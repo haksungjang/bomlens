@@ -510,8 +510,8 @@ echo ""
 
 if [ $FAILED -eq 0 ]; then
     echo -e "${GREEN}=========================================="
-    echo " 🎉 All tests passed!"
-    echo "==========================================${NC}"
+    echo -e " All tests passed!"
+    echo -e "==========================================${NC}"
     echo ""
     
     # List of generated SBOM files
