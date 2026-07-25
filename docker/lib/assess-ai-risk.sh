@@ -181,19 +181,28 @@ jq --arg ctx "$CTX" --slurpfile kb "$KB" '
   def strip_assessment:
     (.properties // []) | map(select(.name | startswith("bomlens:assessment:") | not));
 
-  # Datasets axis for the model: aggregate every data component in the BOM to
-  # the worst dataset verdict, with the offenders named (capped at three).
-  ([ .components[]? | select(.type == "data") | { name: (.name // "(unnamed)") } + data_parts ]) as $ds
-  | (if ($ds | length) == 0 then null
-     else ($ds | map(.overall) | max_by(vrank[.])) as $w
-        | { verdict: $w,
-            reasons: [ ("datasets: \($ds | length) referenced, worst \($w)"
-                        + (if $w == "ok" then ""
-                           else " (" + (([ $ds[] | select(.overall == $w) | .name ][0:3]) | join(", ")) + ")"
-                           end)) ] }
-     end) as $dax
+  # Datasets axis for a model: aggregate ONLY the datasets that model depends
+  # on (dependencies[].dependsOn), so in a multi-model SBOM one model dataset
+  # never contaminates a different model verdict. Keyed by bom-ref, the id
+  # dependencies[] uses. A model with no dataset edges gets no datasets axis —
+  # the links are not guessed. datasets_axis($ref) is called per model below.
+  ( [ .components[]? | select(.type == "data")
+      | { key: (.["bom-ref"] // .name // ""), value: ({ name: (.name // "(unnamed)") } + data_parts) }
+      | select(.key != "") ] | from_entries ) as $dmap
+  | ( reduce (.dependencies[]? | select(type == "object"))
+        as $d ({}; .[$d.ref] += ($d.dependsOn // [])) ) as $deps
+  | def datasets_axis($ref):
+      [ ($deps[$ref] // [])[] | $dmap[.] // empty ] as $mds
+      | if ($mds | length) == 0 then null
+        else ($mds | map(.overall) | max_by(vrank[.])) as $w
+           | { verdict: $w,
+               reasons: [ ("datasets: \($mds | length) referenced, worst \($w)"
+                           + (if $w == "ok" then ""
+                              else " (" + (([ $mds[] | select(.overall == $w) | .name ][0:3]) | join(", ")) + ")"
+                              end)) ] }
+        end;
 
-  | (.components) |= (if type == "array" then map(
+  (.components) |= (if type == "array" then map(
       if .type == "machine-learning-model" then
         (.properties // []) as $p0
         | (assess_license) as $a0
@@ -202,6 +211,7 @@ jq --arg ctx "$CTX" --slurpfile kb "$KB" '
             keys: $a0.keys,
             reasons: ($a0.reasons + ($ex | map(.r))) } as $a
         | (assess_security($p0)) as $s
+        | (datasets_axis(.["bom-ref"] // "")) as $dax
         | (["license"]
            + (if $s != null then ["security"] else [] end)
            + (if $dax != null then ["datasets"] else [] end)) as $axes

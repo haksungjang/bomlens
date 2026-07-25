@@ -265,14 +265,17 @@ else
     P_H2_REVIEW="Elements a person still has to fill in"
     P_REVIEW_INTRO="These G7 elements have no automated source; they are surfaced for human review, not guessed."
     P_H2_ASSESS="Model risk assessment"
-    P_SUM_ASSESS="- Model risk assessment: ok ${AOK}, conditional ${ACOND}, caution ${ACAU}, review ${AREV}."
+    P_SUM_ASSESS="- Model risk assessment: no restriction signals ${AOK}, conditional use ${ACOND}, caution ${ACAU}, needs review ${AREV}."
     P_ASSESS_DISC=$(echo "$ASSESS" | jq -r '.disclaimer')
     AUC=$(echo "$ASSESS" | jq -r '.usageContext // ""')
     P_ASSESS_USAGE=""
     [ -n "$AUC" ] && P_ASSESS_USAGE="Assessed for the ${AUC} usage scenario; conditions that do not bind it are omitted."
     P_TH_LICV="License verdict"; P_TH_SEC="File security"; P_TH_DS="Datasets"; P_TH_OVERALL="Overall"
     P_ASSESS_COND="conditions"; P_ASSESS_SRC="source"
-    L_OK="ok"; L_COND="conditional"; L_CAU="caution"; L_REV="review"
+    # Descriptive labels matching the web UI (gradeOk = "No restriction
+    # signals"), so an English reader never sees a bare "ok" that reads as
+    # "approved/safe" — the exact misread the disclaimer guards against.
+    L_OK="No restriction signals"; L_COND="Conditional use"; L_CAU="Caution"; L_REV="Needs review"
 fi
 
 # --------------------------------------------------------
@@ -315,15 +318,20 @@ fi
             "| \(.name|gsub("[|\n]";" ")) | \(.version|gsub("[|\n]";" ")) | \(.license|gsub("[|\n]";" ")) | \(vl(.axes.license)) | \(vl(.axes.security)) | \(vl(.axes.datasets)) | \(vl(.overall)) |"'
         echo ""
         echo "$ASSESS" | jq -r --arg lang "$REPORT_LANG" --arg condlbl "$P_ASSESS_COND" --arg srclbl "$P_ASSESS_SRC" '
+            # Collapse newlines/pipes the same way the table cells do: $body
+            # embeds a component-supplied license string from an untrusted SBOM,
+            # so leaving newlines in would let it inject markdown structure
+            # (headings, list items, links) into this report.
+            def flat: gsub("[|\n]"; " ");
             .models[] | select(.overall != "ok")
             | (if $lang == "ko" and ((.summary_ko // "") != "") then .summary_ko
                elif (.summary // "") != "" then .summary
-               else (.reasons | join("; ")) end) as $body
+               else (.reasons | join("; ")) end | flat) as $body
             | ((if $lang == "ko" then [ .conditions[]?.label_ko ] else [ .conditions[]?.label ] end)
-               | join("; ")) as $conds
-            | "- **\(.name|gsub("[|\n]";" "))** — \($body)"
+               | join("; ") | flat) as $conds
+            | "- **\(.name|flat)** — \($body)"
               + (if $conds != "" then " (\($condlbl): \($conds))" else "" end)
-              + (if (.sourceUrls | length) > 0 then " — \($srclbl): \(.sourceUrls | join(", "))" else "" end)'
+              + (if (.sourceUrls | length) > 0 then " — \($srclbl): \([ .sourceUrls[] | flat ] | join(", "))" else "" end)'
         echo ""
     fi
 

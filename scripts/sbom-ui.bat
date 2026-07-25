@@ -32,6 +32,10 @@ REM into a <project>_<version>/ subfolder under here (created by server.py).
 REM Override the base with SBOM_OUTPUT_DIR.
 set "OUTDIR=%SBOM_OUTPUT_DIR%"
 if not defined OUTDIR set "OUTDIR=%USERPROFILE%\sbom-output"
+REM Strip a trailing backslash before OUTDIR is used in -v "%OUTDIR%":/src (twice
+REM below): "D:\out\" would emit "D:\out\":/src and the backslash escapes the
+REM closing quote, mangling the mount — the same fix applied to SBOM_UI_MOUNT_DIR.
+if "%OUTDIR:~-1%"=="\" set "OUTDIR=%OUTDIR:~0,-1%"
 if not exist "%OUTDIR%" mkdir "%OUTDIR%"
 
 call :detect_lang
