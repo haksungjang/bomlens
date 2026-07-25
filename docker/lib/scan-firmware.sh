@@ -62,27 +62,35 @@ command -v file >/dev/null 2>&1 && FILE_INFO=$(file -b "$FW" 2>/dev/null || echo
 has_extracted() { [ -n "$(find "$EXTRACT" -type f -size +0c 2>/dev/null | head -1)" ]; }
 unpacked=0
 
+# Firmware input is attacker-supplied, and unpackers have no built-in bound: a
+# decompression bomb or a malformed/deeply-nested image can spin an extractor
+# indefinitely. Wrap each in `timeout` so a hang cannot stall the scan (the
+# `|| true` then moves to the next fallback). Overridable; falls back to no
+# wrapper if `timeout` is somehow absent from the image.
+FW_UNPACK_TIMEOUT="${FW_UNPACK_TIMEOUT:-900}"
+_tmo() { if command -v timeout >/dev/null 2>&1; then timeout "$FW_UNPACK_TIMEOUT" "$@"; else "$@"; fi; }
+
 if command -v unblob >/dev/null 2>&1; then
     echo "[firmware] unpacking with unblob..."
-    unblob --extract-dir "$EXTRACT" "$FW" >/dev/null 2>&1 || true
+    _tmo unblob --extract-dir "$EXTRACT" "$FW" >/dev/null 2>&1 || true
     has_extracted && unpacked=1
 fi
 if [ "$unpacked" = 0 ] && command -v bang-scanner >/dev/null 2>&1; then
     echo "[firmware] unblob produced nothing; falling back to BANG..."
-    bang-scanner -f "$FW" -u "$EXTRACT" >/dev/null 2>&1 || true
+    _tmo bang-scanner -f "$FW" -u "$EXTRACT" >/dev/null 2>&1 || true
     has_extracted && unpacked=1
 fi
 # squashfs is the most common firmware filesystem; unsquashfs (squashfs-tools)
 # handles standard images even when unblob's sasquatch handler is absent.
 if [ "$unpacked" = 0 ] && command -v unsquashfs >/dev/null 2>&1 && printf '%s' "$FILE_INFO" | grep -qi squashfs; then
     echo "[firmware] falling back to unsquashfs..."
-    unsquashfs -f -d "$EXTRACT/squashfs-root" "$FW" >/dev/null 2>&1 || true
+    _tmo unsquashfs -f -d "$EXTRACT/squashfs-root" "$FW" >/dev/null 2>&1 || true
     has_extracted && unpacked=1
 fi
 if [ "$unpacked" = 0 ] && command -v binwalk >/dev/null 2>&1; then
     echo "[firmware] falling back to binwalk extraction..."
-    binwalk --run-as=root --extract --directory "$EXTRACT" "$FW" >/dev/null 2>&1 \
-        || binwalk --extract --directory "$EXTRACT" "$FW" >/dev/null 2>&1 || true
+    _tmo binwalk --run-as=root --extract --directory "$EXTRACT" "$FW" >/dev/null 2>&1 \
+        || _tmo binwalk --extract --directory "$EXTRACT" "$FW" >/dev/null 2>&1 || true
     has_extracted && unpacked=1
 fi
 

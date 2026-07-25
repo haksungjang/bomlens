@@ -129,9 +129,10 @@ server._self_container_id = lambda: "selfcid000000"
 # A hostile project name reaches docker run only as a sanitized -e value, and
 # an out-of-allowlist mode is refused outright (returns -1 without launching).
 captured = {}
-def fake_stream(args, on_log, on_progress=None, cancel=None, container=None):
+def fake_stream(args, on_log, on_progress=None, cancel=None, container=None, env=None):
     captured["args"] = args
     captured["container"] = container
+    captured["env"] = env
     return 0
 server._stream_cmd = fake_stream
 server._sibling_image_present = lambda image: True
@@ -149,6 +150,28 @@ pname = [a for a in args if a.startswith("PROJECT_NAME=")][0]
 assert not any(c in pname for c in ";`$&|<>\n"), pname
 assert "MODE=AIBOM" in args and "MODEL_ID=openai/clip" in args, args
 assert "ghcr.io/sktelecom/bomlens-aibom:1.5.0" in args, args
+# The sibling runs the same entrypoint, which defaults UPLOAD_ENABLED to true and
+# exits 1 without credentials — so without this the scan reports failure despite
+# generating every artifact. With no upload configured the sibling must be told
+# generate-only, and no credential may reach the argv.
+assert "UPLOAD_ENABLED=false" in args, args
+assert not any(a.startswith("API_KEY") for a in args), args
+# With an upload configured, the destination is forwarded but the secret API key
+# rides the subprocess env (name-only `-e API_KEY`), never the argv / `ps`.
+captured.clear()
+server.run_sibling_scan(
+    "ghcr.io/sktelecom/bomlens-aibom:1.5.0", "AIBOM", run_out,
+    lambda ln: None, model_id="openai/clip",
+    extra_env={"PROJECT_NAME": "p", "PROJECT_VERSION": "1.0", "UPLOAD_ENABLED": "true",
+               "UPLOAD_TARGET": "dependency-track", "API_URL": "https://dt.example",
+               "API_KEY": "s3cr3t-should-not-appear"},
+)
+uargs = captured["args"]
+assert "UPLOAD_ENABLED=true" in uargs, uargs
+assert "UPLOAD_TARGET=dependency-track" in uargs and "API_URL=https://dt.example" in uargs, uargs
+assert "API_KEY" in uargs and not any(a.startswith("API_KEY=") for a in uargs), uargs
+assert "s3cr3t-should-not-appear" not in " ".join(uargs), "upload secret leaked onto the argv"
+assert (captured["env"] or {}).get("API_KEY") == "s3cr3t-should-not-appear", "subprocess env must carry the key for name-only -e"
 # Shared via --volumes-from, NOT a host-path bind mount; the run dir is the workdir
 # and HOST_OUTPUT_DIR (container paths).
 assert "--volumes-from" in args and "selfcid000000" in args, args

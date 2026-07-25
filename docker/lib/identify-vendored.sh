@@ -146,12 +146,12 @@ jq -c --argjson minfiles "$MIN_FILES" '
       | .key as $file
       | .value[]?
       | select((.id // "") == "file")
-      | { name: (.component // ((.purl[0] // "") | sub("^pkg:[^/]+/"; ""))),
+      | { name: (.component // ((.purl[0]? // "") | sub("^pkg:[^/]+/"; ""))),
           version: ( (.component // "") as $c
                      | (.version // "")
                      | ltrimstr($c + "-") | ltrimstr($c + "_")
                      | sub("^[vV](?=[0-9])"; "") ),
-          purl: (.purl[0] // null),
+          purl: (.purl[0]? // null),
           cpe: (.cpe[0]? // null),
           matched: (.matched // ""),
           licenses: [ .licenses[]?.name // empty ] }
@@ -184,17 +184,25 @@ jq -c --argjson minfiles "$MIN_FILES" '
         | with_entries(select(.value != null and .value != "" and .value != []))
       )
     | sort_by(.purl // ((.name // "") + "@" + (.version // "")))
-' "$RAW" > "$COMPS_FILE" 2>/dev/null || true
-# Guard: ensure a valid JSON array even if the transform failed.
+' "$RAW" > "$COMPS_FILE" 2>/dev/null && TRANSFORM_OK=1 || TRANSFORM_OK=0
+# Guard: ensure a valid JSON array even if the transform failed. A failed
+# transform is NOT a clean "nothing vendored" result — the `?`-guarded fields
+# above keep one malformed remote record from aborting the whole response, but
+# an outright-invalid RAW (an OSSKB error/rate-limit body, a bad proxy) still
+# lands here, and reporting that as "no-match" would be a false all-clear.
 if [ ! -s "$COMPS_FILE" ] || ! jq -e 'type=="array"' "$COMPS_FILE" >/dev/null 2>&1; then
-    echo '[]' > "$COMPS_FILE"
+    echo '[]' > "$COMPS_FILE"; TRANSFORM_OK=0
 fi
 
 NCOMP=$(jq 'length' "$COMPS_FILE" 2>/dev/null || echo 0)
 # matched when SCANOSS returned full-file hits; no-match when the search ran
-# cleanly but found nothing vendored. (The failure paths above record
-# "unavailable".) The UI uses this to explain an empty result.
-if [ "${NCOMP:-0}" -gt 0 ]; then SCANOSS_STATUS="matched"; else SCANOSS_STATUS="no-match"; fi
+# cleanly but found nothing vendored; unavailable when the search or its
+# response could not be processed (so the UI prompts a retry instead of a
+# reassuring all-clear). The earlier network/auth failure paths also set
+# "unavailable".
+if [ "${NCOMP:-0}" -gt 0 ]; then SCANOSS_STATUS="matched"
+elif [ "${TRANSFORM_OK:-0}" = "0" ]; then SCANOSS_STATUS="unavailable"
+else SCANOSS_STATUS="no-match"; fi
 
 jq -n \
     --slurpfile comps "$COMPS_FILE" \

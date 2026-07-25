@@ -1720,6 +1720,28 @@ def run_sibling_scan(image, mode, out_dir, on_log, *, upload_file=None, model_id
     # and a posted secret would linger in request logs and run state.
     if mode == "AIBOM" and os.environ.get("HF_TOKEN"):
         args += ["-e", "HF_TOKEN"]
+    # Upload gate: the sibling runs the same entrypoint, which defaults
+    # UPLOAD_ENABLED to true and then exits 1 without credentials — so a web-UI
+    # firmware/AIBOM/ANALYZE scan (all sibling modes) would report failure even
+    # though every artifact was generated. Forward the flag so the sibling is
+    # generate-only by default (the UI reads results from run_out, it does not
+    # upload from the sibling), matching the in-process path. When the user DID
+    # configure an upload, forward the destination too, with the API key by NAME
+    # ONLY — its value rides the subprocess env below, never the argv/`ps`.
+    # Default OFF for the sibling (generate-only) unless the caller explicitly
+    # enabled upload — _bool_env defaults a missing flag to "true", which is the
+    # wrong direction here and would re-introduce the failing upload gate.
+    args += ["-e", "UPLOAD_ENABLED=%s" % ("true" if env.get("UPLOAD_ENABLED") == "true" else "false")]
+    if env.get("UPLOAD_ENABLED") == "true":
+        if env.get("UPLOAD_TARGET") in ("dependency-track", "trusca"):
+            args += ["-e", "UPLOAD_TARGET=%s" % env["UPLOAD_TARGET"]]
+        if env.get("API_URL"):
+            args += ["-e", "API_URL=%s" % _env_flag_value(env["API_URL"])]
+        if env.get("API_KEY"):
+            args += ["-e", "API_KEY"]  # name only; value in the subprocess env
+        for _k in ("TRUSCA_PROJECT_ID", "TRUSCA_REF", "TRUSCA_RELEASE"):
+            if env.get(_k):
+                args += ["-e", "%s=%s" % (_k, _env_flag_value(env[_k]))]
     # The sibling writes into the run's output dir; run-scan also cds there via cwd.
     args += ["-w", out_dir, "--entrypoint", "/usr/local/bin/run-scan", image]
 
@@ -1730,8 +1752,11 @@ def run_sibling_scan(image, mode, out_dir, on_log, *, upload_file=None, model_id
         _stream_cmd(["docker", "pull", image], on_log)
 
     on_log("[ui] launching %s in a sibling container (%s)..." % (mode.lower(), image))
+    # Pass the assembled env (os.environ + extra_env) to the docker-run process so
+    # a NAME-ONLY `-e API_KEY` / `-e HF_TOKEN` resolves the value from here instead
+    # of the argv — keeping the upload token and HF token out of `ps`.
     return _stream_cmd(args, on_log, on_progress=on_progress, cancel=cancel,
-                       container=safe_name)
+                       container=safe_name, env=env)
 
 
 def convert_bom_to_spdx(bom_path, spdx_path, stable, on_log):
@@ -1798,7 +1823,7 @@ def _sibling_image_present(image):
         return False
 
 
-def _stream_cmd(args, on_log, on_progress=None, cancel=None, container=None):
+def _stream_cmd(args, on_log, on_progress=None, cancel=None, container=None, env=None):
     """Run a command, streaming combined stdout/stderr line-by-line to on_log.
     Returns the exit code, or -1 if the binary could not be launched.
 
@@ -1812,7 +1837,7 @@ def _stream_cmd(args, on_log, on_progress=None, cancel=None, container=None):
     try:
         proc = subprocess.Popen(
             args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1,
+            text=True, bufsize=1, env=env,
         )
     except OSError as exc:
         on_log("[ui] failed to launch: %s" % exc)
