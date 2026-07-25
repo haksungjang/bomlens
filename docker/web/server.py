@@ -454,11 +454,33 @@ MAX_ASSESS_URLS = 8  # license source links per assessed model
 _SEV_RANK = {"CRITICAL": 5, "HIGH": 4, "MEDIUM": 3, "LOW": 2, "UNKNOWN": 1}
 
 
+def _as_list(v):
+    """Return v when it is a list, else an empty list. CycloneDX does not force
+    array fields (components, properties, licenses, externalReferences, hashes)
+    to actually be arrays, and an ANALYZE scan copies an untrusted uploaded SBOM
+    verbatim — so a scalar/null where a list is expected must degrade to empty
+    instead of crashing the summary. No copy, no cost on the common (list) path."""
+    return v if isinstance(v, list) else []
+
+
+def _as_dict(v):
+    """Return v when it is a dict, else an empty dict (same rationale as
+    _as_list): an untrusted SBOM object field may arrive as a scalar/null."""
+    return v if isinstance(v, dict) else {}
+
+
+def _dicts(v):
+    """The dict elements of a list-shaped field, skipping any non-dict entries
+    (an untrusted `components`/`properties` array may hold scalars). Used before
+    any `.get()` loop so a malformed element is ignored, not crashed on."""
+    return [x for x in _as_list(v) if isinstance(x, dict)]
+
+
 def _component_licenses(c):
     """SPDX ids / names / expressions for one CycloneDX component (notice parity)."""
     out = []
-    for lic in (c.get("licenses") or []):
-        node = lic.get("license") or {}
+    for lic in _dicts(c.get("licenses")):
+        node = _as_dict(lic.get("license"))
         val = node.get("id") or node.get("name") or lic.get("expression")
         if val:
             out.append(val)
@@ -606,18 +628,18 @@ def _scope_index(data):
     component depends on it) vs 'transitive'. Mirrors the client sbomGraph: roots
     are the metadata component's dependsOn, or refs nothing depends on when the
     root has no entry. Returns (scope_by_ref, has_dependencies)."""
-    deps = data.get("dependencies") or []
+    deps = _as_list(data.get("dependencies"))
     adjacency, depended_on = {}, set()
     for d in deps:
         if not isinstance(d, dict) or not isinstance(d.get("ref"), str):
             continue
-        targets = [t for t in (d.get("dependsOn") or []) if isinstance(t, str)]
+        targets = [t for t in _as_list(d.get("dependsOn")) if isinstance(t, str)]
         adjacency[d["ref"]] = targets
         depended_on.update(targets)
     if not any(adjacency.values()):
         return {}, False
 
-    meta_comp = (data.get("metadata") or {}).get("component") or {}
+    meta_comp = _as_dict(_as_dict(data.get("metadata")).get("component"))
     meta_ref = meta_comp.get("bom-ref") or meta_comp.get("purl")
     # The root's direct deps are the metadata component's dependsOn. cdxgen
     # sometimes emits the root entry with an EMPTY dependsOn and floats the real
@@ -646,12 +668,16 @@ def sbom_summary(run_id):
             data = json.load(f)
     except (OSError, json.JSONDecodeError):
         return None
-    comps = data.get("components") or []
+    comps = _as_list(data.get("components"))
     risk_by_purl, risk_by_nv = _component_risk_index(run_id)
     scope_by_ref, has_deps = _scope_index(data)
     rows = []
     for c in comps[:MAX_COMPONENT_ROWS]:
-        props = c.get("properties") or []
+        # An untrusted (ANALYZE) SBOM may hold a scalar where a component object
+        # is expected — skip it rather than crash the whole summary.
+        if not isinstance(c, dict):
+            continue
+        props = _dicts(c.get("properties"))
         vendored = any(
             p.get("name") == "bomlens:layer" and p.get("value") == "vendored"
             for p in props
@@ -668,7 +694,7 @@ def sbom_summary(run_id):
             (p.get("value") for p in props if p.get("name") == "bomlens:licenseReview"),
             "",
         )
-        refs = c.get("externalReferences") or []
+        refs = _dicts(c.get("externalReferences"))
         source = next(
             (
                 r.get("url")
@@ -839,7 +865,7 @@ def sbom_summary(run_id):
         rows.append(row)
     # suggest-identify-vendored: set by suggest-vendored.sh when the scan looks like
     # C/C++ embedded source with no package manager. Drives the result banner.
-    meta_props = (data.get("metadata") or {}).get("properties") or []
+    meta_props = _dicts(_as_dict(data.get("metadata")).get("properties"))
     suggest = any(
         p.get("name") == "bomlens:suggest-identify-vendored" and p.get("value") == "true"
         for p in meta_props
@@ -861,6 +887,8 @@ def sbom_summary(run_id):
     direct_count = transitive_count = 0
     if has_deps:
         for c in comps:
+            if not isinstance(c, dict):
+                continue
             sc = scope_by_ref.get(c.get("bom-ref")) or scope_by_ref.get(c.get("purl"))
             if sc == "direct":
                 direct_count += 1
@@ -879,7 +907,9 @@ def sbom_summary(run_id):
     assess_counts = {"ok": 0, "conditional": 0, "caution": 0, "review": 0}
     assessed_models = 0
     for c in comps:
-        cprops = c.get("properties") or []
+        if not isinstance(c, dict):
+            continue
+        cprops = _dicts(c.get("properties"))
         if c.get("type") == "machine-learning-model":
             overall = next(
                 (
@@ -908,7 +938,7 @@ def sbom_summary(run_id):
             risk = risk_by_nv.get(((c.get("name") or "").lower(), c.get("version") or ""))
         if risk and risk.get("count", 0) > 0:
             at_risk_count += 1
-    meta_comp = (data.get("metadata") or {}).get("component") or {}
+    meta_comp = _as_dict(_as_dict(data.get("metadata")).get("component"))
     summary = {
         "components": len(comps),
         "componentList": rows,
@@ -942,12 +972,12 @@ def scanoss_status(run_id):
             data = json.load(f)
     except (OSError, json.JSONDecodeError):
         return None
-    props = (data.get("metadata") or {}).get("properties") or []
+    props = _dicts(_as_dict(data.get("metadata")).get("properties"))
     status = next(
         (x.get("value") for x in props if x.get("name") == "bomlens:scanoss:status"),
         None,
     )
-    return {"status": status, "count": len(data.get("components") or [])}
+    return {"status": status, "count": len(_as_list(data.get("components")))}
 
 
 def conformance_summary(run_id):
@@ -1221,8 +1251,13 @@ def list_scans():
                 data = json.load(f)
         except (OSError, json.JSONDecodeError):
             return
-        comps = data.get("components") or []
-        meta = (data.get("metadata") or {}).get("component") or {}
+        # An untrusted (ANALYZE) SBOM can hold scalars in components[]; iterate the
+        # dict entries only so one poisoned scan folder can't crash the whole
+        # Recent list (list_scans walks every scan in OUTPUT_DIR). The count still
+        # reflects the full array length, to match sbom_summary's `components`.
+        comp_count = len(_as_list(data.get("components")))
+        comps = _dicts(data.get("components"))
+        meta = _as_dict(_as_dict(data.get("metadata")).get("component"))
         # The OWASP AIBOM generator names the root metadata.component after its
         # job id (job-<timestamp>), which is meaningless in the Recent list. For
         # AI scans, label by the model component instead.
@@ -1239,7 +1274,7 @@ def list_scans():
             "id": run_id,
             "project": project,
             "version": version,
-            "components": len(comps),
+            "components": comp_count,
             "maxSeverity": _max_severity(security_summary(run_id)),
             "isAiScan": any(c.get("type") == "machine-learning-model" for c in comps),
             # CycloneDX root component type — lets the Recent list label the scan
@@ -2278,6 +2313,12 @@ class Handler(BaseHTTPRequestHandler):
             if source == "docker-image":
                 if not target:
                     fail("Docker image name required"); return
+                # Validate the image reference like every other source validates
+                # its target (git URL / model id / rootfs path). TARGET_IMAGE
+                # reaches `syft "$TARGET_IMAGE"` in the entrypoint; _REF_RE starts
+                # with an alphanumeric, so a leading "-" cannot inject a syft flag.
+                if not _valid_image_ref(target):
+                    fail("Unsafe or unsupported image reference"); return
                 if not docker_capable():
                     fail("Docker socket not mounted (-v /var/run/docker.sock:...)"); return
                 mode = "IMAGE"
@@ -2350,6 +2391,17 @@ class Handler(BaseHTTPRequestHandler):
                         listing = subprocess.run(["tar", "-tf", up], stdout=subprocess.PIPE, text=True)
                         if re.search(r"(^|\n)(/|.*\.\.(/|$))", listing.stdout or ""):
                             fail("unsafe path in archive"); return
+                        # Reject a symlink/hardlink member whose target escapes the
+                        # extraction dir (a link "evil -> /etc" followed by "evil/x"
+                        # writes through the link). The name guard above misses these
+                        # because the member names themselves are benign; the verbose
+                        # listing exposes the "name -> target" link line.
+                        vlist = subprocess.run(["tar", "-tvf", up], stdout=subprocess.PIPE, text=True)
+                        for _ln in (vlist.stdout or "").splitlines():
+                            if " -> " in _ln:
+                                _tgt = _ln.split(" -> ", 1)[1].strip()
+                                if _tgt.startswith("/") or ".." in _tgt.split("/"):
+                                    fail("unsafe link in archive"); return
                         subprocess.run(["tar", "-C", cleanup_dir, "--no-same-owner", "-xf", up], check=True)
                 except (ValueError, OSError, subprocess.CalledProcessError) as exc:
                     fail("archive extraction failed: %s" % exc); return
@@ -2508,6 +2560,17 @@ class Handler(BaseHTTPRequestHandler):
                 "scanConfig": scan_config,
             }
             sse("done", json.dumps(done))
+        except Exception as exc:  # noqa: BLE001
+            # The summary helpers are defended against malformed artifacts, so a
+            # reaching this is unexpected — but the client is blocked waiting for a
+            # terminal event, so never let an exception leave the SSE stream open.
+            # Emit an error + a fail-shaped done so the UI stops waiting instead of
+            # hanging on "scan in progress" forever.
+            sse("error", json.dumps("Scan finished but the summary could not be built: %s" % exc))
+            sse("done", json.dumps({"ok": False, "id": run_id,
+                                    "results": list_results(run_id),
+                                    "sbom": None, "security": None,
+                                    "conformance": None}))
         finally:
             # Remove uploaded/cloned/extracted trees; keep generated artifacts
             # (entrypoint wrote them into the run folder run_out).

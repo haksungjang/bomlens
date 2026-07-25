@@ -26,8 +26,8 @@ import { cn } from "@/lib/utils";
 
 /** Badge tone per pipeline grade — the grade word itself is always shown, so
  *  the color is a reinforcement, never the only signal. */
-const GRADE_TONE: Record<AssessmentGrade, "success" | "high" | "critical" | "info"> = {
-  ok: "success",
+const GRADE_TONE: Record<AssessmentGrade, "positive" | "high" | "critical" | "info"> = {
+  ok: "positive",
   conditional: "high",
   caution: "critical",
   review: "info",

@@ -405,7 +405,7 @@ mkdir -p "$WORK/risk2"
 printf 'License: MIT\n' > "$WORK/risk2/proj_1.0_NOTICE.txt"
 ( cd "$WORK/risk2" && bash "$LIB/generate-risk-report.sh" proj_1.0 proj >/dev/null 2>&1 ) \
     || fail "generate-risk-report.sh failed without a BOM artifact"
-if [ -f "$WORK/risk2/proj_1.0_risk-report.md" ] && ! grep -q '라이선스 분류' "$WORK/risk2/proj_1.0_risk-report.md"; then
+if [ -f "$WORK/risk2/proj_1.0_risk-report.md" ] && ! grep -q 'License classification' "$WORK/risk2/proj_1.0_risk-report.md"; then
     pass "no BOM artifact -> classification block skipped gracefully"
 else
     fail "classification block present (or report missing) without a BOM"

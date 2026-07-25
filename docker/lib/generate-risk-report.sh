@@ -68,31 +68,20 @@ TOTAL=$(echo "$FINDINGS" | jq 'length')
 
 # --------------------------------------------------------
 # Report kind: with a conformance artifact this is a SUPPLIER SBOM review
-# (validate an externally-submitted SBOM's format); without one it is a
-# SELF-GENERATED 오픈소스 위험 분석 보고서 (source/firmware/image/binary/rootfs scan).
-# The format-validation section only applies to the supplier case.
+# (validate an externally-submitted SBOM format); without one it is a
+# SELF-GENERATED open-source risk analysis report (source/firmware/image/
+# binary/rootfs scan). The format-validation section only applies to the
+# supplier case. Section numbering is assigned once here; the titles and every
+# other user-facing string are set in the localization block below.
 # --------------------------------------------------------
 if [ "$CONF_RESULT" = "N/A" ]; then
     HAS_CONF=false
-    REPORT_TITLE="오픈소스 위험 분석 보고서 — ${PROJECT}"
-    HTML_H1="오픈소스 위험 분석 보고서"
-    # Self mode: no 포맷 검증 section, so numbering starts at 취약점.
+    # Self mode: no format-validation section, so numbering starts at vulnerabilities.
     S_CONF=""; S_VULN=1; S_LIC=2; S_NEXT=3
 else
     HAS_CONF=true
-    REPORT_TITLE="공급사 SBOM 위험 보고서 — ${PROJECT}"
-    HTML_H1="공급사 SBOM 위험 보고서"
     S_CONF=1; S_VULN=2; S_LIC=3; S_NEXT=4
 fi
-
-# deadline string per severity (Korean, recommended)
-deadline_for() {
-    case "$1" in
-        CRITICAL) echo "${CRIT_DAYS}일 이내" ;;
-        HIGH)     echo "${HIGH_DAYS}일 이내" ;;
-        *)        echo "정책에 따름" ;;
-    esac
-}
 
 # --------------------------------------------------------
 # License summary (from NOTICE text, best-effort)
@@ -157,91 +146,222 @@ if [ "$LIC_CLASS" != "null" ]; then
 fi
 
 # --------------------------------------------------------
+# Localization (REPORT_LANG=ko). English is the default; only the Markdown/HTML
+# below are localized. Data and identifiers (CVE ids, package names, severities,
+# license-class names, counts, dates, URLs, bomlens:* property names) are never
+# translated. Korean swaps chrome strings from
+# docker/lib/i18n/report-strings.ko.json. The AI-verdict labels and disclaimer
+# reuse the aiprofile.* keys so this report and the AI profile never disagree.
+# --------------------------------------------------------
+REPORT_LANG="${REPORT_LANG:-en}"; [ "$REPORT_LANG" = "ko" ] || REPORT_LANG="en"
+KO_CAT="$(dirname "$0")/i18n/report-strings.ko.json"
+if [ "$REPORT_LANG" = "ko" ] && [ ! -f "$KO_CAT" ]; then
+    echo "[risk] WARN: ko report catalog not found ($KO_CAT); using English." >&2
+    REPORT_LANG="en"
+fi
+kstr() { jq -r --arg k "$1" '.[$k] // $k' "$KO_CAT"; }
+# shellcheck disable=SC2059  # the format is a trusted catalog template, not user input
+tfmt() { local f; f="$(kstr "$1")"; shift; printf -- "$f" "$@"; }
+
+CONF_UP=$(echo "$CONF_RESULT" | tr '[:lower:]' '[:upper:]')
+
+if [ "$REPORT_LANG" = "ko" ]; then
+    if [ "$HAS_CONF" = "true" ]; then
+        P_TITLE=$(tfmt risk.md_title_supplier "$PROJECT"); P_H1=$(kstr risk.h1_supplier)
+    else
+        P_TITLE=$(tfmt risk.md_title_self "$PROJECT"); P_H1=$(kstr risk.h1_self)
+    fi
+    P_MD_GEN=$(tfmt risk.md_generated "$GEN_AT")
+    P_MD_INTRO=$(kstr risk.md_intro)
+    P_H2_CONF=$(kstr risk.h2_conf)
+    P_MD_CONF_FMT=$(tfmt risk.md_conf_format "$CONF_FORMAT")
+    P_MD_CONF_RESULT=$(tfmt risk.md_conf_result "$CONF_UP")
+    P_MD_CONF_FAIL=$(kstr risk.md_conf_fail)
+    P_CONF_RESULT_LBL=$(kstr risk.conf_result_label)
+    P_CONF_FAIL_B=$(kstr risk.conf_fail_b)
+    P_CONF_FAIL_TXT=$(kstr risk.conf_fail_txt)
+    P_H2_VULN=$(kstr risk.h2_vuln)
+    P_DL_LEAD=$(kstr risk.deadline_note_lead); P_DL_TAIL=$(kstr risk.deadline_note_tail)
+    P_DL_BOLD_CRIT=$(tfmt risk.deadline_bold_crit "$CRIT_DAYS")
+    P_DL_BOLD_HIGH=$(tfmt risk.deadline_bold_high "$HIGH_DAYS")
+    P_DL_CRIT=$(tfmt risk.deadline_crit "$CRIT_DAYS")
+    P_DL_HIGH=$(tfmt risk.deadline_high "$HIGH_DAYS")
+    P_DL_POLICY=$(kstr risk.deadline_policy)
+    P_TH_DEADLINE=$(kstr risk.th_deadline)
+    P_VULN_NONE_MD=$(kstr risk.vuln_none_md); P_VULN_NONE_HTML=$(kstr risk.vuln_none_html)
+    P_H2_LIC=$(kstr risk.h2_lic)
+    P_LIC_NO_NOTICE_MD=$(kstr risk.lic_no_notice_md); P_LIC_NO_NOTICE_HTML=$(kstr risk.lic_no_notice_html)
+    P_MD_LIC_COUNT=$(tfmt risk.md_lic_count "$LIC_COUNT" "$OUT_PREFIX")
+    P_LIC_HTML_PRE=$(kstr risk.lic_html_pre); P_LIC_HTML_POST=$(kstr risk.lic_html_post)
+    P_H3_LICCLASS=$(kstr risk.h3_licclass)
+    P_LICCLASS_INTRO_MD=$(kstr risk.licclass_intro_md)
+    P_LICCLASS_INTRO_A=$(kstr risk.licclass_intro_html_a); P_LICCLASS_INTRO_B=$(kstr risk.licclass_intro_html_b)
+    P_TH_UNCAT=$(kstr risk.th_uncat)
+    P_COPYLEFT_DRIVERS=$(kstr risk.copyleft_drivers)
+    P_COPYLEFT_MORE_MD=$(tfmt risk.copyleft_more_md "$((COPYLEFT_TOTAL - 10))")
+    P_CL_MORE_PRE=$(kstr risk.copyleft_more_pre); P_CL_MORE_MID=$(kstr risk.copyleft_more_mid); P_CL_MORE_END=$(kstr risk.copyleft_more_end)
+    P_H3_AI=$(kstr risk.h3_ai)
+    P_AI_SEE_MD=$(tfmt risk.ai_see_md "$OUT_PREFIX")
+    P_AI_SEE_HTML=$(kstr risk.ai_see_html)
+    P_AI_DISC=$(kstr risk.ai_disclaimer)
+    L_OK=$(kstr aiprofile.v_ok); L_COND=$(kstr aiprofile.v_conditional)
+    L_CAU=$(kstr aiprofile.v_caution); L_REV=$(kstr aiprofile.v_review)
+    P_H2_NEXT=$(kstr risk.h2_next)
+    P_NEXT1_PRE=$(kstr risk.next1_pre); P_NEXT1_BOLD=$(kstr risk.next1_bold); P_NEXT1_POST=$(kstr risk.next1_post)
+    P_NEXT2_CONF=$(kstr risk.next2_conf)
+    P_NEXT2_SELF_MD=$(tfmt risk.next2_self_md "$OUT_PREFIX" "$OUT_PREFIX")
+    P_NEXT2_SELF_HTML=$(kstr risk.next2_self_html)
+    P_KIND=$(kstr risk.kind)
+    P_META_PROJECT=$(kstr risk.meta_project); P_META_GENERATED=$(kstr risk.meta_generated); P_META_FORMAT=$(kstr risk.meta_format)
+else
+    if [ "$HAS_CONF" = "true" ]; then
+        P_TITLE="Supplier SBOM risk report — ${PROJECT}"; P_H1="Supplier SBOM risk report"
+    else
+        P_TITLE="Open-source risk analysis report — ${PROJECT}"; P_H1="Open-source risk analysis report"
+    fi
+    P_MD_GEN="- Generated: ${GEN_AT}"
+    P_MD_INTRO="- This report re-aggregates the vulnerability and license artifacts already produced, without running a new scan."
+    P_H2_CONF="Requirements met (format validation)"
+    P_MD_CONF_FMT="- Input format: ${CONF_FORMAT}"
+    P_MD_CONF_RESULT="- Validation result: **${CONF_UP}**"
+    P_MD_CONF_FAIL="> ⚠️ **Unmet format-validation items** — the required items below are missing. We recommend fixing them and re-validating."
+    P_CONF_RESULT_LBL="Validation result:"
+    P_CONF_FAIL_B="Unmet format-validation items"
+    P_CONF_FAIL_TXT=" — the required items below are missing. We recommend fixing them and re-validating."
+    P_H2_VULN="Vulnerability analysis and remediation deadlines"
+    P_DL_LEAD="Recommended remediation deadlines: "
+    P_DL_TAIL=". We recommend preparing a remediation plan or risk justification."
+    P_DL_BOLD_CRIT="Critical → within ${CRIT_DAYS} days"
+    P_DL_BOLD_HIGH="High → within ${HIGH_DAYS} days"
+    P_DL_CRIT="within ${CRIT_DAYS} days"
+    P_DL_HIGH="within ${HIGH_DAYS} days"
+    P_DL_POLICY="Per policy"
+    P_TH_DEADLINE="Deadline"
+    P_VULN_NONE_MD="_No known vulnerabilities, or no security artifact was produced._"
+    P_VULN_NONE_HTML="No known vulnerabilities, or no security artifact was produced."
+    P_H2_LIC="License summary"
+    P_LIC_NO_NOTICE_MD="_Skipped: no NOTICE artifact was produced._"
+    P_LIC_NO_NOTICE_HTML="Skipped: no NOTICE artifact was produced."
+    P_MD_LIC_COUNT="- Distinct licenses identified: ${LIC_COUNT} (see \`${OUT_PREFIX}_NOTICE.{txt,html}\` for details)"
+    P_LIC_HTML_PRE="Distinct licenses identified:"
+    P_LIC_HTML_POST=" (see the NOTICE artifact for details)."
+    P_H3_LICCLASS="License classification (copyleft strength)"
+    P_LICCLASS_INTRO_MD="Each component is also recorded in the SBOM with a \`bomlens:licenseClass\` property. An unrecognized license is left uncategorized rather than assumed permissive."
+    P_LICCLASS_INTRO_A="Each component is also recorded in the SBOM with a "
+    P_LICCLASS_INTRO_B=" property. An unrecognized license is left uncategorized rather than assumed permissive."
+    P_TH_UNCAT="Uncategorized"
+    P_COPYLEFT_DRIVERS="Components that create copyleft exposure (network/strong, up to 10):"
+    P_COPYLEFT_MORE_MD="- … and $((COPYLEFT_TOTAL - 10)) more (see the SBOM \`bomlens:licenseClass\` property for all)"
+    P_CL_MORE_PRE="… and "
+    P_CL_MORE_MID=" more (see the SBOM "
+    P_CL_MORE_END=" property for all)"
+    P_H3_AI="AI model risk assessment"
+    P_AI_SEE_MD="Per-model rationale and conditions are in \`${OUT_PREFIX}_ai-profile.md\`."
+    P_AI_SEE_HTML="Per-model rationale and conditions are in the AI compliance profile artifact."
+    P_AI_DISC="This assessment is guidance, not legal advice."
+    L_OK="No restriction signals"; L_COND="Conditional use"; L_CAU="Caution"; L_REV="Needs review"
+    P_H2_NEXT="Next steps"
+    P_NEXT1_PRE="Prepare a "
+    P_NEXT1_BOLD="remediation plan or risk justification"
+    P_NEXT1_POST=" within the recommended deadlines above."
+    P_NEXT2_CONF="If format validation failed, fill the missing items and regenerate the SBOM."
+    P_NEXT2_SELF_MD="Keep and distribute the notice (\`${OUT_PREFIX}_NOTICE.{txt,html}\`) together with the SBOM (\`${OUT_PREFIX}_bom.json\`)."
+    P_NEXT2_SELF_HTML="Keep and distribute the notice (NOTICE) together with the SBOM."
+    P_KIND="Risk Report"
+    P_META_PROJECT="Project:"; P_META_GENERATED="Generated:"; P_META_FORMAT="Input format:"
+fi
+
+# Shared composites (built from the localized pieces above; identical structure
+# in both languages, so the deadline note stays one place).
+P_VULN_NOTE_MD="> ${P_DL_LEAD}**${P_DL_BOLD_CRIT}, ${P_DL_BOLD_HIGH}**${P_DL_TAIL}"
+P_VULN_NOTE_HTML="<div class=\"note\">${P_DL_LEAD}<b>${P_DL_BOLD_CRIT}</b>, <b>${P_DL_BOLD_HIGH}</b>${P_DL_TAIL}</div>"
+
+# --------------------------------------------------------
 # Markdown
 # --------------------------------------------------------
 {
-    echo "# ${REPORT_TITLE}"
+    echo "# ${P_TITLE}"
     echo ""
-    echo "- 생성: ${GEN_AT}"
-    echo "- 본 보고서는 새 스캔 없이 취약점/라이선스 산출물을 재집계한 것입니다."
+    echo "${P_MD_GEN}"
+    echo "${P_MD_INTRO}"
     echo ""
     if [ "$HAS_CONF" = "true" ]; then
-        echo "## ${S_CONF}. 요구사항 충족 (포맷 검증)"
+        echo "## ${S_CONF}. ${P_H2_CONF}"
         echo ""
-        echo "- 입력 포맷: ${CONF_FORMAT}"
-        echo "- 검증 결과: **$(echo "$CONF_RESULT" | tr '[:lower:]' '[:upper:]')**"
+        echo "${P_MD_CONF_FMT}"
+        echo "${P_MD_CONF_RESULT}"
         if [ "$CONF_RESULT" = "fail" ]; then
             echo ""
-            echo "> ⚠️ **포맷 검증 미충족 항목** — 아래 필수 항목이 빠져 있습니다. 보완 후 재검증을 권장합니다."
+            echo "${P_MD_CONF_FAIL}"
             echo ""
             echo "$CONF_FAILS" | jq -r '.[] | "- " + .'
         fi
         echo ""
     fi
-    echo "## ${S_VULN}. 취약점 분석 및 대응 기한"
+    echo "## ${S_VULN}. ${P_H2_VULN}"
     echo ""
-    echo "> 권고 대응 기한: **Critical → ${CRIT_DAYS}일 이내, High → ${HIGH_DAYS}일 이내** 대응계획 또는 위험 정당화를 마련하는 것을 권장합니다."
+    echo "${P_VULN_NOTE_MD}"
     echo ""
     echo "| Critical | High | Medium | Low | Unknown | Total |"
     echo "|---:|---:|---:|---:|---:|---:|"
     echo "| ${C} | ${H} | ${M} | ${L} | ${U} | ${TOTAL} |"
     echo ""
     if [ "$TOTAL" -gt 0 ]; then
-        echo "| Severity | CVE | Package | Installed | Fixed | 대응 기한 |"
+        echo "| Severity | CVE | Package | Installed | Fixed | ${P_TH_DEADLINE} |"
         echo "|----------|-----|---------|-----------|-------|-----------|"
         # shellcheck disable=SC2016
-        echo "$FINDINGS" | jq -r --arg cd "${CRIT_DAYS}일 이내" --arg hd "${HIGH_DAYS}일 이내" '.[] |
+        echo "$FINDINGS" | jq -r --arg cd "$P_DL_CRIT" --arg hd "$P_DL_HIGH" --arg pol "$P_DL_POLICY" '.[] |
             "| \(.severity) | \(.id) | \(.pkg) | \(.version) | \(.fixed) | \(
-              if .severity=="CRITICAL" then $cd elif .severity=="HIGH" then $hd else "정책에 따름" end
+              if .severity=="CRITICAL" then $cd elif .severity=="HIGH" then $hd else $pol end
             ) |"'
     else
-        echo "_알려진 취약점이 없거나 security 산출물이 없습니다._"
+        echo "${P_VULN_NONE_MD}"
     fi
     echo ""
-    echo "## ${S_LIC}. 라이선스 요약"
+    echo "## ${S_LIC}. ${P_H2_LIC}"
     echo ""
     if [ "$LIC_COUNT" = "N/A" ]; then
-        echo "_NOTICE 산출물이 없어 생략합니다._"
+        echo "${P_LIC_NO_NOTICE_MD}"
     else
-        echo "- 식별된 distinct 라이선스: ${LIC_COUNT}건 (상세는 \`${OUT_PREFIX}_NOTICE.{txt,html}\` 참조)"
+        echo "${P_MD_LIC_COUNT}"
     fi
     if [ "$HAS_LIC_CLASS" = "true" ]; then
         echo ""
-        echo "### 라이선스 분류 (카피레프트 강도)"
+        echo "### ${P_H3_LICCLASS}"
         echo ""
-        echo "각 컴포넌트는 SBOM에 \`bomlens:licenseClass\` 속성으로도 기록되어 있습니다. 인식되지 않은 라이선스는 permissive로 간주하지 않고 미분류(uncategorized)로 남깁니다."
+        echo "${P_LICCLASS_INTRO_MD}"
         echo ""
-        echo "| Network copyleft | Strong copyleft | Weak copyleft | Permissive | 미분류 |"
+        echo "| Network copyleft | Strong copyleft | Weak copyleft | Permissive | ${P_TH_UNCAT} |"
         echo "|---:|---:|---:|---:|---:|"
         echo "| ${NC} | ${SC} | ${WK} | ${PM} | ${UN} |"
         if [ "$COPYLEFT_TOTAL" -gt 0 ]; then
             echo ""
-            echo "카피레프트 노출을 만드는 컴포넌트 (network/strong, 최대 10개):"
+            echo "${P_COPYLEFT_DRIVERS}"
             echo ""
             echo "$COPYLEFT_TOP" | jq -r '.[] | "- `" + .label + "` (" + .class + ")"'
             if [ "$COPYLEFT_TOTAL" -gt 10 ]; then
-                echo "- 외 $((COPYLEFT_TOTAL - 10))개 (전체는 SBOM의 \`bomlens:licenseClass\` 속성 참조)"
+                echo "${P_COPYLEFT_MORE_MD}"
             fi
         fi
     fi
     if [ "$AS_MODELS" -gt 0 ]; then
         echo ""
-        echo "### AI 모델 위험 판정"
+        echo "### ${P_H3_AI}"
         echo ""
-        echo "모델별 판정 근거와 조건은 \`${OUT_PREFIX}_ai-profile.md\`에 있습니다. 이 판정은 법적 자문이 아닌 안내입니다."
+        echo "${P_AI_SEE_MD} ${P_AI_DISC}"
         echo ""
-        echo "| 제약 신호 없음 | 조건부 사용 | 주의 | 검토 필요 |"
+        echo "| ${L_OK} | ${L_COND} | ${L_CAU} | ${L_REV} |"
         echo "|---:|---:|---:|---:|"
         echo "| ${AS_OK} | ${AS_COND} | ${AS_CAU} | ${AS_REV} |"
     fi
     echo ""
-    echo "## ${S_NEXT}. 다음 단계"
+    echo "## ${S_NEXT}. ${P_H2_NEXT}"
     echo ""
-    echo "1. 위 권고 대응 기한 내 **대응계획 또는 위험 정당화**를 마련."
+    echo "1. ${P_NEXT1_PRE}**${P_NEXT1_BOLD}**${P_NEXT1_POST}"
     if [ "$HAS_CONF" = "true" ]; then
-        echo "2. 포맷 검증에 실패한 경우 누락 항목을 보완하여 SBOM을 재생성."
+        echo "2. ${P_NEXT2_CONF}"
     else
-        echo "2. 고지문(\`${OUT_PREFIX}_NOTICE.{txt,html}\`)과 SBOM(\`${OUT_PREFIX}_bom.json\`)을 함께 보관·배포."
+        echo "2. ${P_NEXT2_SELF_MD}"
     fi
 } > "$MD"
 
@@ -250,16 +370,16 @@ fi
 # --------------------------------------------------------
 esc() { printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'; }
 conf_class="warn"; [ "$CONF_RESULT" = "pass" ] && conf_class="pass"; [ "$CONF_RESULT" = "fail" ] && conf_class="fail"
-# Meta suffix only states 입력 포맷 for supplier (ANALYZE) reports (section numbers
-# S_CONF/S_VULN/S_LIC/S_NEXT were assigned once near the top).
-META_FORMAT=""; [ "$HAS_CONF" = "true" ] && META_FORMAT=" &middot; 입력 포맷: ${CONF_FORMAT}"
+# Meta suffix only states the input format for supplier (ANALYZE) reports (section
+# numbers S_CONF/S_VULN/S_LIC/S_NEXT were assigned once near the top).
+META_FORMAT=""; [ "$HAS_CONF" = "true" ] && META_FORMAT=" &middot; ${P_META_FORMAT} $(esc "$CONF_FORMAT")"
 {
     cat <<HTMLHEAD
 <!DOCTYPE html>
-<html lang="ko"><head>
+<html lang="${REPORT_LANG}"><head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
-<title>${HTML_H1} — ${PROJECT}</title>
+<title>${P_H1} — ${PROJECT}</title>
 <style>
  :root{
   --bg:#fafafa;--surface:#ffffff;--text:#18181b;--muted:#6c6c75;--border:#e5e5ea;
@@ -329,17 +449,17 @@ META_FORMAT=""; [ "$HAS_CONF" = "true" ] && META_FORMAT=" &middot; 입력 포맷
 </style></head><body>
 <header class="report-header">
  <div class="wordmark">BomLens<span class="tag">SBOM</span></div>
- <div class="report-kind">Risk Report</div>
+ <div class="report-kind">${P_KIND}</div>
 </header>
-<h1>${HTML_H1}</h1>
-<p class="meta">Project: $(esc "$PROJECT") &middot; Generated: ${GEN_AT}${META_FORMAT}</p>
+<h1>${P_H1}</h1>
+<p class="meta">${P_META_PROJECT} $(esc "$PROJECT") &middot; ${P_META_GENERATED} ${GEN_AT}${META_FORMAT}</p>
 HTMLHEAD
 
     if [ "$HAS_CONF" = "true" ]; then
-        echo "<h2>${S_CONF}. 요구사항 충족 (포맷 검증)</h2>"
-        echo "<div class=\"cards\"><span class=\"pill pill-${conf_class}\">검증 결과: $(echo "$CONF_RESULT" | tr '[:lower:]' '[:upper:]')</span></div>"
+        echo "<h2>${S_CONF}. ${P_H2_CONF}</h2>"
+        echo "<div class=\"cards\"><span class=\"pill pill-${conf_class}\">${P_CONF_RESULT_LBL} ${CONF_UP}</span></div>"
         if [ "$CONF_RESULT" = "fail" ]; then
-            echo "<div class=\"note\"><b>포맷 검증 미충족 항목</b> — 아래 필수 항목이 빠져 있습니다. 보완 후 재검증을 권장합니다."
+            echo "<div class=\"note\"><b>${P_CONF_FAIL_B}</b>${P_CONF_FAIL_TXT}"
             echo "<ul>"
             echo "$CONF_FAILS" | jq -r '.[] | "<li>" + (.|@html) + "</li>"'
             echo "</ul></div>"
@@ -347,8 +467,8 @@ HTMLHEAD
     fi
 
     cat <<HTMLSEC
-<h2>${S_VULN}. 취약점 분석 및 대응 기한</h2>
-<div class="note">권고 대응 기한: <b>Critical → ${CRIT_DAYS}일 이내</b>, <b>High → ${HIGH_DAYS}일 이내</b> 대응계획 또는 위험 정당화를 마련하는 것을 권장합니다.</div>
+<h2>${S_VULN}. ${P_H2_VULN}</h2>
+${P_VULN_NOTE_HTML}
 <div class="cards">
  <span class="pill pill-crit">Critical <span class="count">${C}</span></span>
  <span class="pill pill-high">High <span class="count">${H}</span></span>
@@ -359,67 +479,67 @@ HTMLHEAD
 HTMLSEC
 
     if [ "$TOTAL" -gt 0 ]; then
-        echo "<div class=\"table-wrap\"><table><tr><th>Severity</th><th>CVE</th><th>Package</th><th>Installed</th><th>Fixed</th><th>대응 기한</th></tr>"
+        echo "<div class=\"table-wrap\"><table><tr><th>Severity</th><th>CVE</th><th>Package</th><th>Installed</th><th>Fixed</th><th>${P_TH_DEADLINE}</th></tr>"
         # shellcheck disable=SC2016
-        echo "$FINDINGS" | jq -r --arg cd "${CRIT_DAYS}일 이내" --arg hd "${HIGH_DAYS}일 이내" '.[] |
+        echo "$FINDINGS" | jq -r --arg cd "$P_DL_CRIT" --arg hd "$P_DL_HIGH" --arg pol "$P_DL_POLICY" '.[] |
             "<tr><td class=\"sev-\(.severity)\">" + (.severity|@html) + "</td>" +
             "<td>" + (.id|@html) + "</td><td>" + (.pkg|@html) + "</td>" +
             "<td>" + (.version|@html) + "</td><td>" + (.fixed|@html) + "</td>" +
-            "<td>" + ((if .severity=="CRITICAL" then $cd elif .severity=="HIGH" then $hd else "정책에 따름" end)|@html) + "</td></tr>"'
+            "<td>" + ((if .severity=="CRITICAL" then $cd elif .severity=="HIGH" then $hd else $pol end)|@html) + "</td></tr>"'
         echo "</table></div>"
     else
-        echo "<p>알려진 취약점이 없거나 security 산출물이 없습니다.</p>"
+        echo "<p>${P_VULN_NONE_HTML}</p>"
     fi
 
-    echo "<h2>${S_LIC}. 라이선스 요약</h2>"
+    echo "<h2>${S_LIC}. ${P_H2_LIC}</h2>"
     if [ "$LIC_COUNT" = "N/A" ]; then
-        echo "<p><em>NOTICE 산출물이 없어 생략합니다.</em></p>"
+        echo "<p><em>${P_LIC_NO_NOTICE_HTML}</em></p>"
     else
-        echo "<p>식별된 distinct 라이선스: <b>${LIC_COUNT}</b>건 (상세는 NOTICE 산출물 참조).</p>"
+        echo "<p>${P_LIC_HTML_PRE} <b>${LIC_COUNT}</b>${P_LIC_HTML_POST}</p>"
     fi
     if [ "$HAS_LIC_CLASS" = "true" ]; then
-        echo "<h3>라이선스 분류 (카피레프트 강도)</h3>"
-        echo "<p>각 컴포넌트는 SBOM에 <code>bomlens:licenseClass</code> 속성으로도 기록되어 있습니다. 인식되지 않은 라이선스는 permissive로 간주하지 않고 미분류(uncategorized)로 남깁니다.</p>"
+        echo "<h3>${P_H3_LICCLASS}</h3>"
+        echo "<p>${P_LICCLASS_INTRO_A}<code>bomlens:licenseClass</code>${P_LICCLASS_INTRO_B}</p>"
         cat <<HTMLLIC
 <div class="cards">
  <span class="pill pill-crit">Network copyleft <span class="count">${NC}</span></span>
  <span class="pill pill-high">Strong copyleft <span class="count">${SC}</span></span>
  <span class="pill pill-med">Weak copyleft <span class="count">${WK}</span></span>
  <span class="pill pill-pass">Permissive <span class="count">${PM}</span></span>
- <span class="pill pill-info">미분류 <span class="count">${UN}</span></span>
+ <span class="pill pill-info">${P_TH_UNCAT} <span class="count">${UN}</span></span>
 </div>
 HTMLLIC
         if [ "$COPYLEFT_TOTAL" -gt 0 ]; then
-            echo "<p>카피레프트 노출을 만드는 컴포넌트 (network/strong, 최대 10개):</p>"
+            echo "<p>${P_COPYLEFT_DRIVERS}</p>"
             echo "<ul class=\"mono\">"
             echo "$COPYLEFT_TOP" | jq -r '.[] | "<li>" + (.label|@html) + " (" + .class + ")</li>"'
             if [ "$COPYLEFT_TOTAL" -gt 10 ]; then
-                echo "<li>외 $((COPYLEFT_TOTAL - 10))개 (전체는 SBOM의 <code>bomlens:licenseClass</code> 속성 참조)</li>"
+                echo "<li>${P_CL_MORE_PRE}$((COPYLEFT_TOTAL - 10))${P_CL_MORE_MID}<code>bomlens:licenseClass</code>${P_CL_MORE_END}</li>"
             fi
             echo "</ul>"
         fi
     fi
 
     if [ "$AS_MODELS" -gt 0 ]; then
-        echo "<h3>AI 모델 위험 판정</h3>"
-        echo "<p>모델별 판정 근거와 조건은 AI 준수 개요 산출물에 있습니다. 이 판정은 법적 자문이 아닌 안내입니다.</p>"
+        echo "<h3>${P_H3_AI}</h3>"
+        echo "<p>${P_AI_SEE_HTML} ${P_AI_DISC}</p>"
         cat <<HTMLASSESS
 <div class="cards">
- <span class="pill pill-pass">제약 신호 없음 <span class="count">${AS_OK}</span></span>
- <span class="pill pill-med">조건부 사용 <span class="count">${AS_COND}</span></span>
- <span class="pill pill-high">주의 <span class="count">${AS_CAU}</span></span>
- <span class="pill pill-info">검토 필요 <span class="count">${AS_REV}</span></span>
+ <span class="pill pill-pass">${L_OK} <span class="count">${AS_OK}</span></span>
+ <span class="pill pill-med">${L_COND} <span class="count">${AS_COND}</span></span>
+ <span class="pill pill-high">${L_CAU} <span class="count">${AS_CAU}</span></span>
+ <span class="pill pill-info">${L_REV} <span class="count">${AS_REV}</span></span>
 </div>
 HTMLASSESS
     fi
 
-    echo "<h2>${S_NEXT}. 다음 단계</h2>"
+    echo "<h2>${S_NEXT}. ${P_H2_NEXT}</h2>"
     echo "<ol>"
-    echo " <li>위 권고 대응 기한 내 <b>대응계획 또는 위험 정당화</b>를 마련.</li>"
+    echo " <li>${P_NEXT1_PRE}<b>${P_NEXT1_BOLD}</b>${P_NEXT1_POST}</li>"
     if [ "$HAS_CONF" = "true" ]; then
-        echo " <li>포맷 검증에 실패한 경우 누락 항목을 보완하여 SBOM을 재생성.</li>"
+        echo " <li>${P_NEXT2_CONF}</li>"
     else
-        echo " <li>고지문(NOTICE)과 SBOM을 함께 보관·배포.</li>"
+        echo " <li>${P_NEXT2_SELF_HTML}</li>"
     fi
     echo "</ol>"
     echo "</body></html>"

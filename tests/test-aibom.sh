@@ -1163,13 +1163,18 @@ jq '(.components[] | select(.type=="machine-learning-model") | .licenses) = [{"l
     "$FIX/aibom-owasp-1_7.json" > "$WORK/rr_bom.json"
 bash "$LIB/assess-ai-risk.sh" "$WORK/rr_bom.json" >/dev/null 2>&1
 bash "$LIB/generate-risk-report.sh" "$WORK/rr" "demo" >/dev/null 2>&1
-grep -q "AI 모델 위험 판정" "$WORK/rr_risk-report.md" && pass "risk report MD carries the assessment section" || fail "risk report lacks the assessment section"
-grep -q "법적 자문이 아닌 안내" "$WORK/rr_risk-report.md" && pass "risk report repeats the disclaimer" || fail "risk report lacks the disclaimer"
-grep -q "AI 모델 위험 판정" "$WORK/rr_risk-report.html" && pass "risk report HTML carries the assessment section" || fail "risk report HTML lacks the section"
+grep -q "AI model risk assessment" "$WORK/rr_risk-report.md" && pass "risk report MD carries the assessment section (en default)" || fail "risk report lacks the assessment section"
+grep -q "not legal advice" "$WORK/rr_risk-report.md" && pass "risk report repeats the disclaimer (en default)" || fail "risk report lacks the disclaimer"
+grep -q "AI model risk assessment" "$WORK/rr_risk-report.html" && pass "risk report HTML carries the assessment section (en default)" || fail "risk report HTML lacks the section"
+# REPORT_LANG=ko localizes the same section and disclaimer.
+REPORT_LANG=ko bash "$LIB/generate-risk-report.sh" "$WORK/rr" "demo" >/dev/null 2>&1
+grep -q "AI 모델 위험 판정" "$WORK/rr_risk-report.md" && pass "ko risk report localizes the assessment section" || fail "ko risk report section not localized"
+grep -q "법적 자문이 아닌 안내" "$WORK/rr_risk-report.md" && pass "ko risk report localizes the disclaimer" || fail "ko risk report disclaimer not localized"
+grep -q 'lang="ko"' "$WORK/rr_risk-report.html" && pass "ko risk report HTML sets lang=ko" || fail "ko risk report HTML lang not set"
 # A plain software SBOM must not grow the section.
 printf '{"bomFormat":"CycloneDX","components":[{"type":"library","name":"x"}]}' > "$WORK/plainrr_bom.json"
 bash "$LIB/generate-risk-report.sh" "$WORK/plainrr" "x" >/dev/null 2>&1
-if grep -q "AI 모델 위험 판정" "$WORK/plainrr_risk-report.md" 2>/dev/null; then
+if grep -q "AI model risk assessment" "$WORK/plainrr_risk-report.md" 2>/dev/null; then
     fail "the assessment section appeared for a plain software SBOM"
 else
     pass "no assessment section for a plain software SBOM"
