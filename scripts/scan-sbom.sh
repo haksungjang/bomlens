@@ -726,8 +726,8 @@ if [ "$MODE" = "SOURCE" ]; then
     # scanned tree (/src) is never written to.
     # pp_env/cosign_run intentionally expand to several -e KEY=VAL tokens, so the
     # word splitting SC2046 flags here is required, not a bug.
-    # shellcheck disable=SC2046
     export_scan_secrets
+    # shellcheck disable=SC2046
     eval "$DOCKER_MSYS"docker run --rm \
         -v "\"$(hostpath "$SCAN_INPUT_DIR")\"":/src -v "\"$(hostpath "$OUTPUT_HOST_DIR")\"":/host-output \
         -w /host-output \
@@ -784,8 +784,8 @@ else
     fi
     # VOL/ENVV/pp_env/cosign_run intentionally expand to multiple tokens (-v, -e
     # pairs), so the word splitting SC2046 flags here is required, not a bug.
-    # shellcheck disable=SC2046
     export_scan_secrets
+    # shellcheck disable=SC2046
     eval "$DOCKER_MSYS"docker run --rm $VOL \
         --add-host=host.docker.internal:host-gateway \
         -e MODE="$MODE" $ENVV $(pp_env)$(cosign_run) \
