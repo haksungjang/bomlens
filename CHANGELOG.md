@@ -7,8 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v1.9.0] - 2026-07-25
+
 ### Added
 
+- `--model` scans now carry a risk assessment beside the inventory: each model and dataset is given a usability verdict — `ok`, `conditional`, `caution` or `review` — so a development team can tell at a glance whether a HuggingFace model is usable and under what conditions. Three axes feed the verdict. The license axis matches every HuggingFace license tag against a curated terms registry (`docker/lib/ai-risk-knowledge.json`) that records whether commercial use, redistribution and derivatives are allowed, the conditions that apply, and a link to the license text; a `license: other` model has its LICENSE file read and any restrictive wording quoted verbatim, and a fine-tune whose declared license conflicts with an inheritable base-model license (Llama, Gemma, the RAIL family, non-commercial CC) is flagged. The file-security axis reads HuggingFace's own per-file scan results (ClamAV and picklescan) over the metadata API without downloading a weight, and records whether the weights use a pickle-format that can execute code on load. The datasets axis rolls up each referenced dataset's license and its declared risk markers (personal data, access-restricted repositories). `--usage internal|product|redistribute|outputs-only` tailors the verdict to how the model will actually be used, so only the conditions that bind that scenario decide it. The verdicts are stamped into the SBOM as `bomlens:assessment:*` properties, summarized in the AI compliance profile and shown as grade badges in the web UI, always with the note that the assessment is guidance, not legal advice. An unrecognized license always falls to `review`, never a guess. (#473, #474, #475, #476, #478, #479)
+- The conformance report now maps every SBOM — not only AI ones — to the EU Cyber Resilience Act (through BSI TR-03183-2) and the NTIA minimum SBOM elements, so a plain software SBOM shows which baseline documentation elements it already satisfies. Reference only; it does not certify compliance. (#462)
+- An AI model card names its training datasets and stops there. BomLens now resolves each id against the HuggingFace datasets API into its own CycloneDX `data` component — the declared license, content digests and upstream provenance — linked to the model as a dependency, which is what the G7 dataset cluster asks for and what a provider writes an EU AI Act training-content summary from. A dataset that cannot be read (withdrawn, renamed, or private to someone else) is kept with an explicit unresolved marker rather than a fabricated license. (#456)
+- The AI compliance profile's rollup — G7 status by cluster, the regulatory crosswalk and the licenses flagged for review — now opens the conformance report itself, so the two artifacts no longer restate each other; the standalone AI-profile HTML is gone while the JSON and Markdown digests remain. (#455)
+- The conformance HTML report was reworked to be read at a glance: numbered rows, a distinct colour for review-only elements, each requirement's regulatory provisions carried on its own row, and the fill-in guidance shown inline per row instead of in a separate section. The web UI conformance section is labelled "SBOM conformance" and states that a single mandatory-format failure — not an advisory G7 gap — is what fails an SBOM. (#454, #463)
+- The conformance and AI compliance profile reports render in Korean with `--lang ko` (`REPORT_LANG=ko`); the machine-readable JSON stays English as a contract. (#447)
+- `--deep-cve` recovers NVD-only Maven CVEs that Trivy misses for older Java libraries, matching by CPE with grype in an opt-in `bomlens-deep-cve` image pulled on demand. Findings not verified against the live NVD version range are flagged version-unverified in the report. The web UI offers the same deep CVE matching for an uploaded SBOM. (#465, #472)
+- A supplier SBOM that lists every rpm/deb package but omits the operating-system component now gets one synthesized from the dominant distro PURL, so Trivy can select the right advisory database instead of returning zero findings for valid PURLs. Skipped for AI SBOMs; disable with `ENRICH_OS_CONTEXT=false`. (#464)
+- Supplier SBOM analysis (`--analyze`) now accepts UTF-16 and BOM-prefixed files and SPDX 3.0 JSON-LD, so an SBOM exported by a tool that writes those parses instead of failing. (#468)
 - The Windows launchers (`sbom-ui.bat`, `check-setup.bat`) now speak English as well as Korean, following the same rule as the desktop app: `SBOM_LANG` wins, otherwise the Windows display language, and anything that is not Korean gets English. This also removes the boxes-instead-of-text problem on a Japanese console, where the font has no Hangul glyphs and no codepage can help.
 - `bomlens.settings.example.txt`: environment variables do not survive a double-click, so `UI_PORT`, `SBOM_LANG`, `SBOM_PULL`, `SBOM_IMAGE_TAR`, `SBOM_SCANNER_IMAGE`, `SBOM_OUTPUT_DIR` and `SBOM_UI_MOUNT_DIR` are now also read from a text file beside the scripts (or `%USERPROFILE%\.bomlens\settings.txt`). A real environment variable still wins.
 - Offline install: `SBOM_IMAGE_TAR` loads a `docker save` tar instead of pulling, and a `bomlens-image.tar` next to the scripts is picked up automatically. With `SBOM_PULL=never` the launcher never touches the network — a USB stick with the `.bat` and the `.tar` needs no registry, no command line and no proxy setup. `SBOM_PULL=always` refreshes a cached `:latest`, which previously stayed pinned forever once pulled.
@@ -16,8 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The desktop app shows aggregate pull progress (layers complete, elapsed time) with a heartbeat, so the multi-GB first download no longer looks frozen during the long silent stretches, and both start screens gained an "Open log folder" button so a failing user can hand over `startup.log`.
 - Pull failures are now classified (proxy, DNS, auth, disk, timeout) and the screen explains the actual fix. The proxy text states the thing that trips people up: the image is fetched by the Docker daemon, so setting proxy variables for the app has no effect.
 
+### Changed
+
+- Updated cdxgen to 12.8.0 and syft to 1.48.0. (#432, #433)
+- Documentation: the AI model guide gained a worked conformance example with openable sample reports and now covers the model risk assessment, `--deep-cve` and the generalized regulatory crosswalk are documented, the architecture and pipeline diagrams were redrawn as authored SVG legible at page width, and the getting-started pages and environment-variable reference were synced across English and Korean. (#443, #445, #446, #448, #449, #469, #470, #471, #477, #481)
+
 ### Fixed
 
+- Conformance no longer fails PURL coverage when there is nothing to measure. An SBOM whose only components are datasets (no packages) counted an empty denominator as 0% and failed an otherwise complete AI SBOM. (#457)
 - The first-run download figure is now the measured one. Every surface said the scanner image is "about 3-4 GB", which is its uncompressed size on disk rather than what is transferred: the registry manifest puts the actual download at about 250 MB. The launchers, the desktop app and the docs now say 250 MB, and they add the part that was missing — the first scan of a project fetches a language image as well (0.6-1.7 GB, once per language). The AI model guide's comparison figure was corrected the same way (3.5 GB to download).
 - Container start failures no longer leak Korean strings into the English UI. `lib/container.mjs` threw hardcoded Korean text that bypassed i18n, so an ordinary port conflict or start timeout produced `Startup failed: docker run 실패: ...` for a non-Korean user. Errors now carry a code that `i18n.mjs` translates, and a test asserts no Hangul in the English dictionary.
 - `sbom-ui.bat` no longer closes its window silently. Any failure after the Docker check — port conflict, bad mount, container crash — used to vanish instantly with no message; every path now explains itself and holds the window, and the container exit code is reported.
@@ -449,7 +466,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - No publicly known vulnerabilities have been reported or fixed in this project to date.
 
-[Unreleased]: https://github.com/sktelecom/bomlens/compare/v1.8.2...HEAD
+[Unreleased]: https://github.com/sktelecom/bomlens/compare/v1.9.0...HEAD
+[v1.9.0]: https://github.com/sktelecom/bomlens/releases/tag/v1.9.0
+[v1.8.3]: https://github.com/sktelecom/bomlens/releases/tag/v1.8.3
 [v1.8.2]: https://github.com/sktelecom/bomlens/releases/tag/v1.8.2
 [v1.8.1]: https://github.com/sktelecom/bomlens/releases/tag/v1.8.1
 [v1.8.0]: https://github.com/sktelecom/bomlens/releases/tag/v1.8.0
