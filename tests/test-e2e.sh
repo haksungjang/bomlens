@@ -359,31 +359,40 @@ cat > "$atmp/rr_security.json" <<'EOF'
 EOF
 printf 'License: MIT\n' > "$atmp/rr_NOTICE.txt"
 bash "$LIB/generate-risk-report.sh" "$atmp/rr" "demo" >/dev/null 2>&1
-if grep -q "7일" "$atmp/rr_risk-report.md" && grep -q "30일" "$atmp/rr_risk-report.md"; then
-    pass "risk report: Critical-7d / High-30d deadlines present (md)"
+if grep -q "7 days" "$atmp/rr_risk-report.md" && grep -q "30 days" "$atmp/rr_risk-report.md"; then
+    pass "risk report: Critical-7d / High-30d deadlines present (md, en default)"
 else
-    fail "risk report: Critical-7d / High-30d deadlines present (md)"
+    fail "risk report: Critical-7d / High-30d deadlines present (md, en default)"
 fi
-if grep -q "7일" "$atmp/rr_risk-report.html" && grep -q "30일" "$atmp/rr_risk-report.html"; then
-    pass "risk report: deadlines present (html)"
+if grep -q "7 days" "$atmp/rr_risk-report.html" && grep -q "30 days" "$atmp/rr_risk-report.html"; then
+    pass "risk report: deadlines present (html, en default)"
 else
-    fail "risk report: deadlines present (html)"
+    fail "risk report: deadlines present (html, en default)"
 fi
 if grep -qE "Critical \| High" "$atmp/rr_risk-report.md" && grep -q "CVE-2024-0001" "$atmp/rr_risk-report.md"; then
     pass "risk report: severity table + CVE rows present"
 else
     fail "risk report: severity table + CVE rows present"
 fi
-if grep -q "미충족" "$atmp/rr_risk-report.md"; then
-    pass "risk report: surfaces unmet conformance items"
+if grep -q "Unmet format-validation" "$atmp/rr_risk-report.md"; then
+    pass "risk report: surfaces unmet conformance items (en default)"
 else
-    fail "risk report: surfaces unmet conformance items"
+    fail "risk report: surfaces unmet conformance items (en default)"
+fi
+# REPORT_LANG=ko renders the same report in Korean (deadlines + unmet-items note).
+REPORT_LANG=ko bash "$LIB/generate-risk-report.sh" "$atmp/rr" "demo" >/dev/null 2>&1
+if grep -q "7일 이내" "$atmp/rr_risk-report.md" && grep -q "30일 이내" "$atmp/rr_risk-report.md" \
+   && grep -q "포맷 검증 미충족 항목" "$atmp/rr_risk-report.md" && grep -q 'lang="ko"' "$atmp/rr_risk-report.html"; then
+    pass "risk report (ko): deadlines + unmet-items note localized"
+else
+    fail "risk report (ko): deadlines + unmet-items note localized"
 fi
 rm -rf "$atmp"
 
 # Self-generated risk report (no conformance artifact) — the all-modes default.
-# Without a *_conformance.json the report must drop the 포맷 검증 section and
-# retitle to 오픈소스 위험 분석 보고서 with sections renumbered from 1.
+# Without a *_conformance.json the report must drop the format-validation section
+# and retitle to the open-source risk analysis report with sections renumbered
+# from 1. English is the default; REPORT_LANG=ko swaps to Korean.
 stmp="$(mktemp -d)"
 cat > "$stmp/self_security.json" <<'EOF'
 {"Results":[{"Vulnerabilities":[
@@ -392,22 +401,30 @@ cat > "$stmp/self_security.json" <<'EOF'
 EOF
 printf 'License: MIT\nLicense: Apache-2.0\n' > "$stmp/self_NOTICE.txt"
 bash "$LIB/generate-risk-report.sh" "$stmp/self" "SelfApp" >/dev/null 2>&1
-if grep -q "오픈소스 위험 분석 보고서" "$stmp/self_risk-report.md" \
-   && ! grep -q "포맷 검증" "$stmp/self_risk-report.md"; then
-    pass "risk report (self): titled 오픈소스 위험 분석 보고서, no 포맷 검증 section"
+if grep -q "Open-source risk analysis report" "$stmp/self_risk-report.md" \
+   && ! grep -q "format validation" "$stmp/self_risk-report.md"; then
+    pass "risk report (self): titled Open-source risk analysis report, no format-validation section"
 else
-    fail "risk report (self): titled 오픈소스 위험 분석 보고서, no 포맷 검증 section"
+    fail "risk report (self): titled Open-source risk analysis report, no format-validation section"
 fi
-if grep -q "## 1. 취약점" "$stmp/self_risk-report.md" \
-   && grep -q "7일" "$stmp/self_risk-report.md" && grep -q "CVE-2025-0001" "$stmp/self_risk-report.md"; then
+if grep -q "## 1. Vulnerability" "$stmp/self_risk-report.md" \
+   && grep -q "7 days" "$stmp/self_risk-report.md" && grep -q "CVE-2025-0001" "$stmp/self_risk-report.md"; then
     pass "risk report (self): renumbered from 1, vuln table present"
 else
     fail "risk report (self): renumbered from 1, vuln table present"
 fi
-if grep -q "<h1>오픈소스 위험 분석 보고서</h1>" "$stmp/self_risk-report.html"; then
-    pass "risk report (self): html titled 오픈소스 위험 분석 보고서"
+if grep -q "<h1>Open-source risk analysis report</h1>" "$stmp/self_risk-report.html"; then
+    pass "risk report (self): html titled Open-source risk analysis report"
 else
-    fail "risk report (self): html titled 오픈소스 위험 분석 보고서"
+    fail "risk report (self): html titled Open-source risk analysis report"
+fi
+REPORT_LANG=ko bash "$LIB/generate-risk-report.sh" "$stmp/self" "SelfApp" >/dev/null 2>&1
+if grep -q "오픈소스 위험 분석 보고서" "$stmp/self_risk-report.md" \
+   && ! grep -q "포맷 검증" "$stmp/self_risk-report.md" \
+   && grep -q "<h1>오픈소스 위험 분석 보고서</h1>" "$stmp/self_risk-report.html"; then
+    pass "risk report (self, ko): titled 오픈소스 위험 분석 보고서, no 포맷 검증 section"
+else
+    fail "risk report (self, ko): titled 오픈소스 위험 분석 보고서, no 포맷 검증 section"
 fi
 rm -rf "$stmp"
 
@@ -443,10 +460,10 @@ else
         fi
         # Risk report is now generated in SOURCE mode too (not only ANALYZE).
         if [ -f "$w/testapp_1.0_risk-report.md" ] && [ -f "$w/testapp_1.0_risk-report.html" ] \
-           && grep -q "오픈소스 위험 분석 보고서" "$w/testapp_1.0_risk-report.md"; then
-            pass "nodejs SOURCE: 오픈소스 위험 분석 보고서 generated (all-modes default)"
+           && grep -q "Open-source risk analysis report" "$w/testapp_1.0_risk-report.md"; then
+            pass "nodejs SOURCE: Open-source risk analysis report generated (all-modes default)"
         else
-            fail "nodejs SOURCE: 오픈소스 위험 분석 보고서 generated (all-modes default)"
+            fail "nodejs SOURCE: Open-source risk analysis report generated (all-modes default)"
         fi
         rm -rf "$w"
     else
@@ -799,7 +816,7 @@ else
     else
         fail "analyze: SPDX converted to CycloneDX with components" "got $nbom"
     fi
-    { [ -f "$w/supplier_2.3.1_risk-report.md" ] && grep -q "7일" "$w/supplier_2.3.1_risk-report.md" && grep -q "30일" "$w/supplier_2.3.1_risk-report.md"; } \
+    { [ -f "$w/supplier_2.3.1_risk-report.md" ] && grep -q "7 days" "$w/supplier_2.3.1_risk-report.md" && grep -q "30 days" "$w/supplier_2.3.1_risk-report.md"; } \
         && pass "analyze: risk report with 7d/30d deadlines (container)" \
         || fail "analyze: risk report with 7d/30d deadlines (container)"
     # The docs promise a _conformance.{json,md,html} trio; only the .json was

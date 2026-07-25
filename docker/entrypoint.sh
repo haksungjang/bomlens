@@ -625,13 +625,27 @@ fi
 if [ "${SIGN_SBOM:-false}" = "true" ]; then
     if command -v cosign >/dev/null 2>&1 && [ -n "${COSIGN_KEY:-}" ]; then
         echo "[INFO] Signing SBOM with cosign..."
+        SIGN_FAILED=0
         if cosign sign-blob --yes --tlog-upload=false --key "$COSIGN_KEY" \
                --output-signature "${OUTPUT_FILE}.sig" "$OUTPUT_FILE"; then
             ARTIFACTS+=("${OUTPUT_FILE}.sig")
+        else
+            echo "[ERROR] cosign could not sign the SBOM (check COSIGN_KEY / COSIGN_PASSWORD)."; SIGN_FAILED=1
         fi
-        if [ -f "$SPDX_FILE" ] && cosign sign-blob --yes --tlog-upload=false --key "$COSIGN_KEY" \
-               --output-signature "${SPDX_FILE}.sig" "$SPDX_FILE"; then
-            ARTIFACTS+=("${SPDX_FILE}.sig")
+        if [ -f "$SPDX_FILE" ]; then
+            if cosign sign-blob --yes --tlog-upload=false --key "$COSIGN_KEY" \
+                   --output-signature "${SPDX_FILE}.sig" "$SPDX_FILE"; then
+                ARTIFACTS+=("${SPDX_FILE}.sig")
+            else
+                echo "[ERROR] cosign could not sign the SPDX SBOM."; SIGN_FAILED=1
+            fi
+        fi
+        # A requested signature that was not produced is a failure on a
+        # supply-chain tool — do not exit 0 leaving the user to believe their
+        # SBOM is signed when no .sig exists.
+        if [ "$SIGN_FAILED" != "0" ]; then
+            echo "[ERROR] --sign was requested but a signature could not be produced. The SBOM and other artifacts were still written."
+            exit 1
         fi
     else
         echo "[WARN] --sign requested but cosign/COSIGN_KEY unavailable; skipping."

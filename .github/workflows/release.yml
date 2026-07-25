@@ -79,10 +79,11 @@ jobs:
             #### Desktop app (double-click, no CLI)
             Download `BomLens-Setup.exe` (Windows) or `BomLens-Setup.dmg` (macOS) from the assets below. Unsigned for now; if Windows SmartScreen warns, choose "More info", then "Run anyway".
 
-            #### Scripts
+            #### Scripts (CLI)
+            Download `bomlens-cli-linux.tar.gz` (Linux/macOS) or `bomlens-cli-windows.zip` (Windows) from the assets below and extract it — the archive carries `scan-sbom.sh` together with the host-side files it needs (a single raw download of `scan-sbom.sh` will not run on its own).
             ```bash
-            curl -O https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/scan-sbom.sh
-            chmod +x scan-sbom.sh
+            tar -xzf bomlens-cli-linux.tar.gz
+            ./scripts/scan-sbom.sh --help
             ```
             
             #### Docker Image
@@ -118,23 +119,28 @@ jobs:
         run: |
           mkdir -p release-assets
           
-          # Scripts
+          # Scripts. The CLI bundles must carry the host-side lib files
+          # scan-sbom.sh needs: source-detect.sh is sourced unconditionally on
+          # the host (line ~60, under set -e), and build-prep.sh is mounted into
+          # the container for source scans. Paths are preserved so the
+          # scan-sbom(.bat) -> scan-sbom.sh -> REPO_DIR/docker/lib resolution
+          # works after extraction. Omitting source-detect.sh makes even
+          # `scan-sbom.sh --help` exit 1 before any scan.
           cp scripts/scan-sbom.sh release-assets/
           chmod +x release-assets/scan-sbom.sh
-          tar -czf release-assets/bomlens-cli-linux.tar.gz -C scripts scan-sbom.sh
-          
+          tar -czf release-assets/bomlens-cli-linux.tar.gz \
+            scripts/scan-sbom.sh docker/lib/source-detect.sh docker/lib/build-prep.sh
+
           # Windows runtime bundle: both launchers, the orchestration script,
-          # and the one lib file scan-sbom.sh mounts into the container for
-          # source scans (docker/lib/build-prep.sh). Paths are preserved so the
-          # scan-sbom.bat -> scan-sbom.sh -> REPO_DIR/docker/lib resolution works
-          # after unzip. sbom-ui.bat is self-contained (double-click web UI).
-          # check-setup.bat must ship too: the launchers' own error messages tell
-          # users to double-click it, and the settings example is how a non-CLI
-          # user reaches UI_PORT / SBOM_IMAGE_TAR (env vars die on a double-click).
+          # and the host-side lib files above. sbom-ui.bat is self-contained
+          # (double-click web UI). check-setup.bat must ship too: the launchers'
+          # own error messages tell users to double-click it, and the settings
+          # example is how a non-CLI user reaches UI_PORT / SBOM_IMAGE_TAR (env
+          # vars die on a double-click).
           zip -r release-assets/bomlens-cli-windows.zip \
             scripts/scan-sbom.sh scripts/scan-sbom.bat scripts/sbom-ui.bat \
             scripts/check-setup.bat scripts/bomlens.settings.example.txt \
-            docker/lib/build-prep.sh
+            docker/lib/source-detect.sh docker/lib/build-prep.sh
 
           # Examples
           tar -czf release-assets/bomlens-examples-${{ needs.create-release.outputs.version }}.tar.gz examples/
@@ -149,6 +155,28 @@ jobs:
             bomlens-examples-${{ needs.create-release.outputs.version }}.tar.gz \
             bomlens-${{ needs.create-release.outputs.version }}.tar.gz \
             > SHA256SUMS.txt )
+
+      - name: Verify the CLI bundles are self-sufficient
+        # The CLI zip/tar must carry every host-side file scan-sbom.sh sources
+        # or the extracted bundle dies before any scan (source-detect.sh was
+        # missing once and no test caught it — it is not in the container).
+        # Extract each into a clean dir and prove `scan-sbom.sh --help` runs.
+        run: |
+          set -e
+          for pkg in \
+            "tar:release-assets/bomlens-cli-linux.tar.gz" \
+            "zip:release-assets/bomlens-cli-windows.zip"; do
+            kind="${pkg%%:*}"; file="${pkg#*:}"
+            dir="$(mktemp -d)"
+            case "$kind" in
+              tar) tar -xzf "$file" -C "$dir" ;;
+              zip) unzip -q "$file" -d "$dir" ;;
+            esac
+            if ! bash "$dir/scripts/scan-sbom.sh" --help >/dev/null 2>"$dir/err"; then
+              echo "FAIL: $file — extracted scan-sbom.sh --help exited non-zero:"; cat "$dir/err"; exit 1
+            fi
+            echo "OK: $file is self-sufficient"
+          done
 
       - name: Upload release assets
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2

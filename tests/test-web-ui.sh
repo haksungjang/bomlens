@@ -129,9 +129,10 @@ server._self_container_id = lambda: "selfcid000000"
 # A hostile project name reaches docker run only as a sanitized -e value, and
 # an out-of-allowlist mode is refused outright (returns -1 without launching).
 captured = {}
-def fake_stream(args, on_log, on_progress=None, cancel=None, container=None):
+def fake_stream(args, on_log, on_progress=None, cancel=None, container=None, env=None):
     captured["args"] = args
     captured["container"] = container
+    captured["env"] = env
     return 0
 server._stream_cmd = fake_stream
 server._sibling_image_present = lambda image: True
@@ -149,6 +150,28 @@ pname = [a for a in args if a.startswith("PROJECT_NAME=")][0]
 assert not any(c in pname for c in ";`$&|<>\n"), pname
 assert "MODE=AIBOM" in args and "MODEL_ID=openai/clip" in args, args
 assert "ghcr.io/sktelecom/bomlens-aibom:1.5.0" in args, args
+# The sibling runs the same entrypoint, which defaults UPLOAD_ENABLED to true and
+# exits 1 without credentials — so without this the scan reports failure despite
+# generating every artifact. With no upload configured the sibling must be told
+# generate-only, and no credential may reach the argv.
+assert "UPLOAD_ENABLED=false" in args, args
+assert not any(a.startswith("API_KEY") for a in args), args
+# With an upload configured, the destination is forwarded but the secret API key
+# rides the subprocess env (name-only `-e API_KEY`), never the argv / `ps`.
+captured.clear()
+server.run_sibling_scan(
+    "ghcr.io/sktelecom/bomlens-aibom:1.5.0", "AIBOM", run_out,
+    lambda ln: None, model_id="openai/clip",
+    extra_env={"PROJECT_NAME": "p", "PROJECT_VERSION": "1.0", "UPLOAD_ENABLED": "true",
+               "UPLOAD_TARGET": "dependency-track", "API_URL": "https://dt.example",
+               "API_KEY": "s3cr3t-should-not-appear"},
+)
+uargs = captured["args"]
+assert "UPLOAD_ENABLED=true" in uargs, uargs
+assert "UPLOAD_TARGET=dependency-track" in uargs and "API_URL=https://dt.example" in uargs, uargs
+assert "API_KEY" in uargs and not any(a.startswith("API_KEY=") for a in uargs), uargs
+assert "s3cr3t-should-not-appear" not in " ".join(uargs), "upload secret leaked onto the argv"
+assert (captured["env"] or {}).get("API_KEY") == "s3cr3t-should-not-appear", "subprocess env must carry the key for name-only -e"
 # Shared via --volumes-from, NOT a host-path bind mount; the run dir is the workdir
 # and HOST_OUTPUT_DIR (container paths).
 assert "--volumes-from" in args and "selfcid000000" in args, args
@@ -692,6 +715,73 @@ else
     fail "scanError exposure is wrong"
 fi
 rm -f "$OUT"/serr_1.0_* "$OUT"/sok_1.0_*
+
+echo "== untrusted SBOM shapes must not crash the summaries (ANALYZE mode) =="
+# ANALYZE copies an uploaded SBOM verbatim; CycloneDX does not force components[]
+# to be objects or properties/licenses/externalReferences to be arrays. A crafted
+# SBOM must degrade (skip the malformed element) instead of crashing
+# sbom_summary/list_scans and leaving the SSE 'done' event unsent (UI hangs) or
+# permanently breaking the Recent-scans sidebar.
+# (a) scalar entries mixed into components[].
+cat > "$OUT/evil_scal_1.0_bom.json" <<'JSON'
+{"bomFormat":"CycloneDX",
+ "metadata":{"component":{"name":"evil-scal","version":"1.0","type":"application"}},
+ "components":["x", 42, null,
+   {"type":"library","name":"real","version":"1.0","purl":"pkg:pypi/real@1.0"}]}
+JSON
+# (b) dict components whose properties/licenses/externalReferences are scalars,
+# and a metadata that is itself a scalar — every list/dict field must degrade.
+cat > "$OUT/evil_field_1.0_bom.json" <<'JSON'
+{"bomFormat":"CycloneDX","metadata":"oops",
+ "components":[
+   {"name":"bad","properties":"x","licenses":"y","externalReferences":7,"type":"library"},
+   {"name":"good","version":"2.0","type":"library","purl":"pkg:npm/good@2.0",
+    "properties":[null,"scalar",{"name":"bomlens:eol","value":"true"}],
+    "licenses":[{"license":{"id":"MIT"}}]}
+ ]}
+JSON
+if SBOM_OUTPUT_DIR="$OUT" python3 - "$ROOT_DIR" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+
+# (a) scalar components are skipped; the one real component is summarized, and
+# the reported `components` count still reflects the full array length.
+s = server.sbom_summary("evil_scal_1.0")
+assert s is not None, "summary crashed on scalar components"
+rows = {r["name"]: r for r in s["componentList"]}
+assert list(rows) == ["real"], rows          # scalars dropped, real kept
+assert rows["real"]["purl"] == "pkg:pypi/real@1.0", rows["real"]
+assert s["components"] == 4, s                # full array length preserved
+
+# (b) scalar properties/licenses/externalReferences and a scalar metadata all
+# degrade to empty: the malformed component still yields a row, the well-formed
+# one is fully summarized (eol property + MIT license), and eolCount counts it.
+s2 = server.sbom_summary("evil_field_1.0")
+assert s2 is not None, "summary crashed on scalar object fields"
+rows2 = {r["name"]: r for r in s2["componentList"]}
+assert set(rows2) == {"bad", "good"}, rows2
+assert rows2["bad"]["licenses"] == [] and "eol" not in rows2["bad"], rows2["bad"]
+assert rows2["good"]["licenses"] == ["MIT"], rows2["good"]
+assert rows2["good"]["eol"] == "true", rows2["good"]
+assert s2["eolCount"] == 1, s2
+
+# scan_detail re-opens the poisoned scan without crashing (the done-event shape).
+assert server.scan_detail("evil_scal_1.0")["ok"] is True
+
+# (c) list_scans walks EVERY scan in OUTPUT_DIR, so one poisoned folder must not
+# break the whole Recent list: it returns for both malformed scans.
+ids = {x["id"]: x for x in server.list_scans()}
+assert "evil_scal_1.0" in ids and "evil_field_1.0" in ids, ids
+assert ids["evil_scal_1.0"]["components"] == 4, ids["evil_scal_1.0"]
+assert ids["evil_field_1.0"]["project"] == "evil_field_1.0", ids["evil_field_1.0"]
+PY
+then
+    pass "malformed components / scalar object fields degrade (no crash; valid components summarized)"
+else
+    fail "untrusted SBOM shapes crashed a summary (see assertion above)"
+fi
+rm -f "$OUT"/evil_scal_1.0_* "$OUT"/evil_field_1.0_*
 
 rm -f "$OUT"/demo_1.0_* "$OUT"/flat_1.0_* "$OUT"/bad_1.0_*
 

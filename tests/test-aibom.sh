@@ -597,6 +597,45 @@ mdax=$(jq -r '.components[] | select(.type=="machine-learning-model") | .propert
 mre=$(jq -r '.components[] | select(.type=="machine-learning-model") | .properties[] | select(.name=="bomlens:assessment:reasons") | .value' "$WORK/sig.json")
 case "$mre" in *"org/pii-ds"*) pass "the offending dataset is named in the model reasons" ;; *) fail "model reasons='$mre'" ;; esac
 
+echo "== the datasets axis is scoped per model via dependencies[], not global =="
+# Two models, each depending on a different dataset. A clean model must not
+# inherit the worst dataset of a model it does not depend on (the global-
+# aggregation bug). Reproduces the multi-model ANALYZE case the single-model
+# fixtures miss.
+jq -n '{bomFormat:"CycloneDX",specVersion:"1.7",metadata:{component:{name:"m",version:"1"}},
+  components:[
+    {type:"machine-learning-model","bom-ref":"A",name:"model-A",licenses:[{license:{id:"Apache-2.0"}}]},
+    {type:"machine-learning-model","bom-ref":"B",name:"model-B",licenses:[{license:{id:"Apache-2.0"}}]},
+    {type:"data","bom-ref":"cleanDS",name:"clean-ds",licenses:[{license:{id:"Apache-2.0"}}]},
+    {type:"data","bom-ref":"piiDS",name:"pii-ds",properties:[{name:"bomlens:dataset:signal",value:"pii"}]}],
+  dependencies:[{ref:"A",dependsOn:["cleanDS"]},{ref:"B",dependsOn:["piiDS"]}]}' > "$WORK/multi.json"
+bash "$LIB/assess-ai-risk.sh" "$WORK/multi.json" >/dev/null 2>&1
+mA=$(jq -r '.components[]|select(.name=="model-A")|.properties[]|select(.name=="bomlens:assessment:overall")|.value' "$WORK/multi.json")
+mB=$(jq -r '.components[]|select(.name=="model-B")|.properties[]|select(.name=="bomlens:assessment:overall")|.value' "$WORK/multi.json")
+[ "$mA" = "ok" ] && pass "a clean model keeps its own verdict (not contaminated by another model's dataset)" || fail "model-A overall='$mA', expected ok"
+[ "$mB" = "caution" ] && pass "the model depending on the pii dataset is caution" || fail "model-B overall='$mB', expected caution"
+rA=$(jq -r '.components[]|select(.name=="model-A")|.properties[]|select(.name=="bomlens:assessment:reasons")|.value' "$WORK/multi.json")
+case "$rA" in *pii-ds*) fail "model-A reasons name a dataset it does not depend on" "$rA" ;; *) pass "model-A reasons do not name the unrelated pii dataset" ;; esac
+# A model that depends on no dataset gets no datasets axis (links are not guessed).
+jq -n '{components:[{type:"machine-learning-model","bom-ref":"m",name:"solo",licenses:[{license:{id:"MIT"}}]},{type:"data","bom-ref":"d",name:"orphan-ds",properties:[{name:"bomlens:dataset:signal",value:"pii"}]}]}' > "$WORK/solo.json"
+bash "$LIB/assess-ai-risk.sh" "$WORK/solo.json" >/dev/null 2>&1
+soloax=$(jq -r '.components[]|select(.name=="solo")|.properties[]|select(.name=="bomlens:assessment:axes")|.value' "$WORK/solo.json")
+case "$soloax" in *datasets*) fail "a model with no dataset edge got a guessed datasets axis" "$soloax" ;; *) pass "no dataset edge -> no datasets axis (not guessed)" ;; esac
+
+echo "== the AI profile does not let a license string inject markdown =="
+# The per-model reason bullet embeds a component-supplied license string from
+# an untrusted SBOM. Newlines + markdown in a license name must be flattened,
+# not rendered as real headings/list-items/links in the report.
+jq -n '{bomFormat:"CycloneDX",specVersion:"1.7",metadata:{component:{name:"m",version:"1"}},components:[{type:"machine-learning-model","bom-ref":"m",name:"acme",licenses:[{license:{name:"Evil\n## INJECTED HEADING\n- fake item\n[phish](http://evil)"}}]}]}' > "$WORK/inj_bom.json"
+bash "$LIB/assess-ai-risk.sh" "$WORK/inj_bom.json" >/dev/null 2>&1
+printf '{"project":"d","result":"pass","checks":[{"id":"g7-x","label":"x","cluster":"models","source":"auto","status":"pass"}]}' > "$WORK/inj_conformance.json"
+REPORT_LANG=en bash "$LIB/generate-ai-profile.sh" "$WORK/inj" d >/dev/null 2>&1
+if grep -qE '^(## INJECTED HEADING|- fake item)$' "$WORK/inj_ai-profile.md"; then
+    fail "a license name injected real markdown structure into the profile"
+else
+    pass "the license string is flattened; no markdown injection"
+fi
+
 echo "== a custom license (other) is read and its restrictive wording quoted =="
 cat > "$WORK/hfstub/huggingface_hub.py" <<'STUB'
 import os
@@ -1124,13 +1163,18 @@ jq '(.components[] | select(.type=="machine-learning-model") | .licenses) = [{"l
     "$FIX/aibom-owasp-1_7.json" > "$WORK/rr_bom.json"
 bash "$LIB/assess-ai-risk.sh" "$WORK/rr_bom.json" >/dev/null 2>&1
 bash "$LIB/generate-risk-report.sh" "$WORK/rr" "demo" >/dev/null 2>&1
-grep -q "AI 모델 위험 판정" "$WORK/rr_risk-report.md" && pass "risk report MD carries the assessment section" || fail "risk report lacks the assessment section"
-grep -q "법적 자문이 아닌 안내" "$WORK/rr_risk-report.md" && pass "risk report repeats the disclaimer" || fail "risk report lacks the disclaimer"
-grep -q "AI 모델 위험 판정" "$WORK/rr_risk-report.html" && pass "risk report HTML carries the assessment section" || fail "risk report HTML lacks the section"
+grep -q "AI model risk assessment" "$WORK/rr_risk-report.md" && pass "risk report MD carries the assessment section (en default)" || fail "risk report lacks the assessment section"
+grep -q "not legal advice" "$WORK/rr_risk-report.md" && pass "risk report repeats the disclaimer (en default)" || fail "risk report lacks the disclaimer"
+grep -q "AI model risk assessment" "$WORK/rr_risk-report.html" && pass "risk report HTML carries the assessment section (en default)" || fail "risk report HTML lacks the section"
+# REPORT_LANG=ko localizes the same section and disclaimer.
+REPORT_LANG=ko bash "$LIB/generate-risk-report.sh" "$WORK/rr" "demo" >/dev/null 2>&1
+grep -q "AI 모델 위험 판정" "$WORK/rr_risk-report.md" && pass "ko risk report localizes the assessment section" || fail "ko risk report section not localized"
+grep -q "법적 자문이 아닌 안내" "$WORK/rr_risk-report.md" && pass "ko risk report localizes the disclaimer" || fail "ko risk report disclaimer not localized"
+grep -q 'lang="ko"' "$WORK/rr_risk-report.html" && pass "ko risk report HTML sets lang=ko" || fail "ko risk report HTML lang not set"
 # A plain software SBOM must not grow the section.
 printf '{"bomFormat":"CycloneDX","components":[{"type":"library","name":"x"}]}' > "$WORK/plainrr_bom.json"
 bash "$LIB/generate-risk-report.sh" "$WORK/plainrr" "x" >/dev/null 2>&1
-if grep -q "AI 모델 위험 판정" "$WORK/plainrr_risk-report.md" 2>/dev/null; then
+if grep -q "AI model risk assessment" "$WORK/plainrr_risk-report.md" 2>/dev/null; then
     fail "the assessment section appeared for a plain software SBOM"
 else
     pass "no assessment section for a plain software SBOM"
