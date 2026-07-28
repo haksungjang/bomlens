@@ -1034,6 +1034,53 @@ bash "$LIB/validate-sbom.sh" "$FIX/good-spdx3-jsonld.json" "$WORK/spdx3-cf" "sup
 [ -f "$WORK/spdx3-cf_conformance.json" ] && jq -e '.checks|length>0' "$WORK/spdx3-cf_conformance.json" >/dev/null 2>&1 \
     && pass "SPDX 3.0 produces a conformance report" || fail "SPDX 3.0 conformance not produced"
 
+echo "== conformance: a PURL failure says when the components carry a CPE instead =="
+# The submission criteria require a PURL, so this stays a mandatory failure. What
+# it must not do is read as "unidentified components" when the components are
+# identified another way — the baselines under this row (BSI TR-03183-2 5.2.4,
+# NTIA) accept either identifier. A Yocto image is the case in point: bitbake
+# writes CPEs and never PURLs.
+cat > "$WORK/cpe-only.cdx.json" <<'CEOF'
+{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,
+ "metadata":{"timestamp":"2026-01-01T00:00:00Z","tools":{"components":[{"type":"application","name":"t"}]},
+              "component":{"type":"operating-system","name":"img","version":"1.0"}},
+ "components":[
+   {"type":"library","name":"busybox","version":"1.36.1","cpe":"cpe:2.3:a:*:busybox:1.36.1:*:*:*:*:*:*:*"},
+   {"type":"library","name":"libz1","version":"1.3","cpe":"cpe:2.3:a:*:zlib:1.3:*:*:*:*:*:*:*"},
+   {"type":"library","name":"nameless","version":"1.0"}],
+ "dependencies":[{"ref":"busybox","dependsOn":["libz1"]}]}
+CEOF
+bash "$LIB/validate-sbom.sh" "$WORK/cpe-only.cdx.json" "$WORK/cpeonly" "supplier" >/dev/null 2>&1
+cpe_status=$(jq -r '.checks[] | select(.id=="purl") | .status' "$WORK/cpeonly_conformance.json" 2>/dev/null)
+cpe_detail=$(jq -r '.checks[] | select(.id=="purl") | .detail' "$WORK/cpeonly_conformance.json" 2>/dev/null)
+[ "$cpe_status" = "fail" ] \
+    && pass "CPE instead of PURL still fails the submission criteria" \
+    || fail "purl check status='$cpe_status' (expected fail)"
+case "$cpe_detail" in
+    *"2 identified by CPE instead"*)
+        pass "the report counts how many components carry a CPE instead" ;;
+    *)  fail "purl detail does not name the CPE-identified components" "$cpe_detail" ;;
+esac
+# The row already carries the baselines that accept either identifier, so a
+# reader can see the verdict is ours and not theirs.
+jq -e '[.checks[] | select(.id=="purl") | .regulations[]?.framework] | index("bsi-tr-03183-2")' \
+    "$WORK/cpeonly_conformance.json" >/dev/null 2>&1 \
+    && pass "the PURL row still cites the baselines that accept CPE" \
+    || fail "purl row lost its regulatory references"
+# An SBOM with neither identifier must say nothing about CPEs.
+cat > "$WORK/no-id.cdx.json" <<'NEOF'
+{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,
+ "metadata":{"timestamp":"2026-01-01T00:00:00Z","tools":{"components":[{"type":"application","name":"t"}]},
+              "component":{"type":"application","name":"app","version":"1.0"}},
+ "components":[{"type":"library","name":"a","version":"1"}]}
+NEOF
+bash "$LIB/validate-sbom.sh" "$WORK/no-id.cdx.json" "$WORK/noid" "supplier" >/dev/null 2>&1
+noid_detail=$(jq -r '.checks[] | select(.id=="purl") | .detail' "$WORK/noid_conformance.json" 2>/dev/null)
+case "$noid_detail" in
+    *CPE*) fail "a PURL failure with no CPEs mentions CPEs anyway" "$noid_detail" ;;
+    *)     pass "no CPEs, no claim about CPEs" ;;
+esac
+
 echo "== conformance: spec-version range and PURL syntax are mandatory checks =="
 # The SKT submission requirements pin the accepted spec versions (CycloneDX
 # 1.3-1.6, SPDX 2.2/2.3) and require standard pkg:type/name@version PURLs.

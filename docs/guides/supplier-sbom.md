@@ -134,7 +134,9 @@ Two limits are worth knowing before you start.
 
 SPDX 2.2 is read, but with less in it. Yocto 4.0 (Kirkstone) and 5.0 (Scarthgap) emit SPDX 2.2 by default, which is not a single file: the top-level `.spdx.json` is an index and the packages live in per-document files inside the sibling `.spdx.tar.zst`. Both together give the installed packages, their licenses and their CPEs. What they do not give is the build's CVE verdicts — only SPDX 3.0 records which CVEs a recipe patched — so vulnerabilities are matched from the CPEs like any other SBOM, and a CVE the build already patched can appear as open. Upload the index on its own and you get an almost empty result, which is said rather than left to look like a clean scan. When a build directory holds both formats, the SPDX 3.0 document is the one analyzed even if the 2.2 one is newer.
 
-Conformance checks that depend on PURL will fail. Yocto identifies packages with CPE rather than PURL, so PURL coverage and the checks derived from it cannot pass. This reflects a difference in identifier convention, not a defect in the SBOM.
+Conformance checks that depend on PURL will fail. Yocto identifies packages with CPE rather than PURL, so PURL coverage and the checks derived from it cannot pass. The report says how many components carry a CPE instead, and the row cites the baselines — BSI TR-03183-2 and the NTIA minimum elements — that accept either identifier. The verdict is the submission criteria's, not theirs: PURL is required here because the default vulnerability matching keys on it.
+
+Two more required checks behave differently on a Yocto image, for reasons in the document rather than in the tool. The top-level component fails for want of a version: bitbake writes the image package with a name and no `software_packageVersion` (measured on the reference `core-image-minimal`).
 
 Uploads are capped at 100 MB. For scale, the reference `core-image-minimal` document is 15.8 MB with 35 installed packages. A build directory scanned with `--target` reads the file from disk, so the cap does not apply there.
 
