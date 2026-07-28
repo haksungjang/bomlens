@@ -1605,10 +1605,6 @@ else
     pass "conversion refused rather than emitting an empty SBOM (no converter available)"
 fi
 
-echo ""
-echo "Results: ${PASS} passed, ${FAIL} failed"
-[ "$FAIL" -eq 0 ]
-
 echo "== outbound-license: read the declaration out of the project's own manifest =="
 # The licence-conflict check only runs when the SBOM's root component carries a
 # licence, and cdxgen fills that for npm only. detect-project-license.py reads
@@ -1671,3 +1667,193 @@ echo '{"name":"root"}' > "$lic_dir/package.json"
 echo '{"name":"dep","license":"GPL-3.0-only"}' > "$lic_dir/node_modules/dep/package.json"
 got=$(python3 "$DPL" "$lic_dir")
 [ -z "$got" ] && pass "vendored manifests are ignored" || fail "picked up a dependency's licence: '$got'"
+
+echo "== source-snapshot: capture the scanned files themselves, within bounds =="
+# The result screens show what a scan FOUND; source-snapshot.py captures what was
+# SCANNED so a reviewer can open the file behind a finding. The scanned tree does
+# not outlive the scan, so the capture has to be right the first time. Guarded
+# here: the exclusions come from the tree listing (never re-derived), binaries and
+# oversized files cannot bloat the artifact, the budget drops are counted rather
+# than silent, and a listing entry can never pull in a file outside the tree.
+SNAP="$ROOT_DIR/docker/lib/source-snapshot.py"
+snap_dir="$WORK/snap"
+rm -rf "$snap_dir"; mkdir -p "$snap_dir/tree/src" "$snap_dir/tree/node_modules/dep" "$snap_dir/out"
+printf 'package main\n' > "$snap_dir/tree/src/main.go"
+printf 'MIT License\n' > "$snap_dir/tree/LICENSE"
+printf '{"name":"acme"}\n' > "$snap_dir/tree/package.json"
+printf 'pruned\n' > "$snap_dir/tree/node_modules/dep/index.js"
+printf 'ELF\0\0\0binary payload\n' > "$snap_dir/tree/src/app.bin"
+python3 -c "import sys; open(sys.argv[1],'w').write('x' * 300000)" "$snap_dir/tree/big.txt"
+ln -s /etc/passwd "$snap_dir/tree/link.txt"
+(
+    cd "$snap_dir/out" || exit 1
+    bash "$LIB/source-file-tree.sh" "$snap_dir/tree" snap_files.json >/dev/null 2>&1
+    python3 "$SNAP" "$snap_dir/tree" snap_files.json snap_source.json >/dev/null 2>&1
+)
+snap_out="$snap_dir/out/snap_source.json"
+if [ -s "$snap_out" ]; then
+    pass "snapshot written for a source tree"
+else
+    fail "no snapshot produced"
+fi
+got=$(jq -r '[.files[].path] | sort | join(",")' "$snap_out" 2>/dev/null)
+[ "$got" = "LICENSE,big.txt,package.json,src/main.go" ] \
+    && pass "text files captured; node_modules pruned by the shared listing" \
+    || fail "unexpected captured set: '$got'"
+got=$(jq -c '[.files[] | select(.path == "src/main.go") | .content]' "$snap_out" 2>/dev/null)
+[ "$got" = '["package main\n"]' ] && pass "content is the real file body, newline included" \
+    || fail "content mismatch: $got"
+got=$(jq -r '.totals.skippedBinary' "$snap_out" 2>/dev/null)
+[ "$got" = "1" ] && pass "binary counted, never embedded" || fail "skippedBinary = '$got', expected 1"
+got=$(jq -r '.files[] | select(.path == "big.txt") | .truncated' "$snap_out" 2>/dev/null)
+[ "$got" = "true" ] && pass "oversized file cut, not dropped" || fail "big.txt truncated = '$got'"
+got=$(jq -r '.files[] | select(.path == "big.txt") | .size' "$snap_out" 2>/dev/null)
+[ "$got" = "300000" ] && pass "the file's real size survives truncation" || fail "big.txt size = '$got'"
+
+# A listing entry must never reach outside the scanned tree — the paths are ours,
+# but a symlink or a crafted entry must still be refused, not read and published.
+cat > "$snap_dir/out/evil_files.json" <<'EOF'
+{"files":[{"path":"../../../etc/passwd","type":"file"},
+          {"path":"/etc/hosts","type":"file"},
+          {"path":"link.txt","type":"file"},
+          {"path":"src/main.go","type":"file"}]}
+EOF
+(
+    cd "$snap_dir/out" || exit 1
+    python3 "$SNAP" "$snap_dir/tree" evil_files.json evil_source.json >/dev/null 2>&1
+)
+got=$(jq -r '[.files[].path] | join(",")' "$snap_dir/out/evil_source.json" 2>/dev/null)
+[ "$got" = "src/main.go" ] \
+    && pass "traversal, absolute path and symlink entries all refused" \
+    || fail "escaped the scanned tree: '$got'"
+
+# A tight budget must keep the evidence a reviewer opens (licence texts, package
+# manifests), account for what it left out, and never store a fragment: the
+# 300 KB file is skipped whole rather than cut down to whatever fits.
+(
+    cd "$snap_dir/out" || exit 1
+    SOURCE_SNAPSHOT_MAX_TOTAL=32 python3 "$SNAP" \
+        "$snap_dir/tree" snap_files.json tiny_source.json >/dev/null 2>&1
+)
+got=$(jq -r '[.files[].path] | sort | join(",")' "$snap_dir/out/tiny_source.json" 2>/dev/null)
+[ "$got" = "LICENSE,package.json" ] \
+    && pass "licence text and manifest win a tight budget" \
+    || fail "budget spent elsewhere: '$got'"
+got=$(jq -r '.totals.skippedBudget' "$snap_dir/out/tiny_source.json" 2>/dev/null)
+[ "${got:-0}" -gt 0 ] && pass "files left out are counted, not silently missing" \
+    || fail "skippedBudget = '$got', expected > 0"
+
+# Byte-stable: the snapshot carries no timestamp, so re-scanning the same tree
+# reproduces it exactly (the --byte-stable contract the rest of the output keeps).
+(
+    cd "$snap_dir/out" || exit 1
+    python3 "$SNAP" "$snap_dir/tree" snap_files.json again_source.json >/dev/null 2>&1
+)
+if diff -q "$snap_out" "$snap_dir/out/again_source.json" >/dev/null 2>&1; then
+    pass "re-running on the same tree is byte-identical"
+else
+    fail "snapshot is not reproducible"
+fi
+
+echo "== source tree: symlinks are listed, with the target recorded not followed =="
+# A container image or a firmware rootfs is mostly symlinks — an Alpine image has
+# 90 regular files against 334 links, nearly all of them into busybox. Listing
+# only regular files shows a /bin in which none of the commands exist, so links
+# are listed with their destination as the content of the entry.
+link_dir="$WORK/links"
+rm -rf "$link_dir"; mkdir -p "$link_dir/tree/bin" "$link_dir/out"
+printf '#!/bin/sh\necho hi\n' > "$link_dir/tree/bin/busybox"
+ln -s /bin/busybox "$link_dir/tree/bin/cat"
+ln -s busybox "$link_dir/tree/bin/ls"
+ln -s /nowhere/gone "$link_dir/tree/bin/dangling"
+(
+    cd "$link_dir/out" || exit 1
+    bash "$LIB/source-file-tree.sh" "$link_dir/tree" link_files.json >/dev/null 2>&1
+    python3 "$SNAP" "$link_dir/tree" link_files.json link_source.json >/dev/null 2>&1
+)
+got=$(jq -r '[.files[] | select(.type == "symlink") | .path] | sort | join(",")' "$link_dir/out/link_files.json" 2>/dev/null)
+[ "$got" = "bin/cat,bin/dangling,bin/ls" ] \
+    && pass "symlinks appear in the tree, typed as symlink" \
+    || fail "symlink entries were '$got'"
+got=$(jq -r '.files[] | select(.path == "bin/busybox") | .path' "$link_dir/out/link_files.json" 2>/dev/null)
+[ "$got" = "bin/busybox" ] && pass "the real file behind the links is still listed" || fail "regular file missing"
+got=$(jq -r '[.links[] | .path + "->" + .target] | sort | join(",")' "$link_dir/out/link_source.json" 2>/dev/null)
+[ "$got" = "bin/cat->/bin/busybox,bin/dangling->/nowhere/gone,bin/ls->busybox" ] \
+    && pass "link targets recorded verbatim, including a dangling one" \
+    || fail "link targets were '$got'"
+# The link is described, never opened: no symlink may contribute file content.
+got=$(jq -r '[.files[].path] | join(",")' "$link_dir/out/link_source.json" 2>/dev/null)
+[ "$got" = "bin/busybox" ] \
+    && pass "no symlink was followed for its content" \
+    || fail "snapshot captured content through a link: '$got'"
+
+echo "== unpack-scan-target: open an archive, refuse what is not one =="
+# A build artifact is one packed file, so without unpacking there is nothing to
+# show. Archives are opened; an ELF binary is refused with a reason rather than
+# presented as an empty tree.
+UNPACK="$ROOT_DIR/docker/lib/unpack-scan-target.sh"
+arc_dir="$WORK/arc"
+rm -rf "$arc_dir"; mkdir -p "$arc_dir/build/META-INF"
+printf 'Manifest-Version: 1.0\n' > "$arc_dir/build/META-INF/MANIFEST.MF"
+printf 'ELF\0\0binary\n' > "$arc_dir/plain.bin"
+if command -v zip >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1; then
+    (cd "$arc_dir/build" && zip -qr "$arc_dir/app.jar" .)
+    got_dir=$(bash "$UNPACK" BINARY "$arc_dir/app.jar" 2>/dev/null)
+    if [ -n "$got_dir" ] && [ -f "$got_dir/META-INF/MANIFEST.MF" ]; then
+        pass "a jar is unpacked into a readable tree"
+    else
+        fail "jar unpack produced '$got_dir'"
+    fi
+    [ -n "$got_dir" ] && rm -rf "$got_dir"
+else
+    pass "jar unpack skipped (no zip/unzip in this environment)"
+fi
+got_dir=$(bash "$UNPACK" BINARY "$arc_dir/plain.bin" 2>/dev/null)
+[ -z "$got_dir" ] \
+    && pass "a non-archive prints no directory rather than an empty tree" \
+    || fail "unpacked a non-archive into '$got_dir'"
+
+echo "== describe-input-sbom: report the supplier's document, not the conversion =="
+# ANALYZE converts every input to CycloneDX, so every result screen describes the
+# conversion. The format the supplier wrote in, the tool behind it and its
+# authorship survive only in this summary, read from the ORIGINAL. Guarded here:
+# all three input families are read, and an unreadable input yields nothing
+# rather than a guess (a wrong "produced by" on a compliance screen is worse
+# than a blank one).
+DESC="$ROOT_DIR/docker/lib/describe-input-sbom.py"
+desc_dir="$WORK/desc"
+mkdir -p "$desc_dir"
+
+python3 "$DESC" "$FIX/good-cyclonedx.json" "$desc_dir/cdx.json" "supplier.cdx.json" >/dev/null 2>&1
+got=$(jq -r '[.format, .specVersion, (.tools | join(";")), (.componentCount | tostring)] | join("|")' "$desc_dir/cdx.json" 2>/dev/null)
+[ "$got" = "CycloneDX|1.5|cdxgen 12.0.0|2" ] \
+    && pass "CycloneDX header read (format, version, tool, count)" \
+    || fail "CycloneDX summary was '$got'"
+got=$(jq -r '.originalName' "$desc_dir/cdx.json" 2>/dev/null)
+[ "$got" = "supplier.cdx.json" ] && pass "the uploaded filename is kept" || fail "originalName = '$got'"
+
+python3 "$DESC" "$FIX/good-spdx.json" "$desc_dir/spdx2.json" >/dev/null 2>&1
+got=$(jq -r '[.format, .specVersion, (.tools | join(";")), .supplier] | join("|")' "$desc_dir/spdx2.json" 2>/dev/null)
+[ "$got" = "SPDX|2.3|syft-1.18.1|Supplier Inc." ] \
+    && pass "SPDX 2.3 creators split into tool and organization" \
+    || fail "SPDX 2.3 summary was '$got'"
+
+# SPDX 3.0 keeps CreationInfo, the tool and the organization in separate @graph
+# nodes that the document only references by id. Reading the header alone yields
+# blanks, so the references must be resolved.
+python3 "$DESC" "$FIX/good-spdx3-jsonld.json" "$desc_dir/spdx3.json" >/dev/null 2>&1
+got=$(jq -r '[.format, (.tools | join(";")), .supplier, .created] | join("|")' "$desc_dir/spdx3.json" 2>/dev/null)
+[ "$got" = "SPDX|test-tool|test-org|2026-01-01T00:00:00Z" ] \
+    && pass "SPDX 3.0 JSON-LD agent references resolved" \
+    || fail "SPDX 3.0 summary was '$got'"
+
+printf 'not an sbom at all\n' > "$desc_dir/junk.txt"
+rm -f "$desc_dir/junk.json"
+python3 "$DESC" "$desc_dir/junk.txt" "$desc_dir/junk.json" >/dev/null 2>&1
+[ ! -f "$desc_dir/junk.json" ] \
+    && pass "an unrecognized input writes no summary rather than a guess" \
+    || fail "wrote a summary for a non-SBOM input"
+
+echo ""
+echo "Results: ${PASS} passed, ${FAIL} failed"
+[ "$FAIL" -eq 0 ]

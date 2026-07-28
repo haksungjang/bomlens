@@ -346,6 +346,12 @@ EOF
         echo "[1/2] Validating supplier SBOM (conformance, original input)..."
         # Conformance never aborts the pipeline (best-effort report).
         run_optional_step conformance bash "$LIBDIR/validate-sbom.sh" "$ANALYZE_SBOM" "$OUT_PREFIX" "$PROJECT_NAME"
+        # Describe the document the supplier actually sent, before conversion
+        # rewrites it: the format and version it was written in, the tool that
+        # produced it, when, and on whose authority. The result screens otherwise
+        # only ever describe the CycloneDX conversion. Best-effort.
+        run_optional_step describe-input python3 "$LIBDIR/describe-input-sbom.py" \
+            "$ANALYZE_SBOM" "${OUT_PREFIX}_input.json" "$(basename "$ANALYZE_SBOM")"
         echo "[1/2] Converting supplier SBOM to CycloneDX..."
         # Yocto SPDX 3.0 takes a dedicated path. syft converts these documents but
         # drops every vulnerability and lists source FILES as components (measured:
@@ -625,27 +631,71 @@ if [ "${DEEP_LICENSE:-false}" = "true" ] && [ -d /src ]; then
     fi
 fi
 
-# Source file tree (${OUT_PREFIX}_files.json). For modes with actual source files
-# on disk, emit a ScanCode-shaped inventory so the web UI's source-tree view works
-# WITHOUT the opt-in ScanCode deep-license scan — structure only, no licenses.
-# When ScanCode already produced a _scancode.json, that one wins (it carries
-# licenses), so we skip this fallback. SOURCE/ROOTFS walk the tree here; FIRMWARE
-# already wrote it inside scan-firmware.sh (its extracted rootfs is a temp dir
-# removed before we get here). Modes with no source files (AIBOM/ANALYZE/MERGE/
-# POSTPROCESS-without-source/BINARY) are excluded. Best-effort: never aborts.
-if [ ! -f "${OUT_PREFIX}_scancode.json" ]; then
-    SRC_TREE_DIR=""
-    case "$SCAN_MODE" in
-        SOURCE) SRC_TREE_DIR="${SOURCE_ROOT:-/src}" ;;
-        ROOTFS) SRC_TREE_DIR="$TARGET_DIR" ;;
-    esac
-    if [ -n "$SRC_TREE_DIR" ] && [ -d "$SRC_TREE_DIR" ]; then
-        bash "$LIBDIR/source-file-tree.sh" "$SRC_TREE_DIR" "${OUT_PREFIX}_files.json" || true
+# Where this mode's scanned files sit on disk. SOURCE (web UI) and POSTPROCESS
+# (the CLI source scan, which mounts the scanned tree at /src) both look at a
+# source tree; ROOTFS looks at the extracted image directory. FIRMWARE handles
+# itself inside scan-firmware.sh, because its extracted rootfs is a temp dir
+# removed before we get here. AIBOM/ANALYZE/MERGE have no files at all.
+SRC_TREE_DIR=""
+UNPACKED_DIR=""
+case "$SCAN_MODE" in
+    SOURCE) SRC_TREE_DIR="${SOURCE_ROOT:-/src}" ;;
+    POSTPROCESS) [ "$SOURCE_SCAN" = "true" ] && SRC_TREE_DIR="${SOURCE_ROOT:-/src}" ;;
+    ROOTFS) SRC_TREE_DIR="$TARGET_DIR" ;;
+    IMAGE|BINARY)
+        # A container image is layers, and a build artifact is one packed file:
+        # neither has a directory to walk, so the scan alone can say what is
+        # INSIDE them but never show it. Unpack a readable copy to a temp dir,
+        # build the tree and snapshot from it, and delete it below — the same
+        # shape scan-firmware.sh already uses for its extraction. Best-effort:
+        # an ELF binary or a missing docker socket prints nothing and the file
+        # views are simply absent.
+        UNPACK_TARGET="$TARGET_IMAGE"
+        [ "$SCAN_MODE" = "BINARY" ] && UNPACK_TARGET="$TARGET_FILE"
+        # stdout is the directory (empty when it could not unpack); stderr is the
+        # reason, and belongs in the scan log where the user reads it.
+        UNPACKED_DIR="$(bash "$LIBDIR/unpack-scan-target.sh" "$SCAN_MODE" "$UNPACK_TARGET")"
+        SRC_TREE_DIR="$UNPACKED_DIR"
+        ;;
+esac
+[ -n "$SRC_TREE_DIR" ] && [ -d "$SRC_TREE_DIR" ] || SRC_TREE_DIR=""
+
+# Source file tree (${OUT_PREFIX}_files.json): a ScanCode-shaped inventory so the
+# web UI's source-tree view works WITHOUT the opt-in ScanCode deep-license scan —
+# structure only, no licenses. When ScanCode already produced a _scancode.json,
+# that one wins (it carries licenses), so we skip this fallback. Best-effort:
+# never aborts.
+if [ ! -f "${OUT_PREFIX}_scancode.json" ] && [ -n "$SRC_TREE_DIR" ]; then
+    bash "$LIBDIR/source-file-tree.sh" "$SRC_TREE_DIR" "${OUT_PREFIX}_files.json" || true
+fi
+# Collect the file tree if any source-having mode produced one (the modes above,
+# or FIRMWARE from scan-firmware.sh).
+[ -f "${OUT_PREFIX}_files.json" ] && ARTIFACTS+=("${OUT_PREFIX}_files.json")
+
+# Source snapshot (${OUT_PREFIX}_source.json): the CONTENT behind that tree, so
+# the UI can show what was scanned and not only what was found. Takes the file
+# list just written (either artifact — both carry the same ScanCode `files[]`
+# shape) so the exclusions live in one place. The scanned tree is gone once the
+# container exits, which is why the content is captured now. FIRMWARE again does
+# its own inside scan-firmware.sh. Best-effort: never aborts.
+if [ -n "$SRC_TREE_DIR" ]; then
+    SRC_LIST=""
+    [ -f "${OUT_PREFIX}_files.json" ] && SRC_LIST="${OUT_PREFIX}_files.json"
+    [ -f "${OUT_PREFIX}_scancode.json" ] && SRC_LIST="${OUT_PREFIX}_scancode.json"
+    if [ -n "$SRC_LIST" ]; then
+        run_optional_step source-snapshot python3 "$LIBDIR/source-snapshot.py" \
+            "$SRC_TREE_DIR" "$SRC_LIST" "${OUT_PREFIX}_source.json"
     fi
 fi
-# Collect the file tree if any source-having mode produced one (SOURCE/ROOTFS
-# above, or FIRMWARE from scan-firmware.sh).
-[ -f "${OUT_PREFIX}_files.json" ] && ARTIFACTS+=("${OUT_PREFIX}_files.json")
+[ -f "${OUT_PREFIX}_source.json" ] && ARTIFACTS+=("${OUT_PREFIX}_source.json")
+# The unpacked copy of an image / build artifact has served its purpose once the
+# tree and the snapshot are written. It can be gigabytes, so it goes now rather
+# than at container exit.
+if [ -n "$UNPACKED_DIR" ] && [ -d "$UNPACKED_DIR" ]; then
+    rm -rf "$UNPACKED_DIR"
+fi
+# Supplier-SBOM header summary (ANALYZE, written before the conversion above).
+[ -f "${OUT_PREFIX}_input.json" ] && ARTIFACTS+=("${OUT_PREFIX}_input.json")
 # Yocto VEX judgement counts (parse-yocto-spdx.py). Shipped as an artifact because
 # the numbers it carries — how many CVEs the build already patched — are not
 # recoverable from the CycloneDX or the security report, which list only what is
