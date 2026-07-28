@@ -38,9 +38,25 @@ import json
 import os
 import sys
 
-MAX_FILE_BYTES = int(os.environ.get("SOURCE_SNAPSHOT_MAX_FILE", 256 * 1024))
-MAX_TOTAL_BYTES = int(os.environ.get("SOURCE_SNAPSHOT_MAX_TOTAL", 8 * 1024 * 1024))
-MAX_FILES = int(os.environ.get("SOURCE_SNAPSHOT_MAX_FILES", 5000))
+def cap(name, default):
+    """A positive integer from the environment, or the default.
+
+    The caller forwards these as `-e NAME=` whether or not the user set them, so
+    an unset cap arrives as an empty string rather than as an absent variable.
+    Anything that is not a positive integer falls back to the default: a cap is a
+    safety limit, and a malformed one must not stop the capture or, worse, be
+    read as zero and silently capture nothing."""
+    raw = os.environ.get(name, "")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+MAX_FILE_BYTES = cap("SOURCE_SNAPSHOT_MAX_FILE", 256 * 1024)
+MAX_TOTAL_BYTES = cap("SOURCE_SNAPSHOT_MAX_TOTAL", 8 * 1024 * 1024)
+MAX_FILES = cap("SOURCE_SNAPSHOT_MAX_FILES", 5000)
 
 # Read in chunks so a huge file is never pulled into memory whole; only the first
 # MAX_FILE_BYTES are kept anyway.

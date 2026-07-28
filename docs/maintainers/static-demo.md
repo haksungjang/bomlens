@@ -48,8 +48,15 @@ that cap is the demo's size floor as much as the scanner's. Lower it for a run
 whose tree is large and uninteresting:
 
 ```bash
-SOURCE_SNAPSHOT_MAX_TOTAL=2097152 scripts/scan-sbom.sh …   # 2 MB instead of 8
+SOURCE_SNAPSHOT_MAX_TOTAL=786432 scripts/scan-sbom.sh …   # 768 KB instead of 8 MB
 ```
+
+Worth doing for a container image. Measured on `nginx:1.24-alpine`: the full
+8 MB cap captures 2 MB, and three quarters of it is X11 locale tables and CA
+certificate bundles that no visitor opens. The cap keeps the files that answer
+"what is in this image" — the entrypoint scripts, `/etc` configuration and the
+apk package database — because the budget is spent in path order once licence
+texts and manifests are taken.
 
 Pick runs whose *results* differ, not whose input flag differs. A GitHub URL, a
 ZIP and a local folder all produce the same kind of source scan, so publishing

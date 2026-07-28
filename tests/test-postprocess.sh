@@ -1743,6 +1743,24 @@ got=$(jq -r '.totals.skippedBudget' "$snap_dir/out/tiny_source.json" 2>/dev/null
 [ "${got:-0}" -gt 0 ] && pass "files left out are counted, not silently missing" \
     || fail "skippedBudget = '$got', expected > 0"
 
+# The caps arrive as `-e NAME=` whether or not the user set them (scan-sbom.sh
+# forwards them unconditionally), so an unset cap is an empty string, not an
+# absent variable. Parsing that as an integer would abort the capture; reading it
+# as zero would silently capture nothing. Both must fall back to the default.
+for bad in "" "abc" "0" "-5"; do
+    (
+        cd "$snap_dir/out" || exit 1
+        SOURCE_SNAPSHOT_MAX_TOTAL="$bad" python3 "$SNAP" \
+            "$snap_dir/tree" snap_files.json cap_source.json >/dev/null 2>&1
+    )
+    got=$(jq -r '.totals.files' "$snap_dir/out/cap_source.json" 2>/dev/null)
+    if [ "${got:-0}" -gt 0 ]; then
+        pass "a malformed cap ('$bad') falls back to the default"
+    else
+        fail "cap '$bad' captured nothing (files=$got)"
+    fi
+done
+
 # Byte-stable: the snapshot carries no timestamp, so re-scanning the same tree
 # reproduces it exactly (the --byte-stable contract the rest of the output keeps).
 (
