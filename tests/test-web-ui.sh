@@ -1725,6 +1725,7 @@ echo "[stub] scanning ${PROJECT_NAME} ${PROJECT_VERSION} (mode=$mode)"
   echo "TARGET_FILE=${TARGET_FILE:-}"
   echo "TARGET_DIR=${TARGET_DIR:-}"
   echo "ANALYZE_SBOM=${ANALYZE_SBOM:-}"
+  echo "YOCTO_BUILD_DIR=${YOCTO_BUILD_DIR:-}"
   # Counted here, while the scan is running: an extracted upload tree is removed
   # once the scan finishes, so a later check would always find it empty.
   echo "TARGET_DIR_FILES=$([ -n "${TARGET_DIR:-}" ] && find "$TARGET_DIR" -type f 2>/dev/null | wc -l | tr -d ' ' || echo 0)"; } > "${STUB_ENV_FILE:-/dev/null}"
@@ -2143,13 +2144,50 @@ import sys, json
 evs = json.load(sys.stdin)
 errs = [e['data'] for e in evs if e['event'] == 'error']
 done = [e['data'] for e in evs if e['event'] == 'done']
-assert errs and 'no SPDX SBOM' in errs[0], evs
+assert errs and 'neither an SPDX SBOM' in errs[0], evs
 assert 'create-spdx-3.0' in errs[0], errs
 assert len(done) == 1 and done[0]['ok'] is False, done
 "; then
     pass "a build directory with no SBOM fails with the setting to add"
 else
     fail "no-SBOM build directory handling wrong" "$nev"
+fi
+
+# A build that produced no SPDX still recorded what it shipped. Reading those
+# records beats refusing: the image package manifest is the installed set, the
+# license manifest carries the licenses, and cve-check the verdicts.
+MFROOT="$YOCTOROOT/tmp/deploy/images/manifest-only"
+mkdir -p "$MFROOT/conf" "$MFROOT/tmp/deploy/images/qemuarm" "$MFROOT/tmp/deploy/licenses/img-20260101" "$MFROOT/tmp/log/cve"
+echo 'BBLAYERS = "x"' > "$MFROOT/conf/bblayers.conf"
+printf 'busybox core2-64 1.36.1\nlibz1 core2-64 1.3\n' \
+    > "$MFROOT/tmp/deploy/images/qemuarm/img-qemuarm.rootfs.manifest"
+printf 'PACKAGE NAME: busybox\nPACKAGE VERSION: 1.36.1\nRECIPE NAME: busybox\nLICENSE: GPL-2.0-only\n\n' \
+    > "$MFROOT/tmp/deploy/licenses/img-20260101/license.manifest"
+printf '{"version":"1","package":[{"name":"busybox","version":"1.36.1","issue":[{"id":"CVE-2022-28391","status":"Unpatched","scorev3":"9.8","summary":"x","link":"y"}]}]}\n' \
+    > "$MFROOT/tmp/log/cve/cve-summary.json"
+mev=$(sse_events "project=mfonly&version=1.0&source=rootfs-dir&target=$MFROOT")
+if echo "$mev" | python3 -c "
+import sys, json
+evs = json.load(sys.stdin)
+logs = [e['data'] for e in evs if e['event'] == 'log']
+done = [e['data'] for e in evs if e['event'] == 'done']
+assert len(done) == 1 and done[0]['ok'] is True, evs
+assert done[0]['mode'] == 'ANALYZE', done[0]['mode']
+assert done[0]['scanConfig']['source'] == 'yocto-build-dir', done[0]['scanConfig']
+assert any('reading the manifests' in ln for ln in logs), logs
+"; then
+    pass "a build with no SPDX is read from the manifests it did write"
+else
+    fail "manifest fallback failed" "$mev"
+fi
+
+# The scanner is pointed at the build directory itself, since the records it
+# needs are spread across it — and no document is claimed to exist.
+if grep -q '^MODE=ANALYZE$' "$WORK/stub-env" \
+   && grep -q '^ANALYZE_SBOM=$' "$WORK/stub-env"; then
+    pass "the manifest path hands over the build directory, not a document"
+else
+    fail "wrong scan environment for the manifest fallback" "$(cat "$WORK/stub-env")"
 fi
 
 # The recorded source is not an input the form offers, so re-scanning one comes

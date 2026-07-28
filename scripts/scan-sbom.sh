@@ -562,6 +562,28 @@ resolve_file_path() {
     printf '%s/%s' "$d" "$b"
 }
 
+# The image package manifest a build wrote, when it produced no SPDX document.
+# `<image>.manifest` lists every installed package; image_license.manifest sits
+# beside it and describes the image recipe rather than its contents, so it is not
+# one of these. Only the presence matters here — parse-yocto-manifests.py reads
+# the contents container-side.
+yocto_manifest_in() {
+    local d="$1" p
+    for p in \
+        "$d"/tmp*/deploy/images/*/*.manifest \
+        "$d"/deploy/images/*/*.manifest \
+        "$d"/images/*/*.manifest \
+        "$d"/*.manifest; do
+        [ -f "$p" ] || continue
+        case "$(basename "$p")" in
+            image_license.manifest) continue ;;
+        esac
+        printf '%s' "$p"
+        return 0
+    done
+    return 1
+}
+
 # Pick the one SPDX document to analyze out of the candidate paths on stdin.
 # SPDX 3.x wins over 2.x (only 3.x carries the installed set and the build's CVE
 # judgements), then the most recently written. Prints the chosen path and
@@ -788,20 +810,35 @@ elif [ -n "$TARGET" ]; then
         done < <(yocto_spdx_candidates "$TARGET" || true)
         YOCTO_SPDX="$(printf '%s' "$YOCTO_CANDS" | yocto_pick_spdx)"
         if [ -z "$YOCTO_SPDX" ]; then
-            echo "[ERROR] This is a Yocto build directory, but it holds no SPDX SBOM."
-            echo "        Add these two lines to conf/local.conf and build the image again:"
-            echo '            INHERIT += "create-spdx-3.0"'
-            echo '            INHERIT += "vex"'
-            echo "        The SBOM then lands in tmp/deploy/images/<machine>/<image>.rootfs.spdx.json,"
-            echo "        and this folder can be scanned as-is."
-            echo "        If this build writes its images elsewhere (a relocated DEPLOY_DIR), pass"
-            echo "        the document directly: --analyze <image>.rootfs.spdx.json."
-            echo "        Scanning a build directory as a plain directory tree is not done as a"
-            echo "        fallback: it reports sysroots and native build tools that never ship in"
-            echo "        the image. To scan a tree anyway, point --target at that tree itself"
-            echo "        (an extracted rootfs, for example) rather than at the build directory."
-            exit 1
-        fi
+            # No SPDX, but a build still records what it shipped: the image package
+            # manifest, license.manifest and cve-check's report. Read those instead
+            # of refusing — scanning the build tree as a directory would report
+            # sysroots and native build tools that never ship in the image.
+            if [ -n "$(yocto_manifest_in "$TARGET")" ]; then
+                echo "[INFO] No SPDX in this build; reading the manifests it wrote instead."
+                echo "[INFO]   Components and licenses come from the image and license manifests,"
+                echo "[INFO]   and vulnerabilities from cve-check when the build ran it. For"
+                echo '[INFO]   CPE-accurate matching, rebuild with INHERIT += "create-spdx-3.0".'
+                YOCTO_BUILD_DIR="$(cd "$TARGET" && pwd)"
+                MODE="ANALYZE"
+                GENERATE_NOTICE="true"; GENERATE_SECURITY="true"
+            else
+                echo "[ERROR] This is a Yocto build directory, but it holds neither an SPDX SBOM"
+                echo "        nor an image package manifest to read."
+                echo "        Add these two lines to conf/local.conf and build the image again:"
+                echo '            INHERIT += "create-spdx-3.0"'
+                echo '            INHERIT += "vex"'
+                echo "        The SBOM then lands in tmp/deploy/images/<machine>/<image>.rootfs.spdx.json,"
+                echo "        and this folder can be scanned as-is."
+                echo "        If this build writes its images elsewhere (a relocated DEPLOY_DIR), pass"
+                echo "        the document directly: --analyze <image>.rootfs.spdx.json."
+                echo "        Scanning a build directory as a plain directory tree is not done as a"
+                echo "        fallback: it reports sysroots and native build tools that never ship in"
+                echo "        the image. To scan a tree anyway, point --target at that tree itself"
+                echo "        (an extracted rootfs, for example) rather than at the build directory."
+                exit 1
+            fi
+        else
         # The machine and image folder names come from the filesystem, not from
         # anything the user typed, and the path is interpolated into an `eval`ed
         # docker run below. Refuse the few characters that would be more than a
@@ -828,11 +865,19 @@ elif [ -n "$TARGET" ]; then
             echo "[INFO]   To analyze a different one, pass it with --analyze <file>."
         fi
         if is_spdx2_doc "$YOCTO_SPDX"; then
-            echo "[WARN] $(basename "$YOCTO_SPDX") is an SPDX 2.x document. For a Yocto build that"
-            echo "[WARN]   file is only an index — the packages live in the per-recipe documents"
-            echo "[WARN]   inside <image>.spdx.tar.zst beside it — so expect an almost empty result."
-            echo '[WARN]   Rebuild with INHERIT += "create-spdx-3.0" for the full image contents'
-            echo "[WARN]   and the vulnerability judgements the build made."
+            # An SPDX 2.x image document is only an index; the packages are in the
+            # archive beside it, which the parser reads when it is there.
+            if [ -f "${YOCTO_SPDX%.spdx.json}.spdx.tar.zst" ]; then
+                echo "[INFO] SPDX 2.x build: the packages come from"
+                echo "[INFO]   $(basename "${YOCTO_SPDX%.spdx.json}.spdx.tar.zst") beside the image document."
+                echo "[INFO]   Vulnerabilities are matched from the CPEs, since only SPDX 3.0 records"
+                echo '[INFO]   which CVEs a recipe patched — INHERIT += "create-spdx-3.0" adds that.'
+            else
+                echo "[WARN] $(basename "$YOCTO_SPDX") is an SPDX 2.x document, and the archive that"
+                echo "[WARN]   holds its packages ($(basename "${YOCTO_SPDX%.spdx.json}.spdx.tar.zst"))"
+                echo "[WARN]   is not beside it, so expect an almost empty result. Keep the two"
+                echo '[WARN]   together, or rebuild with INHERIT += "create-spdx-3.0".'
+            fi
         fi
         echo "[INFO] Image SBOM: $YOCTO_SPDX"
         # Resolved, so the result page names a folder the user can find again
@@ -842,6 +887,7 @@ elif [ -n "$TARGET" ]; then
         MODE="ANALYZE"
         # Same as an uploaded SBOM: the risk report needs license + vulnerability data.
         GENERATE_NOTICE="true"; GENERATE_SECURITY="true"
+        fi
     elif [ -d "$TARGET" ]; then MODE="ROOTFS";
     else MODE="IMAGE"; fi
 elif [ "$FORCE_FIRMWARE" = "true" ]; then
@@ -1020,7 +1066,18 @@ else
                 # own environment instead. AIBOM only — no other mode needs it.
                 [ -n "$HF_TOKEN" ] && ENVV="$ENVV -e HF_TOKEN"
                 RUN_IMAGE="$AIBOM_IMAGE" ;;
-        ANALYZE) FD="$(cd "$(dirname "$ANALYZE_SBOM")" && pwd)"; FN="$(basename "$ANALYZE_SBOM")"; VOL="-v \"$(hostpath "$FD")\":/input:ro -v \"$(hostpath "$OUTPUT_HOST_DIR")\":/host-output"; ENVV="-e ANALYZE_SBOM=\"/input/$FN\"" ;;
+        ANALYZE)
+            if [ -z "$ANALYZE_SBOM" ]; then
+                # A Yocto build directory with no SPDX document: the build tree is
+                # what has to be readable, since the manifests and the cve-check
+                # report are spread across it. Read-only — nothing is written back.
+                VOL="-v \"$(hostpath "$YOCTO_BUILD_DIR")\":/input:ro -v \"$(hostpath "$OUTPUT_HOST_DIR")\":/host-output"
+                ENVV="-e YOCTO_BUILD_DIR=/input"
+            else
+                FD="$(cd "$(dirname "$ANALYZE_SBOM")" && pwd)"; FN="$(basename "$ANALYZE_SBOM")"
+                VOL="-v \"$(hostpath "$FD")\":/input:ro -v \"$(hostpath "$OUTPUT_HOST_DIR")\":/host-output"
+                ENVV="-e ANALYZE_SBOM=\"/input/$FN\""
+            fi ;;
         MERGE)
             # Mount each input's directory read-only under its own index so files
             # that share a basename (three layers all named *_bom.json) don't

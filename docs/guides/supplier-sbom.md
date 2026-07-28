@@ -110,7 +110,19 @@ When several machines or images were built, the most recently written SBOM is an
 
 The web UI reads the same folder: pick it with the Directory input (mount it first with `--ui --mount ~/poky/build`, or use Add folder in the desktop app) and the detection runs exactly as it does on the command line.
 
-If the directory is a Yocto build but holds no SPDX document, the scan stops and names the two settings above rather than falling back to a directory scan whose result would misrepresent the image.
+### A build that produced no SPDX at all
+
+Turning `create-spdx` on is a build-configuration change, and whoever holds a finished build directory cannot always make one. A build records what it shipped regardless, and those records are read instead:
+
+| What | Where | Gives |
+|------|-------|-------|
+| Image package manifest | `tmp/deploy/images/<machine>/<image>.manifest` | the installed packages and their versions |
+| License manifest | `tmp/deploy/licenses/**/license.manifest` | each package's license and the recipe it came from |
+| cve-check report | `tmp/log/cve/cve-summary.json` | per CVE, whether a recipe patched it, judged it not applicable, or left it open |
+
+This is the weakest of the three inputs, and worth knowing why: there are no CPEs, so vulnerability matching has only names and versions to work with, and the CVE verdicts are only as complete as the build's own `cve-check` run (a build that never ran it reports no verdicts rather than none existing). No conformance report is produced either — conformance measures a document someone sent you against submission criteria, and there is no document here. Adding the two `local.conf` lines above and rebuilding remains the better answer.
+
+If the directory is a Yocto build but holds neither an SPDX document nor an image manifest, the scan stops and names the two settings above rather than falling back to a directory scan whose result would misrepresent the image.
 
 What you get differs from a normal SBOM scan in two ways.
 
@@ -120,7 +132,7 @@ Vulnerabilities come from the build itself. Yocto runs a CVE analysis while buil
 
 Two limits are worth knowing before you start.
 
-Only SPDX 3.0 is supported. Yocto 4.0 (Kirkstone) and 5.0 (Scarthgap) emit SPDX 2.2 by default, which is not a single file: the top-level `.spdx.json` is an index and the packages live in per-recipe documents inside the sibling `.spdx.tar.zst`. That case is detected and reported rather than silently returning an empty result — on a build directory it is reported before the scan runs, and on an uploaded index during the scan. When a build directory holds both, the SPDX 3.0 document is the one analyzed even if the 2.2 one is newer. Both releases can emit SPDX 3.0 with the setting above.
+SPDX 2.2 is read, but with less in it. Yocto 4.0 (Kirkstone) and 5.0 (Scarthgap) emit SPDX 2.2 by default, which is not a single file: the top-level `.spdx.json` is an index and the packages live in per-document files inside the sibling `.spdx.tar.zst`. Both together give the installed packages, their licenses and their CPEs. What they do not give is the build's CVE verdicts — only SPDX 3.0 records which CVEs a recipe patched — so vulnerabilities are matched from the CPEs like any other SBOM, and a CVE the build already patched can appear as open. Upload the index on its own and you get an almost empty result, which is said rather than left to look like a clean scan. When a build directory holds both formats, the SPDX 3.0 document is the one analyzed even if the 2.2 one is newer.
 
 Conformance checks that depend on PURL will fail. Yocto identifies packages with CPE rather than PURL, so PURL coverage and the checks derived from it cannot pass. This reflects a difference in identifier convention, not a defect in the SBOM.
 

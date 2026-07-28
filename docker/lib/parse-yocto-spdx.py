@@ -41,7 +41,10 @@
 # the caller always receives a valid (possibly empty) CycloneDX envelope.
 import json
 import os
+import shutil
+import subprocess
 import sys
+import tarfile
 
 CDX_VERSION = "1.6"
 
@@ -304,6 +307,241 @@ def write_cyclonedx(path, components, source_name, doc_graph=(), dependencies=()
         fh.write("\n")
 
 
+# ---------------------------------------------------------------------------
+# SPDX 2.2 bundles
+#
+# An SPDX 2.2 build does not publish one document. The image document lists the
+# image and nothing else; every installed package sits in its own document, and
+# all of them are packed into <image>.spdx.tar.zst beside it. The shape below is
+# what create-spdx-2.2.bbclass writes (openembedded-core), and the reader
+# follows it exactly:
+#
+#   image doc   packages[0]           the image itself
+#               externalDocumentRefs  DocumentRef-<doc name> -> namespace
+#               relationships         image CONTAINS "DocumentRef-<d>:<SPDXID>"
+#                                     for each INSTALLED package, and OTHER for
+#                                     the runtime documents (not installed)
+#   tar member  <doc name>.spdx.json  one per document, plus index.json listing
+#                                     {filename, documentNamespace, sha1}
+#   package doc packages[0]           name, versionInfo, licenseDeclared
+#               relationships         package GENERATED_FROM the recipe document
+#   recipe doc  packages[0]           externalRefs cpe23Type (CVE_PRODUCT)
+#
+# The CVE verdicts that make a 3.0 document worth reading are absent here: 2.2
+# records patched CVEs only as free text on the recipe, keyed to the recipe
+# rather than to the CVE match, so vulnerabilities are left to the ordinary CPE
+# matching downstream rather than presented as the build's own judgement.
+# ---------------------------------------------------------------------------
+SPDX2_MAX_MEMBER = 256 << 20     # a single document; the largest observed is ~1 MB
+SPDX2_MAX_TOTAL = 4 << 30        # the whole archive, uncompressed
+SPDX2_INDEX_NAME = "index.json"
+
+
+def spdx2_bundle_path(image_doc_path):
+    """The archive that belongs to an image document, or None when it is absent.
+
+    bitbake names the pair from one stem: <image>.spdx.json and
+    <image>.spdx.tar.zst.
+    """
+    if not image_doc_path.endswith(".spdx.json"):
+        return None
+    candidate = image_doc_path[: -len(".spdx.json")] + ".spdx.tar.zst"
+    return candidate if os.path.isfile(candidate) else None
+
+
+def _installed_refs(doc):
+    """(document name, SPDXID) for every package the image CONTAINS.
+
+    CONTAINS is what the class writes for an installed package; the runtime
+    dependency documents hang off OTHER relationships and are deliberately left
+    out — they describe what a package needs, not what shipped.
+    """
+    refs = []
+    for rel in doc.get("relationships") or []:
+        if not isinstance(rel, dict) or rel.get("relationshipType") != "CONTAINS":
+            continue
+        target = rel.get("relatedSpdxElement") or ""
+        if ":" not in target or not target.startswith("DocumentRef-"):
+            continue
+        doc_ref, spdx_id = target.split(":", 1)
+        refs.append((doc_ref[len("DocumentRef-"):], spdx_id))
+    return refs
+
+
+def _read_bundle(archive, wanted):
+    """Read the named documents out of the zstd tar, as {name: parsed json}.
+
+    Streamed through `zstd -dc`: the archive is written with `tarfile mode="w|"`
+    so it cannot be seeked, and python 3.12's tarfile has no zstd support of its
+    own. Only the documents asked for are parsed, so a build with thousands of
+    recipes costs one decompression rather than a heap of JSON.
+    """
+    if not wanted:
+        return {}
+    zstd = shutil.which("zstd")
+    if not zstd:
+        print("[yocto-spdx] zstd is not installed; cannot read %s" % os.path.basename(archive),
+              file=sys.stderr)
+        return {}
+    want = {name + ".spdx.json" for name in wanted}
+    found, total = {}, 0
+    proc = subprocess.Popen([zstd, "-dcq", "--", archive], stdout=subprocess.PIPE)
+    try:
+        with tarfile.open(fileobj=proc.stdout, mode="r|") as tar:
+            for member in tar:
+                if not member.isfile():
+                    continue
+                total += max(member.size, 0)
+                if total > SPDX2_MAX_TOTAL:
+                    print("[yocto-spdx] %s expands past the size limit; stopping."
+                          % os.path.basename(archive), file=sys.stderr)
+                    break
+                name = os.path.basename(member.name)
+                if name not in want or member.size > SPDX2_MAX_MEMBER:
+                    continue
+                handle = tar.extractfile(member)
+                if handle is None:
+                    continue
+                try:
+                    found[name[: -len(".spdx.json")]] = json.load(handle)
+                except (ValueError, OSError):
+                    continue
+                if len(found) == len(want):
+                    break
+    except (tarfile.TarError, OSError) as exc:
+        print("[yocto-spdx] cannot read %s: %s" % (os.path.basename(archive), exc),
+              file=sys.stderr)
+    finally:
+        if proc.stdout:
+            proc.stdout.close()
+        proc.wait()
+    return found
+
+
+def _spdx2_package(doc, spdx_id):
+    """The package with this SPDXID in a 2.2 document, or its only package."""
+    packages = [p for p in (doc.get("packages") or []) if isinstance(p, dict)]
+    for pkg in packages:
+        if pkg.get("SPDXID") == spdx_id:
+            return pkg
+    return packages[0] if len(packages) == 1 else None
+
+
+def _spdx2_license(pkg):
+    """The license expression to record: concluded when the build reached one,
+    otherwise declared. NOASSERTION and NONE mean nothing was determined, which
+    is not a license."""
+    for field in ("licenseConcluded", "licenseDeclared"):
+        value = (pkg.get(field) or "").strip()
+        if value and value not in ("NOASSERTION", "NONE"):
+            return value
+    return ""
+
+
+def _recipe_ref_of(doc):
+    """The document name of the recipe a package was GENERATED_FROM."""
+    for rel in doc.get("relationships") or []:
+        if not isinstance(rel, dict) or rel.get("relationshipType") != "GENERATED_FROM":
+            continue
+        target = rel.get("relatedSpdxElement") or ""
+        if target.startswith("DocumentRef-") and ":" in target:
+            doc_ref, spdx_id = target.split(":", 1)
+            return doc_ref[len("DocumentRef-"):], spdx_id
+    return None
+
+
+def _cpe_of(pkg):
+    for ref in pkg.get("externalRefs") or []:
+        if not isinstance(ref, dict):
+            continue
+        if str(ref.get("referenceType") or "").endswith("cpe23Type"):
+            locator = ref.get("referenceLocator")
+            if locator:
+                return locator
+    return None
+
+
+def extract_spdx2(image_doc, archive):
+    """(components, image name, image version) from a 2.2 image document plus
+    its archive. Empty when the archive cannot be read or holds nothing the
+    image says it contains."""
+    refs = _installed_refs(image_doc)
+    if not refs:
+        return [], "", ""
+    docs = _read_bundle(archive, {name for name, _ in refs})
+    if not docs:
+        return [], "", ""
+
+    # The recipes are a second pass: which ones are needed is only known once the
+    # package documents have been read, and the archive is a forward-only stream.
+    packages, recipe_wanted = [], {}
+    for doc_name, spdx_id in refs:
+        doc = docs.get(doc_name)
+        if not isinstance(doc, dict):
+            continue
+        pkg = _spdx2_package(doc, spdx_id)
+        if not pkg or not pkg.get("name"):
+            continue
+        recipe = _recipe_ref_of(doc)
+        if recipe:
+            recipe_wanted[recipe[0]] = recipe[1]
+        packages.append((pkg, recipe))
+    recipes = _read_bundle(archive, set(recipe_wanted)) if recipe_wanted else {}
+
+    components = []
+    for pkg, recipe in sorted(packages, key=lambda pr: pr[0].get("name") or ""):
+        comp = {
+            "bom-ref": pkg.get("SPDXID") or pkg.get("name"),
+            "type": "library",
+            "name": pkg.get("name"),
+            "version": pkg.get("versionInfo") or "",
+            "properties": [
+                {"name": "bomlens:layer", "value": "yocto"},
+                {"name": "bomlens:identifiedBy", "value": "yocto-spdx"},
+            ],
+        }
+        licenses = _licenses_cdx(_spdx2_license(pkg))
+        if licenses:
+            comp["licenses"] = licenses
+        if recipe:
+            recipe_doc = recipes.get(recipe[0])
+            if isinstance(recipe_doc, dict):
+                recipe_pkg = _spdx2_package(recipe_doc, recipe[1])
+                cpe = _cpe_of(recipe_pkg) if recipe_pkg else None
+                if cpe:
+                    comp["cpe"] = cpe
+                if not comp.get("licenses") and recipe_pkg:
+                    fallback = _licenses_cdx(_spdx2_license(recipe_pkg))
+                    if fallback:
+                        comp["licenses"] = fallback
+        components.append(comp)
+
+    image_pkg = (image_doc.get("packages") or [{}])[0]
+    return components, image_pkg.get("name") or "", image_pkg.get("versionInfo") or ""
+
+
+def write_cyclonedx_spdx2(path, components, source_name, image_name, image_version, created):
+    root = {"type": "operating-system", "name": image_name or source_name}
+    if image_version:
+        root["version"] = image_version
+    metadata = {
+        "tools": {"components": [{"type": "application", "name": "bomlens-yocto-spdx"}]},
+        "component": root,
+    }
+    if created:
+        metadata["timestamp"] = created
+    doc = {
+        "bomFormat": "CycloneDX",
+        "specVersion": CDX_VERSION,
+        "version": 1,
+        "metadata": metadata,
+        "components": components,
+    }
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(doc, fh, indent=2, sort_keys=False)
+        fh.write("\n")
+
+
 def write_sidecars(out_prefix, vuln_rows, counts):
     """Security sidecar (unresolved only) plus the judgement counts for the UI."""
     if vuln_rows:
@@ -353,14 +591,38 @@ def main():
         return 1
 
     if yocto_spdx2_index(doc):
+        # The image document of a 2.2 build lists the image and nothing else; the
+        # packages are in the archive beside it. Read that when it is there.
+        archive = spdx2_bundle_path(src)
+        if archive:
+            components, image_name, image_version = extract_spdx2(doc, archive)
+            if components:
+                created = (doc.get("creationInfo") or {}).get("created") or ""
+                write_cyclonedx_spdx2(
+                    out, components, os.path.basename(src), image_name, image_version, created
+                )
+                print(
+                    "[yocto-spdx] SPDX 2.x bundle: %d installed package(s) from %s. "
+                    "Vulnerabilities are matched from the CPEs, not from the build — "
+                    "only SPDX 3.0 records which CVEs a recipe patched."
+                    % (len(components), os.path.basename(archive)),
+                    file=sys.stderr,
+                )
+                return 0
+            print(
+                "[yocto-spdx] %s holds no package this image says it contains; "
+                "falling back to the generic converter." % os.path.basename(archive),
+                file=sys.stderr,
+            )
         # Convertible but nearly empty. Say why, and name the file that holds the
         # real content, before the generic path reports "0 components" as success.
         print(
             "[yocto-spdx] NOTE: this is the top-level document of a Yocto SPDX 2.x "
             "build, which lists almost no packages on its own. The package set lives "
-            "in the per-recipe documents inside <image>.spdx.tar.zst next to it. "
-            "Re-run with an SPDX 3.0 SBOM (INHERIT += \"create-spdx-3.0\") for the "
-            "full image contents and its vulnerability judgements.",
+            "in the per-recipe documents inside <image>.spdx.tar.zst next to it; put "
+            "that file beside this one, or re-run with an SPDX 3.0 SBOM "
+            "(INHERIT += \"create-spdx-3.0\") for the full image contents and its "
+            "vulnerability judgements.",
             file=sys.stderr,
         )
         return 3

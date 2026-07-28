@@ -57,7 +57,7 @@ cd ~/sbom-output      # 출력 폴더(아무 곳이나 가능)
 
 디렉터리 입력으로 고른 폴더가 Yocto 빌드 디렉터리이면 그렇게 인식합니다. 빌드 트리를 훑는 대신 빌드가 `tmp/deploy/images/<machine>/` 아래에 만든 이미지 SBOM을 분석합니다. 빌드 트리에는 이미지에 들어가지 않는 sysroot와 빌드용 도구가 들어 있기 때문입니다. 스캔 로그에 어떤 폴더의 어떤 문서를 읽었는지 남고, 결과 화면은 이 스캔을 Yocto 빌드 디렉터리로 표시하며, 취약점에는 빌드가 내린 판정(레시피가 패치함, 해당 없음, 아직 남음)이 함께 담깁니다.
 
-빌드할 때 SBOM 생성을 켜 두어야 합니다(`conf/local.conf`에 `INHERIT += "create-spdx-3.0"`과 `INHERIT += "vex"`). SBOM이 없으면 디렉터리 스캔으로 넘어가지 않고 스캔을 멈춘 뒤 그 사실을 알립니다. 그대로 스캔하면 이미지 내용과 다른 결과가 나오기 때문입니다. 동작과 한계는 [공급사 SBOM 가이드](../guides/supplier-sbom.ko.md#yocto-이미지)에 있고, CLI에서는 `--target`으로 같은 폴더를 인식합니다.
+빌드할 때 SBOM 생성을 켜 두면(`conf/local.conf`에 `INHERIT += "create-spdx-3.0"`과 `INHERIT += "vex"`) 가장 많은 정보를 얻습니다. SPDX 2.2도 옆의 `.spdx.tar.zst`와 함께 읽지만 CVE 판정은 담기지 않고, SPDX가 전혀 없는 빌드는 빌드가 남긴 매니페스트를 대신 읽습니다. 셋 다 없을 때만 스캔을 멈춥니다. 그대로 디렉터리로 스캔하면 이미지 내용과 다른 결과가 나오기 때문입니다. 동작과 한계는 [공급사 SBOM 가이드](../guides/supplier-sbom.ko.md#yocto-이미지)에 있고, CLI에서는 `--target`으로 같은 폴더를 인식합니다.
 
 ## 진행 화면
 

@@ -432,6 +432,30 @@ def yocto_spdx_candidates(d):
     return []
 
 
+# Files that end in .manifest but are not the image package manifest.
+_NOT_IMAGE_MANIFEST = ("image_license.manifest",)
+
+
+def yocto_manifest_in(d):
+    """The image package manifest in `d`, when the build wrote one.
+
+    A build with no SPDX still records what it shipped: <image>.manifest lists
+    every installed package. image_license.manifest sits beside it and describes
+    the image recipe rather than its contents, so it does not count. Only the
+    presence is decided here — parse-yocto-manifests.py reads the contents.
+    """
+    safe = scan_root_dir(d)
+    if safe is None:
+        return None
+    esc = glob.escape(safe)
+    for pattern in ("tmp*/deploy/images/*/*.manifest", "deploy/images/*/*.manifest",
+                    "images/*/*.manifest", "*.manifest"):
+        for path in sorted(glob.glob(os.path.join(esc, pattern))):
+            if os.path.isfile(path) and os.path.basename(path) not in _NOT_IMAGE_MANIFEST:
+                return path
+    return None
+
+
 def yocto_pick_spdx(candidates):
     """The one document to analyze: SPDX 3.x over 2.x (only 3.x carries the
     installed set and the build's CVE verdicts), then most recently written.
@@ -2758,8 +2782,28 @@ class Handler(BaseHTTPRequestHandler):
                 sse("log", json.dumps("▶ Yocto build directory: %s" % shown))
                 candidates = yocto_spdx_candidates(yocto_dir)
                 doc = yocto_pick_spdx(candidates)
-                if not doc:
-                    fail("This is a Yocto build directory, but it holds no SPDX SBOM. "
+                if not doc and yocto_manifest_in(yocto_dir):
+                    # No SPDX, but a build records what it shipped anyway: the
+                    # image package manifest, license.manifest and cve-check's
+                    # report. Read those rather than refuse — scanning the build
+                    # tree as a directory would report sysroots and native build
+                    # tools that never ship in the image.
+                    sse("log", json.dumps(
+                        "▶ No SPDX in this build; reading the manifests it wrote instead. "
+                        "Components and licenses come from the image and license manifests, "
+                        "and vulnerabilities from cve-check when the build ran it. For "
+                        'CPE-accurate matching, rebuild with INHERIT += "create-spdx-3.0".'))
+                    mode = "ANALYZE"
+                    env["MODE"] = "ANALYZE"
+                    env["YOCTO_BUILD_DIR"] = yocto_dir
+                    env["GENERATE_NOTICE"] = "true"
+                    env["GENERATE_SECURITY"] = "true"
+                    scan_config["source"] = "yocto-build-dir"
+                    scan_config["sourceLabel"] = shown
+                    write_scanmeta(run_out, scan_config)
+                elif not doc:
+                    fail("This is a Yocto build directory, but it holds neither an SPDX "
+                         "SBOM nor an image package manifest to read. "
                          'Add INHERIT += "create-spdx-3.0" and INHERIT += "vex" to '
                          "conf/local.conf and build the image again — the SBOM then "
                          "appears as tmp/deploy/images/<machine>/<image>.rootfs.spdx.json "
@@ -2769,45 +2813,57 @@ class Handler(BaseHTTPRequestHandler):
                          "offered as a fallback: it reports sysroots and native build "
                          "tools that never ship in the image.")
                     return
-                if len(candidates) > 1:
-                    sse("log", json.dumps(
-                        "▶ Several image SBOMs in this build directory — analyzing by SPDX "
-                        "version first (3.x carries the installed set and the build's CVE "
-                        "verdicts), then by which was written last:"))
-                    for cand in candidates:
+                if doc:
+                    if len(candidates) > 1:
                         sse("log", json.dumps(
-                            "    %s%s" % (os.path.relpath(cand, yocto_dir),
-                                          "  <- analyzing this one" if cand == doc else "")))
-                if is_spdx2_doc(doc):
-                    sse("log", json.dumps(
-                        "▶ %s is an SPDX 2.x document. For a Yocto build that file is only "
-                        "an index — the packages live in the per-recipe documents inside "
-                        "<image>.spdx.tar.zst beside it — so expect an almost empty result. "
-                        'Rebuild with INHERIT += "create-spdx-3.0" for the full image '
-                        "contents and the vulnerability judgements the build made."
-                        % os.path.basename(doc)))
-                sse("log", json.dumps("▶ Image SBOM: %s" % os.path.relpath(doc, yocto_dir)))
-                mode = "ANALYZE"
-                env["MODE"] = "ANALYZE"
-                env["ANALYZE_SBOM"] = doc
-                # ANALYZE needs license + vulnerability data for the risk report.
-                env["GENERATE_NOTICE"] = "true"
-                env["GENERATE_SECURITY"] = "true"
-                # Record what this turned out to be, so the result page names a
-                # Yocto build rather than a directory scan. `target` keeps the
-                # folder the user picked, which is what "re-scan" replays — the
-                # detection then runs again on the same folder.
-                scan_config["source"] = "yocto-build-dir"
-                scan_config["sourceLabel"] = shown
-                write_scanmeta(run_out, scan_config)
-                # Same opt-in as an uploaded SBOM: the base UI image has no grype,
-                # so deep CVE matching runs in the deep-cve image as a sibling.
-                if g("deep_cve") == "true" and not deep_cve_capable():
-                    if docker_cli_present() and docker_capable():
-                        sibling = {"image": DEEP_CVE_IMAGE, "upload_file": doc}
-                    else:
-                        fail("Deep CVE matching requires Docker (to run the deep-cve "
-                             "image) or relaunching the UI from the deep-cve image."); return
+                            "▶ Several image SBOMs in this build directory — analyzing by SPDX "
+                            "version first (3.x carries the installed set and the build's CVE "
+                            "verdicts), then by which was written last:"))
+                        for cand in candidates:
+                            sse("log", json.dumps(
+                                "    %s%s" % (os.path.relpath(cand, yocto_dir),
+                                              "  <- analyzing this one" if cand == doc else "")))
+                    if is_spdx2_doc(doc):
+                        # An SPDX 2.x image document is only an index; its packages are
+                        # in the archive beside it, which the parser reads when present.
+                        archive = doc[: -len(".spdx.json")] + ".spdx.tar.zst"
+                        if os.path.isfile(archive):
+                            sse("log", json.dumps(
+                                "▶ SPDX 2.x build: the packages come from %s beside the image "
+                                "document. Vulnerabilities are matched from the CPEs, since only "
+                                "SPDX 3.0 records which CVEs a recipe patched — "
+                                'INHERIT += "create-spdx-3.0" adds that.'
+                                % os.path.basename(archive)))
+                        else:
+                            sse("log", json.dumps(
+                                "▶ %s is an SPDX 2.x document and the archive holding its packages "
+                                "(%s) is not beside it, so expect an almost empty result. Keep the "
+                                'two together, or rebuild with INHERIT += "create-spdx-3.0".'
+                                % (os.path.basename(doc), os.path.basename(archive))))
+                    sse("log", json.dumps("▶ Image SBOM: %s" % os.path.relpath(doc, yocto_dir)))
+                    mode = "ANALYZE"
+                    env["MODE"] = "ANALYZE"
+                    env["ANALYZE_SBOM"] = doc
+                    # ANALYZE needs license + vulnerability data for the risk report.
+                    env["GENERATE_NOTICE"] = "true"
+                    env["GENERATE_SECURITY"] = "true"
+                    # Record what this turned out to be, so the result page names a
+                    # Yocto build rather than a directory scan. `target` keeps the
+                    # folder the user picked, which is what "re-scan" replays — the
+                    # detection then runs again on the same folder.
+                    scan_config["source"] = "yocto-build-dir"
+                    scan_config["sourceLabel"] = shown
+                    write_scanmeta(run_out, scan_config)
+                    # Same opt-in as an uploaded SBOM: the base UI image has no
+                    # grype, so deep CVE matching runs in the deep-cve image as a
+                    # sibling. Only for a document — the manifest path has no
+                    # single file to hand over, and runs in process or not at all.
+                    if g("deep_cve") == "true" and not deep_cve_capable():
+                        if docker_cli_present() and docker_capable():
+                            sibling = {"image": DEEP_CVE_IMAGE, "upload_file": doc}
+                        else:
+                            fail("Deep CVE matching requires Docker (to run the deep-cve "
+                                 "image) or relaunching the UI from the deep-cve image."); return
 
             elif source == "docker-image":
                 if not target:

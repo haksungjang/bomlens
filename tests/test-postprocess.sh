@@ -1586,6 +1586,245 @@ y22_rc=$?
     && pass "Yocto SPDX 2.x index document names the file that holds the packages" \
     || fail "SPDX 2.x index not recognised (rc=$y22_rc): $y22_msg"
 
+# With the archive beside it, that same document is readable: the packages come
+# out of the per-document members and the CPEs off the recipes they were built
+# from. The fixture is generated rather than committed so its shape stays
+# checkable — it mirrors create-spdx-2.2.bbclass (openembedded-core): members
+# named <document>.spdx.json, an index.json, CONTAINS for installed packages and
+# OTHER for the runtime documents.
+if command -v zstd >/dev/null 2>&1; then
+    Y22DIR="$WORK/y22bundle"
+    python3 - "$Y22DIR" <<'PYGEN'
+import hashlib, io, json, os, subprocess, sys, tarfile
+
+out_dir = sys.argv[1]
+os.makedirs(out_dir, exist_ok=True)
+stem = "core-image-minimal-qemux86-64.rootfs"
+CREATORS = ["Tool: OpenEmbedded Core create-spdx.bbclass", "Organization: OE ()"]
+
+def doc(name, suffix):
+    return {"spdxVersion": "SPDX-2.2", "dataLicense": "CC0-1.0", "SPDXID": "SPDXRef-DOCUMENT",
+            "name": name, "documentNamespace": "http://spdx.org/spdxdocs/%s-%s" % (name, suffix),
+            "creationInfo": {"created": "2026-01-02T00:00:00Z", "creators": CREATORS},
+            "packages": [], "relationships": [], "externalDocumentRefs": []}
+
+recipes = {}
+for pn, pv, lic, cpe in [
+    ("busybox", "1.36.1", "GPL-2.0-only AND LicenseRef-bzip2-1.0.4",
+     "cpe:2.3:a:*:busybox:1.36.1:*:*:*:*:*:*:*"),
+    ("zlib", "1.3", "Zlib", "cpe:2.3:a:*:zlib:1.3:*:*:*:*:*:*:*"),
+]:
+    d = doc("recipe-" + pn, "r")
+    d["packages"] = [{"SPDXID": "SPDXRef-Recipe-" + pn, "name": pn, "versionInfo": pv,
+                      "licenseDeclared": lic, "licenseConcluded": "NOASSERTION",
+                      "sourceInfo": "CVEs fixed: CVE-2023-42363",
+                      "externalRefs": [{"referenceCategory": "SECURITY",
+                                        "referenceType": "http://spdx.org/rdf/references/cpe23Type",
+                                        "referenceLocator": cpe}]}]
+    recipes["recipe-" + pn] = d
+
+packages = {}
+for pkg, recipe, pv, lic in [
+    ("busybox", "recipe-busybox", "1.36.1", "GPL-2.0-only AND LicenseRef-bzip2-1.0.4"),
+    ("libz1", "recipe-zlib", "1.3", "Zlib"),
+    # No license of its own: the recipe's has to fill in.
+    ("busybox-syslog", "recipe-busybox", "1.36.1", "NOASSERTION"),
+]:
+    d = doc(pkg, "p")
+    rid = "SPDXRef-Package-" + pkg
+    d["packages"] = [{"SPDXID": rid, "name": pkg, "versionInfo": pv,
+                      "licenseDeclared": lic, "licenseConcluded": "NOASSERTION"}]
+    d["relationships"] = [{"spdxElementId": rid, "relationshipType": "GENERATED_FROM",
+                           "relatedSpdxElement": "DocumentRef-%s:SPDXRef-Recipe-%s"
+                                                  % (recipe, recipe[len("recipe-"):])}]
+    packages[pkg] = d
+
+runtimes = {}
+for pkg in packages:
+    d = doc("runtime-" + pkg, "rt")
+    d["packages"] = [{"SPDXID": "SPDXRef-Runtime-" + pkg, "name": "runtime-" + pkg,
+                      "versionInfo": "1.0", "licenseDeclared": "NOASSERTION"}]
+    runtimes["runtime-" + pkg] = d
+
+image = doc(stem, "i")
+image["packages"] = [{"SPDXID": "SPDXRef-Image", "name": "core-image-minimal", "versionInfo": "1.0"}]
+for pkg, d in packages.items():
+    image["externalDocumentRefs"].append({"externalDocumentId": "DocumentRef-" + pkg,
+                                          "spdxDocument": d["documentNamespace"]})
+    image["relationships"].append({"spdxElementId": "SPDXRef-Image", "relationshipType": "CONTAINS",
+                                   "relatedSpdxElement": "DocumentRef-%s:SPDXRef-Package-%s" % (pkg, pkg)})
+for rt, d in runtimes.items():
+    image["relationships"].append({"spdxElementId": "SPDXRef-Image", "relationshipType": "OTHER",
+                                   "relatedSpdxElement": "DocumentRef-%s:SPDXRef-DOCUMENT" % rt,
+                                   "comment": "Runtime dependencies"})
+
+with open(os.path.join(out_dir, stem + ".spdx.json"), "w") as fh:
+    json.dump(image, fh, indent=2, sort_keys=True)
+
+all_docs = dict(recipes); all_docs.update(packages); all_docs.update(runtimes); all_docs[stem] = image
+raw, index = io.BytesIO(), {"documents": []}
+with tarfile.open(fileobj=raw, mode="w|") as tar:
+    for name in sorted(all_docs):
+        blob = json.dumps(all_docs[name], sort_keys=True, indent=2).encode()
+        info = tarfile.TarInfo(name + ".spdx.json"); info.size = len(blob)
+        tar.addfile(info, io.BytesIO(blob))
+        index["documents"].append({"filename": info.name, "sha1": hashlib.sha1(blob).hexdigest(),
+                                   "documentNamespace": all_docs[name]["documentNamespace"]})
+    blob = json.dumps(index, sort_keys=True, indent=2).encode()
+    info = tarfile.TarInfo("index.json"); info.size = len(blob)
+    tar.addfile(info, io.BytesIO(blob))
+subprocess.run(["zstd", "-q", "-f", "-o", os.path.join(out_dir, stem + ".spdx.tar.zst"), "-"],
+               input=raw.getvalue(), check=True)
+PYGEN
+    y22b_msg=$(python3 "$LIB/parse-yocto-spdx.py" \
+        "$Y22DIR/core-image-minimal-qemux86-64.rootfs.spdx.json" \
+        "$WORK/y22b.cdx.json" "$WORK/y22b" 2>&1 >/dev/null)
+    y22b_rc=$?
+    [ "$y22b_rc" = "0" ] && pass "an SPDX 2.x image document with its archive is read" \
+        || fail "SPDX 2.x bundle rejected (rc=$y22b_rc): $y22b_msg"
+    y22b_names=$(jq -r '[.components[].name] | sort | join(",")' "$WORK/y22b.cdx.json" 2>/dev/null)
+    # CONTAINS names the installed packages; the runtime documents hang off OTHER
+    # and describe what a package needs, not what shipped.
+    [ "$y22b_names" = "busybox,busybox-syslog,libz1" ] \
+        && pass "the installed set comes from CONTAINS (runtime documents excluded)" \
+        || fail "SPDX 2.x components='$y22b_names'"
+    [ "$(jq -r '.components[] | select(.name=="busybox") | .cpe' "$WORK/y22b.cdx.json")" \
+        = "cpe:2.3:a:*:busybox:1.36.1:*:*:*:*:*:*:*" ] \
+        && pass "the CPE is taken from the recipe the package was generated from" \
+        || fail "SPDX 2.x cpe missing"
+    [ "$(jq -r '.components[] | select(.name=="busybox") | .licenses[0].expression' "$WORK/y22b.cdx.json")" \
+        = "GPL-2.0-only AND LicenseRef-bzip2-1.0.4" ] \
+        && pass "a compound license from the package document is preserved" \
+        || fail "SPDX 2.x compound license lost"
+    # NOASSERTION is not a license: the recipe's expression fills in instead.
+    [ "$(jq -r '.components[] | select(.name=="busybox-syslog") | .licenses[0].expression' "$WORK/y22b.cdx.json")" \
+        = "GPL-2.0-only AND LicenseRef-bzip2-1.0.4" ] \
+        && pass "a package with no license of its own falls back to its recipe" \
+        || fail "SPDX 2.x license fallback missing"
+    [ "$(jq -r '.metadata.component.name' "$WORK/y22b.cdx.json")" = "core-image-minimal" ] \
+        && pass "the image names the root component (SPDX 2.x)" || fail "SPDX 2.x root component wrong"
+    # 2.2 carries no VEX, so no judgement sidecar may be written: an empty one
+    # would claim the build made judgements it never recorded.
+    [ ! -f "$WORK/y22b_yocto_vex.json" ] \
+        && pass "no build-verdict sidecar is invented for SPDX 2.x" \
+        || fail "SPDX 2.x wrote a VEX sidecar"
+    # Without the archive the same document is only an index again.
+    cp "$Y22DIR/core-image-minimal-qemux86-64.rootfs.spdx.json" "$WORK/lonely.spdx.json"
+    lonely_rc=0
+    python3 "$LIB/parse-yocto-spdx.py" "$WORK/lonely.spdx.json" "$WORK/lonely.cdx.json" >/dev/null 2>&1 || lonely_rc=$?
+    [ "$lonely_rc" = "3" ] \
+        && pass "the image document alone still declines, with the archive missing" \
+        || fail "index-only document returned rc=$lonely_rc"
+else
+    echo "  SKIP: SPDX 2.x bundle reading (zstd not installed)"
+fi
+
+echo "== yocto: a build with no SPDX is read from the manifests it did write =="
+# Turning create-spdx on is a build-configuration change the holder of a finished
+# build directory cannot always make. The build recorded what it shipped anyway:
+# the image package manifest, license.manifest and cve-check's report (formats
+# from openembedded-core: rootfs-postcommands, license_image, cve-check).
+MFDIR="$WORK/yocto-manifests"
+mkdir -p "$MFDIR/tmp/deploy/images/qemux86-64" \
+         "$MFDIR/tmp/deploy/licenses/core-image-minimal-qemux86-64-20260720" \
+         "$MFDIR/tmp/log/cve"
+cat > "$MFDIR/tmp/deploy/images/qemux86-64/core-image-minimal-qemux86-64.rootfs.manifest" <<'MEOF'
+base-files core2-64 3.0.14
+busybox core2-64 1.36.1
+busybox-syslog core2-64 1.36.1
+libz1 core2-64 1.3
+MEOF
+cat > "$MFDIR/tmp/deploy/licenses/core-image-minimal-qemux86-64-20260720/license.manifest" <<'LEOF'
+PACKAGE NAME: base-files
+PACKAGE VERSION: 3.0.14
+RECIPE NAME: base-files
+LICENSE: GPL-2.0-only
+
+PACKAGE NAME: busybox
+PACKAGE VERSION: 1.36.1
+RECIPE NAME: busybox
+LICENSE: GPL-2.0-only & bzip2-1.0.4
+
+PACKAGE NAME: busybox-syslog
+PACKAGE VERSION: 1.36.1
+RECIPE NAME: busybox
+LICENSE: GPL-2.0-only
+
+PACKAGE NAME: libz1
+PACKAGE VERSION: 1.3
+RECIPE NAME: zlib
+LICENSE: Zlib
+
+LEOF
+# An image_license.manifest sits beside the real one and describes the image
+# recipe, not its contents; reading it would replace the package list.
+cat > "$MFDIR/tmp/deploy/licenses/core-image-minimal-qemux86-64-20260720/image_license.manifest" <<'IEOF'
+RECIPE NAME: core-image-minimal
+VERSION: 1.0
+LICENSE: MIT
+FILES:
+
+IEOF
+cat > "$MFDIR/tmp/log/cve/cve-summary.json" <<'CEOF'
+{"version":"1","package":[
+ {"name":"busybox","layer":"meta","version":"1.36.1","issue":[
+   {"id":"CVE-2023-42363","status":"Patched","scorev3":"5.5","summary":"awk use-after-free","link":"a"},
+   {"id":"CVE-2022-28391","status":"Unpatched","scorev3":"9.8","summary":"remote code execution","link":"b"},
+   {"id":"CVE-2021-42374","status":"Ignored","scorev3":"5.3","summary":"not applicable here","link":"c"}]},
+ {"name":"zlib","layer":"meta","version":"1.3","issue":[
+   {"id":"CVE-2023-45853","status":"Unpatched","scorev3":"7.5","summary":"integer overflow","link":"d"}]},
+ {"name":"gcc-cross-x86_64","layer":"meta","version":"13.2","issue":[
+   {"id":"CVE-2023-99999","status":"Unpatched","scorev3":"9.9","summary":"build host only","link":"e"}]}
+]}
+CEOF
+mf_rc=0
+python3 "$LIB/parse-yocto-manifests.py" "$MFDIR" "$WORK/mf.cdx.json" "$WORK/mf" >/dev/null 2>&1 || mf_rc=$?
+[ "$mf_rc" = "0" ] && pass "a build directory with manifests but no SPDX is read" \
+    || fail "manifest parser rc=$mf_rc"
+mf_names=$(jq -r '[.components[].name] | sort | join(",")' "$WORK/mf.cdx.json" 2>/dev/null)
+[ "$mf_names" = "base-files,busybox,busybox-syslog,libz1" ] \
+    && pass "the installed set comes from the image package manifest" \
+    || fail "manifest components='$mf_names'"
+[ "$(jq -r '.components[] | select(.name=="busybox") | .licenses[0].expression' "$WORK/mf.cdx.json")" \
+    = "GPL-2.0-only AND bzip2-1.0.4" ] \
+    && pass "license.manifest's Yocto operators are written as SPDX ones" \
+    || fail "license expression not normalized: $(jq -c '.components[]|select(.name=="busybox")|.licenses' "$WORK/mf.cdx.json")"
+[ "$(jq -r '.components[] | select(.name=="libz1") | (.properties[] | select(.name=="bomlens:yocto:recipe") | .value)' "$WORK/mf.cdx.json")" = "zlib" ] \
+    && pass "a package records the recipe it came from when they differ" \
+    || fail "recipe property missing"
+# cve-check is keyed by recipe, so a recipe that built nothing installed — the
+# native and cross tools — must not bring its CVEs into the image's report.
+mf_cves=$(jq -r '[.Results[].Vulnerabilities[].VulnerabilityID] | unique | join(",")' "$WORK/mf_security_yocto.json" 2>/dev/null)
+[ "$mf_cves" = "CVE-2022-28391,CVE-2023-45853" ] \
+    && pass "only CVEs of recipes that shipped a package are reported" \
+    || fail "manifest CVEs='$mf_cves'"
+[ "$(jq -r '[.Results[].Vulnerabilities[] | select(.VulnerabilityID=="CVE-2022-28391") | .Severity] | unique | join(",")' "$WORK/mf_security_yocto.json")" = "CRITICAL" ] \
+    && pass "the CVSS score becomes the severity the report groups by" \
+    || fail "severity not derived from the score"
+# Patched and Ignored are the build's own judgements and must not be findings.
+[ "$(jq -r '[.judgements.fixed, .judgements.notAffected, .judgements.affected] | join("/")' "$WORK/mf_yocto_vex.json")" = "2/2/3" ] \
+    && pass "cve-check verdicts split into patched / not applicable / unpatched" \
+    || fail "manifest vex counts=$(jq -c '.judgements' "$WORK/mf_yocto_vex.json")"
+[ "$(jq -r '.metadata.component.name' "$WORK/mf.cdx.json")" = "core-image-minimal-qemux86-64" ] \
+    && pass "the image manifest names the root component" \
+    || fail "manifest root='$(jq -r '.metadata.component.name' "$WORK/mf.cdx.json")'"
+
+# A build with an image manifest but no cve-check run has no verdicts to report,
+# and must not claim otherwise.
+NOCVE="$WORK/yocto-nocve"
+mkdir -p "$NOCVE/tmp/deploy/images/m1"
+printf 'busybox core2-64 1.36.1\n' > "$NOCVE/tmp/deploy/images/m1/img.rootfs.manifest"
+python3 "$LIB/parse-yocto-manifests.py" "$NOCVE" "$WORK/nocve.cdx.json" "$WORK/nocve" >/dev/null 2>&1
+[ ! -f "$WORK/nocve_yocto_vex.json" ] && [ ! -f "$WORK/nocve_security_yocto.json" ] \
+    && pass "no cve-check run means no verdicts and no findings are invented" \
+    || fail "manifest parser invented CVE output without cve-check"
+
+# Nothing to read at all is rc=3, so the caller can say what is missing.
+empty_rc=0
+python3 "$LIB/parse-yocto-manifests.py" "$WORK" "$WORK/none.cdx.json" >/dev/null 2>&1 || empty_rc=$?
+[ "$empty_rc" = "3" ] && pass "a directory with no image manifest declines with rc=3" \
+    || fail "manifest parser rc=$empty_rc on a directory with no manifest"
+
 echo "== convert: a non-empty SBOM never converts to an empty one silently =="
 # A valid-but-empty CycloneDX passes every later step, and the report then reads
 # "no components, no vulnerabilities" — indistinguishable from a clean result.

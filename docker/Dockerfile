@@ -102,9 +102,12 @@ ARG WEASYPRINT_VERSION=63.1
 
 # jq (helper scripts), curl/tar (installers), file (binary mode),
 # git (web UI 'GitHub URL' ingestion: server.py clones into a temp source tree).
+# zstd: a Yocto SPDX 2.2 build publishes its package documents as an
+# <image>.spdx.tar.zst beside the image document (parse-yocto-spdx.py reads it
+# through `zstd -dc`; python 3.12's tarfile cannot decompress zstd itself).
 # python3 + pip are already in the python:3.12-slim base (web UI + scancode).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    jq curl wget ca-certificates bash tar file git \
+    jq curl wget ca-certificates bash tar file git zstd \
     && rm -rf /var/lib/apt/lists/*
 
 # syft — image/binary/RootFS scanning (pinned)

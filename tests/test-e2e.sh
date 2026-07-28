@@ -378,17 +378,34 @@ fi
 if [ "$have_docker" = 1 ]; then
     absent_img="bomlens-absent-for-tests:notag"
 
-    # A build directory with no SBOM must say so and name the setting that
-    # produces one, instead of falling back to a directory scan of the build tree.
+    # A build directory with neither an SBOM nor a manifest must say so and name
+    # the setting that produces one, instead of falling back to a directory scan
+    # of the build tree.
     mkdir -p "$yb/nosbom/conf" "$yb/nosbom/tmp/deploy/images/qemuarm"
     echo 'BBLAYERS = "x"' > "$yb/nosbom/conf/bblayers.conf"
     ns_err="$(bash "$SCAN" --project p --version 1 --target "$yb/nosbom" --generate-only 2>&1 || true)"
-    if printf '%s' "$ns_err" | grep -q "no SPDX SBOM" \
+    if printf '%s' "$ns_err" | grep -q "neither an SPDX SBOM" \
        && printf '%s' "$ns_err" | grep -q "create-spdx-3.0" \
        && printf '%s' "$ns_err" | grep -q -- "--analyze"; then
-        pass "a build directory with no SBOM errors with the setting to add"
+        pass "a build directory with nothing to read errors with the setting to add"
     else
-        fail "a build directory with no SBOM errors with the setting to add" "$ns_err"
+        fail "a build directory with nothing to read errors with the setting to add" "$ns_err"
+    fi
+
+    # With no SPDX but the manifests a build writes anyway, the scan reads those
+    # instead of refusing: the image manifest is the installed set.
+    mkdir -p "$yb/mfonly/conf" "$yb/mfonly/tmp/deploy/images/qemuarm"
+    echo 'BBLAYERS = "x"' > "$yb/mfonly/conf/bblayers.conf"
+    printf 'busybox core2-64 1.36.1\n' \
+        > "$yb/mfonly/tmp/deploy/images/qemuarm/img-qemuarm.rootfs.manifest"
+    mf_out="$(mktemp -d "$WORK_ROOT/yocto-mf.XXXXXX")"
+    mf_log="$( cd "$mf_out" && SBOM_SCANNER_IMAGE="$absent_img" \
+        bash "$SCAN" --project p --version 1 --target "$yb/mfonly" --generate-only 2>&1 || true )"
+    if printf '%s' "$mf_log" | grep -q "reading the manifests it wrote" \
+       && printf '%s' "$mf_log" | grep -q "Mode: ANALYZE"; then
+        pass "a build with no SPDX falls back to the manifests it did write"
+    else
+        fail "a build with no SPDX falls back to the manifests it did write" "$mf_log"
     fi
 
     # End to end through the orchestrator: the build directory routes to ANALYZE
@@ -436,8 +453,9 @@ if [ "$have_docker" = 1 ]; then
         fail "the candidates and the chosen one are reported on stdout" "$ym_log"
     fi
 
-    # An SPDX 2.x document is flagged before the scan, since for a Yocto build it
-    # is an index and the packages are in the sibling archive.
+    # An SPDX 2.x image document is only an index: the packages are in the archive
+    # beside it. Which of the two situations the user is in decides what they are
+    # told, so both are checked.
     mkdir -p "$yb/only22/conf" "$yb/only22/tmp/deploy/images/m1"
     echo 'BBLAYERS = "x"' > "$yb/only22/conf/bblayers.conf"
     printf '%s' "$spdx2" > "$yb/only22/tmp/deploy/images/m1/img.rootfs.spdx.json"
@@ -445,10 +463,24 @@ if [ "$have_docker" = 1 ]; then
     y2_log="$( cd "$y2_out" && SBOM_SCANNER_IMAGE="$absent_img" \
         bash "$SCAN" --project p --version 1 --target "$yb/only22" --generate-only 2>&1 || true )"
     if printf '%s' "$y2_log" | grep -q "SPDX 2.x document" \
+       && printf '%s' "$y2_log" | grep -q "not beside it" \
        && printf '%s' "$y2_log" | grep -q "spdx.tar.zst"; then
-        pass "an SPDX 2.x image document is flagged before the scan"
+        pass "an SPDX 2.x document with no archive beside it is called out"
     else
-        fail "an SPDX 2.x image document is flagged before the scan" "$y2_log"
+        fail "an SPDX 2.x document with no archive beside it is called out" "$y2_log"
+    fi
+
+    # With the archive present the scan proceeds on it, and says where the
+    # packages came from and what is missing compared with SPDX 3.0.
+    : > "$yb/only22/tmp/deploy/images/m1/img.rootfs.spdx.tar.zst"
+    y2b_out="$(mktemp -d "$WORK_ROOT/yocto-22b.XXXXXX")"
+    y2b_log="$( cd "$y2b_out" && SBOM_SCANNER_IMAGE="$absent_img" \
+        bash "$SCAN" --project p --version 1 --target "$yb/only22" --generate-only 2>&1 || true )"
+    if printf '%s' "$y2b_log" | grep -q "packages come from" \
+       && printf '%s' "$y2b_log" | grep -q "matched from the CPEs"; then
+        pass "an SPDX 2.x document with its archive names where the packages come from"
+    else
+        fail "an SPDX 2.x document with its archive names where the packages come from" "$y2b_log"
     fi
 
     # --firmware with a directory keeps its own error: the Yocto branch must not
