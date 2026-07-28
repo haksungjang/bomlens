@@ -24,7 +24,7 @@
     "rootfsDir": "Directory / rootfs",
     "yoctoBuildDir": "Yocto build directory",
     "rootfsPlaceholder": "centos-rootfs/  (relative to the current folder)",
-    "rootfsHint": "Scans an OS rootfs or any subfolder under the current folder (/src) as a directory. Paths outside the folder are rejected — place the rootfs under the launch folder, mount it with --mount, or use a Docker image instead.",
+    "rootfsHint": "Scans an OS rootfs or any subfolder under the current folder (/src) as a directory. A Yocto build directory is recognized as one, and the image SBOM the build published is analyzed instead of the build tree. Paths outside the folder are rejected — place the rootfs under the launch folder, mount it with --mount, or use a Docker image instead.",
     "scanRoot": "Scan location",
     "scanRootCurrent": "Current folder ({{path}})",
     "scanRootCurrentNoPath": "Current folder",

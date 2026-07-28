@@ -24,7 +24,7 @@
     "rootfsDir": "디렉터리 / rootfs",
     "yoctoBuildDir": "Yocto 빌드 디렉터리",
     "rootfsPlaceholder": "centos-rootfs/  (현재 폴더 기준 상대경로)",
-    "rootfsHint": "현재 폴더(/src) 하위의 OS rootfs나 임의 하위 폴더를 디렉터리로 스캔합니다. 폴더 밖 경로는 거부되므로, rootfs를 실행 폴더 하위에 두거나 --mount로 마운트하거나 Docker 이미지 입력을 사용하세요.",
+    "rootfsHint": "현재 폴더(/src) 하위의 OS rootfs나 임의 하위 폴더를 디렉터리로 스캔합니다. Yocto 빌드 디렉터리는 그렇게 인식해서, 빌드 트리 대신 빌드가 만든 이미지 SBOM을 분석합니다. 폴더 밖 경로는 거부되므로, rootfs를 실행 폴더 하위에 두거나 --mount로 마운트하거나 Docker 이미지 입력을 사용하세요.",
     "scanRoot": "스캔 위치",
     "scanRootCurrent": "현재 폴더 ({{path}})",
     "scanRootCurrentNoPath": "현재 폴더",
