@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Vulnerability severity grades stay in English on the Korean UI — `Critical`, `High`, `Medium`, `Low`, `Unknown` rather than 심각/높음/중간/낮음. They are the vocabulary of the advisory itself: NVD, OSV and Trivy all publish those names, the generated reports already print them untranslated, and a reader cross-referencing a CVE page had to map the Korean label back to the English one. Only the grade names change; the surrounding Korean (the "심각도" column heading, the filter hints) stays as it was.
+
 ### Added
 
 - The result screens now show what a scan looked at, not only what it found. The Source tree section pairs the file list with the file itself: pick an entry and its text opens beside the tree. It covers every scan that had files to read — source trees, directory and rootfs scans, firmware, container images and archive build artifacts (jar, war, whl, zip, tar). A container image and an archive have no directory to walk, so a temporary copy is unpacked, read and deleted within the run; a firmware rootfs is captured while the unpacker's own temp directory still exists, since none of these outlive the scan. Symlinks are listed with the path they point at, which a container image needs badly: an Alpine image holds 90 regular files against 334 links, so listing only regular files showed a `/bin` in which none of the commands existed. The capture is bounded and says so — text only, 256 KB per file and 8 MB in total, licence texts and package manifests taken first so the evidence behind a finding survives a tight budget, with the count of what was left out shown above the tree and the reason (binary, or past the limit) shown in place of any file with no text.
