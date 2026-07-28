@@ -471,37 +471,53 @@ is_firmware() {
 is_yocto_build_dir() {
     local d="$1" p q
     [ -d "$d" ] || return 1
-    # Markers only bitbake leaves: the build directory itself. These stand on
-    # their own, so a build that has not been configured to emit an SBOM is
-    # still recognized and can be told what setting to add.
+    # Markers only bitbake leaves, in the build directory it was run from. These
+    # stand on their own, so a build that was never configured to emit an SBOM is
+    # still recognized and can be told which setting to add. TMPDIR carries the C
+    # library suffix outside poky (oe-core builds write tmp-glibc), hence tmp*.
     [ -f "$d/conf/bblayers.conf" ] && return 0
-    [ -d "$d/tmp/deploy/images" ] && return 0
-    # Shapes that are not Yocto-specific: a deploy tree passed directly, or the
-    # per-machine image folder inside one. Any project can have a `deploy/images`
-    # folder, and taking one over would refuse a directory scan the user meant to
-    # run — so these count only when an SPDX document is actually there to read.
-    for q in "$d"/deploy/images/*/*.spdx.json; do
-        [ -f "$q" ] && return 0
+    for q in "$d"/tmp*/deploy/images; do
+        [ -d "$q" ] && return 0
+    done
+    # Shapes that are not Yocto-specific on their own: a deploy tree, or the
+    # per-machine image folder inside one. Plenty of projects have a directory
+    # called deploy/images or a file called *.manifest, and taking one of those
+    # over would refuse a directory scan the user meant to run — so these count
+    # only when a document bitbake actually wrote is sitting there.
+    for q in "$d"/deploy/images/*/*.spdx.json "$d"/images/*/*.spdx.json; do
+        is_yocto_spdx_doc "$q" && return 0
     done
     for p in "$d"/*.manifest; do
         [ -f "$p" ] || continue
         for q in "$d"/*.spdx.json; do
-            [ -f "$q" ] && return 0
+            is_yocto_spdx_doc "$q" && return 0
         done
         break
     done
     return 1
 }
 
+# True for an SPDX document bitbake produced. Both SPDX 2.x and 3.x name it as
+# the creating tool, so one grep covers the releases we accept; the container
+# does the authoritative check (parse-yocto-spdx.py), this only decides whether a
+# directory is Yocto's. openembedded appears instead of bitbake in some 2.x
+# output, so both are matched.
+is_yocto_spdx_doc() {
+    [ -f "$1" ] || return 1
+    LC_ALL=C grep -qiE 'bitbake|openembedded' "$1" 2>/dev/null
+}
+
 # Every SPDX document a Yocto build could have left in $1, most specific
 # location first. `<image>.rootfs.spdx.json` is what an image build writes;
 # the looser `*.spdx.json` tier is only consulted when that finds nothing, so
-# an image document is never listed twice.
+# an image document is never listed twice by the two tiers. Duplicates within a
+# tier are removed by the caller (bitbake publishes both a timestamped file and
+# an IMAGE_LINK_NAME symlink to it).
 yocto_spdx_candidates() {
     local d="$1" tier p hit=1
     for tier in .rootfs.spdx.json .spdx.json; do
         for p in \
-            "$d"/tmp/deploy/images/*/*"$tier" \
+            "$d"/tmp*/deploy/images/*/*"$tier" \
             "$d"/deploy/images/*/*"$tier" \
             "$d"/images/*/*"$tier" \
             "$d"/*"$tier"; do
@@ -523,19 +539,37 @@ is_spdx2_doc() {
     LC_ALL=C grep -qE '"spdxVersion"[[:space:]]*:[[:space:]]*"SPDX-2' "$1" 2>/dev/null
 }
 
-# Pick the one SPDX document to analyze out of a build directory. SPDX 3.x wins
-# over 2.x (only 3.x carries the installed set and the build's CVE judgements),
-# then the most recently written. Prints the path, or nothing when the build
-# produced no SBOM at all. Every candidate is listed when there is more than
-# one, so a multi-machine build directory does not silently pick for the user.
+# The physical path of a file, following symlinks. bitbake publishes each image
+# artifact twice — a timestamped file and an IMAGE_LINK_NAME symlink pointing at
+# it — and reporting those as two different SBOMs would invent a choice the user
+# does not have. Falls back to the path as given wherever it cannot resolve
+# (readlink is absent, a link is broken, a cycle), which is never worse than the
+# duplicate listing it replaces.
+resolve_file_path() {
+    local f="$1" d b t n=0
+    d=$(cd "$(dirname "$f")" 2>/dev/null && pwd -P) || { printf '%s' "$f"; return 0; }
+    b=$(basename "$f")
+    while [ -L "$d/$b" ] && [ "$n" -lt 16 ]; do
+        t=$(readlink "$d/$b" 2>/dev/null) || break
+        [ -n "$t" ] || break
+        case "$t" in
+            /*) d=$(cd "$(dirname "$t")" 2>/dev/null && pwd -P) || break ;;
+            *)  d=$(cd "$d/$(dirname "$t")" 2>/dev/null && pwd -P) || break ;;
+        esac
+        b=$(basename "$t")
+        n=$((n + 1))
+    done
+    printf '%s/%s' "$d" "$b"
+}
+
+# Pick the one SPDX document to analyze out of the candidate paths on stdin.
+# SPDX 3.x wins over 2.x (only 3.x carries the installed set and the build's CVE
+# judgements), then the most recently written. Prints the chosen path and
+# nothing else, so the caller owns what the user sees.
 yocto_pick_spdx() {
-    local d="$1" p chosen="" fallback=""
-    local -a cands=()
+    local p chosen="" fallback=""
     while IFS= read -r p; do
-        [ -n "$p" ] && cands+=("$p")
-    done < <(yocto_spdx_candidates "$d")
-    [ "${#cands[@]}" -gt 0 ] || return 1
-    for p in "${cands[@]}"; do
+        [ -n "$p" ] || continue
         if is_spdx2_doc "$p"; then
             { [ -z "$fallback" ] || [ "$p" -nt "$fallback" ]; } && fallback="$p"
         else
@@ -543,17 +577,6 @@ yocto_pick_spdx() {
         fi
     done
     [ -n "$chosen" ] || chosen="$fallback"
-    if [ "${#cands[@]}" -gt 1 ]; then
-        echo "[INFO] Several image SBOMs in this build directory:" >&2
-        for p in "${cands[@]}"; do
-            if [ "$p" = "$chosen" ]; then
-                echo "[INFO]   $p  <- newest, analyzing this one" >&2
-            else
-                echo "[INFO]   $p" >&2
-            fi
-        done
-        echo "[INFO]   To analyze a different one, pass it with --analyze <file>." >&2
-    fi
     printf '%s' "$chosen"
 }
 
@@ -741,13 +764,29 @@ elif [ -n "$MODEL" ]; then
 elif [ -n "$TARGET" ]; then
     if [ -f "$TARGET" ]; then
         if [ "$FORCE_FIRMWARE" = "true" ] || is_firmware "$TARGET"; then MODE="FIRMWARE"; else MODE="BINARY"; fi
-    elif [ -d "$TARGET" ] && is_yocto_build_dir "$TARGET"; then
+    elif [ -d "$TARGET" ] && [ "$FORCE_FIRMWARE" != "true" ] && is_yocto_build_dir "$TARGET"; then
         # A Yocto build already knows what it put in the image; read that rather
         # than walking the build tree. Joins the ANALYZE path below with the
         # SBOM the build wrote — no separate mode, so validation, conformance
         # and the reports all behave exactly as they do for an uploaded SBOM.
+        # --firmware is excluded above so that combination still gets its own
+        # "expects a file target" error instead of one about a missing SBOM.
         echo "[INFO] Yocto build directory: $TARGET"
-        YOCTO_SPDX="$(yocto_pick_spdx "$TARGET" || true)"
+        # Collect first, then choose, so the list the user sees and the choice
+        # come from one set. A timestamped document and the IMAGE_LINK_NAME
+        # symlink pointing at it are the same SBOM, so keep one entry per file.
+        YOCTO_CANDS=""; YOCTO_SEEN=""
+        while IFS= read -r yc; do
+            [ -n "$yc" ] || continue
+            yc_real="$(resolve_file_path "$yc")"
+            case "$YOCTO_SEEN" in
+                *"|$yc_real|"*) continue ;;
+            esac
+            YOCTO_SEEN="$YOCTO_SEEN|$yc_real|"
+            YOCTO_CANDS="$YOCTO_CANDS$yc
+"
+        done < <(yocto_spdx_candidates "$TARGET" || true)
+        YOCTO_SPDX="$(printf '%s' "$YOCTO_CANDS" | yocto_pick_spdx)"
         if [ -z "$YOCTO_SPDX" ]; then
             echo "[ERROR] This is a Yocto build directory, but it holds no SPDX SBOM."
             echo "        Add these two lines to conf/local.conf and build the image again:"
@@ -755,11 +794,38 @@ elif [ -n "$TARGET" ]; then
             echo '            INHERIT += "vex"'
             echo "        The SBOM then lands in tmp/deploy/images/<machine>/<image>.rootfs.spdx.json,"
             echo "        and this folder can be scanned as-is."
+            echo "        If this build writes its images elsewhere (a relocated DEPLOY_DIR), pass"
+            echo "        the document directly: --analyze <image>.rootfs.spdx.json."
             echo "        Scanning a build directory as a plain directory tree is not done as a"
             echo "        fallback: it reports sysroots and native build tools that never ship in"
             echo "        the image. To scan a tree anyway, point --target at that tree itself"
             echo "        (an extracted rootfs, for example) rather than at the build directory."
             exit 1
+        fi
+        # The machine and image folder names come from the filesystem, not from
+        # anything the user typed, and the path is interpolated into an `eval`ed
+        # docker run below. Refuse the few characters that would be more than a
+        # path there rather than quietly running them.
+        case "$YOCTO_SPDX" in
+            *'$'*|*'`'*|*'"'*|*'\'*)
+                echo "[ERROR] The SBOM path found in this build directory contains a character"
+                echo "        that cannot be passed through safely: $YOCTO_SPDX"
+                echo "        Rename the folder, or pass the file with --analyze <file>."
+                exit 1 ;;
+        esac
+        if [ "$(printf '%s' "$YOCTO_CANDS" | grep -c .)" -gt 1 ]; then
+            echo "[INFO] Several image SBOMs in this build directory:"
+            while IFS= read -r yc; do
+                [ -n "$yc" ] || continue
+                if [ "$yc" = "$YOCTO_SPDX" ]; then
+                    echo "[INFO]   $yc  <- analyzing this one"
+                else
+                    echo "[INFO]   $yc"
+                fi
+            done <<< "$YOCTO_CANDS"
+            echo "[INFO]   Chosen by SPDX version first (3.x carries the installed set and the"
+            echo "[INFO]   build's CVE verdicts), then by which was written last."
+            echo "[INFO]   To analyze a different one, pass it with --analyze <file>."
         fi
         if is_spdx2_doc "$YOCTO_SPDX"; then
             echo "[WARN] $(basename "$YOCTO_SPDX") is an SPDX 2.x document. For a Yocto build that"

@@ -463,6 +463,18 @@ export const SOURCE_TYPES: SourceType[] = [
   "docker-image",
 ];
 
+/**
+ * Whether a finished scan can be launched again from the UI. "Re-scan" seeds
+ * the form from a scan's config, which only works for sources the form can
+ * express and the server accepts. A Yocto build directory is recognized by the
+ * CLI scanner from a folder it was pointed at — the UI has no input for it and
+ * the server has no branch for it — so offering the button would guarantee a
+ * failed submit. Lift this restriction when the UI grows the same detection.
+ */
+export function isRescannableSource(source: SourceType): boolean {
+  return source !== "yocto-build-dir";
+}
+
 export type UploadKind = "zip" | "sbom" | "firmware" | "package";
 
 /** How the user intends to use a scanned AI model. Sent with the scan start so

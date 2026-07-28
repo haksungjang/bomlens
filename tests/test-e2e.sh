@@ -181,13 +181,22 @@ fi
 section "Yocto build directory (host)"
 
 eval "$(sed -n '/^is_yocto_build_dir() {/,/^}/p' "$SCAN")"
+eval "$(sed -n '/^is_yocto_spdx_doc() {/,/^}/p' "$SCAN")"
 eval "$(sed -n '/^yocto_spdx_candidates() {/,/^}/p' "$SCAN")"
 eval "$(sed -n '/^is_spdx2_doc() {/,/^}/p' "$SCAN")"
+eval "$(sed -n '/^resolve_file_path() {/,/^}/p' "$SCAN")"
 eval "$(sed -n '/^yocto_pick_spdx() {/,/^}/p' "$SCAN")"
 
+# What the orchestrator does: enumerate, then choose.
+ypick() { yocto_spdx_candidates "$1" | yocto_pick_spdx; }
+
 yb="$WORK_ROOT/yocto"; rm -rf "$yb"; mkdir -p "$yb"
-spdx3='{"@context":"https://spdx.org/rdf/3.0.1/spdx-context.jsonld","@graph":[]}'
-spdx2='{"spdxVersion": "SPDX-2.2", "packages": []}'
+# Both Yocto fixtures name bitbake as the creating tool, as a real document
+# does — that is what tells a deploy folder apart from any other folder that
+# happens to hold an SBOM.
+spdx3='{"@context":"https://spdx.org/rdf/3.0.1/spdx-context.jsonld","@graph":[{"type":"Tool","name":"bitbake"}]}'
+spdx2='{"spdxVersion": "SPDX-2.2", "creationInfo": {"creators": ["Tool: bitbake"]}, "packages": []}'
+spdxother='{"bomFormat":"CycloneDX","specVersion":"1.6","components":[]}'
 
 # A build directory: bitbake's conf/bblayers.conf, with the image SBOM published
 # under tmp/deploy/images/<machine>/.
@@ -202,10 +211,33 @@ else
     fail "a Yocto build directory is recognized"
 fi
 
-if [ "$(yocto_pick_spdx "$yb/build" 2>/dev/null)" = "$img" ]; then
+if [ "$(ypick "$yb/build")" = "$img" ]; then
     pass "the image SBOM is found under tmp/deploy/images/"
 else
-    fail "the image SBOM is found under tmp/deploy/images/" "$(yocto_pick_spdx "$yb/build" 2>/dev/null)"
+    fail "the image SBOM is found under tmp/deploy/images/" "$(ypick "$yb/build")"
+fi
+
+# TMPDIR carries the C library suffix outside poky, so an oe-core build writes
+# tmp-glibc/. Missing it used to end in "this build has no SBOM" for a build
+# that had one.
+mkdir -p "$yb/oecore/conf" "$yb/oecore/tmp-glibc/deploy/images/qemuarm"
+echo 'BBLAYERS = "x"' > "$yb/oecore/conf/bblayers.conf"
+oeimg="$yb/oecore/tmp-glibc/deploy/images/qemuarm/core-image-base-qemuarm.rootfs.spdx.json"
+printf '%s' "$spdx3" > "$oeimg"
+if is_yocto_build_dir "$yb/oecore" && [ "$(ypick "$yb/oecore")" = "$oeimg" ]; then
+    pass "an oe-core build directory (tmp-glibc) is recognized and read"
+else
+    fail "an oe-core build directory (tmp-glibc) is recognized and read" "$(ypick "$yb/oecore")"
+fi
+
+# The deploy directory itself (build/tmp/deploy), passed directly.
+mkdir -p "$yb/deploydir/images/qemux86"
+ddimg="$yb/deploydir/images/qemux86/img.rootfs.spdx.json"
+printf '%s' "$spdx3" > "$ddimg"
+if is_yocto_build_dir "$yb/deploydir" && [ "$(ypick "$yb/deploydir")" = "$ddimg" ]; then
+    pass "a deploy directory passed directly is recognized and read"
+else
+    fail "a deploy directory passed directly is recognized and read" "$(ypick "$yb/deploydir")"
 fi
 
 # The per-machine deploy folder, passed directly: recognized by the SBOM sitting
@@ -239,35 +271,84 @@ else
     pass "a plain deploy/images folder is NOT taken for a Yocto build"
 fi
 
-# The same shape with an image SBOM in it is a deploy tree, and is read.
+# Nor is any SBOM in such a folder enough: it has to be one bitbake wrote.
+mkdir -p "$yb/otherbom/deploy/images/dist"
+printf '%s' "$spdxother" > "$yb/otherbom/deploy/images/dist/release.spdx.json"
+if is_yocto_build_dir "$yb/otherbom"; then
+    fail "a non-Yocto SBOM under deploy/images does NOT trigger detection"
+else
+    pass "a non-Yocto SBOM under deploy/images does NOT trigger detection"
+fi
+
+# Same for the manifest rule: *.manifest is a common filename, so a release
+# folder holding one next to somebody else's SBOM stays a directory scan.
+mkdir -p "$yb/release"
+: > "$yb/release/app.manifest"
+printf '%s' "$spdxother" > "$yb/release/release.spdx.json"
+if is_yocto_build_dir "$yb/release"; then
+    fail "a manifest beside a non-Yocto SBOM does NOT trigger detection"
+else
+    pass "a manifest beside a non-Yocto SBOM does NOT trigger detection"
+fi
+
+# The deploy tree shape, with a document bitbake wrote, is read.
 mkdir -p "$yb/deploytree/deploy/images/qemuarm64"
-printf '%s' "$spdx3" > "$yb/deploytree/deploy/images/qemuarm64/img.rootfs.spdx.json"
-if is_yocto_build_dir "$yb/deploytree" \
-   && [ "$(yocto_pick_spdx "$yb/deploytree" 2>/dev/null)" = "$yb/deploytree/deploy/images/qemuarm64/img.rootfs.spdx.json" ]; then
+dtimg="$yb/deploytree/deploy/images/qemuarm64/img.rootfs.spdx.json"
+printf '%s' "$spdx3" > "$dtimg"
+if is_yocto_build_dir "$yb/deploytree" && [ "$(ypick "$yb/deploytree")" = "$dtimg" ]; then
     pass "a deploy tree holding an image SBOM is read"
 else
     fail "a deploy tree holding an image SBOM is read"
 fi
 
-# Two machines built from one directory: the newest is analyzed, and every
-# candidate is printed so the choice is visible rather than silent.
+# An image name without the .rootfs infix still resolves, through the looser
+# second tier of the candidate globs.
+mkdir -p "$yb/noinfix/conf" "$yb/noinfix/tmp/deploy/images/m1"
+echo 'BBLAYERS = "x"' > "$yb/noinfix/conf/bblayers.conf"
+niimg="$yb/noinfix/tmp/deploy/images/m1/custom-image.spdx.json"
+printf '%s' "$spdx3" > "$niimg"
+if [ "$(ypick "$yb/noinfix")" = "$niimg" ]; then
+    pass "an image SBOM without the .rootfs infix is found"
+else
+    fail "an image SBOM without the .rootfs infix is found" "$(ypick "$yb/noinfix")"
+fi
+
+# A path with spaces must survive the globs and the picker.
+mkdir -p "$yb/with space/conf" "$yb/with space/tmp/deploy/images/qemu x86"
+echo 'BBLAYERS = "x"' > "$yb/with space/conf/bblayers.conf"
+spimg="$yb/with space/tmp/deploy/images/qemu x86/core image.rootfs.spdx.json"
+printf '%s' "$spdx3" > "$spimg"
+if is_yocto_build_dir "$yb/with space" && [ "$(ypick "$yb/with space")" = "$spimg" ]; then
+    pass "a build directory whose path has spaces is handled"
+else
+    fail "a build directory whose path has spaces is handled" "$(ypick "$yb/with space")"
+fi
+
+# bitbake publishes the image artifacts twice: a timestamped file and an
+# IMAGE_LINK_NAME symlink to it. Both match the globs, and resolving them must
+# collapse to one file so a single-image build is not reported as a choice.
+mkdir -p "$yb/linked/conf" "$yb/linked/tmp/deploy/images/m1"
+echo 'BBLAYERS = "x"' > "$yb/linked/conf/bblayers.conf"
+lreal="$yb/linked/tmp/deploy/images/m1/img-m1-20260101010101.rootfs.spdx.json"
+printf '%s' "$spdx3" > "$lreal"
+( cd "$yb/linked/tmp/deploy/images/m1" && ln -sf "img-m1-20260101010101.rootfs.spdx.json" "img-m1.rootfs.spdx.json" )
+if [ "$(resolve_file_path "$yb/linked/tmp/deploy/images/m1/img-m1.rootfs.spdx.json")" \
+   = "$(resolve_file_path "$lreal")" ]; then
+    pass "a link and the file it points at resolve to one path"
+else
+    fail "a link and the file it points at resolve to one path"
+fi
+
+# Two machines built from one directory: the most recent is analyzed.
 mkdir -p "$yb/multi/conf" "$yb/multi/tmp/deploy/images/m1" "$yb/multi/tmp/deploy/images/m2"
 echo 'BBLAYERS = "x"' > "$yb/multi/conf/bblayers.conf"
 printf '%s' "$spdx3" > "$yb/multi/tmp/deploy/images/m1/a.rootfs.spdx.json"
 sleep 1
 printf '%s' "$spdx3" > "$yb/multi/tmp/deploy/images/m2/b.rootfs.spdx.json"
-multi_pick="$(yocto_pick_spdx "$yb/multi" 2>/dev/null)"
-multi_log="$(yocto_pick_spdx "$yb/multi" 2>&1 >/dev/null)"
-if [ "$multi_pick" = "$yb/multi/tmp/deploy/images/m2/b.rootfs.spdx.json" ]; then
+if [ "$(ypick "$yb/multi")" = "$yb/multi/tmp/deploy/images/m2/b.rootfs.spdx.json" ]; then
     pass "the most recently written image SBOM wins"
 else
-    fail "the most recently written image SBOM wins" "$multi_pick"
-fi
-if printf '%s' "$multi_log" | grep -q "a.rootfs.spdx.json" \
-   && printf '%s' "$multi_log" | grep -q -- "--analyze"; then
-    pass "every candidate is listed, with how to pick another"
-else
-    fail "every candidate is listed, with how to pick another" "$multi_log"
+    fail "the most recently written image SBOM wins" "$(ypick "$yb/multi")"
 fi
 
 # SPDX 2.x is only an index for a Yocto build (the packages live in the
@@ -278,7 +359,7 @@ echo 'BBLAYERS = "x"' > "$yb/mixed/conf/bblayers.conf"
 printf '%s' "$spdx3" > "$yb/mixed/tmp/deploy/images/m1/new.rootfs.spdx.json"
 sleep 1
 printf '%s' "$spdx2" > "$yb/mixed/tmp/deploy/images/m2/old.rootfs.spdx.json"
-if [ "$(yocto_pick_spdx "$yb/mixed" 2>/dev/null)" = "$yb/mixed/tmp/deploy/images/m1/new.rootfs.spdx.json" ]; then
+if [ "$(ypick "$yb/mixed")" = "$yb/mixed/tmp/deploy/images/m1/new.rootfs.spdx.json" ]; then
     pass "an SPDX 3.x document is preferred over a newer SPDX 2.x one"
 else
     fail "an SPDX 3.x document is preferred over a newer SPDX 2.x one"
@@ -291,31 +372,107 @@ else
     fail "SPDX 2.x is told apart from SPDX 3.x"
 fi
 
-# A build directory with no SBOM must say so and name the setting that produces
-# one, instead of falling back to a directory scan of the build tree. The guard
-# runs after docker_check in the orchestrator, hence the daemon requirement.
+# The guards below run after docker_check in the orchestrator, hence the daemon
+# requirement. None of them starts a scan: the image name is deliberately absent,
+# so what is asserted is the routing and what the user is told.
 if [ "$have_docker" = 1 ]; then
+    absent_img="bomlens-absent-for-tests:notag"
+
+    # A build directory with no SBOM must say so and name the setting that
+    # produces one, instead of falling back to a directory scan of the build tree.
     mkdir -p "$yb/nosbom/conf" "$yb/nosbom/tmp/deploy/images/qemuarm"
     echo 'BBLAYERS = "x"' > "$yb/nosbom/conf/bblayers.conf"
     ns_err="$(bash "$SCAN" --project p --version 1 --target "$yb/nosbom" --generate-only 2>&1 || true)"
     if printf '%s' "$ns_err" | grep -q "no SPDX SBOM" \
-       && printf '%s' "$ns_err" | grep -q "create-spdx-3.0"; then
+       && printf '%s' "$ns_err" | grep -q "create-spdx-3.0" \
+       && printf '%s' "$ns_err" | grep -q -- "--analyze"; then
         pass "a build directory with no SBOM errors with the setting to add"
     else
         fail "a build directory with no SBOM errors with the setting to add" "$ns_err"
     fi
 
     # End to end through the orchestrator: the build directory routes to ANALYZE
-    # on the SBOM found inside it. The scan itself is not run (the image name is
-    # deliberately absent), so this asserts the routing, not the pipeline.
+    # on the SBOM found inside it, and the sidecar records where it came from.
     yr_out="$(mktemp -d "$WORK_ROOT/yocto-run.XXXXXX")"
-    yr_log="$( cd "$yr_out" && SBOM_SCANNER_IMAGE="bomlens-absent:notag" \
+    yr_log="$( cd "$yr_out" && SBOM_SCANNER_IMAGE="$absent_img" \
         bash "$SCAN" --project p --version 1 --target "$yb/build" --generate-only 2>&1 || true )"
     if printf '%s' "$yr_log" | grep -q "Mode: ANALYZE" \
        && printf '%s' "$yr_log" | grep -q "Image SBOM: .*rootfs.spdx.json"; then
         pass "a build directory is analyzed as its image SBOM (mode ANALYZE)"
     else
         fail "a build directory is analyzed as its image SBOM (mode ANALYZE)" "$yr_log"
+    fi
+
+    # The whole frontend provenance mapping hangs off this one literal.
+    yr_meta="$(find "$yr_out" -name '.scanmeta.json' | head -1)"
+    if [ -n "$yr_meta" ] && grep -q '"source":"yocto-build-dir"' "$yr_meta" \
+       && grep -q "yocto/build" "$yr_meta"; then
+        pass "the scan sidecar records yocto-build-dir and the folder"
+    else
+        fail "the scan sidecar records yocto-build-dir and the folder" "${yr_meta:-no sidecar}"
+    fi
+
+    # One image, published as a timestamped file plus a link: one SBOM, so no
+    # "several SBOMs" prompt to choose between two names for the same document.
+    yl_out="$(mktemp -d "$WORK_ROOT/yocto-link.XXXXXX")"
+    yl_log="$( cd "$yl_out" && SBOM_SCANNER_IMAGE="$absent_img" \
+        bash "$SCAN" --project p --version 1 --target "$yb/linked" --generate-only 2>&1 || true )"
+    if printf '%s' "$yl_log" | grep -q "Several image SBOMs"; then
+        fail "a link to the image SBOM is not counted as a second SBOM" "$yl_log"
+    else
+        pass "a link to the image SBOM is not counted as a second SBOM"
+    fi
+
+    # With a real choice, the candidates and the reason are on stdout: a CI log
+    # that keeps only stdout must still show which one was analyzed.
+    ym_out="$(mktemp -d "$WORK_ROOT/yocto-multi.XXXXXX")"
+    ym_log="$( cd "$ym_out" && SBOM_SCANNER_IMAGE="$absent_img" \
+        bash "$SCAN" --project p --version 1 --target "$yb/mixed" --generate-only 2>/dev/null || true )"
+    if printf '%s' "$ym_log" | grep -q "Several image SBOMs" \
+       && printf '%s' "$ym_log" | grep -q "old.rootfs.spdx.json" \
+       && printf '%s' "$ym_log" | grep -q "new.rootfs.spdx.json  <- analyzing this one"; then
+        pass "the candidates and the chosen one are reported on stdout"
+    else
+        fail "the candidates and the chosen one are reported on stdout" "$ym_log"
+    fi
+
+    # An SPDX 2.x document is flagged before the scan, since for a Yocto build it
+    # is an index and the packages are in the sibling archive.
+    mkdir -p "$yb/only22/conf" "$yb/only22/tmp/deploy/images/m1"
+    echo 'BBLAYERS = "x"' > "$yb/only22/conf/bblayers.conf"
+    printf '%s' "$spdx2" > "$yb/only22/tmp/deploy/images/m1/img.rootfs.spdx.json"
+    y2_out="$(mktemp -d "$WORK_ROOT/yocto-22.XXXXXX")"
+    y2_log="$( cd "$y2_out" && SBOM_SCANNER_IMAGE="$absent_img" \
+        bash "$SCAN" --project p --version 1 --target "$yb/only22" --generate-only 2>&1 || true )"
+    if printf '%s' "$y2_log" | grep -q "SPDX 2.x document" \
+       && printf '%s' "$y2_log" | grep -q "spdx.tar.zst"; then
+        pass "an SPDX 2.x image document is flagged before the scan"
+    else
+        fail "an SPDX 2.x image document is flagged before the scan" "$y2_log"
+    fi
+
+    # --firmware with a directory keeps its own error: the Yocto branch must not
+    # answer for it with a message about a missing SBOM.
+    fw_err="$(bash "$SCAN" --project p --version 1 --firmware --target "$yb/nosbom" --generate-only 2>&1 || true)"
+    if printf '%s' "$fw_err" | grep -q -- "--firmware expects a file target"; then
+        pass "--firmware with a build directory reports the firmware error"
+    else
+        fail "--firmware with a build directory reports the firmware error" "$fw_err"
+    fi
+
+    # Machine and image folder names come from the filesystem, and the path is
+    # interpolated into an evaluated docker command. A name that would be more
+    # than a path there is refused instead of run.
+    mkdir -p "$yb/evil/conf" "$yb/evil/tmp/deploy/images/\$(id)"
+    echo 'BBLAYERS = "x"' > "$yb/evil/conf/bblayers.conf"
+    printf '%s' "$spdx3" > "$yb/evil/tmp/deploy/images/\$(id)/img.rootfs.spdx.json"
+    ev_err="$( cd "$WORK_ROOT" && SBOM_SCANNER_IMAGE="$absent_img" \
+        bash "$SCAN" --project p --version 1 --target "$yb/evil" --generate-only 2>&1 || true )"
+    if printf '%s' "$ev_err" | grep -q "cannot be passed through safely" \
+       && ! printf '%s' "$ev_err" | grep -q "uid="; then
+        pass "a discovered path with shell syntax in it is refused"
+    else
+        fail "a discovered path with shell syntax in it is refused" "$ev_err"
     fi
 else
     skip "Yocto build-directory CLI guards (docker daemon unavailable)"

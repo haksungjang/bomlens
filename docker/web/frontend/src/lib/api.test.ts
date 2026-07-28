@@ -9,11 +9,13 @@ import {
   fileUrl,
   exportSpdx,
   getCapabilities,
+  isRescannableSource,
   listScans,
   loadScan,
   stashGitCred,
   startScan,
   uploadFile,
+  SOURCE_TYPES,
   type DoneEvent,
   type ScanHandlers,
   type ScanParams,
@@ -340,5 +342,27 @@ describe("startScan", () => {
     es.emit("done", JSON.stringify({ ok: true, results: [], sbom: null, security: null }));
     es.onerror!();
     expect(h.errors).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Re-scan eligibility
+// ---------------------------------------------------------------------------
+describe("isRescannableSource", () => {
+  it("accepts every source the picker offers", () => {
+    for (const s of SOURCE_TYPES) expect(isRescannableSource(s)).toBe(true);
+  });
+
+  // The CLI recognizes a Yocto build directory from a folder and records it in
+  // the scan config. The form has no input for it and the server has no branch,
+  // so re-scanning one would fail on submit — the button is withheld instead.
+  it("refuses a Yocto build directory, which the UI cannot launch", () => {
+    expect(isRescannableSource("yocto-build-dir")).toBe(false);
+  });
+
+  // Submitted in place of rootfs-dir for a deep scan of a picked folder, and
+  // handled server-side, so a scan recorded with it stays replayable.
+  it("accepts the deep scan-target variant", () => {
+    expect(isRescannableSource("scan-target-src")).toBe(true);
   });
 });
