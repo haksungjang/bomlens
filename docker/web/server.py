@@ -378,19 +378,43 @@ def containing_scan_root(path):
 
 
 def scan_root_dir(d):
-    """`d` resolved, when it is a directory inside an allowed scan root.
+    """The directory `d` names, rebuilt from the scan root that contains it.
 
-    The request path is already resolved by safe_scan_dir before it gets here,
-    but the functions below walk the filesystem on their own, so they re-check
-    containment themselves instead of trusting the caller: the boundary is what
-    makes walking a user-named directory safe, and it belongs next to the walk.
-    Returns None for anything outside /src and the extra `--mount` roots.
+    The request path is resolved by safe_scan_dir before it gets here, but the
+    functions below walk the filesystem on their own, and a containment check
+    they inherit from a caller is a guarantee they cannot see. So the path is
+    rebuilt here instead: start at the allowed root, and take each component
+    from what the directory actually contains rather than from the request. The
+    value that reaches the filesystem calls is then made of our own root plus
+    names read off the disk — a request naming something outside a root, or
+    something that does not exist, produces None and no walk at all.
     """
     real = os.path.normpath(os.path.realpath(d))
     base = containing_scan_root(real)
-    if base is None or not (real == base or real.startswith(base + os.sep)):
+    if base is None:
         return None
-    return real if os.path.isdir(real) else None
+    rel = os.path.relpath(real, base)
+    if rel in (".", os.curdir):
+        return base if os.path.isdir(base) else None
+    resolved = base
+    for wanted in rel.split(os.sep):
+        # os.pardir cannot appear (both sides are resolved), but a walk that
+        # accepted one would climb out of the root, so refuse it outright.
+        if wanted in ("", os.curdir, os.pardir):
+            return None
+        step = None
+        try:
+            with os.scandir(resolved) as entries:
+                for entry in entries:
+                    if entry.name == wanted:
+                        step = os.path.join(resolved, entry.name)
+                        break
+        except OSError:
+            return None
+        if step is None:
+            return None
+        resolved = step
+    return resolved if os.path.isdir(resolved) else None
 
 
 def is_yocto_build_dir(d):
@@ -398,11 +422,8 @@ def is_yocto_build_dir(d):
     per-machine image folder inside one. Anything outside an allowed scan root
     is not one, by definition — the containment check is repeated here rather
     than taken on trust, because this is where the filesystem walk happens."""
-    safe = os.path.normpath(os.path.realpath(d))
-    base = containing_scan_root(safe)
-    if base is None or not (safe == base or safe.startswith(base + os.sep)):
-        return False
-    if not os.path.isdir(safe):
+    safe = scan_root_dir(d)
+    if safe is None:
         return False
     if os.path.isfile(os.path.join(safe, "conf", "bblayers.conf")):
         return True
@@ -425,9 +446,8 @@ def yocto_spdx_candidates(d):
     artifact as a timestamped file plus an IMAGE_LINK_NAME symlink to it, so
     entries resolving to one file are collapsed — otherwise a single-image build
     would present a choice between two names for the same document."""
-    safe = os.path.normpath(os.path.realpath(d))
-    base = containing_scan_root(safe)
-    if base is None or not (safe == base or safe.startswith(base + os.sep)):
+    safe = scan_root_dir(d)
+    if safe is None:
         return []
     esc = glob.escape(safe)
     for tier in (".rootfs.spdx.json", ".spdx.json"):
@@ -458,9 +478,8 @@ def yocto_manifest_in(d):
     the image recipe rather than its contents, so it does not count. Only the
     presence is decided here — parse-yocto-manifests.py reads the contents.
     """
-    safe = os.path.normpath(os.path.realpath(d))
-    base = containing_scan_root(safe)
-    if base is None or not (safe == base or safe.startswith(base + os.sep)):
+    safe = scan_root_dir(d)
+    if safe is None:
         return None
     esc = glob.escape(safe)
     for pattern in ("tmp*/deploy/images/*/*.manifest", "deploy/images/*/*.manifest",
