@@ -365,6 +365,18 @@ def is_spdx2_doc(path):
     return _file_matches(path, _SPDX2_RE)
 
 
+def containing_scan_root(path):
+    """The allowed scan root `path` sits in, or None. /src and every extra
+    `--mount` root, resolved, so a symlinked or relative spelling still matches
+    the mount it belongs to."""
+    real = os.path.normpath(os.path.realpath(path))
+    for root in ALLOWED_SCAN_ROOTS:
+        base = os.path.normpath(os.path.realpath(root))
+        if real == base or real.startswith(base + os.sep):
+            return base
+    return None
+
+
 def scan_root_dir(d):
     """`d` resolved, when it is a directory inside an allowed scan root.
 
@@ -375,21 +387,22 @@ def scan_root_dir(d):
     Returns None for anything outside /src and the extra `--mount` roots.
     """
     real = os.path.normpath(os.path.realpath(d))
-    for root in ALLOWED_SCAN_ROOTS:
-        base = os.path.normpath(os.path.realpath(root))
-        if real == base or real.startswith(base + os.sep):
-            if os.path.isdir(real):
-                return real
-            return None
-    return None
+    base = containing_scan_root(real)
+    if base is None or not (real == base or real.startswith(base + os.sep)):
+        return None
+    return real if os.path.isdir(real) else None
 
 
 def is_yocto_build_dir(d):
     """True when `d` is a Yocto build directory, a deploy tree, or the
     per-machine image folder inside one. Anything outside an allowed scan root
-    is not one, by definition — see scan_root_dir."""
-    safe = scan_root_dir(d)
-    if safe is None:
+    is not one, by definition — the containment check is repeated here rather
+    than taken on trust, because this is where the filesystem walk happens."""
+    safe = os.path.normpath(os.path.realpath(d))
+    base = containing_scan_root(safe)
+    if base is None or not (safe == base or safe.startswith(base + os.sep)):
+        return False
+    if not os.path.isdir(safe):
         return False
     if os.path.isfile(os.path.join(safe, "conf", "bblayers.conf")):
         return True
@@ -412,8 +425,9 @@ def yocto_spdx_candidates(d):
     artifact as a timestamped file plus an IMAGE_LINK_NAME symlink to it, so
     entries resolving to one file are collapsed — otherwise a single-image build
     would present a choice between two names for the same document."""
-    safe = scan_root_dir(d)
-    if safe is None:
+    safe = os.path.normpath(os.path.realpath(d))
+    base = containing_scan_root(safe)
+    if base is None or not (safe == base or safe.startswith(base + os.sep)):
         return []
     esc = glob.escape(safe)
     for tier in (".rootfs.spdx.json", ".spdx.json"):
@@ -444,8 +458,9 @@ def yocto_manifest_in(d):
     the image recipe rather than its contents, so it does not count. Only the
     presence is decided here — parse-yocto-manifests.py reads the contents.
     """
-    safe = scan_root_dir(d)
-    if safe is None:
+    safe = os.path.normpath(os.path.realpath(d))
+    base = containing_scan_root(safe)
+    if base is None or not (safe == base or safe.startswith(base + os.sep)):
         return None
     esc = glob.escape(safe)
     for pattern in ("tmp*/deploy/images/*/*.manifest", "deploy/images/*/*.manifest",
