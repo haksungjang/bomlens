@@ -499,7 +499,11 @@ echo "== Yocto build directory detection (parity with scripts/scan-sbom.sh) =="
 # folder would be analyzed one way from a terminal and another from the browser.
 YFIX="$WORK/yocto-fixtures"
 mkdir -p "$YFIX"
-if SBOM_OUTPUT_DIR="$OUT" python3 - "$ROOT_DIR" "$YFIX" <<'PY'
+# The fixtures are registered as a scan root: the detection walks a folder the
+# request named, so it re-checks that the folder is inside one before touching
+# it, and refuses anything else.
+if SBOM_OUTPUT_DIR="$OUT" SBOM_UI_SCAN_ROOTS="$YFIX|/host/yocto-fixtures" \
+   python3 - "$ROOT_DIR" "$YFIX" <<'PY'
 import os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
 import server
@@ -514,7 +518,10 @@ def write(rel, text):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as fh:
         fh.write(text)
-    return path
+    # Candidates come back resolved (the containment check resolves before it
+    # walks), so compare against the resolved path — which document is chosen is
+    # what has to match the CLI, not how the path is spelled.
+    return os.path.realpath(path)
 
 # bitbake's own markers stand alone, so a build that emitted no SBOM is still
 # recognized (and gets told which setting to add) rather than scanned as a tree.
@@ -565,6 +572,16 @@ real = write("linked/tmp/deploy/images/m1/img-20260101.rootfs.spdx.json", YOCTO3
 os.symlink(os.path.basename(real), os.path.join(os.path.dirname(real), "img.rootfs.spdx.json"))
 write("linked/conf/bblayers.conf", 'BBLAYERS = "x"')
 assert len(server.yocto_spdx_candidates(linked)) == 1, server.yocto_spdx_candidates(linked)
+
+# Outside every allowed scan root there is nothing to detect, whatever the
+# folder looks like: the walk is only safe inside the boundary.
+outside = os.path.join(os.path.dirname(root), "outside-build")
+os.makedirs(os.path.join(outside, "conf"), exist_ok=True)
+with open(os.path.join(outside, "conf", "bblayers.conf"), "w") as fh:
+    fh.write('BBLAYERS = "x"')
+assert server.scan_root_dir(outside) is None
+assert server.is_yocto_build_dir(outside) is False
+assert server.yocto_spdx_candidates(outside) == []
 PY
 then
     pass "Yocto detection matches the CLI rules (markers, tmp-glibc, SPDX 3.x, symlinks)"

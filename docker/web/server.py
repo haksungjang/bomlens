@@ -365,14 +365,35 @@ def is_spdx2_doc(path):
     return _file_matches(path, _SPDX2_RE)
 
 
+def scan_root_dir(d):
+    """`d` resolved, when it is a directory inside an allowed scan root.
+
+    The request path is already resolved by safe_scan_dir before it gets here,
+    but the functions below walk the filesystem on their own, so they re-check
+    containment themselves instead of trusting the caller: the boundary is what
+    makes walking a user-named directory safe, and it belongs next to the walk.
+    Returns None for anything outside /src and the extra `--mount` roots.
+    """
+    real = os.path.normpath(os.path.realpath(d))
+    for root in ALLOWED_SCAN_ROOTS:
+        base = os.path.normpath(os.path.realpath(root))
+        if real == base or real.startswith(base + os.sep):
+            if os.path.isdir(real):
+                return real
+            return None
+    return None
+
+
 def is_yocto_build_dir(d):
     """True when `d` is a Yocto build directory, a deploy tree, or the
-    per-machine image folder inside one."""
-    if not os.path.isdir(d):
+    per-machine image folder inside one. Anything outside an allowed scan root
+    is not one, by definition — see scan_root_dir."""
+    safe = scan_root_dir(d)
+    if safe is None:
         return False
-    if os.path.isfile(os.path.join(d, "conf", "bblayers.conf")):
+    if os.path.isfile(os.path.join(safe, "conf", "bblayers.conf")):
         return True
-    esc = glob.escape(d)
+    esc = glob.escape(safe)
     if any(os.path.isdir(p) for p in glob.glob(os.path.join(esc, "tmp*", "deploy", "images"))):
         return True
     for pat in ("deploy/images/*/*.spdx.json", "images/*/*.spdx.json"):
@@ -385,13 +406,16 @@ def is_yocto_build_dir(d):
 
 
 def yocto_spdx_candidates(d):
-    """Every image SPDX document in `d`, most specific location first. The looser
+    """Every image SPDX document in `d`, resolved, most specific location first. The looser
     `*.spdx.json` tier is consulted only when `<image>.rootfs.spdx.json` finds
     nothing, so an image document is never listed twice. bitbake publishes each
     artifact as a timestamped file plus an IMAGE_LINK_NAME symlink to it, so
     entries resolving to one file are collapsed — otherwise a single-image build
     would present a choice between two names for the same document."""
-    esc = glob.escape(d)
+    safe = scan_root_dir(d)
+    if safe is None:
+        return []
+    esc = glob.escape(safe)
     for tier in (".rootfs.spdx.json", ".spdx.json"):
         hits, seen = [], set()
         for pat in ("tmp*/deploy/images/*/*", "deploy/images/*/*", "images/*/*", "*"):
