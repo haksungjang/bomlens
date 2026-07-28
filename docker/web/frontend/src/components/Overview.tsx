@@ -59,6 +59,7 @@ const ATTN_ICON: Record<AttentionItem["id"], LucideIcon> = {
 /** Icon per provenance kind, so the input reads at a glance. */
 const PROVENANCE_ICON: Record<ProvenanceKind, LucideIcon> = {
   folder: FolderOpen,
+  yocto: FolderOpen,
   git: GitBranch,
   image: Container,
   file: FileText,

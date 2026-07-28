@@ -437,6 +437,12 @@ export type SourceType =
   // toggle is on, so a desktop "Add folder…" scan resolves transitives like the
   // current folder does. Server clones the read-only mount into a writable tree.
   | "scan-target-src"
+  // A Yocto build directory, recognized from a folder the user pointed at. Not a
+  // picker tile: the CLI (and, later, the folder pickers) route to it on its own
+  // when the folder turns out to be a build directory, and analyze the image
+  // SBOM the build wrote. Appears in a finished scan's config, never in a
+  // request.
+  | "yocto-build-dir"
   | "git-url"
   | "zip-upload"
   | "package-upload"

@@ -20,6 +20,7 @@ import type { ScanConfig, SourceType } from "./api";
 /** What kind of thing the input was — picks the label and the icon. */
 export type ProvenanceKind =
   | "folder"
+  | "yocto"
   | "git"
   | "image"
   | "file"
@@ -38,6 +39,9 @@ const KIND_BY_SOURCE: Record<SourceType, ProvenanceKind> = {
   "current-dir": "folder",
   "rootfs-dir": "folder",
   "scan-target-src": "folder",
+  // Its own kind rather than "folder": the components came from the SBOM the
+  // build wrote, not from reading the folder, and the label should say so.
+  "yocto-build-dir": "yocto",
   "git-url": "git",
   "docker-image": "image",
   "zip-upload": "file",
@@ -49,6 +53,7 @@ const KIND_BY_SOURCE: Record<SourceType, ProvenanceKind> = {
 
 const LABEL_KEY: Record<ProvenanceKind, string> = {
   folder: "provenance.folder",
+  yocto: "provenance.yocto",
   git: "provenance.git",
   image: "provenance.image",
   file: "provenance.file",

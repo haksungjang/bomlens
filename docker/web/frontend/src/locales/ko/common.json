@@ -22,6 +22,7 @@
     "currentDirPath": "현재 폴더",
     "currentDirHint": "이 폴더(컨테이너에 /src로 마운트)의 소스를 스캔합니다. 다른 폴더를 스캔하려면 그 폴더에서 --ui를 실행하세요.",
     "rootfsDir": "디렉터리 / rootfs",
+    "yoctoBuildDir": "Yocto 빌드 디렉터리",
     "rootfsPlaceholder": "centos-rootfs/  (현재 폴더 기준 상대경로)",
     "rootfsHint": "현재 폴더(/src) 하위의 OS rootfs나 임의 하위 폴더를 디렉터리로 스캔합니다. 폴더 밖 경로는 거부되므로, rootfs를 실행 폴더 하위에 두거나 --mount로 마운트하거나 Docker 이미지 입력을 사용하세요.",
     "scanRoot": "스캔 위치",
@@ -813,6 +814,7 @@
   },
   "provenance": {
     "folder": "스캔한 폴더",
+    "yocto": "Yocto 빌드 디렉터리",
     "git": "복제한 저장소",
     "image": "컨테이너 이미지",
     "file": "업로드한 파일",

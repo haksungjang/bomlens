@@ -22,7 +22,7 @@ BomLens의 전체 옵션과 분석 모드, CI/CD 통합 방법, 트러블슈팅�
 |------|--------|------|
 | `--project <이름>` | — | **(필수)** 프로젝트 이름 |
 | `--version <버전>` | — | **(필수)** 프로젝트 버전 |
-| `--target <대상>` | 현재 디렉터리 | 분석 대상: 디렉터리(소스 트리, 또는 OS rootfs·빌드 산출물 staging), Docker 이미지, 바이너리 파일, `.zip`/`.tar.gz` 아카이브 |
+| `--target <대상>` | 현재 디렉터리 | 분석 대상: 디렉터리(소스 트리, 또는 OS rootfs·빌드 산출물 staging), Docker 이미지, 바이너리 파일, `.zip`/`.tar.gz` 아카이브. Yocto 빌드 디렉터리는 그렇게 인식해서, 빌드 트리를 훑는 대신 `tmp/deploy/images/` 아래에 빌드가 만든 이미지 SBOM을 분석합니다([공급사 SBOM 가이드](../guides/supplier-sbom.ko.md#yocto-이미지) 참고) |
 | `--git <url>` | — | git/GitHub URL을 얕은 클론(shallow) 후 소스로 분석 (비공개 저장소: `GIT_TOKEN` 환경변수) |
 | `--branch <ref>` | 기본 브랜치 | `--git` 대상의 브랜치, 태그, 커밋 (별칭 `--ref`) |
 | `--firmware` | false | `--target` 파일을 펌웨어 모드로 강제 (opt-in 펌웨어 이미지) |

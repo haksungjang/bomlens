@@ -170,6 +170,158 @@ else
 fi
 
 # --------------------------------------------------------
+# Group 1b: Yocto build directory (host-side, no Docker)
+#
+# A Yocto build directory used to be scanned as a plain directory tree, which
+# reads sysroots and native build tools that never ship in the image. The
+# orchestrator now recognizes it and analyzes the SBOM the build wrote instead.
+# The decision functions are pure, so lift them out of the script and drive them
+# against fixture trees (same isolation trick as pp_env above).
+# --------------------------------------------------------
+section "Yocto build directory (host)"
+
+eval "$(sed -n '/^is_yocto_build_dir() {/,/^}/p' "$SCAN")"
+eval "$(sed -n '/^yocto_spdx_candidates() {/,/^}/p' "$SCAN")"
+eval "$(sed -n '/^is_spdx2_doc() {/,/^}/p' "$SCAN")"
+eval "$(sed -n '/^yocto_pick_spdx() {/,/^}/p' "$SCAN")"
+
+yb="$WORK_ROOT/yocto"; rm -rf "$yb"; mkdir -p "$yb"
+spdx3='{"@context":"https://spdx.org/rdf/3.0.1/spdx-context.jsonld","@graph":[]}'
+spdx2='{"spdxVersion": "SPDX-2.2", "packages": []}'
+
+# A build directory: bitbake's conf/bblayers.conf, with the image SBOM published
+# under tmp/deploy/images/<machine>/.
+mkdir -p "$yb/build/conf" "$yb/build/tmp/deploy/images/qemux86-64"
+echo 'BBLAYERS = "x"' > "$yb/build/conf/bblayers.conf"
+img="$yb/build/tmp/deploy/images/qemux86-64/core-image-minimal-qemux86-64.rootfs.spdx.json"
+printf '%s' "$spdx3" > "$img"
+
+if is_yocto_build_dir "$yb/build"; then
+    pass "a Yocto build directory is recognized"
+else
+    fail "a Yocto build directory is recognized"
+fi
+
+if [ "$(yocto_pick_spdx "$yb/build" 2>/dev/null)" = "$img" ]; then
+    pass "the image SBOM is found under tmp/deploy/images/"
+else
+    fail "the image SBOM is found under tmp/deploy/images/" "$(yocto_pick_spdx "$yb/build" 2>/dev/null)"
+fi
+
+# The per-machine deploy folder, passed directly: recognized by the SBOM sitting
+# beside the package manifest bitbake writes for the same image.
+mdir="$yb/build/tmp/deploy/images/qemux86-64"
+: > "$mdir/core-image-minimal-qemux86-64.rootfs.manifest"
+if is_yocto_build_dir "$mdir"; then
+    pass "the per-machine deploy folder is recognized on its own"
+else
+    fail "the per-machine deploy folder is recognized on its own"
+fi
+
+# An ordinary directory must stay a directory scan — the detection may not
+# capture rootfs targets, which are the reason ROOTFS mode exists.
+mkdir -p "$yb/plain/etc" "$yb/plain/usr/lib"
+echo 'ID=debian' > "$yb/plain/etc/os-release"
+if is_yocto_build_dir "$yb/plain"; then
+    fail "a plain rootfs directory is NOT taken for a Yocto build"
+else
+    pass "a plain rootfs directory is NOT taken for a Yocto build"
+fi
+
+# `deploy/images` is not a Yocto signal on its own — plenty of projects ship
+# one — so a folder that has it but no SPDX document must stay a directory scan
+# rather than being refused for lacking an SBOM it was never meant to have.
+mkdir -p "$yb/deployonly/deploy/images/banners"
+: > "$yb/deployonly/deploy/images/banners/logo.png"
+if is_yocto_build_dir "$yb/deployonly"; then
+    fail "a plain deploy/images folder is NOT taken for a Yocto build"
+else
+    pass "a plain deploy/images folder is NOT taken for a Yocto build"
+fi
+
+# The same shape with an image SBOM in it is a deploy tree, and is read.
+mkdir -p "$yb/deploytree/deploy/images/qemuarm64"
+printf '%s' "$spdx3" > "$yb/deploytree/deploy/images/qemuarm64/img.rootfs.spdx.json"
+if is_yocto_build_dir "$yb/deploytree" \
+   && [ "$(yocto_pick_spdx "$yb/deploytree" 2>/dev/null)" = "$yb/deploytree/deploy/images/qemuarm64/img.rootfs.spdx.json" ]; then
+    pass "a deploy tree holding an image SBOM is read"
+else
+    fail "a deploy tree holding an image SBOM is read"
+fi
+
+# Two machines built from one directory: the newest is analyzed, and every
+# candidate is printed so the choice is visible rather than silent.
+mkdir -p "$yb/multi/conf" "$yb/multi/tmp/deploy/images/m1" "$yb/multi/tmp/deploy/images/m2"
+echo 'BBLAYERS = "x"' > "$yb/multi/conf/bblayers.conf"
+printf '%s' "$spdx3" > "$yb/multi/tmp/deploy/images/m1/a.rootfs.spdx.json"
+sleep 1
+printf '%s' "$spdx3" > "$yb/multi/tmp/deploy/images/m2/b.rootfs.spdx.json"
+multi_pick="$(yocto_pick_spdx "$yb/multi" 2>/dev/null)"
+multi_log="$(yocto_pick_spdx "$yb/multi" 2>&1 >/dev/null)"
+if [ "$multi_pick" = "$yb/multi/tmp/deploy/images/m2/b.rootfs.spdx.json" ]; then
+    pass "the most recently written image SBOM wins"
+else
+    fail "the most recently written image SBOM wins" "$multi_pick"
+fi
+if printf '%s' "$multi_log" | grep -q "a.rootfs.spdx.json" \
+   && printf '%s' "$multi_log" | grep -q -- "--analyze"; then
+    pass "every candidate is listed, with how to pick another"
+else
+    fail "every candidate is listed, with how to pick another" "$multi_log"
+fi
+
+# SPDX 2.x is only an index for a Yocto build (the packages live in the
+# per-recipe documents inside <image>.spdx.tar.zst), so a 3.x document wins even
+# when the 2.x one was written later.
+mkdir -p "$yb/mixed/conf" "$yb/mixed/tmp/deploy/images/m1" "$yb/mixed/tmp/deploy/images/m2"
+echo 'BBLAYERS = "x"' > "$yb/mixed/conf/bblayers.conf"
+printf '%s' "$spdx3" > "$yb/mixed/tmp/deploy/images/m1/new.rootfs.spdx.json"
+sleep 1
+printf '%s' "$spdx2" > "$yb/mixed/tmp/deploy/images/m2/old.rootfs.spdx.json"
+if [ "$(yocto_pick_spdx "$yb/mixed" 2>/dev/null)" = "$yb/mixed/tmp/deploy/images/m1/new.rootfs.spdx.json" ]; then
+    pass "an SPDX 3.x document is preferred over a newer SPDX 2.x one"
+else
+    fail "an SPDX 3.x document is preferred over a newer SPDX 2.x one"
+fi
+
+if is_spdx2_doc "$yb/mixed/tmp/deploy/images/m2/old.rootfs.spdx.json" \
+   && ! is_spdx2_doc "$img"; then
+    pass "SPDX 2.x is told apart from SPDX 3.x"
+else
+    fail "SPDX 2.x is told apart from SPDX 3.x"
+fi
+
+# A build directory with no SBOM must say so and name the setting that produces
+# one, instead of falling back to a directory scan of the build tree. The guard
+# runs after docker_check in the orchestrator, hence the daemon requirement.
+if [ "$have_docker" = 1 ]; then
+    mkdir -p "$yb/nosbom/conf" "$yb/nosbom/tmp/deploy/images/qemuarm"
+    echo 'BBLAYERS = "x"' > "$yb/nosbom/conf/bblayers.conf"
+    ns_err="$(bash "$SCAN" --project p --version 1 --target "$yb/nosbom" --generate-only 2>&1 || true)"
+    if printf '%s' "$ns_err" | grep -q "no SPDX SBOM" \
+       && printf '%s' "$ns_err" | grep -q "create-spdx-3.0"; then
+        pass "a build directory with no SBOM errors with the setting to add"
+    else
+        fail "a build directory with no SBOM errors with the setting to add" "$ns_err"
+    fi
+
+    # End to end through the orchestrator: the build directory routes to ANALYZE
+    # on the SBOM found inside it. The scan itself is not run (the image name is
+    # deliberately absent), so this asserts the routing, not the pipeline.
+    yr_out="$(mktemp -d "$WORK_ROOT/yocto-run.XXXXXX")"
+    yr_log="$( cd "$yr_out" && SBOM_SCANNER_IMAGE="bomlens-absent:notag" \
+        bash "$SCAN" --project p --version 1 --target "$yb/build" --generate-only 2>&1 || true )"
+    if printf '%s' "$yr_log" | grep -q "Mode: ANALYZE" \
+       && printf '%s' "$yr_log" | grep -q "Image SBOM: .*rootfs.spdx.json"; then
+        pass "a build directory is analyzed as its image SBOM (mode ANALYZE)"
+    else
+        fail "a build directory is analyzed as its image SBOM (mode ANALYZE)" "$yr_log"
+    fi
+else
+    skip "Yocto build-directory CLI guards (docker daemon unavailable)"
+fi
+
+# --------------------------------------------------------
 # Group 2: helper libraries (host-side, no Docker)
 # --------------------------------------------------------
 section "Helper libraries (host)"

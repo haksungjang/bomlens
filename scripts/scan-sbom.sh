@@ -79,6 +79,9 @@ SIGN_SBOM="false"; BYTE_STABLE="false"; UI_MODE="false"; UI_PORT="${UI_PORT:-808
 # Only these two are honored; anything else is normalized to en further down.
 REPORT_LANG="${REPORT_LANG:-en}"
 FORCE_FIRMWARE="false"; ANALYZE_SBOM=""; MODEL=""
+# Set when --target turned out to be a Yocto build directory: the folder the
+# user pointed at, while ANALYZE_SBOM holds the image SBOM found inside it.
+YOCTO_BUILD_DIR=""
 IDENTIFY_VENDORED="false"
 DEEP_CVE="false"
 SCANOSS_API_URL="${SCANOSS_API_URL:-}"; SCANOSS_API_KEY="${SCANOSS_API_KEY:-}"
@@ -152,7 +155,10 @@ Options:
                          without it no conflict verdict is produced. An
                          existing root license in the SBOM is never replaced.
   --target <target>      Not set: source (current dir) | image name | file |
-                         directory | .zip/.tar.gz archive (auto-extracted)
+                         directory | .zip/.tar.gz archive (auto-extracted).
+                         A Yocto build directory is recognized as such: its
+                         image SBOM under tmp/deploy/images/ is analyzed
+                         instead of the build tree being walked.
   --git <url>            Clone a git/GitHub URL (shallow) and scan as source.
                          Private repos: set GIT_TOKEN env. Mutually exclusive
                          with --target/--analyze/--firmware.
@@ -451,6 +457,106 @@ is_firmware() {
     return 1
 }
 
+# ---------------------------------------------------------------------------
+# Yocto build directory
+#
+# A Yocto build publishes its SPDX SBOM next to the image it produced, under
+# tmp/deploy/images/<machine>/. Pointing --target at the build directory used to
+# fall through to a plain ROOTFS directory scan, which reads the entire build
+# tree — sysroots, native build tools, per-recipe work directories — none of
+# which ships in the image. Recognize the build directory instead and hand its
+# image SBOM to the ANALYZE path, which reads the installed set and the
+# vulnerability judgements the build recorded (docker/lib/parse-yocto-spdx.py).
+# ---------------------------------------------------------------------------
+is_yocto_build_dir() {
+    local d="$1" p q
+    [ -d "$d" ] || return 1
+    # Markers only bitbake leaves: the build directory itself. These stand on
+    # their own, so a build that has not been configured to emit an SBOM is
+    # still recognized and can be told what setting to add.
+    [ -f "$d/conf/bblayers.conf" ] && return 0
+    [ -d "$d/tmp/deploy/images" ] && return 0
+    # Shapes that are not Yocto-specific: a deploy tree passed directly, or the
+    # per-machine image folder inside one. Any project can have a `deploy/images`
+    # folder, and taking one over would refuse a directory scan the user meant to
+    # run — so these count only when an SPDX document is actually there to read.
+    for q in "$d"/deploy/images/*/*.spdx.json; do
+        [ -f "$q" ] && return 0
+    done
+    for p in "$d"/*.manifest; do
+        [ -f "$p" ] || continue
+        for q in "$d"/*.spdx.json; do
+            [ -f "$q" ] && return 0
+        done
+        break
+    done
+    return 1
+}
+
+# Every SPDX document a Yocto build could have left in $1, most specific
+# location first. `<image>.rootfs.spdx.json` is what an image build writes;
+# the looser `*.spdx.json` tier is only consulted when that finds nothing, so
+# an image document is never listed twice.
+yocto_spdx_candidates() {
+    local d="$1" tier p hit=1
+    for tier in .rootfs.spdx.json .spdx.json; do
+        for p in \
+            "$d"/tmp/deploy/images/*/*"$tier" \
+            "$d"/deploy/images/*/*"$tier" \
+            "$d"/images/*/*"$tier" \
+            "$d"/*"$tier"; do
+            [ -f "$p" ] || continue
+            printf '%s\n' "$p"
+            hit=0
+        done
+        [ "$hit" = 0 ] && return 0
+    done
+    return 1
+}
+
+# True for an SPDX 2.x document. For a Yocto build that form is only an index:
+# the packages live in per-recipe documents inside <image>.spdx.tar.zst, so it
+# converts to an almost empty SBOM (parse-yocto-spdx.py explains the same thing
+# container-side). Read from the content rather than the sibling files, which
+# differ between releases.
+is_spdx2_doc() {
+    LC_ALL=C grep -qE '"spdxVersion"[[:space:]]*:[[:space:]]*"SPDX-2' "$1" 2>/dev/null
+}
+
+# Pick the one SPDX document to analyze out of a build directory. SPDX 3.x wins
+# over 2.x (only 3.x carries the installed set and the build's CVE judgements),
+# then the most recently written. Prints the path, or nothing when the build
+# produced no SBOM at all. Every candidate is listed when there is more than
+# one, so a multi-machine build directory does not silently pick for the user.
+yocto_pick_spdx() {
+    local d="$1" p chosen="" fallback=""
+    local -a cands=()
+    while IFS= read -r p; do
+        [ -n "$p" ] && cands+=("$p")
+    done < <(yocto_spdx_candidates "$d")
+    [ "${#cands[@]}" -gt 0 ] || return 1
+    for p in "${cands[@]}"; do
+        if is_spdx2_doc "$p"; then
+            { [ -z "$fallback" ] || [ "$p" -nt "$fallback" ]; } && fallback="$p"
+        else
+            { [ -z "$chosen" ] || [ "$p" -nt "$chosen" ]; } && chosen="$p"
+        fi
+    done
+    [ -n "$chosen" ] || chosen="$fallback"
+    if [ "${#cands[@]}" -gt 1 ]; then
+        echo "[INFO] Several image SBOMs in this build directory:" >&2
+        for p in "${cands[@]}"; do
+            if [ "$p" = "$chosen" ]; then
+                echo "[INFO]   $p  <- newest, analyzing this one" >&2
+            else
+                echo "[INFO]   $p" >&2
+            fi
+        done
+        echo "[INFO]   To analyze a different one, pass it with --analyze <file>." >&2
+    fi
+    printf '%s' "$chosen"
+}
+
 # A git/GitHub URL we are willing to clone. Strict allowlist (anti-injection):
 # only http(s)/git/ssh/file schemes, no whitespace, no '..', no leading '-' .
 is_git_url() {
@@ -635,6 +741,41 @@ elif [ -n "$MODEL" ]; then
 elif [ -n "$TARGET" ]; then
     if [ -f "$TARGET" ]; then
         if [ "$FORCE_FIRMWARE" = "true" ] || is_firmware "$TARGET"; then MODE="FIRMWARE"; else MODE="BINARY"; fi
+    elif [ -d "$TARGET" ] && is_yocto_build_dir "$TARGET"; then
+        # A Yocto build already knows what it put in the image; read that rather
+        # than walking the build tree. Joins the ANALYZE path below with the
+        # SBOM the build wrote — no separate mode, so validation, conformance
+        # and the reports all behave exactly as they do for an uploaded SBOM.
+        echo "[INFO] Yocto build directory: $TARGET"
+        YOCTO_SPDX="$(yocto_pick_spdx "$TARGET" || true)"
+        if [ -z "$YOCTO_SPDX" ]; then
+            echo "[ERROR] This is a Yocto build directory, but it holds no SPDX SBOM."
+            echo "        Add these two lines to conf/local.conf and build the image again:"
+            echo '            INHERIT += "create-spdx-3.0"'
+            echo '            INHERIT += "vex"'
+            echo "        The SBOM then lands in tmp/deploy/images/<machine>/<image>.rootfs.spdx.json,"
+            echo "        and this folder can be scanned as-is."
+            echo "        Scanning a build directory as a plain directory tree is not done as a"
+            echo "        fallback: it reports sysroots and native build tools that never ship in"
+            echo "        the image. To scan a tree anyway, point --target at that tree itself"
+            echo "        (an extracted rootfs, for example) rather than at the build directory."
+            exit 1
+        fi
+        if is_spdx2_doc "$YOCTO_SPDX"; then
+            echo "[WARN] $(basename "$YOCTO_SPDX") is an SPDX 2.x document. For a Yocto build that"
+            echo "[WARN]   file is only an index — the packages live in the per-recipe documents"
+            echo "[WARN]   inside <image>.spdx.tar.zst beside it — so expect an almost empty result."
+            echo '[WARN]   Rebuild with INHERIT += "create-spdx-3.0" for the full image contents'
+            echo "[WARN]   and the vulnerability judgements the build made."
+        fi
+        echo "[INFO] Image SBOM: $YOCTO_SPDX"
+        # Resolved, so the result page names a folder the user can find again
+        # rather than a relative path that only meant something in that shell.
+        YOCTO_BUILD_DIR="$(cd "$TARGET" && pwd)"
+        ANALYZE_SBOM="$YOCTO_SPDX"
+        MODE="ANALYZE"
+        # Same as an uploaded SBOM: the risk report needs license + vulnerability data.
+        GENERATE_NOTICE="true"; GENERATE_SECURITY="true"
     elif [ -d "$TARGET" ]; then MODE="ROOTFS";
     else MODE="IMAGE"; fi
 elif [ "$FORCE_FIRMWARE" = "true" ]; then
@@ -686,7 +827,16 @@ json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
 case "$MODE" in
     AIBOM)    META_SOURCE="ai-model";        META_TARGET="$MODEL";  META_LABEL="" ;;
-    ANALYZE)  META_SOURCE="sbom-upload";     META_TARGET=""; META_LABEL="$(basename "$ANALYZE_SBOM")" ;;
+    ANALYZE)
+        # Two inputs reach ANALYZE: an SBOM the user handed us, and a Yocto build
+        # directory whose SBOM we found. Record which, so the result page says
+        # "Yocto build" over the folder rather than naming a file nobody picked.
+        if [ -n "$YOCTO_BUILD_DIR" ]; then
+            META_SOURCE="yocto-build-dir"; META_TARGET=""; META_LABEL="$YOCTO_BUILD_DIR"
+        else
+            META_SOURCE="sbom-upload";     META_TARGET=""; META_LABEL="$(basename "$ANALYZE_SBOM")"
+        fi
+        ;;
     IMAGE)    META_SOURCE="docker-image";    META_TARGET="$TARGET"; META_LABEL="" ;;
     FIRMWARE) META_SOURCE="firmware-upload"; META_TARGET=""; META_LABEL="$(basename "$TARGET")" ;;
     BINARY)   META_SOURCE="package-upload";  META_TARGET=""; META_LABEL="$(basename "$TARGET")" ;;

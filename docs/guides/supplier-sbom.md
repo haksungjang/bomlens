@@ -88,7 +88,7 @@ If you supply SPDX (JSON, Tag-Value), it is converted to CycloneDX internally wi
 
 ## Yocto images
 
-A Yocto build can produce its own SPDX SBOM, and that file can be uploaded directly. It is read by a dedicated parser rather than the generic SPDX path, because a Yocto document carries two things the generic path loses.
+A Yocto build can produce its own SPDX SBOM, and BomLens reads it with a dedicated parser rather than the generic SPDX path, because a Yocto document carries two things the generic path loses.
 
 To produce one, add the following to `local.conf` and build as usual.
 
@@ -97,7 +97,16 @@ INHERIT += "create-spdx-3.0"
 INHERIT += "vex"
 ```
 
-The SBOM appears in the deploy directory as `tmp/deploy/images/<machine>/<image>.rootfs.spdx.json`. Upload that file.
+Then point the scan at the build directory. You do not need to know where the build put the SBOM.
+
+```bash
+./scripts/scan-sbom.sh --project my-image --version 1.0.0 \
+  --target ~/poky/build --generate-only
+```
+
+The build directory is recognized as one, and the image SBOM it published — `tmp/deploy/images/<machine>/<image>.rootfs.spdx.json` — is analyzed. The build tree itself is not walked: scanning it as a directory would report sysroots and native build tools that never ship in the image. When the directory holds SBOMs for several machines or images, the most recently written one is analyzed and all of them are listed in the log; pass a specific file with `--analyze <file>` to choose another. That file can also be uploaded on its own — in the web UI, or with `--analyze` — which is what a supplier who sends you only the SBOM will do.
+
+If the directory is a Yocto build but holds no SPDX document, the scan stops and names the two settings above rather than falling back to a directory scan whose result would misrepresent the image.
 
 What you get differs from a normal SBOM scan in two ways.
 
@@ -107,11 +116,11 @@ Vulnerabilities come from the build itself. Yocto runs a CVE analysis while buil
 
 Two limits are worth knowing before you start.
 
-Only SPDX 3.0 is supported. Yocto 4.0 (Kirkstone) and 5.0 (Scarthgap) emit SPDX 2.2 by default, which is not a single file: the top-level `.spdx.json` is an index and the packages live in per-recipe documents inside the sibling `.spdx.tar.zst`. Uploading the index alone is detected and reported rather than silently returning an empty result. Both releases can emit SPDX 3.0 with the setting above.
+Only SPDX 3.0 is supported. Yocto 4.0 (Kirkstone) and 5.0 (Scarthgap) emit SPDX 2.2 by default, which is not a single file: the top-level `.spdx.json` is an index and the packages live in per-recipe documents inside the sibling `.spdx.tar.zst`. That case is detected and reported rather than silently returning an empty result — on a build directory it is reported before the scan runs, and on an uploaded index during the scan. When a build directory holds both, the SPDX 3.0 document is the one analyzed even if the 2.2 one is newer. Both releases can emit SPDX 3.0 with the setting above.
 
 Conformance checks that depend on PURL will fail. Yocto identifies packages with CPE rather than PURL, so PURL coverage and the checks derived from it cannot pass. This reflects a difference in identifier convention, not a defect in the SBOM.
 
-Uploads are capped at 100 MB. For scale, the reference `core-image-minimal` document is 15.8 MB with 35 installed packages.
+Uploads are capped at 100 MB. For scale, the reference `core-image-minimal` document is 15.8 MB with 35 installed packages. A build directory scanned with `--target` reads the file from disk, so the cap does not apply there.
 
 ## Asking for remediation
 
