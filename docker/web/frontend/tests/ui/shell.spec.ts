@@ -157,7 +157,7 @@ test("Recent menu re-opens a past scan from the top bar", async ({ page }) => {
   await page.route("**/results", (r) => r.fulfill({ contentType: "application/json", body: "[]" }));
   await page.route("**/scans", (r) =>
     r.fulfill({ contentType: "application/json", body: JSON.stringify([
-      { id: "demo_1.0", project: "demo", version: "1.0", components: 2, maxSeverity: "CRITICAL", isAiScan: false, generatedAt: 1700000000 },
+      { id: "demo_1.0", project: "demo", version: "1.0", components: 3, maxSeverity: "CRITICAL", isAiScan: false, generatedAt: 1700000000 },
     ]) }),
   );
   await page.route("**/scan?id=demo_1.0", (r) =>
@@ -182,7 +182,7 @@ test("Recent home renders the summary strip and the scan table", async ({ page }
   );
   await page.route("**/scans", (r) =>
     r.fulfill({ contentType: "application/json", body: JSON.stringify([
-      { id: "demo_1.0", project: "demo", version: "1.0", components: 2, maxSeverity: "CRITICAL", isAiScan: false, componentType: "application", generatedAt: 1700000000 },
+      { id: "demo_1.0", project: "demo", version: "1.0", components: 3, maxSeverity: "CRITICAL", isAiScan: false, componentType: "application", generatedAt: 1700000000 },
       { id: "model_1.0", project: "model", version: "1.0", components: 1, maxSeverity: null, isAiScan: true, componentType: "machine-learning-model", generatedAt: 1700000100 },
     ]) }),
   );
@@ -208,7 +208,7 @@ test("Recent home opens a past scan from the table row", async ({ page }) => {
   );
   await page.route("**/scans", (r) =>
     r.fulfill({ contentType: "application/json", body: JSON.stringify([
-      { id: "demo_1.0", project: "demo", version: "1.0", components: 2, maxSeverity: "CRITICAL", isAiScan: false, componentType: "application", generatedAt: 1700000000 },
+      { id: "demo_1.0", project: "demo", version: "1.0", components: 3, maxSeverity: "CRITICAL", isAiScan: false, componentType: "application", generatedAt: 1700000000 },
     ]) }),
   );
   await page.route("**/scan?id=demo_1.0", (r) =>
@@ -228,7 +228,7 @@ test("Recent home deletes a scan from its row", async ({ page }) => {
   );
   await page.route("**/scans", (r) =>
     r.fulfill({ contentType: "application/json", body: JSON.stringify(deleted ? [] : [
-      { id: "demo_1.0", project: "demo", version: "1.0", components: 2, maxSeverity: "CRITICAL", isAiScan: false, componentType: "application", generatedAt: 1700000000 },
+      { id: "demo_1.0", project: "demo", version: "1.0", components: 3, maxSeverity: "CRITICAL", isAiScan: false, componentType: "application", generatedAt: 1700000000 },
     ]) }),
   );
   await page.route("**/scan-delete**", (r) => {
@@ -270,7 +270,7 @@ test("a deep link to a scan section restores that scan and section (open-in-new-
   await page.route("**/results", (r) => r.fulfill({ contentType: "application/json", body: "[]" }));
   await page.route("**/scans", (r) =>
     r.fulfill({ contentType: "application/json", body: JSON.stringify([
-      { id: "demo_1.0", project: "demo", version: "1.0", components: 2, maxSeverity: "CRITICAL", isAiScan: false, generatedAt: 1700000000 },
+      { id: "demo_1.0", project: "demo", version: "1.0", components: 3, maxSeverity: "CRITICAL", isAiScan: false, generatedAt: 1700000000 },
     ]) }),
   );
   await page.route("**/scan?id=demo_1.0", (r) =>
@@ -422,10 +422,15 @@ const DONE = {
   },
   conformance: null,
   sbom: {
-    components: 2,
+    // readline is here to keep a copyleft license in frame. Without one, every
+    // row in the license distribution is permissive and renders neutral, so the
+    // tier colouring and the badge beside a flagged row are invisible to the
+    // visual baseline — which is how a highlight nobody could see survived.
+    components: 3,
     componentList: [
       { name: "openssl", version: "3.0.0", group: "", purl: "pkg:github/openssl/openssl", type: "library", licenses: ["Apache-2.0"], scope: "direct", maxSeverity: "CRITICAL", vulnCount: 1 },
       { name: "zlib", version: "1.2.0", group: "", purl: "pkg:github/madler/zlib", type: "library", licenses: ["Zlib"], scope: "transitive" },
+      { name: "readline", version: "8.2", group: "", purl: "pkg:generic/readline@8.2", type: "library", licenses: ["GPL-3.0-only"], scope: "transitive" },
     ],
   },
 };
@@ -897,11 +902,15 @@ const LIC_DONE = {
   security: null,
   conformance: null,
   sbom: {
-    components: 3,
+    components: 4,
     componentList: [
       { name: "some-llama-model", version: "1", group: "", purl: "", type: "machine-learning-model", licenses: ["LLaMA-3.1"], licenseReview: "behavioral-use" },
       { name: "some-nc-dataset", version: "1", group: "", purl: "", type: "data", licenses: ["CC-BY-NC-4.0"], licenseReview: "non-commercial" },
       { name: "ordinary-lib", version: "1", group: "", purl: "", type: "library", licenses: ["MIT"] },
+      // A copyleft row, so the distribution's tier colouring and its badge are
+      // in this section's baseline. The others are AI-restrictive or permissive
+      // and all render neutral, which left the flagged styling uncovered.
+      { name: "copyleft-lib", version: "1", group: "", purl: "", type: "library", licenses: ["GPL-3.0-only"] },
     ],
   },
 };
