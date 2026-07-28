@@ -73,8 +73,15 @@ LIB_DIR = os.environ.get("SBOM_LIB_DIR") or next(
 )
 
 # Per-kind upload size caps (bytes).
+#
+# The SBOM cap is set from measurement, not preference. Build-system SBOMs are far
+# larger than hand-written ones: a Yocto core-image-minimal SPDX 3.0 document is
+# 15.8 MB, and a product image with more packages scales from there. Parsing peaks
+# at ~4.8x the file size (15.8 MB in, 75.7 MB resident, 0.23 s), so 100 MB keeps the
+# worst case near 500 MB of transient memory — affordable for a local single-run
+# tool, while still refusing inputs large enough to threaten the container.
 MAX_BYTES = {
-    "sbom": 25 * 1024 * 1024,        # 25 MB
+    "sbom": 100 * 1024 * 1024,       # 100 MB
     "zip": 500 * 1024 * 1024,        # 500 MB
     "package": 500 * 1024 * 1024,    # 500 MB
     "firmware": 500 * 1024 * 1024,   # 500 MB
@@ -1120,6 +1127,35 @@ def scanoss_status(run_id):
     return {"status": status, "count": len(_as_list(data.get("components")))}
 
 
+def yocto_vex_summary(run_id):
+    """Build-time vulnerability judgements from a Yocto SPDX SBOM (ANALYZE only).
+
+    Written by parse-yocto-spdx.py. The security report lists only what is still
+    unresolved, so without these counts the UI cannot tell "this build patched
+    12255 CVEs" from "we found nothing" — two very different statements. Absent
+    (None) for every non-Yocto scan.
+    """
+    p = run_file(run_id, "_yocto_vex.json")
+    if not p or not os.path.isfile(p):
+        return None
+    try:
+        with open(p) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    def _count(value):
+        return value if isinstance(value, int) and value >= 0 else 0
+
+    j = data.get("judgements") if isinstance(data.get("judgements"), dict) else {}
+    return {
+        "fixed": _count(j.get("fixed")),
+        "notAffected": _count(j.get("notAffected")),
+        "affected": _count(j.get("affected")),
+        "unresolved": _count(data.get("unresolved")),
+    }
+
+
 def conformance_summary(run_id):
     """Supplier-SBOM conformance verdict (ANALYZE mode only)."""
     p = run_file(run_id, "_conformance.json")
@@ -1457,6 +1493,8 @@ def scan_detail(run_id):
         "sbom": sbom,
         "security": security_summary(run_id),
         "conformance": conformance_summary(run_id),
+        # Yocto build-time VEX counts (Yocto SPDX input only); None otherwise.
+        "yoctoVex": yocto_vex_summary(run_id),
         # AI compliance profile card (AI SBOMs only); None otherwise. Paired with
         # the done-event payload below — keep both in sync.
         "aiProfile": ai_profile_summary(run_id),
@@ -2167,7 +2205,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send(411, json.dumps({"error": "Content-Length required"}))
             return
         if length > MAX_BYTES[kind]:
-            self._send(413, json.dumps({"error": "file too large for %s" % kind}))
+            # Name the limit and the actual size: "too large" alone leaves the user
+            # guessing whether trimming helps or the file is simply unsupported.
+            self._send(413, json.dumps({
+                "error": "file too large for %s: %.1f MB (limit %d MB)" % (
+                    kind, length / (1024.0 * 1024.0), MAX_BYTES[kind] // (1024 * 1024)
+                )
+            }))
             return
 
         token = secrets.token_hex(16)
@@ -2811,6 +2855,8 @@ class Handler(BaseHTTPRequestHandler):
                 "sbom": sbom_summary(run_id),
                 "security": security_summary(run_id) if env["GENERATE_SECURITY"] == "true" else None,
                 "conformance": conformance_summary(run_id),
+                # Yocto build-time VEX counts (Yocto SPDX input only); None otherwise.
+                "yoctoVex": yocto_vex_summary(run_id),
                 # AI compliance profile card (AI SBOMs only); None otherwise.
                 # Paired with scan_detail() so a re-opened scan carries it too.
                 "aiProfile": ai_profile_summary(run_id),
