@@ -41,6 +41,16 @@ scripts/scan-sbom.sh --project BertBaseUncased --version 1.0 \
 scripts/capture-demo-data.sh ~/demo-scans
 ```
 
+The captured folders now carry the source snapshot (`*_source.json`) — the text
+of the files each scan read — which is what makes the demo's Source tree section
+show real content instead of an empty pane. It is capped at 8 MB per scan, and
+that cap is the demo's size floor as much as the scanner's. Lower it for a run
+whose tree is large and uninteresting:
+
+```bash
+SOURCE_SNAPSHOT_MAX_TOTAL=2097152 scripts/scan-sbom.sh …   # 2 MB instead of 8
+```
+
 Pick runs whose *results* differ, not whose input flag differs. A GitHub URL, a
 ZIP and a local folder all produce the same kind of source scan, so publishing
 all three would fill the list with rows that look identical. Source, container,

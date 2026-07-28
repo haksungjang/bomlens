@@ -87,7 +87,13 @@ If a scan finished with reduced analysis — for example cdxgen ran out of Docke
 
 ![Conformance — format verdict with the G7 advisory sub-block](../images/web-ui-g7.png)
 
-**Artifacts** lists the generated files (SBOM, notice, risk report, security report, conformance) grouped by kind, downloadable per format or as a single ZIP. The Source tree section appears when ScanCode results are available — that is, from a source scan run with **License scan (ScanCode)** on — showing the source files with the license detected per file.
+**Artifacts** lists the generated files (SBOM, notice, risk report, security report, conformance) grouped by kind, downloadable per format or as a single ZIP.
+
+**Source tree** shows what the scan actually looked at, rather than only what it found. The tree on the left lists the files; picking one opens its text beside it. It appears for every scan that had files to read: a source scan, a directory or rootfs scan, a firmware image (after unpacking), a container image, and a build artifact that is an archive (jar, war, whl, zip, tar). A container image and an archive have no folder to walk, so BomLens unpacks a temporary copy, reads it, and deletes it before the scan ends. Symlinks are listed with the path they point at — in a container image nearly every command in `/bin` is a link into busybox, and leaving them out would show a tree in which those commands do not exist. When the scan ran with **License scan (ScanCode)** on, each file also carries the license detected in it.
+
+The captured text is bounded so a scan's output folder stays a reasonable size: text files only, up to 256 KB each and 8 MB in total, and licence texts and package manifests are taken first so the evidence behind a finding is the part that survives a tight budget. A file with no text on screen says why — it is binary, or the capture reached its limit — and the line above the tree reports how many files were captured and how many were left out. Nothing is silently dropped.
+
+**Submitted SBOM** appears when the scan read an SBOM someone else produced (SBOM upload / ANALYZE). Every other screen describes the CycloneDX document BomLens converted that input into, so this one describes the input itself: the format and spec version it was written in, its document name and identifier, when it was created, the tool that produced it, and the supplier or authors it names. Fields the supplier did not fill in are left out rather than shown blank — on a compliance screen a confident-looking wrong value costs more than a missing one. The entries themselves are not repeated here; the section links to Components, which lists them with sorting, filters and risk.
 
 ![Artifacts — files grouped by kind, with the SPDX export button on the SBOM card](../images/web-ui-artifacts.png)
 

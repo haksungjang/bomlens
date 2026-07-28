@@ -283,6 +283,41 @@
     "empty": "No source files were scanned.",
     "noLicenseHint": "License details appear when you run a ScanCode (deep-license) scan."
   },
+  "sourceViewer": {
+    "selectPrompt": "Pick a file to read what was scanned.",
+    "summary": "{{count}} file(s) captured from the scanned tree.",
+    "summaryOmitted": "{{count}} left out (binary, or past the capture limit).",
+    "lines": "{{count}} lines",
+    "truncated": "Shown in part",
+    "truncatedFoot": "The rest of this file went past the capture limit and was not stored.",
+    "showAll": "Show the remaining {{count}} lines",
+    "missingBinary": "No preview — this file is binary, so only its path was recorded.",
+    "missingBudget": "No preview — the capture reached its size limit before this file.",
+    "missingUnknown": "No content was captured for this file.",
+    "symlink": "Symlink",
+    "symlinkTo": "This is a symlink to",
+    "linksSummary": "{{count}} symlinks."
+  },
+  "inputSbom": {
+    "loading": "Loading the submitted SBOM…",
+    "loadError": "Could not load the details of the submitted SBOM.",
+    "intro": "This scan read an SBOM someone else produced. Below is that document as it arrived, before it was converted to CycloneDX for the analysis on the other screens.",
+    "unnamed": "Submitted SBOM",
+    "entries": "{{count}} entries",
+    "componentsHint": "The entries themselves are listed, with filters and risk, under",
+    "field": {
+      "format": "Format",
+      "documentName": "Document name",
+      "created": "Created",
+      "tools": "Produced by",
+      "supplier": "Supplier",
+      "authors": "Authors",
+      "documentId": "Document id",
+      "rootComponent": "Describes",
+      "rootLicense": "Declared license",
+      "purl": "Package URL"
+    }
+  },
   "severity": {
     "CRITICAL": "Critical",
     "HIGH": "High",
@@ -326,7 +361,8 @@
     "licenses": "Licenses",
     "conformance": "SBOM conformance",
     "models": "Models & datasets",
-    "artifacts": "Artifacts"
+    "artifacts": "Artifacts",
+    "inputSbom": "Submitted SBOM"
   },
   "shell": {
     "newScan": "New scan",

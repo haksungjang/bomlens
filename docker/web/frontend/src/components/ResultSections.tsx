@@ -4,12 +4,20 @@ import { EmptyState } from "@/components/ui/state";
 import type { DoneEvent, RecentScan, ResultFile, Severity } from "@/lib/api";
 import type { LicenseRiskTier } from "@/lib/licenses";
 import type { SectionId } from "@/lib/nav";
-import { sbomFileName, scancodeFileName, sourceTreeFileName } from "@/lib/results";
+import {
+  inputSbomFileName,
+  sbomFileName,
+  scancodeFileName,
+  sourceSnapshotFileName,
+  sourceTreeFileName,
+} from "@/lib/results";
+import { scanHash } from "@/lib/route";
 
 import { ArtifactsSection, Overview } from "./Overview";
 import { ComponentsTable } from "./ComponentsTable";
 import { ConformancePanel } from "./ConformancePanel";
 import { DependenciesPanel } from "./DependenciesPanel";
+import { InputSbomPanel } from "./InputSbomPanel";
 import { Licenses } from "./Licenses";
 import { ModelsDatasets } from "./ModelsDatasets";
 import { SourceTreePanel } from "./SourceTreePanel";
@@ -111,7 +119,20 @@ export function ResultSection({
         <SourceTreePanel
           scanId={scanId}
           sourceFile={sourceFile}
+          snapshotFile={sourceSnapshotFileName(result)}
           hasLicenses={hasLicenses}
+        />
+      );
+    }
+
+    case "inputSbom": {
+      const inputFile = inputSbomFileName(result);
+      if (!inputFile) return null;
+      return (
+        <InputSbomPanel
+          scanId={scanId}
+          inputFile={inputFile}
+          componentsHref={scanId ? scanHash(scanId, "components") : undefined}
         />
       );
     }
