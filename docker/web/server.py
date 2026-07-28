@@ -135,6 +135,15 @@ ARTIFACT_SUFFIXES = (
     # opt-in ScanCode deep-license scan; the frontend prefers _scancode (which
     # carries licenses) when both exist.
     "_files.json",
+    # Source snapshot (source-snapshot.py): the text content behind that tree,
+    # captured during the scan because the scanned tree itself (a container's
+    # /src, a firmware unpacker's temp dir) does not outlive it. Backs the file
+    # viewer, and is served like any other artifact.
+    "_source.json",
+    # Supplier-SBOM header summary (describe-input-sbom.py, ANALYZE only): the
+    # format, spec version, producing tool and authorship of the document as it
+    # arrived, read before the conversion to CycloneDX rewrites all of it.
+    "_input.json",
     # EPSS/KEV priority sidecar (scan-security.sh) and the SCANOSS vendored-OSS
     # SBOM (identify-vendored). Both back result views, so include them in the
     # download bundle and the per-scan results listing.

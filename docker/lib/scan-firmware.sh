@@ -111,14 +111,21 @@ else
     echo "[firmware] no rootfs marker found; scanning whole extraction tree"
 fi
 
-# Source file tree for the web UI (structure only, no licenses). The extracted
-# rootfs is in this script's temp dir and is removed on EXIT, so emit it here
-# while it exists. Writes ${OUT_PREFIX}_files.json into the caller's working dir
-# (where the entrypoint collects artifacts). Best-effort; never aborts the scan.
+# File tree + content snapshot for the web UI. The extracted rootfs is in this
+# script's temp dir and is removed on EXIT, so both are emitted here while it
+# exists. They land in the caller's working dir (where the entrypoint collects
+# artifacts): ${OUT_PREFIX}_files.json is the structure, ${OUT_PREFIX}_source.json
+# the readable content behind it — configs, init scripts and licence texts, under
+# the snapshot's own size caps so a multi-GB rootfs cannot bloat the output.
+# Best-effort; never aborts the scan.
 if [ -n "$OUT_PREFIX" ]; then
-    SFT="$(cd "$(dirname "$0")" && pwd)/source-file-tree.sh"
-    if [ -f "$SFT" ]; then
-        bash "$SFT" "$ROOTFS" "${OUT_PREFIX}_files.json" || true
+    LIB="$(cd "$(dirname "$0")" && pwd)"
+    if [ -f "$LIB/source-file-tree.sh" ]; then
+        bash "$LIB/source-file-tree.sh" "$ROOTFS" "${OUT_PREFIX}_files.json" || true
+    fi
+    if [ -f "$LIB/source-snapshot.py" ] && [ -f "${OUT_PREFIX}_files.json" ]; then
+        python3 "$LIB/source-snapshot.py" \
+            "$ROOTFS" "${OUT_PREFIX}_files.json" "${OUT_PREFIX}_source.json" || true
     fi
 fi
 
