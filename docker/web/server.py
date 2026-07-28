@@ -311,6 +311,122 @@ def safe_scan_dir(rel):
     return None
 
 
+# ---------------------------------------------------------------------------
+# Yocto build directory
+#
+# A folder the user points at can be a Yocto build directory, and then the thing
+# worth reading is not the tree — sysroots, native build tools, per-recipe work
+# directories, none of which ships in the image — but the SBOM the build itself
+# published under tmp/deploy/images/<machine>/. Recognize it and analyze that.
+#
+# This mirrors is_yocto_build_dir / yocto_spdx_candidates / yocto_pick_spdx in
+# scripts/scan-sbom.sh; the two must agree, or the same folder would be read one
+# way from the CLI and another from the UI. Rules, in the order they matter:
+#   - conf/bblayers.conf and tmp*/deploy/images are bitbake's own and stand
+#     alone, so a build that never emitted an SBOM is still recognized (and can
+#     be told which setting to add) rather than scanned as a directory.
+#   - deploy/images and *.manifest are ordinary names any project can carry, so
+#     they count only alongside a document bitbake actually wrote.
+#   - TMPDIR carries the C library suffix outside poky (tmp-glibc), hence tmp*.
+# ---------------------------------------------------------------------------
+_YOCTO_DOC_RE = re.compile(rb"bitbake|openembedded", re.IGNORECASE)
+_SPDX2_RE = re.compile(rb'"spdxVersion"\s*:\s*"SPDX-2')
+
+
+def _file_matches(path, pattern):
+    """True when the file's bytes match `pattern` anywhere. Streamed with a small
+    overlap so a marker straddling a chunk boundary is still found — an image
+    SBOM runs to tens of megabytes and is not worth holding in memory."""
+    try:
+        with open(path, "rb") as fh:
+            tail = b""
+            while True:
+                chunk = fh.read(1 << 20)
+                if not chunk:
+                    return False
+                if pattern.search(tail + chunk):
+                    return True
+                tail = chunk[-64:]
+    except OSError:
+        return False
+
+
+def is_yocto_spdx_doc(path):
+    """True for an SPDX document bitbake produced. Both SPDX 2.x and 3.x name it
+    as the creating tool; the container does the authoritative check
+    (parse-yocto-spdx.py), this only decides whether a directory is Yocto's."""
+    return os.path.isfile(path) and _file_matches(path, _YOCTO_DOC_RE)
+
+
+def is_spdx2_doc(path):
+    """True for an SPDX 2.x document. For a Yocto build that form is only an
+    index: the packages live in per-recipe documents inside the sibling
+    <image>.spdx.tar.zst, so it converts to an almost empty SBOM."""
+    return _file_matches(path, _SPDX2_RE)
+
+
+def is_yocto_build_dir(d):
+    """True when `d` is a Yocto build directory, a deploy tree, or the
+    per-machine image folder inside one."""
+    if not os.path.isdir(d):
+        return False
+    if os.path.isfile(os.path.join(d, "conf", "bblayers.conf")):
+        return True
+    esc = glob.escape(d)
+    if any(os.path.isdir(p) for p in glob.glob(os.path.join(esc, "tmp*", "deploy", "images"))):
+        return True
+    for pat in ("deploy/images/*/*.spdx.json", "images/*/*.spdx.json"):
+        if any(is_yocto_spdx_doc(p) for p in glob.glob(os.path.join(esc, pat))):
+            return True
+    if glob.glob(os.path.join(esc, "*.manifest")):
+        if any(is_yocto_spdx_doc(p) for p in glob.glob(os.path.join(esc, "*.spdx.json"))):
+            return True
+    return False
+
+
+def yocto_spdx_candidates(d):
+    """Every image SPDX document in `d`, most specific location first. The looser
+    `*.spdx.json` tier is consulted only when `<image>.rootfs.spdx.json` finds
+    nothing, so an image document is never listed twice. bitbake publishes each
+    artifact as a timestamped file plus an IMAGE_LINK_NAME symlink to it, so
+    entries resolving to one file are collapsed — otherwise a single-image build
+    would present a choice between two names for the same document."""
+    esc = glob.escape(d)
+    for tier in (".rootfs.spdx.json", ".spdx.json"):
+        hits, seen = [], set()
+        for pat in ("tmp*/deploy/images/*/*", "deploy/images/*/*", "images/*/*", "*"):
+            for p in sorted(glob.glob(os.path.join(esc, pat + tier))):
+                if not os.path.isfile(p):
+                    continue
+                real = os.path.realpath(p)
+                if real in seen:
+                    continue
+                seen.add(real)
+                hits.append(p)
+        if hits:
+            return hits
+    return []
+
+
+def yocto_pick_spdx(candidates):
+    """The one document to analyze: SPDX 3.x over 2.x (only 3.x carries the
+    installed set and the build's CVE verdicts), then most recently written.
+    None when there is nothing to pick."""
+    best3 = best2 = None
+    for p in candidates:
+        try:
+            mtime = os.path.getmtime(p)
+        except OSError:
+            continue
+        if is_spdx2_doc(p):
+            if best2 is None or mtime > best2[1]:
+                best2 = (p, mtime)
+        elif best3 is None or mtime > best3[1]:
+            best3 = (p, mtime)
+    chosen = best3 or best2
+    return chosen[0] if chosen else None
+
+
 # Directories a build-based source scan re-resolves from manifests, so copying
 # them wastes time and disk (and, for a 1.8 GB tree, dominates the copy). Skipped
 # when cloning a read-only picked folder into a writable tree for a deep scan;
@@ -1658,6 +1774,30 @@ def host_path_of(container_path):
     return ""
 
 
+def display_path_of(container_path):
+    """The path to show a user for something inside this container.
+
+    A folder the user picked is theirs, not ours: they know it as the host path
+    they mounted (`--mount <dir>`, or the desktop app's Add folder), so print
+    that. Extra scan roots carry their own host path; anything under /src maps
+    through the launch folder. Falls back to the container path, which is at
+    least true.
+    """
+    # Matched on the resolved path: a scan dir arrives realpath'd (safe_scan_dir)
+    # while a mount is recorded as given, and on macOS those differ by /private.
+    p = os.path.realpath(container_path)
+    for root in EXTRA_SCAN_ROOTS:
+        base = os.path.realpath(root["path"])
+        host = root.get("hostPath") or ""
+        if not host:
+            continue
+        if p == base:
+            return host
+        if p.startswith(base + os.sep):
+            return os.path.join(host, os.path.relpath(p, base))
+    return host_path_of(p) or os.path.normpath(container_path)
+
+
 # Allowlist charsets for the image ref / model id / container name interpolated into
 # the sibling docker-run command line. Each is enforced as an inline
 # `re.fullmatch(<const>, value)` barrier in run_sibling_scan, in the same scope as the
@@ -1819,8 +1959,15 @@ def run_sibling_scan(image, mode, out_dir, on_log, *, upload_file=None, model_id
     if not out_dir or not _path_under(out_dir, OUTPUT_DIR):
         on_log("[ui] cannot launch sibling: output dir is outside OUTPUT_DIR")
         return -1
-    if upload_file is not None and not _path_under(upload_file, UPLOAD_DIR):
-        on_log("[ui] refusing to launch sibling: upload is outside the uploads dir")
+    # The file to analyze is normally an upload, but a Yocto build directory
+    # supplies one the scanner found inside an allowed scan root instead. Both
+    # ride --volumes-from at the same path in the sibling, so the guard admits
+    # either tree and nothing else.
+    if upload_file is not None and not (
+            _path_under(upload_file, UPLOAD_DIR)
+            or any(_path_under(upload_file, r) for r in ALLOWED_SCAN_ROOTS)):
+        on_log("[ui] refusing to launch sibling: input is outside the uploads dir "
+               "and every scan root")
         return -1
     if model_id is not None:
         _m = _MODEL_RE.fullmatch(model_id)
@@ -2392,6 +2539,12 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         source = g("source", "current-dir").strip() or "current-dir"
+        # Not an input the form offers: it is what a folder scan turned out to be,
+        # recorded in the scan config. A re-scan of one replays the folder, so
+        # take it back to the directory input it came from and let the detection
+        # below decide again — the folder may have been rebuilt, or cleaned.
+        if source == "yocto-build-dir":
+            source = "rootfs-dir"
         target = g("target").strip()
         token = g("token").strip()
         # Optional outbound license (--license on the CLI) enabling the
@@ -2560,8 +2713,79 @@ class Handler(BaseHTTPRequestHandler):
         # instead of in-process run-scan. dict: {image, upload_file?, model_id?}.
         sibling = None
 
+        # A folder the user pointed at can be a Yocto build directory. Asked here
+        # rather than inside each branch so both folder inputs — a directory
+        # target and a picked scan-target folder — answer it the same way, and so
+        # the answer is known before the per-source dispatch below.
+        yocto_dir = None
+        if source in ("rootfs-dir", "scan-target-src"):
+            _picked = safe_scan_dir(target)
+            if _picked and is_yocto_build_dir(_picked):
+                yocto_dir = _picked
+
         try:
-            if source == "docker-image":
+            if yocto_dir is not None:
+                # Analyze what the build published, not the tree it published
+                # from: a directory scan of a build directory reports sysroots
+                # and native build tools that never ship in the image. Joins the
+                # ANALYZE path, so conformance, notice, security and the risk
+                # report behave exactly as they do for an uploaded SBOM.
+                shown = display_path_of(yocto_dir)
+                sse("log", json.dumps("▶ Yocto build directory: %s" % shown))
+                candidates = yocto_spdx_candidates(yocto_dir)
+                doc = yocto_pick_spdx(candidates)
+                if not doc:
+                    fail("This is a Yocto build directory, but it holds no SPDX SBOM. "
+                         'Add INHERIT += "create-spdx-3.0" and INHERIT += "vex" to '
+                         "conf/local.conf and build the image again — the SBOM then "
+                         "appears as tmp/deploy/images/<machine>/<image>.rootfs.spdx.json "
+                         "and this folder can be scanned as it is. If the build writes "
+                         "its images somewhere else, upload that document with the SBOM "
+                         "input instead. Scanning the build tree as a directory is not "
+                         "offered as a fallback: it reports sysroots and native build "
+                         "tools that never ship in the image.")
+                    return
+                if len(candidates) > 1:
+                    sse("log", json.dumps(
+                        "▶ Several image SBOMs in this build directory — analyzing by SPDX "
+                        "version first (3.x carries the installed set and the build's CVE "
+                        "verdicts), then by which was written last:"))
+                    for cand in candidates:
+                        sse("log", json.dumps(
+                            "    %s%s" % (os.path.relpath(cand, yocto_dir),
+                                          "  <- analyzing this one" if cand == doc else "")))
+                if is_spdx2_doc(doc):
+                    sse("log", json.dumps(
+                        "▶ %s is an SPDX 2.x document. For a Yocto build that file is only "
+                        "an index — the packages live in the per-recipe documents inside "
+                        "<image>.spdx.tar.zst beside it — so expect an almost empty result. "
+                        'Rebuild with INHERIT += "create-spdx-3.0" for the full image '
+                        "contents and the vulnerability judgements the build made."
+                        % os.path.basename(doc)))
+                sse("log", json.dumps("▶ Image SBOM: %s" % os.path.relpath(doc, yocto_dir)))
+                mode = "ANALYZE"
+                env["MODE"] = "ANALYZE"
+                env["ANALYZE_SBOM"] = doc
+                # ANALYZE needs license + vulnerability data for the risk report.
+                env["GENERATE_NOTICE"] = "true"
+                env["GENERATE_SECURITY"] = "true"
+                # Record what this turned out to be, so the result page names a
+                # Yocto build rather than a directory scan. `target` keeps the
+                # folder the user picked, which is what "re-scan" replays — the
+                # detection then runs again on the same folder.
+                scan_config["source"] = "yocto-build-dir"
+                scan_config["sourceLabel"] = shown
+                write_scanmeta(run_out, scan_config)
+                # Same opt-in as an uploaded SBOM: the base UI image has no grype,
+                # so deep CVE matching runs in the deep-cve image as a sibling.
+                if g("deep_cve") == "true" and not deep_cve_capable():
+                    if docker_cli_present() and docker_capable():
+                        sibling = {"image": DEEP_CVE_IMAGE, "upload_file": doc}
+                    else:
+                        fail("Deep CVE matching requires Docker (to run the deep-cve "
+                             "image) or relaunching the UI from the deep-cve image."); return
+
+            elif source == "docker-image":
                 if not target:
                     fail("Docker image name required"); return
                 # Validate the image reference like every other source validates
@@ -2580,6 +2804,16 @@ class Handler(BaseHTTPRequestHandler):
                 mode = "SOURCE"
                 env["MODE"] = "SOURCE"
                 env["SOURCE_ROOT"] = SRC_DIR
+                # The launch folder is scanned as source on request, so this one
+                # is not switched under the user — but a Yocto build directory
+                # scanned as source reads the build tree rather than the image,
+                # and saying so beats handing back an inventory of sysroots.
+                if is_yocto_build_dir(SRC_DIR):
+                    sse("log", json.dumps(
+                        "▶ Note: this folder looks like a Yocto build directory. Scanned as "
+                        "source it reports the build tree, not what the image ships. To read "
+                        "the image SBOM the build published, pick this folder with the "
+                        "Directory / rootfs input instead."))
 
             elif source == "rootfs-dir":
                 # Scan an OS rootfs (or any subfolder) under /src — or under an

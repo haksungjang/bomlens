@@ -8,6 +8,7 @@ import { type Dispatch, type SetStateAction, useEffect, useState } from "react";
 
 import {
   describeUploadError,
+  formSourceOf,
   stashGitCred,
   uploadFile,
   type Capabilities,
@@ -105,8 +106,12 @@ export function useScanForm({
   // dirty: the seeded identity is deliberate, not a suggestion to replace.
   const [projectDirty, setProjectDirty] = useState(() => Boolean(initialConfig));
   const [versionDirty, setVersionDirty] = useState(() => Boolean(initialConfig));
-  const [source, setSource] = useState<SourceType>(
-    () => initialConfig?.source ?? "current-dir",
+  // A re-scan seeds the input the scan came from. `formSourceOf` maps what a
+  // scan turned out to be (a Yocto build directory) back to the input the form
+  // offers (the folder that was picked), so the seeded form is one the user can
+  // see, edit and submit.
+  const [source, setSource] = useState<SourceType>(() =>
+    initialConfig ? formSourceOf(initialConfig.source) : "current-dir",
   );
   const [target, setTargetRaw] = useState(() => initialConfig?.target ?? "");
   // Extra --mount scan targets (capabilities.scanRoots): the rootfs-dir input

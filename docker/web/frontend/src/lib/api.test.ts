@@ -8,8 +8,8 @@ import {
   downloadAllUrl,
   fileUrl,
   exportSpdx,
+  formSourceOf,
   getCapabilities,
-  isRescannableSource,
   listScans,
   loadScan,
   stashGitCred,
@@ -346,23 +346,21 @@ describe("startScan", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Re-scan eligibility
+// Re-scan seeding
 // ---------------------------------------------------------------------------
-describe("isRescannableSource", () => {
-  it("accepts every source the picker offers", () => {
-    for (const s of SOURCE_TYPES) expect(isRescannableSource(s)).toBe(true);
+describe("formSourceOf", () => {
+  it("leaves every source the picker offers alone", () => {
+    for (const s of SOURCE_TYPES) expect(formSourceOf(s)).toBe(s);
   });
 
-  // The CLI recognizes a Yocto build directory from a folder and records it in
-  // the scan config. The form has no input for it and the server has no branch,
-  // so re-scanning one would fail on submit — the button is withheld instead.
-  it("refuses a Yocto build directory, which the UI cannot launch", () => {
-    expect(isRescannableSource("yocto-build-dir")).toBe(false);
+  // Not an input anyone picks: it is what a picked folder turned out to be. A
+  // re-scan replays the folder, so the form shows the directory input again and
+  // the scanner decides afresh whether it is still a Yocto build directory.
+  it("replays a Yocto build directory as the folder it came from", () => {
+    expect(formSourceOf("yocto-build-dir")).toBe("rootfs-dir");
   });
 
-  // Submitted in place of rootfs-dir for a deep scan of a picked folder, and
-  // handled server-side, so a scan recorded with it stays replayable.
-  it("accepts the deep scan-target variant", () => {
-    expect(isRescannableSource("scan-target-src")).toBe(true);
+  it("keeps the deep scan-target variant, which the server handles", () => {
+    expect(formSourceOf("scan-target-src")).toBe("scan-target-src");
   });
 });

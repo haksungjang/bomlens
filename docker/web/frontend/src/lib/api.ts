@@ -464,15 +464,14 @@ export const SOURCE_TYPES: SourceType[] = [
 ];
 
 /**
- * Whether a finished scan can be launched again from the UI. "Re-scan" seeds
- * the form from a scan's config, which only works for sources the form can
- * express and the server accepts. A Yocto build directory is recognized by the
- * CLI scanner from a folder it was pointed at — the UI has no input for it and
- * the server has no branch for it — so offering the button would guarantee a
- * failed submit. Lift this restriction when the UI grows the same detection.
+ * The input a finished scan should be replayed from. "Re-scan" seeds the form
+ * from a scan's config, and `yocto-build-dir` is not an input the form offers —
+ * it is what a picked folder turned out to be. Replaying it means picking the
+ * same folder again, so it maps back to the directory input; the scanner then
+ * decides afresh whether that folder is still a Yocto build directory.
  */
-export function isRescannableSource(source: SourceType): boolean {
-  return source !== "yocto-build-dir";
+export function formSourceOf(source: SourceType): SourceType {
+  return source === "yocto-build-dir" ? "rootfs-dir" : source;
 }
 
 export type UploadKind = "zip" | "sbom" | "firmware" | "package";

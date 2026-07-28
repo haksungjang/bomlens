@@ -104,7 +104,11 @@ Then point the scan at the build directory. You do not need to know where the bu
   --target ~/poky/build --generate-only
 ```
 
-The build directory is recognized as one, and the image SBOM it published — `tmp/deploy/images/<machine>/<image>.rootfs.spdx.json`, or `tmp-glibc/…` on an OpenEmbedded build — is analyzed. A build that writes its images somewhere else entirely (a relocated `DEPLOY_DIR`) is not found this way; pass that document with `--analyze <file>`. The build tree itself is not walked: scanning it as a directory would report sysroots and native build tools that never ship in the image. When the directory holds SBOMs for several machines or images, the most recently written one is analyzed and all of them are listed in the log; pass a specific file with `--analyze <file>` to choose another. That file can also be uploaded on its own — in the web UI, or with `--analyze` — which is what a supplier who sends you only the SBOM will do.
+The build directory is recognized as one, and the image SBOM it published — `tmp/deploy/images/<machine>/<image>.rootfs.spdx.json`, or `tmp-glibc/…` on an OpenEmbedded build — is analyzed. The build tree itself is not walked: scanning it as a directory would report sysroots and native build tools that never ship in the image.
+
+When several machines or images were built, the most recently written SBOM is analyzed and all the candidates are listed in the log; pass a specific one with `--analyze <file>` to choose another. A build that writes its images somewhere else entirely (a relocated `DEPLOY_DIR`) is not found this way either, so name that document the same way. When all you were sent is the SBOM file, upload it in the web UI or pass it to `--analyze`.
+
+The web UI reads the same folder: pick it with the Directory input (mount it first with `--ui --mount ~/poky/build`, or use Add folder in the desktop app) and the detection runs exactly as it does on the command line.
 
 If the directory is a Yocto build but holds no SPDX document, the scan stops and names the two settings above rather than falling back to a directory scan whose result would misrepresent the image.
 

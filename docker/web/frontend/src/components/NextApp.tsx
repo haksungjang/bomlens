@@ -11,7 +11,6 @@ import { ScanRunning } from "./ScanRunning";
 import {
   deleteScan,
   getCapabilities,
-  isRescannableSource,
   listScans,
   loadScan,
   startScan,
@@ -350,12 +349,7 @@ export function NextApp() {
         result ? <GlobalSearch result={result} onPick={handleSearchPick} /> : undefined
       }
       onRescan={
-        // Not every finished scan can be launched again from here: a Yocto build
-        // directory is recognized by the CLI scanner and has no form input yet,
-        // so the button is withheld rather than offered and failing on submit.
-        result?.scanConfig && isRescannableSource(result.scanConfig.source)
-          ? () => handleRescan(result.scanConfig!)
-          : undefined
+        result?.scanConfig ? () => handleRescan(result.scanConfig!) : undefined
       }
     >
       {isHome ? (

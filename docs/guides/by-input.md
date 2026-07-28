@@ -135,6 +135,7 @@ $SBOM --project team5-image --version 1.0.0 \
 - The image SBOM under `tmp/deploy/images/<machine>/` is analyzed — not the build tree, which holds sysroots and native build tools that never ship in the image.
 - The component list is the packages installed in the image, and vulnerabilities carry the verdicts the build itself made (patched by a recipe, judged not applicable, or still open). Only the open ones count as findings.
 - If several machines or images were built, the newest SBOM is analyzed and every candidate is listed in the log; pass `--analyze <file>` to choose a different one.
+- In the web UI, pick the folder with the **Directory / rootfs** input (mount it with `--ui --mount ~/poky/build`, or use Add folder in the desktop app) — the same detection runs there.
 - For the full behavior and its limits, see the [Yocto section of the supplier SBOM guide](supplier-sbom.md#yocto-images).
 
 **Deliverables**: notice, SBOM, risk report, conformance report
