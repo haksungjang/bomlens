@@ -10,6 +10,7 @@ import {
   Boxes,
   Cpu,
   FileCheck2,
+  FileInput,
   FileText,
   GitBranch,
   type LucideIcon,
@@ -25,6 +26,7 @@ export type SectionId =
   | "components"
   | "dependencies"
   | "sourceTree"
+  | "inputSbom"
   | "vulnerabilities"
   | "licenses"
   | "conformance"
@@ -69,6 +71,8 @@ export interface ScanContext {
   hasDependencies: boolean;
   /** A ScanCode artifact exists, so the source tree can be shown. */
   hasSourceTree: boolean;
+  /** The scan's input was an SBOM and its header summary was captured. */
+  hasInputSbom: boolean;
   /**
    * An SBOM conformance report exists (ANALYZE produced format/G7 checks), so
    * the conformance section applies — regardless of AI content.
@@ -81,6 +85,7 @@ export const EMPTY_SCAN: ScanContext = {
   isAiScan: false,
   hasDependencies: false,
   hasSourceTree: false,
+  hasInputSbom: false,
   hasConformance: false,
 };
 
@@ -107,6 +112,16 @@ export const NAV_GROUPS: NavGroup[] = [
         labelKey: "nav.sourceTree",
         icon: FileText,
         requires: (c) => c.hasSourceTree,
+      },
+      // The scanned input, when that input was itself an SBOM: what the
+      // supplier sent, before the conversion to CycloneDX that everything else
+      // on screen describes. Sits beside the source tree because it answers the
+      // same question for a different kind of scan — what did we look at?
+      {
+        id: "inputSbom",
+        labelKey: "nav.inputSbom",
+        icon: FileInput,
+        requires: (c) => c.hasInputSbom,
       },
     ],
   },

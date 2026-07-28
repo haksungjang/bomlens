@@ -13,6 +13,7 @@ const SOURCE_SCAN: ScanContext = {
   isAiScan: false,
   hasDependencies: true,
   hasSourceTree: false,
+  hasInputSbom: false,
   hasConformance: false,
 };
 const AI_SCAN: ScanContext = {
@@ -20,6 +21,7 @@ const AI_SCAN: ScanContext = {
   isAiScan: true,
   hasDependencies: true,
   hasSourceTree: true,
+  hasInputSbom: true,
   hasConformance: true,
 };
 // A supplier SBOM uploaded for review (ANALYZE) with no AI model: it produces a
@@ -29,10 +31,24 @@ const SUPPLIER_SBOM: ScanContext = {
   isAiScan: false,
   hasDependencies: true,
   hasSourceTree: false,
+  hasInputSbom: true,
   hasConformance: true,
 };
 
 describe("visibleGroups — scan-type + data adaptation", () => {
+  it("shows the submitted-SBOM section only when the input was an SBOM", () => {
+    // Reading a supplier's document is the one scan where the input itself is
+    // worth a section; a source scan has a file tree instead.
+    expect(visibleSectionIds(SUPPLIER_SBOM)).toContain("inputSbom");
+    expect(visibleSectionIds(SOURCE_SCAN)).not.toContain("inputSbom");
+    expect(visibleSectionIds(EMPTY_SCAN)).not.toContain("inputSbom");
+  });
+
+  it("keeps the submitted SBOM beside the source tree, under Inventory", () => {
+    const inventory = visibleGroups(SUPPLIER_SBOM).find((g) => g.id === "inventory");
+    expect(inventory?.sections.map((s) => s.id)).toContain("inputSbom");
+  });
+
   it("always shows the core sections", () => {
     const ids = visibleSectionIds(EMPTY_SCAN);
     expect(ids).toContain("overview");
