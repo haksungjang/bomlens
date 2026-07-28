@@ -36,7 +36,7 @@ The New scan screen is two panes. On the left, pick a source — grouped into Co
 | Scan target | Input method | Backend mode |
 |-------------|--------------|--------------|
 | Current folder | scans the source in the UI's run folder | SOURCE |
-| Directory path | a subfolder under the run folder (e.g. an OS rootfs), a folder mounted with `--ui --mount <dir>`, or — in the desktop app — a folder added with the Add folder button | ROOTFS |
+| Directory path | a subfolder under the run folder (e.g. an OS rootfs), a folder mounted with `--ui --mount <dir>`, or — in the desktop app — a folder added with the Add folder button | ROOTFS, or ANALYZE when the folder is a [Yocto build directory](#yocto-build-directory) |
 | GitHub URL | enter the repository URL | SOURCE (clone) |
 | ZIP upload | upload a `.zip`/tar file | SOURCE (extract) |
 | Package upload | upload a build artifact — `.jar`, `.war`, `.ear`, `.deb`, `.rpm`, `.whl` | BINARY (a wheel is unpacked and scanned as ROOTFS) |
@@ -52,6 +52,12 @@ A **Reproducible output** toggle produces byte-identical SBOMs across runs (the 
 An **Outbound license** field takes the SPDX id your project ships under, such as `Apache-2.0` (the UI equivalent of `--license`). Fill it in and the Licenses section reports which dependencies clash with it; leave it empty and that check stays off, which the section says outright. It appears wherever BomLens generates the SBOM, so not for an analyzed supplier SBOM (which carries the supplier's own declaration) or an AI model.
 
 Below the outputs, an optional **Upload** step can send the finished SBOM to a server. Turn it on to pick the destination — Dependency-Track or TRUSCA — and enter the server URL and an access token; TRUSCA also asks for the target project id. The URL and token are used for that one run and are never saved. It is the UI equivalent of the CLI upload options; see [Upload to Dependency-Track / TRUSCA](../guides/upload.md).
+
+### Yocto build directory
+
+A folder picked with the Directory input can be a Yocto build directory, and BomLens recognizes it as one: it analyzes the image SBOM the build published under `tmp/deploy/images/<machine>/` instead of walking the build tree, which holds sysroots and native build tools that never ship in the image. The scan log names the folder and the document it read, the result page labels the scan a Yocto build directory, and the vulnerabilities carry the verdicts the build itself made — patched by a recipe, judged not applicable, or still open.
+
+The build gives the most when it was configured to emit an SBOM (`INHERIT += "create-spdx-3.0"` and `INHERIT += "vex"` in `conf/local.conf`). SPDX 2.2 is read as well, together with the `.spdx.tar.zst` beside it, though it carries no CVE verdicts; a build with no SPDX at all is read from the manifests it wrote anyway. Only a build directory with none of those stops the scan, rather than falling back to a directory scan whose result would misrepresent the image. The [supplier SBOM guide](../guides/supplier-sbom.md#yocto-images) covers the behaviour and its limits; the CLI recognizes the same folder through `--target`.
 
 ## Scan running
 

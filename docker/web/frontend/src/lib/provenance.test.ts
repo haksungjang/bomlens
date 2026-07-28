@@ -58,6 +58,22 @@ describe("provenanceOf", () => {
     ).toMatchObject({ kind: "folder", value: "/srv/app" });
   });
 
+  // A Yocto build directory reaches the same ANALYZE pipeline as an uploaded
+  // SBOM, so only the sidecar distinguishes them. It gets its own kind because
+  // the components came from the SBOM the build wrote, not from reading the
+  // folder — labelling it "Scanned folder" would claim the wrong thing.
+  it("shows the build directory for a Yocto scan", () => {
+    expect(
+      provenanceOf(
+        config({ source: "yocto-build-dir", sourceLabel: "/home/me/poky/build" }),
+      ),
+    ).toEqual({
+      kind: "yocto",
+      value: "/home/me/poky/build",
+      labelKey: "provenance.yocto",
+    });
+  });
+
   it("shows the model id for an AI scan", () => {
     expect(
       provenanceOf(

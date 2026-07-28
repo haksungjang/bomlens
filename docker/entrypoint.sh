@@ -338,6 +338,25 @@ EOF
         ;;
 
     ANALYZE)
+        # A Yocto build directory that published no SPDX document at all. There is
+        # no supplier document to validate or convert here — the build's own
+        # records (the image package manifest, license.manifest, cve-check) are
+        # read into the same CycloneDX the SPDX path produces, and the rest of the
+        # pipeline continues unchanged. Set by scan-sbom.sh / server.py only after
+        # they have established the folder is a build directory with no SBOM.
+        if [ -n "${YOCTO_BUILD_DIR:-}" ] && [ -z "$ANALYZE_SBOM" ]; then
+            if [ ! -d "$YOCTO_BUILD_DIR" ]; then
+                echo "[ERROR] YOCTO_BUILD_DIR not found: $YOCTO_BUILD_DIR"; exit 1
+            fi
+            echo "[1/2] Reading the Yocto build's own records (no SPDX in this build)..."
+            if ! python3 "$LIBDIR/parse-yocto-manifests.py" \
+                    "$YOCTO_BUILD_DIR" "$OUTPUT_FILE" "$OUT_PREFIX"; then
+                echo "[ERROR] this build directory holds no image package manifest to read."
+                exit 1
+            fi
+            # No conformance report: conformance measures a document someone sent
+            # us against the submission criteria, and there is no document here.
+        else
         # Supplier-submitted SBOM (CycloneDX or SPDX). Validate the ORIGINAL for
         # conformance, then convert to CycloneDX so the common pipeline is reused.
         if [ -z "$ANALYZE_SBOM" ] || [ ! -f "$ANALYZE_SBOM" ]; then
@@ -372,6 +391,7 @@ EOF
             if ! bash "$LIBDIR/convert-to-cdx.sh" "$ANALYZE_SBOM" "$OUTPUT_FILE"; then
                 echo "[ERROR] could not convert supplier SBOM to CycloneDX."; exit 1
             fi
+        fi
         fi
         ;;
 

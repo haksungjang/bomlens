@@ -51,6 +51,8 @@ const SOURCE_META: Record<SourceType, { labelKey: string; icon: LucideIcon }> = 
   // Not shown as a tile (absent from SOURCE_GROUPS) — a submit-time variant of
   // rootfs-dir. Present only to satisfy the exhaustive SourceType record.
   "scan-target-src": { labelKey: "source.rootfsDir", icon: FolderTree },
+  // Also not a tile: a folder the scanner recognized as a Yocto build directory.
+  "yocto-build-dir": { labelKey: "source.yoctoBuildDir", icon: FolderTree },
   "git-url": { labelKey: "source.gitUrl", icon: Github },
   "zip-upload": { labelKey: "source.zipUpload", icon: FileArchive },
   "package-upload": { labelKey: "source.packageUpload", icon: Package },

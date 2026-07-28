@@ -494,6 +494,101 @@ else
     fail "safe_scan_dir extra-root boundary failed (see assertion above)"
 fi
 
+echo "== Yocto build directory detection (parity with scripts/scan-sbom.sh) =="
+# The UI must read a Yocto build directory exactly as the CLI does, or the same
+# folder would be analyzed one way from a terminal and another from the browser.
+YFIX="$WORK/yocto-fixtures"
+mkdir -p "$YFIX"
+# The fixtures are registered as a scan root: the detection walks a folder the
+# request named, so it re-checks that the folder is inside one before touching
+# it, and refuses anything else.
+if SBOM_OUTPUT_DIR="$OUT" SBOM_UI_SCAN_ROOTS="$YFIX|/host/yocto-fixtures" \
+   python3 - "$ROOT_DIR" "$YFIX" <<'PY'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+
+root = sys.argv[2]
+YOCTO3 = '{"@context":"https://spdx.org/rdf/3.0.1/x","@graph":[{"type":"Tool","name":"bitbake"}]}'
+YOCTO2 = '{"spdxVersion": "SPDX-2.2", "creationInfo": {"creators": ["Tool: bitbake"]}, "packages": []}'
+OTHER = '{"bomFormat":"CycloneDX","specVersion":"1.6","components":[]}'
+
+def write(rel, text):
+    path = os.path.join(root, rel)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as fh:
+        fh.write(text)
+    # Candidates come back resolved (the containment check resolves before it
+    # walks), so compare against the resolved path — which document is chosen is
+    # what has to match the CLI, not how the path is spelled.
+    return os.path.realpath(path)
+
+# bitbake's own markers stand alone, so a build that emitted no SBOM is still
+# recognized (and gets told which setting to add) rather than scanned as a tree.
+build = os.path.join(root, "build")
+img = write("build/tmp/deploy/images/qemux86-64/core-image.rootfs.spdx.json", YOCTO3)
+os.makedirs(os.path.join(build, "conf"), exist_ok=True)
+write("build/conf/bblayers.conf", 'BBLAYERS = "x"')
+assert server.is_yocto_build_dir(build)
+assert server.yocto_pick_spdx(server.yocto_spdx_candidates(build)) == img
+assert server.is_yocto_build_dir(os.path.join(root, "nosbom")) is False
+
+nosbom = os.path.join(root, "nosbom", "conf")
+os.makedirs(nosbom, exist_ok=True)
+write("nosbom/conf/bblayers.conf", 'BBLAYERS = "x"')
+assert server.is_yocto_build_dir(os.path.join(root, "nosbom"))
+assert server.yocto_spdx_candidates(os.path.join(root, "nosbom")) == []
+
+# TMPDIR carries the C library suffix outside poky: tmp-glibc, not tmp.
+oe = os.path.join(root, "oecore")
+oeimg = write("oecore/tmp-glibc/deploy/images/qemuarm/core-image-base.rootfs.spdx.json", YOCTO3)
+assert server.is_yocto_build_dir(oe)
+assert server.yocto_pick_spdx(server.yocto_spdx_candidates(oe)) == oeimg
+
+# An ordinary directory, and folders whose only Yocto-looking trait is a common
+# name, stay directory scans — being taken over would refuse a scan the user meant.
+plain = os.path.join(root, "plain")
+os.makedirs(os.path.join(plain, "etc"), exist_ok=True)
+assert server.is_yocto_build_dir(plain) is False
+write("assets/deploy/images/banners/note.txt", "not an sbom")
+assert server.is_yocto_build_dir(os.path.join(root, "assets")) is False
+write("release/release.spdx.json", OTHER)
+write("release/app.manifest", "")
+assert server.is_yocto_build_dir(os.path.join(root, "release")) is False
+
+# SPDX 3.x wins over 2.x even when the 2.x document was written later, since only
+# 3.x carries the installed set and the build's CVE verdicts.
+mixed = os.path.join(root, "mixed")
+new3 = write("mixed/tmp/deploy/images/m1/new.rootfs.spdx.json", YOCTO3)
+old2 = write("mixed/tmp/deploy/images/m2/old.rootfs.spdx.json", YOCTO2)
+os.utime(old2, (2 ** 31 - 1, 2 ** 31 - 1))
+assert server.is_spdx2_doc(old2) and not server.is_spdx2_doc(new3)
+assert server.yocto_pick_spdx(server.yocto_spdx_candidates(mixed)) == new3
+
+# bitbake publishes a timestamped file plus an IMAGE_LINK_NAME symlink to it;
+# both match, and they are one document, not a choice.
+linked = os.path.join(root, "linked")
+real = write("linked/tmp/deploy/images/m1/img-20260101.rootfs.spdx.json", YOCTO3)
+os.symlink(os.path.basename(real), os.path.join(os.path.dirname(real), "img.rootfs.spdx.json"))
+write("linked/conf/bblayers.conf", 'BBLAYERS = "x"')
+assert len(server.yocto_spdx_candidates(linked)) == 1, server.yocto_spdx_candidates(linked)
+
+# Outside every allowed scan root there is nothing to detect, whatever the
+# folder looks like: the walk is only safe inside the boundary.
+outside = os.path.join(os.path.dirname(root), "outside-build")
+os.makedirs(os.path.join(outside, "conf"), exist_ok=True)
+with open(os.path.join(outside, "conf", "bblayers.conf"), "w") as fh:
+    fh.write('BBLAYERS = "x"')
+assert server.scan_root_dir(outside) is None
+assert server.is_yocto_build_dir(outside) is False
+assert server.yocto_spdx_candidates(outside) == []
+PY
+then
+    pass "Yocto detection matches the CLI rules (markers, tmp-glibc, SPDX 3.x, symlinks)"
+else
+    fail "Yocto detection parity failed (see assertion above)"
+fi
+
 echo "== upload round-trip (the regression that shows as 'Failed to fetch') =="
 echo "hello" > "$WORK/payload.txt"
 ( cd "$WORK" && zip -q sample.zip payload.txt )
@@ -1629,6 +1724,8 @@ echo "[stub] scanning ${PROJECT_NAME} ${PROJECT_VERSION} (mode=$mode)"
   echo "MODE=${MODE:-}"
   echo "TARGET_FILE=${TARGET_FILE:-}"
   echo "TARGET_DIR=${TARGET_DIR:-}"
+  echo "ANALYZE_SBOM=${ANALYZE_SBOM:-}"
+  echo "YOCTO_BUILD_DIR=${YOCTO_BUILD_DIR:-}"
   # Counted here, while the scan is running: an extracted upload tree is removed
   # once the scan finishes, so a later check would always find it empty.
   echo "TARGET_DIR_FILES=$([ -n "${TARGET_DIR:-}" ] && find "$TARGET_DIR" -type f 2>/dev/null | wc -l | tr -d ' ' || echo 0)"; } > "${STUB_ENV_FILE:-/dev/null}"
@@ -1653,10 +1750,25 @@ esac
 STUB
 chmod +x "$WORK/bin/run-scan"
 
+# A Yocto build directory, offered to the stub server as a picked scan target.
+# Pointing the directory input at one must analyze the image SBOM the build
+# published instead of scanning the build tree — the same decision the CLI makes
+# (scripts/scan-sbom.sh), which is why the detection lives in both.
+YOCTOROOT="$WORK/poky-build"
+mkdir -p "$YOCTOROOT/conf" "$YOCTOROOT/tmp/deploy/images/qemux86-64"
+echo 'BBLAYERS = "x"' > "$YOCTOROOT/conf/bblayers.conf"
+printf '%s' '{"@context":"https://spdx.org/rdf/3.0.1/spdx-context.jsonld","@graph":[{"type":"Tool","name":"bitbake"}]}' \
+    > "$YOCTOROOT/tmp/deploy/images/qemux86-64/core-image-minimal.rootfs.spdx.json"
+# A second picked folder that is NOT a Yocto build, to prove an ordinary
+# directory scan still goes to ROOTFS.
+PLAINROOT="$WORK/plainroot"; mkdir -p "$PLAINROOT/etc"; echo 'ID=debian' > "$PLAINROOT/etc/os-release"
+
 SRV2_PID=""
 cleanup2() { [ -n "$SRV2_PID" ] && kill "$SRV2_PID" 2>/dev/null; }
 trap 'cleanup2; cleanup' EXIT
 SBOM_OUTPUT_DIR="$OUT2" UI_PORT="$PORT2" SBOM_UI_HOST_DIR="$WORK" \
+    SBOM_UI_SCAN_ROOTS="$YOCTOROOT|/host/poky-build
+$PLAINROOT|/host/plainroot" \
     SBOM_RUN_SCAN="$WORK/bin/run-scan" SBOM_DOCKER_SOCK="$WORK/no-such.sock" \
     SBOM_LIB_DIR="$WORK/no-such-lib" \
     STUB_MODE_FILE="$STUB_MODE_FILE" STUB_HEARTBEAT="$STUB_HEARTBEAT" \
@@ -1970,6 +2082,130 @@ fi
 # points at nothing so the helper is missing however the developer's machine is
 # equipped (a host syft would otherwise make the first server capable). The export
 # must then say so plainly instead of failing opaquely.
+echo "== Yocto build directory routes to ANALYZE through the scan stream =="
+echo ok > "$STUB_MODE_FILE"
+yev=$(sse_events "project=yocto&version=1.0&source=rootfs-dir&target=$YOCTOROOT")
+if echo "$yev" | python3 -c "
+import sys, json
+evs = json.load(sys.stdin)
+logs = [e['data'] for e in evs if e['event'] == 'log']
+done = [e['data'] for e in evs if e['event'] == 'done']
+assert len(done) == 1, evs
+d = done[0]
+assert d['ok'] is True, d
+# The run is an SBOM analysis, not a directory scan of the build tree.
+assert d['mode'] == 'ANALYZE', d['mode']
+# The result page must say what this turned out to be, and name the folder.
+assert d['scanConfig']['source'] == 'yocto-build-dir', d['scanConfig']
+assert d['scanConfig']['sourceLabel'] == '/host/poky-build', d['scanConfig']
+# The folder the user picked is kept, so a re-scan replays the same detection.
+assert d['scanConfig']['target'].endswith('poky-build'), d['scanConfig']
+assert any('Yocto build directory' in ln for ln in logs), logs
+assert any('Image SBOM' in ln for ln in logs), logs
+"; then
+    pass "a picked Yocto build directory is analyzed as its image SBOM"
+else
+    fail "Yocto build directory routing failed" "$yev"
+fi
+
+# The scanner has to receive the document, not the folder: ANALYZE_SBOM points at
+# the file the build published, and no directory target is set.
+if grep -q '^MODE=ANALYZE$' "$WORK/stub-env" \
+   && grep -q '^ANALYZE_SBOM=.*/tmp/deploy/images/qemux86-64/core-image-minimal.rootfs.spdx.json$' "$WORK/stub-env" \
+   && grep -q '^TARGET_DIR=$' "$WORK/stub-env"; then
+    pass "the scanner is handed the image SBOM (ANALYZE_SBOM), not the build tree"
+else
+    fail "wrong scan environment for a Yocto build directory" "$(cat "$WORK/stub-env")"
+fi
+
+# A picked folder that is not a Yocto build must still be a directory scan —
+# the detection may not take over an ordinary rootfs target.
+pev=$(sse_events "project=plain&version=1.0&source=rootfs-dir&target=$PLAINROOT")
+if echo "$pev" | python3 -c "
+import sys, json
+done = [e['data'] for e in json.load(sys.stdin) if e['event'] == 'done']
+assert len(done) == 1, done
+assert done[0]['mode'] == 'ROOTFS', done[0]['mode']
+assert done[0]['scanConfig']['source'] == 'rootfs-dir', done[0]['scanConfig']
+"; then
+    pass "an ordinary picked folder still runs as a directory scan"
+else
+    fail "plain directory scan regressed" "$pev"
+fi
+
+# A Yocto build directory with no SPDX document stops the run and says which
+# setting produces one, instead of falling back to scanning the build tree.
+NOSBOMROOT="$YOCTOROOT/tmp/deploy/images/empty-machine"
+mkdir -p "$NOSBOMROOT/conf"
+echo 'BBLAYERS = "x"' > "$NOSBOMROOT/conf/bblayers.conf"
+nev=$(sse_events "project=nosbom&version=1.0&source=rootfs-dir&target=$NOSBOMROOT")
+if echo "$nev" | python3 -c "
+import sys, json
+evs = json.load(sys.stdin)
+errs = [e['data'] for e in evs if e['event'] == 'error']
+done = [e['data'] for e in evs if e['event'] == 'done']
+assert errs and 'neither an SPDX SBOM' in errs[0], evs
+assert 'create-spdx-3.0' in errs[0], errs
+assert len(done) == 1 and done[0]['ok'] is False, done
+"; then
+    pass "a build directory with no SBOM fails with the setting to add"
+else
+    fail "no-SBOM build directory handling wrong" "$nev"
+fi
+
+# A build that produced no SPDX still recorded what it shipped. Reading those
+# records beats refusing: the image package manifest is the installed set, the
+# license manifest carries the licenses, and cve-check the verdicts.
+MFROOT="$YOCTOROOT/tmp/deploy/images/manifest-only"
+mkdir -p "$MFROOT/conf" "$MFROOT/tmp/deploy/images/qemuarm" "$MFROOT/tmp/deploy/licenses/img-20260101" "$MFROOT/tmp/log/cve"
+echo 'BBLAYERS = "x"' > "$MFROOT/conf/bblayers.conf"
+printf 'busybox core2-64 1.36.1\nlibz1 core2-64 1.3\n' \
+    > "$MFROOT/tmp/deploy/images/qemuarm/img-qemuarm.rootfs.manifest"
+printf 'PACKAGE NAME: busybox\nPACKAGE VERSION: 1.36.1\nRECIPE NAME: busybox\nLICENSE: GPL-2.0-only\n\n' \
+    > "$MFROOT/tmp/deploy/licenses/img-20260101/license.manifest"
+printf '{"version":"1","package":[{"name":"busybox","version":"1.36.1","issue":[{"id":"CVE-2022-28391","status":"Unpatched","scorev3":"9.8","summary":"x","link":"y"}]}]}\n' \
+    > "$MFROOT/tmp/log/cve/cve-summary.json"
+mev=$(sse_events "project=mfonly&version=1.0&source=rootfs-dir&target=$MFROOT")
+if echo "$mev" | python3 -c "
+import sys, json
+evs = json.load(sys.stdin)
+logs = [e['data'] for e in evs if e['event'] == 'log']
+done = [e['data'] for e in evs if e['event'] == 'done']
+assert len(done) == 1 and done[0]['ok'] is True, evs
+assert done[0]['mode'] == 'ANALYZE', done[0]['mode']
+assert done[0]['scanConfig']['source'] == 'yocto-build-dir', done[0]['scanConfig']
+assert any('reading the manifests' in ln for ln in logs), logs
+"; then
+    pass "a build with no SPDX is read from the manifests it did write"
+else
+    fail "manifest fallback failed" "$mev"
+fi
+
+# The scanner is pointed at the build directory itself, since the records it
+# needs are spread across it — and no document is claimed to exist.
+if grep -q '^MODE=ANALYZE$' "$WORK/stub-env" \
+   && grep -q '^ANALYZE_SBOM=$' "$WORK/stub-env"; then
+    pass "the manifest path hands over the build directory, not a document"
+else
+    fail "wrong scan environment for the manifest fallback" "$(cat "$WORK/stub-env")"
+fi
+
+# The recorded source is not an input the form offers, so re-scanning one comes
+# back as the directory input it was picked with — and detection runs again.
+rev=$(sse_events "project=yocto&version=1.0&source=yocto-build-dir&target=$YOCTOROOT")
+if echo "$rev" | python3 -c "
+import sys, json
+done = [e['data'] for e in json.load(sys.stdin) if e['event'] == 'done']
+assert len(done) == 1, done
+assert done[0]['ok'] is True, done[0]
+assert done[0]['mode'] == 'ANALYZE', done[0]['mode']
+assert done[0]['scanConfig']['source'] == 'yocto-build-dir', done[0]['scanConfig']
+"; then
+    pass "re-scanning a Yocto scan replays the folder and detects it again"
+else
+    fail "re-scan of a Yocto build directory failed" "$rev"
+fi
+
 echo "== SPDX export without a converter =="
 caps2=$(curl -fsS "$BASE2/capabilities" 2>/dev/null)
 if echo "$caps2" | python3 -c "

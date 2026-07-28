@@ -437,6 +437,12 @@ export type SourceType =
   // toggle is on, so a desktop "Add folder…" scan resolves transitives like the
   // current folder does. Server clones the read-only mount into a writable tree.
   | "scan-target-src"
+  // A Yocto build directory, recognized from a folder the user pointed at. Not a
+  // picker tile: the CLI (and, later, the folder pickers) route to it on its own
+  // when the folder turns out to be a build directory, and analyze the image
+  // SBOM the build wrote. Appears in a finished scan's config, never in a
+  // request.
+  | "yocto-build-dir"
   | "git-url"
   | "zip-upload"
   | "package-upload"
@@ -456,6 +462,17 @@ export const SOURCE_TYPES: SourceType[] = [
   "ai-model",
   "docker-image",
 ];
+
+/**
+ * The input a finished scan should be replayed from. "Re-scan" seeds the form
+ * from a scan's config, and `yocto-build-dir` is not an input the form offers —
+ * it is what a picked folder turned out to be. Replaying it means picking the
+ * same folder again, so it maps back to the directory input; the scanner then
+ * decides afresh whether that folder is still a Yocto build directory.
+ */
+export function formSourceOf(source: SourceType): SourceType {
+  return source === "yocto-build-dir" ? "rootfs-dir" : source;
+}
 
 export type UploadKind = "zip" | "sbom" | "firmware" | "package";
 
