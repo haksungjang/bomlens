@@ -29,6 +29,11 @@
 #       (cve-check.bbclass). license.manifest is what ties a package back to the
 #       recipe those verdicts belong to.
 #
+# Measured against a published Yocto artifact (docs/maintainers/yocto-validation.md):
+# Kirkstone 4.0.28 publishes an image manifest and no SPDX at all — 31 packages,
+# exactly the set the manifest lists, and no CVE verdicts because that build ran
+# no cve-check, which the log says rather than implying there are none to find.
+#
 # What this is not: the SPDX path. There are no CPEs here, so vulnerability
 # matching downstream has only names and versions to work with, and the CVE
 # verdicts are only as complete as the build's own cve-check run. When a build
