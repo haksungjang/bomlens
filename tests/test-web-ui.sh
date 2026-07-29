@@ -573,6 +573,20 @@ os.symlink(os.path.basename(real), os.path.join(os.path.dirname(real), "img.root
 write("linked/conf/bblayers.conf", 'BBLAYERS = "x"')
 assert len(server.yocto_spdx_candidates(linked)) == 1, server.yocto_spdx_candidates(linked)
 
+# A real build directory carries a per-recipe SPDX document for every recipe
+# under tmp/deploy/spdx/, plus an SDK's own documents. None describe the image,
+# and the browser has to reach the same answer the CLI does.
+big = os.path.join(root, "bigtree")
+bigimg = write("bigtree/tmp/deploy/images/qemux86-64/core-image-minimal.rootfs.spdx.json", YOCTO3)
+write("bigtree/conf/bblayers.conf", 'BBLAYERS = "x"')
+for i in range(300):
+    write("bigtree/tmp/deploy/spdx/qemux86-64/recipe-pkg%d.spdx.json" % i, YOCTO3)
+write("bigtree/tmp/deploy/sdk/poky-glibc-x86_64-core-image-minimal.rootfs.spdx.json", YOCTO3)
+assert server.is_yocto_build_dir(big)
+cands = server.yocto_spdx_candidates(big)
+assert cands == [bigimg], cands
+assert server.yocto_pick_spdx(cands) == bigimg
+
 # Outside every allowed scan root there is nothing to detect, whatever the
 # folder looks like: the walk is only safe inside the boundary.
 outside = os.path.join(os.path.dirname(root), "outside-build")

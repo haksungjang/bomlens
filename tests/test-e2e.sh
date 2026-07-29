@@ -313,6 +313,56 @@ else
     fail "an image SBOM without the .rootfs infix is found" "$(ypick "$yb/noinfix")"
 fi
 
+# A real build directory is not a handful of files: bitbake leaves a per-recipe
+# SPDX document for every recipe under tmp/deploy/spdx/, a work tree, an sstate
+# cache and an SDK's own documents. None of those describe the image, and the
+# published artifacts cannot show this shape — they only carry what is deployed.
+# So it is built here: what has to hold is that the image SBOM is still the one
+# found, out of hundreds of documents that are not it.
+mkdir -p "$yb/bigtree/conf" "$yb/bigtree/tmp/deploy/images/qemux86-64" \
+         "$yb/bigtree/tmp/deploy/spdx/qemux86-64" "$yb/bigtree/tmp/deploy/sdk" \
+         "$yb/bigtree/tmp/work/core2-64-poky-linux/busybox/1.36.1-r0" \
+         "$yb/bigtree/sstate-cache/universal"
+echo 'BBLAYERS = "x"' > "$yb/bigtree/conf/bblayers.conf"
+bigimg="$yb/bigtree/tmp/deploy/images/qemux86-64/core-image-minimal-qemux86-64.rootfs.spdx.json"
+printf '%s' "$spdx3" > "$bigimg"
+# The per-recipe documents bitbake deploys beside the image, and an SDK's.
+for i in $(seq 1 300); do
+    printf '%s' "$spdx3" > "$yb/bigtree/tmp/deploy/spdx/qemux86-64/recipe-pkg$i.spdx.json"
+done
+printf '%s' "$spdx3" > "$yb/bigtree/tmp/deploy/sdk/poky-glibc-x86_64-core-image-minimal.spdx.json"
+printf '%s' "$spdx3" > "$yb/bigtree/tmp/deploy/sdk/poky-glibc-x86_64-core-image-minimal.rootfs.spdx.json"
+# Work and sstate: thousands of files that are not SBOMs, and one that looks like
+# a manifest but belongs to a recipe's work directory.
+for i in $(seq 1 200); do
+    : > "$yb/bigtree/tmp/work/core2-64-poky-linux/busybox/1.36.1-r0/file$i"
+    : > "$yb/bigtree/sstate-cache/universal/sstate-$i.tar.zst"
+done
+: > "$yb/bigtree/tmp/work/core2-64-poky-linux/busybox/1.36.1-r0/busybox.manifest"
+
+big_pick="$(ypick "$yb/bigtree")"
+if [ "$big_pick" = "$bigimg" ]; then
+    pass "in a full build tree the image SBOM is the one found"
+else
+    fail "a full build tree picked the wrong document" "$big_pick"
+fi
+big_count=$(yocto_spdx_candidates "$yb/bigtree" | wc -l | tr -d ' ')
+if [ "$big_count" = "1" ]; then
+    pass "the per-recipe and SDK documents are not candidates"
+else
+    fail "a full build tree offered $big_count candidates (expected 1)"
+fi
+# Detection must not walk the tree looking for an answer it can get from the
+# markers; a build directory with tens of thousands of files is normal.
+big_start=$(date +%s)
+is_yocto_build_dir "$yb/bigtree" || fail "a full build tree is not recognized"
+big_elapsed=$(( $(date +%s) - big_start ))
+if [ "$big_elapsed" -le 5 ]; then
+    pass "recognizing a full build tree stays fast (${big_elapsed}s)"
+else
+    fail "recognizing a full build tree took ${big_elapsed}s"
+fi
+
 # A path with spaces must survive the globs and the picker.
 mkdir -p "$yb/with space/conf" "$yb/with space/tmp/deploy/images/qemu x86"
 echo 'BBLAYERS = "x"' > "$yb/with space/conf/bblayers.conf"
