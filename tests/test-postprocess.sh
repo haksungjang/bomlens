@@ -1772,6 +1772,26 @@ PYGEN
     [ "$(jq -r '.metadata.component.name' "$WORK/y22arch.cdx.json")" = "core-image-minimal" ] \
         && pass "the image inside the archive names the root component" \
         || fail "archive-only root component wrong"
+    # Reading stops at the documents it came for, which closes the pipe under
+    # zstd and makes it report a write error it was never going to survive. That
+    # is not a failure, and printing it into a scan log would read as one.
+    arch_noise=$(python3 "$LIB/parse-yocto-spdx.py" \
+        "$Y22DIR/core-image-minimal-qemux86-64.rootfs.spdx.tar.zst" \
+        "$WORK/y22noise.cdx.json" "$WORK/y22noise" 2>&1 >/dev/null)
+    case "$arch_noise" in
+        *"Broken pipe"*|*"Write error"*)
+            fail "a successful archive read logs zstd pipe errors" "$arch_noise" ;;
+        *)  pass "a successful archive read logs nothing from zstd" ;;
+    esac
+    # A truncated archive is a real failure, and then zstd's reason is the answer.
+    head -c 200 "$Y22DIR/core-image-minimal-qemux86-64.rootfs.spdx.tar.zst" \
+        > "$WORK/truncated.spdx.tar.zst"
+    trunc_msg=$(python3 "$LIB/parse-yocto-spdx.py" "$WORK/truncated.spdx.tar.zst" \
+        "$WORK/trunc.cdx.json" 2>&1 >/dev/null)
+    case "$trunc_msg" in
+        *zstd*) pass "a truncated archive reports what zstd said about it" ;;
+        *)      fail "a truncated archive hides the reason" "$trunc_msg" ;;
+    esac
 
     # Without the archive the same document is only an index again.
     cp "$Y22DIR/core-image-minimal-qemux86-64.rootfs.spdx.json" "$WORK/lonely.spdx.json"

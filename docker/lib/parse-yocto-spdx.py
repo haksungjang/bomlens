@@ -45,6 +45,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 
 CDX_VERSION = "1.6"
 
@@ -374,7 +375,7 @@ def read_image_doc(archive):
         print("[yocto-spdx] zstd is not installed; cannot read %s" % os.path.basename(archive),
               file=sys.stderr)
         return None
-    proc = subprocess.Popen([zstd, "-dcq", "--", archive], stdout=subprocess.PIPE)
+    proc, err = _open_archive(archive)
     found, total = None, 0
     try:
         with tarfile.open(fileobj=proc.stdout, mode="r|") as tar:
@@ -402,9 +403,7 @@ def read_image_doc(archive):
         print("[yocto-spdx] cannot read %s: %s" % (os.path.basename(archive), exc),
               file=sys.stderr)
     finally:
-        if proc.stdout:
-            proc.stdout.close()
-        proc.wait()
+        _close_archive(proc, err, quiet=bool(found))
     return found
 
 
@@ -427,6 +426,38 @@ def _installed_refs(doc):
     return refs
 
 
+def _open_archive(archive):
+    """`zstd -dc <archive>` as a process whose stdout is the tar stream.
+
+    Its stderr goes to a temporary file rather than ours: both readers below stop
+    as soon as they have the documents they came for, which closes the pipe and
+    makes zstd report a write error it was never going to survive. That is not a
+    failure — but printed into a scan log it reads as one. The file is returned
+    so a genuine failure can still be explained.
+    """
+    err = tempfile.TemporaryFile()
+    proc = subprocess.Popen([shutil.which("zstd"), "-dcq", "--", archive],
+                            stdout=subprocess.PIPE, stderr=err)
+    return proc, err
+
+
+def _close_archive(proc, err, quiet):
+    """Wait for zstd and, unless the caller got what it wanted, pass on whatever
+    it had to say."""
+    if proc.stdout:
+        proc.stdout.close()
+    proc.wait()
+    if not quiet:
+        try:
+            err.seek(0)
+            message = err.read().decode("utf-8", "replace").strip()
+        except (OSError, ValueError):
+            message = ""
+        if message:
+            print("[yocto-spdx] zstd: %s" % message.splitlines()[-1], file=sys.stderr)
+    err.close()
+
+
 def _read_bundle(archive, wanted):
     """Read the named documents out of the zstd tar, as {name: parsed json}.
 
@@ -444,7 +475,7 @@ def _read_bundle(archive, wanted):
         return {}
     want = {name + ".spdx.json" for name in wanted}
     found, total = {}, 0
-    proc = subprocess.Popen([zstd, "-dcq", "--", archive], stdout=subprocess.PIPE)
+    proc, err = _open_archive(archive)
     try:
         with tarfile.open(fileobj=proc.stdout, mode="r|") as tar:
             for member in tar:
@@ -471,9 +502,7 @@ def _read_bundle(archive, wanted):
         print("[yocto-spdx] cannot read %s: %s" % (os.path.basename(archive), exc),
               file=sys.stderr)
     finally:
-        if proc.stdout:
-            proc.stdout.close()
-        proc.wait()
+        _close_archive(proc, err, quiet=found is not None)
     return found
 
 
