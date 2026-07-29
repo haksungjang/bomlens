@@ -131,7 +131,7 @@ $SBOM --project team5-image --version 1.0.0 \
   --generate-only
 ```
 
-- Configure the build to emit an SBOM — add `INHERIT += "create-spdx-3.0"` and `INHERIT += "vex"` to `conf/local.conf` — and you get the most out of it. SPDX 2.2 (the default on Kirkstone and Scarthgap) is read too, from the `.spdx.tar.zst` beside the image document, but carries no CVE verdicts. A build with no SPDX at all falls back to the manifests it wrote anyway; a build with neither stops the scan and says so.
+- Configure the build to emit an SBOM — add `INHERIT += "create-spdx-3.0"` and `INHERIT += "vex"` to `conf/local.conf` — and you get the most out of it. That setting needs 5.0 Scarthgap or later; 4.0 Kirkstone has no such class. SPDX 2.2 (the default on both LTS releases) is read too, from the `.spdx.tar.zst` beside the image document, but carries no CVE verdicts. A build with no SPDX at all falls back to the manifests it wrote anyway; a build with neither stops the scan and says so.
 - The image SBOM under `tmp/deploy/images/<machine>/` is analyzed — not the build tree, which holds sysroots and native build tools that never ship in the image.
 - The component list is the packages installed in the image, and vulnerabilities carry the verdicts the build itself made (patched by a recipe, judged not applicable, or still open). Only the open ones count as findings.
 - If several machines or images were built, the newest SBOM is analyzed and every candidate is listed in the log; pass `--analyze <file>` to choose a different one.

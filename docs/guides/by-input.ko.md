@@ -131,7 +131,7 @@ $SBOM --project team5-image --version 1.0.0 \
   --generate-only
 ```
 
-- `conf/local.conf`에 `INHERIT += "create-spdx-3.0"`과 `INHERIT += "vex"`를 넣고 빌드하면 가장 많은 정보를 얻습니다. Kirkstone·Scarthgap 기본값인 SPDX 2.2도 이미지 문서 옆의 `.spdx.tar.zst`와 함께 읽지만 CVE 판정은 담기지 않습니다. SPDX가 전혀 없는 빌드는 빌드가 남긴 매니페스트를 대신 읽고, 둘 다 없으면 스캔을 멈추고 알려 줍니다.
+- `conf/local.conf`에 `INHERIT += "create-spdx-3.0"`과 `INHERIT += "vex"`를 넣고 빌드하면 가장 많은 정보를 얻습니다. 이 설정은 5.0 Scarthgap 이상에서만 쓸 수 있고, 4.0 Kirkstone에는 해당 클래스가 없습니다. 두 LTS의 기본값인 SPDX 2.2도 이미지 문서 옆의 `.spdx.tar.zst`와 함께 읽지만 CVE 판정은 담기지 않습니다. SPDX가 전혀 없는 빌드는 빌드가 남긴 매니페스트를 대신 읽고, 둘 다 없으면 스캔을 멈추고 알려 줍니다.
 - 분석 대상은 `tmp/deploy/images/<machine>/` 아래의 이미지 SBOM입니다. 빌드 트리 자체는 훑지 않습니다. 이미지에 들어가지 않는 sysroot와 빌드용 도구가 결과에 섞이기 때문입니다.
 - 구성요소는 이미지에 설치된 패키지이고, 취약점에는 빌드가 내린 판정(레시피가 패치함, 해당 없음, 아직 남음)이 함께 담깁니다. 남은 것만 발견 항목으로 셉니다.
 - 머신이나 이미지를 여럿 빌드했다면 가장 최근 SBOM을 분석하고 후보 전체를 로그에 남깁니다. 다른 것을 고르려면 `--analyze <파일>`로 지정합니다.
