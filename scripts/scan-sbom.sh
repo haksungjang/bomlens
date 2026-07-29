@@ -487,6 +487,9 @@ is_yocto_build_dir() {
     for q in "$d"/deploy/images/*/*.spdx.json "$d"/images/*/*.spdx.json; do
         is_yocto_spdx_doc "$q" && return 0
     done
+    for q in "$d"/deploy/images/*/*.spdx.tar.zst "$d"/images/*/*.spdx.tar.zst "$d"/*.spdx.tar.zst; do
+        [ -f "$q" ] && return 0
+    done
     for p in "$d"/*.manifest; do
         [ -f "$p" ] || continue
         for q in "$d"/*.spdx.json; do
@@ -515,7 +518,11 @@ is_yocto_spdx_doc() {
 # an IMAGE_LINK_NAME symlink to it).
 yocto_spdx_candidates() {
     local d="$1" tier p hit=1
-    for tier in .rootfs.spdx.json .spdx.json; do
+    # The archive tiers are last because they are the SPDX 2.x form: a build that
+    # wrote a 3.0 document leaves a .spdx.json and no archive, and a 2.2 build
+    # leaves the archive and nothing else — its image document is inside it, not
+    # beside it (verified against the published Yocto 5.0.14 artifacts).
+    for tier in .rootfs.spdx.json .spdx.json .rootfs.spdx.tar.zst .spdx.tar.zst; do
         for p in \
             "$d"/tmp*/deploy/images/*/*"$tier" \
             "$d"/deploy/images/*/*"$tier" \
@@ -527,6 +534,16 @@ yocto_spdx_candidates() {
         done
         [ "$hit" = 0 ] && return 0
     done
+    return 1
+}
+
+# True for the archive an SPDX 2.x build deploys. Its contents are compressed, so
+# nothing in it can be grepped for — the name is the signal, and it is one only
+# bitbake writes.
+is_spdx2_archive() {
+    case "$1" in
+        *.spdx.tar.zst) return 0 ;;
+    esac
     return 1
 }
 
@@ -864,7 +881,12 @@ elif [ -n "$TARGET" ]; then
             echo "[INFO]   build's CVE verdicts), then by which was written last."
             echo "[INFO]   To analyze a different one, pass it with --analyze <file>."
         fi
-        if is_spdx2_doc "$YOCTO_SPDX"; then
+        if is_spdx2_archive "$YOCTO_SPDX"; then
+            echo "[INFO] SPDX 2.x build: the packages come from inside this archive."
+            echo "[INFO]   Vulnerabilities are matched from the CPEs, since only SPDX 3.0 records"
+            echo '[INFO]   which CVEs a recipe patched — INHERIT += "create-spdx-3.0" adds that'
+            echo "[INFO]   on 5.0 Scarthgap and later."
+        elif is_spdx2_doc "$YOCTO_SPDX"; then
             # An SPDX 2.x image document is only an index; the packages are in the
             # archive beside it, which the parser reads when it is there.
             if [ -f "${YOCTO_SPDX%.spdx.json}.spdx.tar.zst" ]; then

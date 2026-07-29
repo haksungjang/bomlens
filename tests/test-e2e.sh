@@ -470,17 +470,39 @@ if [ "$have_docker" = 1 ]; then
         fail "an SPDX 2.x document with no archive beside it is called out" "$y2_log"
     fi
 
-    # With the archive present the scan proceeds on it, and says where the
-    # packages came from and what is missing compared with SPDX 3.0.
+    # A real SPDX 2.x deploy directory holds the archive and nothing else, so the
+    # archive alone has to be found and read.
+    mkdir -p "$yb/archive-only/conf" "$yb/archive-only/tmp/deploy/images/m1"
+    echo 'BBLAYERS = "x"' > "$yb/archive-only/conf/bblayers.conf"
+    : > "$yb/archive-only/tmp/deploy/images/m1/img.rootfs.spdx.tar.zst"
+    if is_yocto_build_dir "$yb/archive-only" \
+       && [ "$(ypick "$yb/archive-only")" = "$yb/archive-only/tmp/deploy/images/m1/img.rootfs.spdx.tar.zst" ]; then
+        pass "an archive with no document beside it is the one analyzed"
+    else
+        fail "archive-only build directory not found" "$(ypick "$yb/archive-only")"
+    fi
+    ao_out="$(mktemp -d "$WORK_ROOT/yocto-ao.XXXXXX")"
+    ao_log="$( cd "$ao_out" && SBOM_SCANNER_IMAGE="$absent_img" \
+        bash "$SCAN" --project p --version 1 --target "$yb/archive-only" --generate-only 2>&1 || true )"
+    if printf '%s' "$ao_log" | grep -q "packages come from inside this archive" \
+       && printf '%s' "$ao_log" | grep -q "Mode: ANALYZE"; then
+        pass "an archive-only build directory routes to ANALYZE on the archive"
+    else
+        fail "archive-only routing wrong" "$ao_log"
+    fi
+
+    # A document AND an archive: the document wins (a 3.0 build writes one, a 2.2
+    # build writes the other, so this only happens across rebuilds).
     : > "$yb/only22/tmp/deploy/images/m1/img.rootfs.spdx.tar.zst"
     y2b_out="$(mktemp -d "$WORK_ROOT/yocto-22b.XXXXXX")"
     y2b_log="$( cd "$y2b_out" && SBOM_SCANNER_IMAGE="$absent_img" \
         bash "$SCAN" --project p --version 1 --target "$yb/only22" --generate-only 2>&1 || true )"
     if printf '%s' "$y2b_log" | grep -q "packages come from" \
-       && printf '%s' "$y2b_log" | grep -q "matched from the CPEs"; then
-        pass "an SPDX 2.x document with its archive names where the packages come from"
+       && printf '%s' "$y2b_log" | grep -q "matched from the CPEs" \
+       && printf '%s' "$y2b_log" | grep -q "img.rootfs.spdx.json"; then
+        pass "a document beside an archive is still the one analyzed"
     else
-        fail "an SPDX 2.x document with its archive names where the packages come from" "$y2b_log"
+        fail "a document beside an archive is still the one analyzed" "$y2b_log"
     fi
 
     # --firmware with a directory keeps its own error: the Yocto branch must not

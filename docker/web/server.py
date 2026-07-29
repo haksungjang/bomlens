@@ -433,6 +433,11 @@ def is_yocto_build_dir(d):
     for pat in ("deploy/images/*/*.spdx.json", "images/*/*.spdx.json"):
         if any(is_yocto_spdx_doc(p) for p in glob.glob(os.path.join(esc, pat))):
             return True
+    # An SPDX 2.x archive is compressed, so nothing in it can be searched for —
+    # the name is the signal, and only bitbake writes it.
+    for pat in ("deploy/images/*/*.spdx.tar.zst", "images/*/*.spdx.tar.zst", "*.spdx.tar.zst"):
+        if any(os.path.isfile(p) for p in glob.glob(os.path.join(esc, pat))):
+            return True
     if glob.glob(os.path.join(esc, "*.manifest")):
         if any(is_yocto_spdx_doc(p) for p in glob.glob(os.path.join(esc, "*.spdx.json"))):
             return True
@@ -450,7 +455,10 @@ def yocto_spdx_candidates(d):
     if safe is None:
         return []
     esc = glob.escape(safe)
-    for tier in (".rootfs.spdx.json", ".spdx.json"):
+    # The archive tiers are last because they are the SPDX 2.x form: a 3.0 build
+    # leaves a .spdx.json and no archive, and a 2.2 build leaves the archive and
+    # nothing else — its image document is packed inside, not written beside it.
+    for tier in (".rootfs.spdx.json", ".spdx.json", ".rootfs.spdx.tar.zst", ".spdx.tar.zst"):
         hits, seen = [], set()
         for pat in ("tmp*/deploy/images/*/*", "deploy/images/*/*", "images/*/*", "*"):
             for p in sorted(glob.glob(os.path.join(esc, pat + tier))):
@@ -2857,7 +2865,13 @@ class Handler(BaseHTTPRequestHandler):
                             sse("log", json.dumps(
                                 "    %s%s" % (os.path.relpath(cand, yocto_dir),
                                               "  <- analyzing this one" if cand == doc else "")))
-                    if is_spdx2_doc(doc):
+                    if doc.endswith(".spdx.tar.zst"):
+                        sse("log", json.dumps(
+                            "▶ SPDX 2.x build: the packages come from inside this archive. "
+                            "Vulnerabilities are matched from the CPEs, since only SPDX 3.0 "
+                            "records which CVEs a recipe patched — "
+                            'INHERIT += "create-spdx-3.0" adds that on 5.0 Scarthgap and later.'))
+                    elif is_spdx2_doc(doc):
                         # An SPDX 2.x image document is only an index; its packages are
                         # in the archive beside it, which the parser reads when present.
                         archive = doc[: -len(".spdx.json")] + ".spdx.tar.zst"
