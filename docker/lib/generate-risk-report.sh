@@ -238,7 +238,6 @@ if [ "$REPORT_LANG" = "ko" ]; then
     P_H3_LICCLASS=$(kstr risk.h3_licclass)
     P_LICCLASS_INTRO_MD=$(kstr risk.licclass_intro_md)
     P_LICCLASS_INTRO_A=$(kstr risk.licclass_intro_html_a); P_LICCLASS_INTRO_B=$(kstr risk.licclass_intro_html_b)
-    P_TH_UNCAT=$(kstr risk.th_uncat)
     P_COPYLEFT_DRIVERS=$(kstr risk.copyleft_drivers)
     P_H3_LICCONFLICT=$(kstr risk.h3_licconflict)
     P_LICCONFLICT_INTRO=$(kstr risk.licconflict_intro)
@@ -298,7 +297,6 @@ else
     P_LICCLASS_INTRO_MD="Each component is also recorded in the SBOM with a \`bomlens:licenseClass\` property. An unrecognized license is left uncategorized rather than assumed permissive."
     P_LICCLASS_INTRO_A="Each component is also recorded in the SBOM with a "
     P_LICCLASS_INTRO_B=" property. An unrecognized license is left uncategorized rather than assumed permissive."
-    P_TH_UNCAT="Uncategorized"
     P_COPYLEFT_DRIVERS="Components that create copyleft exposure (network/strong, up to 10):"
     P_H3_LICCONFLICT="Outbound-license conflicts"
     P_LICCONFLICT_INTRO="Dependencies checked against the declared outbound license. Advisory only — it surfaces combinations that need a person to look, and makes no legal determination."
@@ -387,7 +385,7 @@ P_VULN_NOTE_HTML="<div class=\"note\">${P_DL_LEAD}<b>${P_DL_BOLD_CRIT}</b>, <b>$
         echo ""
         echo "${P_LICCLASS_INTRO_MD}"
         echo ""
-        echo "| Network copyleft | Strong copyleft | Weak copyleft | Permissive | ${P_TH_UNCAT} |"
+        echo "| Network copyleft | Strong copyleft | Weak copyleft | Permissive | Uncategorized |"
         echo "|---:|---:|---:|---:|---:|"
         echo "| ${NC} | ${SC} | ${WK} | ${PM} | ${UN} |"
         if [ "$COPYLEFT_TOTAL" -gt 0 ]; then
@@ -590,7 +588,7 @@ HTMLSEC
  <span class="pill pill-high">Strong copyleft <span class="count">${SC}</span></span>
  <span class="pill pill-med">Weak copyleft <span class="count">${WK}</span></span>
  <span class="pill pill-pass">Permissive <span class="count">${PM}</span></span>
- <span class="pill pill-info">${P_TH_UNCAT} <span class="count">${UN}</span></span>
+ <span class="pill pill-info">Uncategorized <span class="count">${UN}</span></span>
 </div>
 HTMLLIC
         if [ "$COPYLEFT_TOTAL" -gt 0 ]; then
