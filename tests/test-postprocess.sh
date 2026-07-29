@@ -581,6 +581,27 @@ if [ -f "$RMD" ] && [ -f "$RHTML" ]; then
 else
     fail "generate-risk-report.sh produced no md/html with a BOM present"
 fi
+# The Korean report prints the same class names as the English one. Four of the
+# five were hardcoded English while "Uncategorized" went through a translation
+# key, so a Korean table read "... | Permissive | 미분류 |" and disagreed with
+# the web UI beside it. The names are the classifier's own vocabulary, not prose.
+( cd "$WORK/risk" && REPORT_LANG=ko bash "$LIB/generate-risk-report.sh" proj_1.0 proj >/dev/null 2>&1 )
+if [ -f "$RMD" ] && [ -f "$RHTML" ]; then
+    grep -q '^| Network copyleft | Strong copyleft | Weak copyleft | Permissive | Uncategorized |$' "$RMD" \
+        && pass "ko md classification header keeps every class name in English" \
+        || fail "ko md header was" "$(grep -m1 'Network copyleft' "$RMD")"
+    grep -q 'Uncategorized <span class="count">4</span>' "$RHTML" \
+        && pass "ko html classification pills keep the English names" \
+        || fail "ko html uncategorized pill missing/translated"
+    grep -q '미분류' "$RMD" \
+        && fail "a translated class name survived in the ko report" \
+        || pass "no translated class name remains in the ko report"
+else
+    fail "ko risk report was not produced"
+fi
+# Restore the English report for any later assertion on these paths.
+( cd "$WORK/risk" && bash "$LIB/generate-risk-report.sh" proj_1.0 proj >/dev/null 2>&1 )
+
 # Without a BOM artifact the classification block is skipped, not an error.
 mkdir -p "$WORK/risk2"
 printf 'License: MIT\n' > "$WORK/risk2/proj_1.0_NOTICE.txt"
