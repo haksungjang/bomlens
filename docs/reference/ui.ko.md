@@ -40,7 +40,7 @@ cd ~/sbom-output      # 출력 폴더(아무 곳이나 가능)
 | GitHub URL | 저장소 URL 입력 | SOURCE (clone) |
 | ZIP 업로드 | `.zip`/tar 파일 업로드 | SOURCE (extract) |
 | 패키지 업로드 | 빌드 산출물 업로드 — `.jar`, `.war`, `.ear`, `.deb`, `.rpm`, `.whl` | BINARY (whl은 압축을 풀어 ROOTFS로 스캔) |
-| SBOM 업로드 | 기존 SBOM(JSON) 업로드 | ANALYZE |
+| SBOM 업로드 | 기존 SBOM(JSON, 또는 Yocto SPDX 2.2 빌드가 만드는 `.spdx.tar.zst`) 업로드 | ANALYZE |
 | 펌웨어 업로드 | `.bin` 등 업로드 | FIRMWARE |
 | Docker 이미지 | 이미지 이름 입력 | IMAGE |
 | AI 모델 | HuggingFace 모델 id(`org/model`) 입력 | AIBOM |

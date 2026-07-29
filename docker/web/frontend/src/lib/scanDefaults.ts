@@ -80,6 +80,9 @@ const FILE_SUFFIXES = [
   ".sqsh",
   ".json",
   ".spdx",
+  // Yocto names its image artifacts <image>-<machine>.rootfs.<type>, so the
+  // infix is part of the filename rather than part of the project.
+  ".rootfs",
   ".bin",
   ".bz2",
   ".chk",

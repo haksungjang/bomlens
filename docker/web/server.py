@@ -88,7 +88,10 @@ MAX_BYTES = {
 }
 # Accepted extensions per upload kind (lowercased).
 UPLOAD_EXTS = {
-    "sbom": (".json", ".xml", ".spdx", ".cdx.json", ".spdx.json"),
+    # .spdx.tar.zst is what a Yocto SPDX 2.2 build deploys, and the only SBOM
+    # such a build produces — there is no .spdx.json beside it to send instead.
+    # Named in full rather than as .tar.zst, which would admit any zstd tarball.
+    "sbom": (".json", ".xml", ".spdx", ".cdx.json", ".spdx.json", ".spdx.tar.zst"),
     "zip": (".zip", ".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".tar"),
     # Build artifacts a supplier ships instead of source. The list is measured,
     # not aspirational: syft's file scan reads java archives (an executable jar

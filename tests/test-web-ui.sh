@@ -611,6 +611,24 @@ c_kind=$(curl -s -o /dev/null -w '%{http_code}' -F "file=@$WORK/sample.zip" "$BA
 c_ext=$(curl -s -o /dev/null -w '%{http_code}' -F "kind=zip" -F "file=@$WORK/payload.txt" "$BASE/upload?kind=zip")
 [ "$c_ext" = "415" ] && pass "wrong extension rejected (415)" || fail ".txt as zip returned $c_ext (expected 415)"
 
+# A Yocto SPDX 2.2 build deploys one <image>.spdx.tar.zst and no document, so
+# that archive is the only SBOM such a build can hand over. It has to be
+# uploadable, while a bare zstd tarball stays out.
+: > "$WORK/core-image-minimal.rootfs.spdx.tar.zst"
+: > "$WORK/something.tar.zst"
+zst_tok=$(curl -fsS -F "kind=sbom" -F "file=@$WORK/core-image-minimal.rootfs.spdx.tar.zst" \
+    "$BASE/upload?kind=sbom" 2>/dev/null \
+    | python3 -c "import sys,json;print(json.load(sys.stdin).get('token',''))" 2>/dev/null)
+[ -n "$zst_tok" ] && pass "a Yocto SPDX 2.x archive uploads as an SBOM" \
+    || fail ".spdx.tar.zst was refused as an SBOM upload"
+c_zst=$(curl -s -o /dev/null -w '%{http_code}' -F "kind=sbom" -F "file=@$WORK/something.tar.zst" "$BASE/upload?kind=sbom")
+[ "$c_zst" = "415" ] && pass "a bare zstd tarball is still refused (415)" \
+    || fail "something.tar.zst as sbom returned $c_zst (expected 415)"
+# The extension has to survive the save, or the scanner cannot tell what it got.
+[ -n "$zst_tok" ] && [ -n "$(find "$OUT/.uploads/$zst_tok" -name '*.spdx.tar.zst' 2>/dev/null | head -1)" ] \
+    && pass "the archive keeps its extension where the scanner reads it" \
+    || fail "uploaded archive lost its .spdx.tar.zst name"
+
 echo "== upload size caps are enforced before the body is read =="
 # The SBOM cap is sized from measurement, not taste: a Yocto core-image-minimal
 # SPDX 3.0 document is 15.8 MB and parsing peaks around 4.8x the file size, so the
