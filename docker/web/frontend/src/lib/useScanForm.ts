@@ -31,7 +31,7 @@ export const UPLOAD_KIND: Partial<Record<SourceType, UploadKind>> = {
 export const ACCEPT: Record<UploadKind, string> = {
   zip: ".zip,.tar.gz,.tgz,.tar.bz2,.tar.xz,.tar",
   package: ".jar,.war,.ear,.deb,.rpm,.whl",
-  sbom: ".json,.xml,.spdx,.cdx.json,.spdx.json",
+  sbom: ".json,.xml,.spdx,.cdx.json,.spdx.json,.spdx.tar.zst",
   firmware:
     ".bin,.img,.squashfs,.sqsh,.ubi,.ubifs,.trx,.chk,.fw,.rom,.dlf," +
     ".gz,.tgz,.tar,.xz,.bz2,.lzma,.zst,.img.gz,.tar.gz",
@@ -288,12 +288,18 @@ export function useScanForm({
     if (source === "sbom-upload" && file) {
       // The SBOM's own metadata beats filename guessing; fall back to the
       // filename when the file isn't parseable JSON (xml / tag-value SPDX)
-      // or its metadata names nothing.
+      // or its metadata names nothing. A Yocto SPDX 2.2 archive is neither text
+      // nor one document, so it goes straight to the filename rather than
+      // reading a megabyte of compressed tar as a string.
+      if (file.name.toLowerCase().endsWith(".spdx.tar.zst")) {
+        apply(suggestIdentity(source, { fileName: file.name }));
+      } else {
       void file
         .text()
         .then((text) => parseSbomIdentity(text))
         .catch(() => null)
         .then((id) => apply(id ?? suggestIdentity(source, { fileName: file.name })));
+      }
     } else {
       // A selected scan root with no subpath: suggest from its host path (the
       // folder the user actually mounted), not the synthetic container path.

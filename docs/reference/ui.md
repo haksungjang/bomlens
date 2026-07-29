@@ -40,7 +40,7 @@ The New scan screen is two panes. On the left, pick a source — grouped into Co
 | GitHub URL | enter the repository URL | SOURCE (clone) |
 | ZIP upload | upload a `.zip`/tar file | SOURCE (extract) |
 | Package upload | upload a build artifact — `.jar`, `.war`, `.ear`, `.deb`, `.rpm`, `.whl` | BINARY (a wheel is unpacked and scanned as ROOTFS) |
-| SBOM upload | upload an existing SBOM (JSON) | ANALYZE |
+| SBOM upload | upload an existing SBOM (JSON, or the `.spdx.tar.zst` a Yocto SPDX 2.2 build deploys) | ANALYZE |
 | Firmware upload | upload a `.bin`, etc. | FIRMWARE |
 | Docker image | enter the image name | IMAGE |
 | AI model | enter a HuggingFace model id (`org/model`) | AIBOM |
