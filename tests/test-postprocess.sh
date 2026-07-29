@@ -1894,6 +1894,21 @@ mf_cves=$(jq -r '[.Results[].Vulnerabilities[].VulnerabilityID] | unique | join(
     && pass "the image manifest names the root component" \
     || fail "manifest root='$(jq -r '.metadata.component.name' "$WORK/mf.cdx.json")'"
 
+# The package-to-recipe mapping is not a formality: in real builds most installed
+# packages come from a differently-named recipe (measured — 20 of 36 in the
+# published Scarthgap core-image-minimal, 32 of 57 in a shipped PinePhone modem
+# image). cve-check keys its report by recipe, so without that mapping the CVEs
+# of every such package would be missed. The fixture keeps the shape: three
+# packages, two of them from one recipe under another name.
+mf_recipes=$(jq -r '[.components[] | (.properties[]? | select(.name=="bomlens:yocto:recipe") | .value)] | length' "$WORK/mf.cdx.json")
+[ "${mf_recipes:-0}" -ge 1 ] \
+    && pass "packages whose recipe has another name record it" \
+    || fail "no package recorded a differing recipe name"
+mf_bb=$(jq -r '[.Results[].Vulnerabilities[] | select(.VulnerabilityID=="CVE-2022-28391") | .PkgName] | sort | join(",")' "$WORK/mf_security_yocto.json")
+[ "$mf_bb" = "busybox,busybox-syslog" ] \
+    && pass "a recipe's CVE reaches every package it produced" \
+    || fail "recipe CVE did not reach all its packages: '$mf_bb'"
+
 # A build with an image manifest but no cve-check run has no verdicts to report,
 # and must not claim otherwise.
 NOCVE="$WORK/yocto-nocve"

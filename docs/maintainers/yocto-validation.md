@@ -61,10 +61,28 @@ diff <(jq -r '.components[].name' out.cdx.json | sort) \
 - **적합성 필수 실패 2건.** `purl`은 Yocto가 CPE로 식별하기 때문이고(제출 기준을 유지하기로 한 결정), `top-component`는 bitbake가 이미지 패키지에 `software_packageVersion`을 넣지 않기 때문입니다. 둘 다 문서의 사실이므로 값을 지어내지 않습니다.
 - **아카이브에는 적합성 보고서를 만들지 않습니다.** 제출된 문서가 아니라 문서 묶음이라 제출 기준과 대조할 대상이 아닙니다.
 
+## 코드 검색으로 구한 실물
+
+릴리스가 공개하지 않는 파일도 공개 저장소에 커밋된 것이 있습니다. GitHub 코드 검색으로 찾았습니다.
+
+- **`license.manifest`** — `"PACKAGE NAME:" "RECIPE NAME:" filename:license.manifest`로 100건 이상. 실제 제품 빌드(PinePhone 모뎀 SDK의 mdm9607 이미지, 57개 패키지)로 파싱을 확인했습니다. 합성 시료에 없던 표현이 여기 있습니다 — 4항·7항 `&` 결합, `PD`처럼 SPDX가 아닌 식별자.
+- **`cve-summary.json`** — 파일명으로는 안 나오고, `"scorev3" "Unpatched" "cvesInRecord" extension:json`으로 Jenkins 프로젝트의 테스트 자산에서 실물을 찾았습니다(i.MX 빌드, 12개 레시피). 이 보고서는 12개 중 6개가 `-native` 레시피여서, 빌드 전용 레시피가 이미지 결과에 섞이지 않는지를 실물로 확인하는 데 쓰였습니다.
+
+### 패키지-레시피 매핑이 왜 필수인가 (실측)
+
+cve-check는 **레시피** 기준으로 보고하고, 이미지에 설치되는 것은 **패키지**입니다. 둘의 이름이 다른 경우가 소수가 아닙니다.
+
+| 실물 | 패키지 수 | 이름이 레시피와 다른 패키지 |
+|------|-----------|------------------------------|
+| Scarthgap 5.0.14 core-image-minimal | 36 | 20 (busybox-syslog→busybox 등) |
+| PinePhone 모뎀 SDK mdm9607 | 57 | 32 (kernel-base→linuxmdm 등) |
+
+매핑 없이 이름만 맞춰 보면 절반 이상의 패키지가 자기 CVE를 못 받습니다. `license.manifest`의 `RECIPE NAME`이 그 매핑입니다.
+
 ## 아직 실물로 보지 못한 것
 
-- 진짜 빌드 디렉터리(수십 GB의 `tmp/`, sstate, work 포함). 공개 산출물은 deploy 산출물만 담습니다.
-- `license.manifest`와 `cve-summary.json` 실물. 매니페스트 경로의 라이선스·판정 부분은 아직 합성 시료로만 확인했습니다.
-- 머신 여러 개, multilib, `TMPDIR`/`DEPLOY_DIR` 이전, SDK 문서가 함께 있는 빌드.
+- **같은 빌드에서 나온 `license.manifest`와 `cve-summary.json` 한 쌍.** 위 두 실물은 서로 다른 빌드라 레시피가 겹치지 않아, 매핑의 긍정 경로(레시피 CVE가 그 레시피의 패키지들에 붙는 것)는 여전히 합성 시료로만 확인했습니다. 공개된 쌍은 찾지 못했습니다(릴리스의 `testresults/`에도 cve 결과는 없고, per-recipe `*_cve.json`도 공개된 것이 없습니다).
+- **진짜 빌드 디렉터리.** 다만 여기서 문제가 되는 것은 파일 내용이 아니라 디렉터리 모양이라, 합성 트리로 재현해 검증했습니다 — `tmp/deploy/spdx/`의 레시피 문서 300개, SDK 문서, `tmp/work`와 `sstate-cache`를 만들어 두고도 이미지 SBOM 하나만 후보로 잡히는지, 감지가 빠른지 확인합니다(`tests/test-e2e.sh`, `tests/test-web-ui.sh`).
+- multilib, `TMPDIR`/`DEPLOY_DIR`를 빌드 디렉터리 밖으로 옮긴 설정.
 
-이 항목들은 실제로 빌드를 돌리거나, Yocto를 쓰는 팀의 빌드 디렉터리에서 확인해야 합니다.
+이 항목들은 실제로 빌드를 돌려야 확인됩니다. 빌드 없이 좁힐 수 있는 부분은 위와 같이 좁혀 두었습니다.
