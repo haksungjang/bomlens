@@ -756,12 +756,12 @@
     "flagBehavioral": "행위 기반 제한",
     "flagNonCommercial": "비상업",
     "tier": {
-      "networkCopyleft": "네트워크 카피레프트",
-      "strongCopyleft": "강한 카피레프트",
-      "weakCopyleft": "약한 카피레프트",
-      "reviewNeeded": "검토 필요",
-      "uncategorized": "미분류",
-      "permissive": "허용적"
+      "networkCopyleft": "Network copyleft",
+      "strongCopyleft": "Strong copyleft",
+      "weakCopyleft": "Weak copyleft",
+      "reviewNeeded": "Review needed",
+      "uncategorized": "Uncategorized",
+      "permissive": "Permissive"
     },
     "conflictTitle": "배포 라이선스({{license}})와의 충돌",
     "conflictHint": "배포하는 라이선스를 기준으로 각 의존성의 조건이 어떻게 맞물리는지 보여 줍니다. 검토가 필요한 조합을 드러내는 참고 자료이며 법적 판단을 내리지 않습니다.",

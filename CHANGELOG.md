@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- License classification names stay in English on the Korean UI — `Network copyleft`, `Strong copyleft`, `Weak copyleft`, `Permissive`, `Review needed`, `Uncategorized`. Same reasoning as the severity grades: the risk report already prints these names untranslated, so the screen and the report it produced now agree. The Korean around them is unchanged, including the `라이선스 분류` heading and the review flags (`행위 기반 제한`, `비상업`), which describe a licence's terms rather than name a class.
 - Vulnerability severity grades stay in English on the Korean UI — `Critical`, `High`, `Medium`, `Low`, `Unknown` rather than 심각/높음/중간/낮음. They are the vocabulary of the advisory itself: NVD, OSV and Trivy all publish those names, the generated reports already print them untranslated, and a reader cross-referencing a CVE page had to map the Korean label back to the English one. Only the grade names change; the surrounding Korean (the "심각도" column heading, the filter hints) stays as it was.
 
 ### Added
