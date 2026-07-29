@@ -349,6 +349,65 @@ def spdx2_bundle_path(image_doc_path):
     return candidate if os.path.isfile(candidate) else None
 
 
+def is_spdx2_archive(path):
+    """True for the archive a Yocto SPDX 2.x build deploys."""
+    return path.endswith(".spdx.tar.zst")
+
+
+def read_image_doc(archive):
+    """The image document inside an SPDX 2.x archive, or None.
+
+    A real deploy directory holds only the archive: create-spdx-2.2.bbclass
+    writes the image document into the recipe's work directory and packs it,
+    together with a document per package and per recipe, into
+    <image>.spdx.tar.zst. Nothing named <image>.spdx.json is left on disk
+    (verified against the published Yocto 5.0.14 artifacts), so the archive has
+    to be readable on its own.
+
+    Which member is the image document is decided by shape, not by name: it is
+    the one describing a single package and holding the CONTAINS relationships
+    for everything installed. The class happens to pack it first, so this
+    normally stops at the first member.
+    """
+    zstd = shutil.which("zstd")
+    if not zstd:
+        print("[yocto-spdx] zstd is not installed; cannot read %s" % os.path.basename(archive),
+              file=sys.stderr)
+        return None
+    proc = subprocess.Popen([zstd, "-dcq", "--", archive], stdout=subprocess.PIPE)
+    found, total = None, 0
+    try:
+        with tarfile.open(fileobj=proc.stdout, mode="r|") as tar:
+            for member in tar:
+                if not member.isfile() or not member.name.endswith(".spdx.json"):
+                    continue
+                total += max(member.size, 0)
+                if total > SPDX2_MAX_TOTAL:
+                    break
+                if member.size > SPDX2_MAX_MEMBER:
+                    continue
+                handle = tar.extractfile(member)
+                if handle is None:
+                    continue
+                try:
+                    doc = json.load(handle)
+                except (ValueError, OSError):
+                    continue
+                if not isinstance(doc, dict):
+                    continue
+                if len(doc.get("packages") or []) == 1 and _installed_refs(doc):
+                    found = doc
+                    break
+    except (tarfile.TarError, OSError) as exc:
+        print("[yocto-spdx] cannot read %s: %s" % (os.path.basename(archive), exc),
+              file=sys.stderr)
+    finally:
+        if proc.stdout:
+            proc.stdout.close()
+        proc.wait()
+    return found
+
+
 def _installed_refs(doc):
     """(document name, SPDXID) for every package the image CONTAINS.
 
@@ -583,6 +642,32 @@ def main():
         return 2
     src, out = sys.argv[1], sys.argv[2]
     out_prefix = sys.argv[3] if len(sys.argv) > 3 else ""
+
+    # A deploy directory of an SPDX 2.x build holds the archive and nothing else,
+    # so it is an input in its own right: the image document is inside it.
+    if is_spdx2_archive(src):
+        image_doc = read_image_doc(src)
+        if image_doc is None:
+            print("[yocto-spdx] no image document inside %s." % os.path.basename(src),
+                  file=sys.stderr)
+            return 3
+        components, image_name, image_version = extract_spdx2(image_doc, src)
+        if not components:
+            print("[yocto-spdx] %s holds no package its image says it contains."
+                  % os.path.basename(src), file=sys.stderr)
+            return 3
+        created = (image_doc.get("creationInfo") or {}).get("created") or ""
+        write_cyclonedx_spdx2(
+            out, components, os.path.basename(src), image_name, image_version, created
+        )
+        print(
+            "[yocto-spdx] SPDX 2.x archive: %d installed package(s) from %s. "
+            "Vulnerabilities are matched from the CPEs, not from the build — "
+            "only SPDX 3.0 records which CVEs a recipe patched."
+            % (len(components), os.path.basename(src)),
+            file=sys.stderr,
+        )
+        return 0
 
     try:
         doc = load_document(src)

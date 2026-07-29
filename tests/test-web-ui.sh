@@ -2153,6 +2153,32 @@ else
     fail "no-SBOM build directory handling wrong" "$nev"
 fi
 
+# A real SPDX 2.x deploy directory holds the archive and nothing else, so the
+# browser has to find and analyze the archive itself.
+AROOT="$YOCTOROOT/tmp/deploy/images/archive-only"
+mkdir -p "$AROOT/conf" "$AROOT/tmp/deploy/images/m1"
+echo 'BBLAYERS = "x"' > "$AROOT/conf/bblayers.conf"
+: > "$AROOT/tmp/deploy/images/m1/img.rootfs.spdx.tar.zst"
+aev=$(sse_events "project=arch&version=1.0&source=rootfs-dir&target=$AROOT")
+if echo "$aev" | python3 -c "
+import sys, json
+evs = json.load(sys.stdin)
+logs = [e['data'] for e in evs if e['event'] == 'log']
+done = [e['data'] for e in evs if e['event'] == 'done']
+assert len(done) == 1 and done[0]['mode'] == 'ANALYZE', evs
+assert done[0]['scanConfig']['source'] == 'yocto-build-dir', done[0]['scanConfig']
+assert any('inside this archive' in ln for ln in logs), logs
+"; then
+    pass "an archive-only build directory is analyzed as the archive"
+else
+    fail "archive-only routing wrong" "$aev"
+fi
+if grep -q '^ANALYZE_SBOM=.*\.spdx\.tar\.zst$' "$WORK/stub-env"; then
+    pass "the scanner is handed the archive"
+else
+    fail "the archive did not reach the scanner" "$(cat "$WORK/stub-env")"
+fi
+
 # A build that produced no SPDX still recorded what it shipped. Reading those
 # records beats refusing: the image package manifest is the installed set, the
 # license manifest carries the licenses, and cve-check the verdicts.

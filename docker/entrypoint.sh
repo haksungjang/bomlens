@@ -362,6 +362,17 @@ EOF
         if [ -z "$ANALYZE_SBOM" ] || [ ! -f "$ANALYZE_SBOM" ]; then
             echo "[ERROR] ANALYZE_SBOM not found: $ANALYZE_SBOM"; exit 1
         fi
+        # An SPDX 2.x archive is not a document: it is a bundle of them, and the
+        # image document inside is an index listing one package. Measuring either
+        # against the submission criteria would report an unparseable or almost
+        # empty SBOM for something we read 36 packages out of, so conformance is
+        # skipped here for the same reason the manifest path skips it — there is
+        # no submitted document to judge.
+        case "$ANALYZE_SBOM" in
+            *.spdx.tar.zst) YOCTO_ARCHIVE=true ;;
+            *)              YOCTO_ARCHIVE=false ;;
+        esac
+        if [ "$YOCTO_ARCHIVE" = "false" ]; then
         echo "[1/2] Validating supplier SBOM (conformance, original input)..."
         # Conformance never aborts the pipeline (best-effort report).
         run_optional_step conformance bash "$LIBDIR/validate-sbom.sh" "$ANALYZE_SBOM" "$OUT_PREFIX" "$PROJECT_NAME"
@@ -371,6 +382,7 @@ EOF
         # only ever describe the CycloneDX conversion. Best-effort.
         run_optional_step describe-input python3 "$LIBDIR/describe-input-sbom.py" \
             "$ANALYZE_SBOM" "${OUT_PREFIX}_input.json" "$(basename "$ANALYZE_SBOM")"
+        fi
         echo "[1/2] Converting supplier SBOM to CycloneDX..."
         # Yocto SPDX 3.0 takes a dedicated path. syft converts these documents but
         # drops every vulnerability and lists source FILES as components (measured:
@@ -385,6 +397,15 @@ EOF
             YOCTO_RC=0
             python3 "$LIBDIR/parse-yocto-spdx.py" "$ANALYZE_SBOM" "$OUTPUT_FILE" "$OUT_PREFIX" \
                 || YOCTO_RC=$?
+        fi
+        if [ "$YOCTO_RC" != 0 ] && [ "$YOCTO_ARCHIVE" = "true" ]; then
+            # An archive is never CycloneDX or SPDX text, so the generic converter
+            # has nothing to try; it would only report an unrecognized format and
+            # bury the reason the archive could not be read (zstd missing, or a
+            # bundle with no image document in it).
+            echo "[ERROR] could not read the Yocto SPDX archive: $(basename "$ANALYZE_SBOM")"
+            echo "        See the [yocto-spdx] message above for what stopped it."
+            exit 1
         fi
         if [ "$YOCTO_RC" != 0 ]; then
             [ "$YOCTO_RC" = 3 ] || echo "[analyze] WARN: Yocto SPDX parser failed (rc=$YOCTO_RC); using the generic converter." >&2
