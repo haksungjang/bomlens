@@ -97,6 +97,16 @@ INHERIT += "create-spdx-3.0"
 INHERIT += "vex"
 ```
 
+Which SPDX version a release can write is not a choice everywhere:
+
+| Release | SPDX by default | `create-spdx-3.0` available |
+|---------|-----------------|-----------------------------|
+| 4.0 Kirkstone (LTS) | 2.2 | **no** — the class does not exist in this release |
+| 5.0 Scarthgap (LTS) | 2.2 | yes |
+| 5.1 Styhead and later | 3.0 | yes (it is the default) |
+
+On Kirkstone the setting above cannot be used; that build writes SPDX 2.2, which is read as described below.
+
 Then point the scan at the build directory. You do not need to know where the build put the SBOM.
 
 ```bash
