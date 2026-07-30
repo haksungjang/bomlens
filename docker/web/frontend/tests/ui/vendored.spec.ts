@@ -1,27 +1,9 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect } from "@playwright/test";
+import { runScan, stubBackend } from "./helpers";
 
-// Stub the backend API so the UI renders deterministically (no Docker / network).
-type Caps = { firmware: boolean; scanoss: boolean; docker: boolean };
-
-async function stub(page: Page, caps: Caps, done?: unknown) {
-  await page.route("**/capabilities", (r) =>
-    r.fulfill({ contentType: "application/json", body: JSON.stringify(caps) }),
-  );
-  await page.route("**/results", (r) =>
-    r.fulfill({ contentType: "application/json", body: "[]" }),
-  );
-  if (done) {
-    // EventSource stream: a single `done` event then close (the app treats a
-    // close after `done` as success, see api.ts onerror/finished).
-    await page.route("**/scan-stream**", (r) =>
-      r.fulfill({
-        contentType: "text/event-stream",
-        body: `event: done\ndata: ${JSON.stringify(done)}\n\n`,
-      }),
-    );
-  }
-}
-
+// The --identify-vendored surfaces (Advanced toggle gating, result banner,
+// vendored badge + match confidence, XSS escaping). The backend is stubbed so
+// the UI renders deterministically (no Docker / network).
 const VENDORED_DONE = {
   ok: true,
   mode: "SOURCE",
@@ -39,14 +21,8 @@ const VENDORED_DONE = {
   },
 };
 
-async function fillAndRun(page: Page) {
-  await page.fill("#project", "testapp");
-  await page.fill("#version", "1.0");
-  await page.getByRole("button", { name: /Run scan/i }).click();
-}
-
 test("Advanced vendored toggle is offered (collapsed by default) when scanoss is available", async ({ page }) => {
-  await stub(page, { firmware: false, scanoss: true, docker: true });
+  await stubBackend(page, { caps: { scanoss: true } });
   await page.goto("/");
   // Off-by-default UX: the toggle lives inside a collapsed "Advanced" disclosure,
   // so it is present but hidden until the user expands it.
@@ -58,22 +34,22 @@ test("Advanced vendored toggle is offered (collapsed by default) when scanoss is
 });
 
 test("Advanced vendored toggle hidden when scanoss is NOT available", async ({ page }) => {
-  await stub(page, { firmware: false, scanoss: false, docker: true });
+  await stubBackend(page, { caps: { scanoss: false } });
   await page.goto("/");
   await expect(page.getByText("Identify bundled open source")).toHaveCount(0);
 });
 
 test("result banner appears for the C/C++ suggestion", async ({ page }) => {
-  await stub(page, { firmware: false, scanoss: true, docker: true }, VENDORED_DONE);
+  await stubBackend(page, { caps: { scanoss: true }, done: VENDORED_DONE });
   await page.goto("/");
-  await fillAndRun(page);
+  await runScan(page, "testapp", "1.0");
   await expect(page.getByText(/is this C\/C\+\+ embedded source/i)).toBeVisible();
 });
 
 test("vendored badge + match confidence render; XSS name is inert", async ({ page }) => {
-  await stub(page, { firmware: false, scanoss: true, docker: true }, VENDORED_DONE);
+  await stubBackend(page, { caps: { scanoss: true }, done: VENDORED_DONE });
   await page.goto("/");
-  await fillAndRun(page);
+  await runScan(page, "testapp", "1.0");
   // Open the Components tab where the per-component table (and badge) lives.
   await page.getByRole("button", { name: /^Components/ }).click();
 

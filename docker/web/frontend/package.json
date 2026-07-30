@@ -13,6 +13,7 @@
     "test:unit": "vitest run",
     "test:ui": "playwright test --grep-invert \"@capture|@visual\"",
     "test:visual": "playwright test --grep @visual",
+    "test:integration": "playwright test --config playwright.integration.config.ts",
     "capture:ui": "playwright test --grep @capture",
     "token:lint": "node scripts/token-lint.mjs",
     "i18n:check": "node scripts/i18n-coverage.mjs"

@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
+import { openShell, runScan, stubBackend, type Lang, type Theme } from "./helpers";
 
 /**
  * Shell gates for the new UI behind `?ui=next`:
@@ -8,25 +9,10 @@ import { expect, test, type Page } from "@playwright/test";
  *  - a stubbed end-to-end scan that proves the result content moved from tabs
  *    into the left-rail sections (Phase 1), with scan-type/data adaptation.
  *
- * Theme and language are seeded into localStorage before the app boots so each
- * combination is deterministic. Visual snapshots are tagged @visual and run in
- * the pinned Playwright container so pixels are stable.
+ * Theme and language are seeded into localStorage before the app boots (see
+ * openShell in ./helpers) so each combination is deterministic. Visual snapshots
+ * are tagged @visual and run in the pinned Playwright container so pixels are stable.
  */
-
-type Theme = "light" | "dark";
-type Lang = "en" | "ko";
-
-async function openShell(page: Page, theme: Theme, lang: Lang) {
-  await page.addInitScript(
-    ([t, l]) => {
-      localStorage.setItem("sbom.theme", t);
-      localStorage.setItem("sbom.lang", l);
-    },
-    [theme, lang],
-  );
-  await page.goto("/?ui=next");
-  await page.getByRole("navigation").first().waitFor();
-}
 
 const COMBOS: Array<{ theme: Theme; lang: Lang }> = [
   { theme: "light", lang: "en" },
@@ -90,18 +76,10 @@ test("New scan groups sources and switches the source-specific input", async ({ 
 });
 
 test("Recent scans list re-opens a past scan from the rail", async ({ page }) => {
-  await page.route("**/capabilities", (r) =>
-    r.fulfill({ contentType: "application/json", body: JSON.stringify({ firmware: false, scanoss: false, docker: true }) }),
-  );
-  await page.route("**/results", (r) => r.fulfill({ contentType: "application/json", body: "[]" }));
-  await page.route("**/scans", (r) =>
-    r.fulfill({ contentType: "application/json", body: JSON.stringify([
-      { id: "demo_1.0", project: "demo", version: "1.0", components: 2, maxSeverity: "CRITICAL", isAiScan: false, generatedAt: 1700000000 },
-    ]) }),
-  );
-  await page.route("**/scan?id=demo_1.0", (r) =>
-    r.fulfill({ contentType: "application/json", body: JSON.stringify(DONE) }),
-  );
+  await stubBackend(page, {
+    scans: [{ id: "demo_1.0", project: "demo", version: "1.0", components: 2, maxSeverity: "CRITICAL", isAiScan: false, generatedAt: 1700000000 }],
+    scanById: { "demo_1.0": DONE },
+  });
   await page.goto("/?ui=next");
 
   // The rail's Recent area lists the past scan; clicking it loads the result.
@@ -114,19 +92,10 @@ test("Recent scans list re-opens a past scan from the rail", async ({ page }) =>
 });
 
 test("Scan running shows the pipeline stages while scanning", async ({ page }) => {
-  await page.route("**/capabilities", (r) =>
-    r.fulfill({ contentType: "application/json", body: JSON.stringify({ firmware: false, scanoss: false, docker: true }) }),
-  );
-  await page.route("**/results", (r) => r.fulfill({ contentType: "application/json", body: "[]" }));
   // Delay the stream so the running view is observable before the done event.
-  await page.route("**/scan-stream**", async (r) => {
-    await new Promise((res) => setTimeout(res, 2500));
-    await r.fulfill({ contentType: "text/event-stream", body: `event: done\ndata: ${JSON.stringify(DONE)}\n\n` });
-  });
+  await stubBackend(page, { done: DONE, streamDelayMs: 2500 });
   await page.goto("/?ui=next");
-  await page.fill("#project", "demo");
-  await page.fill("#version", "1.0");
-  await page.getByRole("button", { name: /Run scan/i }).click();
+  await runScan(page, "demo", "1.0");
 
   // Running view: the headline and the pipeline stage stepper.
   await expect(page.getByText("Scanning…")).toBeVisible();
@@ -184,20 +153,10 @@ const SBOM = {
 };
 
 async function stubAndRun(page: Page) {
-  await page.route("**/capabilities", (r) =>
-    r.fulfill({ contentType: "application/json", body: JSON.stringify({ firmware: false, scanoss: false, docker: true }) }),
-  );
-  await page.route("**/results", (r) => r.fulfill({ contentType: "application/json", body: "[]" }));
-  await page.route("**/file**", (r) =>
-    r.fulfill({ contentType: "application/json", body: JSON.stringify(SBOM) }),
-  );
-  await page.route("**/scan-stream**", (r) =>
-    r.fulfill({ contentType: "text/event-stream", body: `event: done\ndata: ${JSON.stringify(DONE)}\n\n` }),
-  );
+  await stubBackend(page, { file: SBOM, done: DONE });
   await page.goto("/?ui=next");
-  await page.fill("#project", "demo");
-  await page.fill("#version", "1.0");
-  await page.getByRole("button", { name: /Run scan/i }).click();
+  await page.getByRole("navigation").first().waitFor();
+  await runScan(page, "demo", "1.0");
 }
 
 test("scan results render in the rail sections, adapted to scan type", async ({ page }) => {
@@ -311,18 +270,10 @@ const AI_SBOM = {
 };
 
 async function stubAiAndRun(page: Page) {
-  await page.route("**/capabilities", (r) =>
-    r.fulfill({ contentType: "application/json", body: JSON.stringify({ firmware: false, scanoss: false, docker: true }) }),
-  );
-  await page.route("**/results", (r) => r.fulfill({ contentType: "application/json", body: "[]" }));
-  await page.route("**/file**", (r) => r.fulfill({ contentType: "application/json", body: JSON.stringify(AI_SBOM) }));
-  await page.route("**/scan-stream**", (r) =>
-    r.fulfill({ contentType: "text/event-stream", body: `event: done\ndata: ${JSON.stringify(AI_DONE)}\n\n` }),
-  );
+  await stubBackend(page, { file: AI_SBOM, done: AI_DONE });
   await page.goto("/?ui=next");
-  await page.fill("#project", "model");
-  await page.fill("#version", "1.0");
-  await page.getByRole("button", { name: /Run scan/i }).click();
+  await page.getByRole("navigation").first().waitFor();
+  await runScan(page, "model", "1.0");
 }
 
 test("AI scan exposes Models & Datasets with the model card", async ({ page }) => {
@@ -398,17 +349,10 @@ const LIC_DONE = {
 };
 
 async function stubLicensesAndRun(page: Page) {
-  await page.route("**/capabilities", (r) =>
-    r.fulfill({ contentType: "application/json", body: JSON.stringify({ firmware: false, scanoss: false, docker: true }) }),
-  );
-  await page.route("**/results", (r) => r.fulfill({ contentType: "application/json", body: "[]" }));
-  await page.route("**/scan-stream**", (r) =>
-    r.fulfill({ contentType: "text/event-stream", body: `event: done\ndata: ${JSON.stringify(LIC_DONE)}\n\n` }),
-  );
+  await stubBackend(page, { done: LIC_DONE });
   await page.goto("/?ui=next");
-  await page.fill("#project", "lic");
-  await page.fill("#version", "1.0");
-  await page.getByRole("button", { name: /Run scan/i }).click();
+  await page.getByRole("navigation").first().waitFor();
+  await runScan(page, "lic", "1.0");
 }
 
 test("Licenses section flags AI-restrictive licenses for review", async ({ page }) => {

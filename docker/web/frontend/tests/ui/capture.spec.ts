@@ -1,28 +1,11 @@
-import { test, type Page } from "@playwright/test";
+import { test } from "@playwright/test";
+import { killAnim, runScan, stubBackend } from "./helpers";
 
 // Screenshot capture for the docs (run on demand: `npm run capture:ui`, excluded
 // from the normal `test:ui` run via the @capture tag). Renders the
 // --identify-vendored UI states deterministically with stubbed API responses and
 // writes PNGs into docs/images/, so the guide screenshots are reproducible.
 const IMAGES = "../../../docs/images";
-
-type Caps = { firmware: boolean; scanoss: boolean; docker: boolean };
-async function stub(page: Page, caps: Caps, done?: unknown) {
-  await page.route("**/capabilities", (r) =>
-    r.fulfill({ contentType: "application/json", body: JSON.stringify(caps) }),
-  );
-  await page.route("**/results", (r) =>
-    r.fulfill({ contentType: "application/json", body: "[]" }),
-  );
-  if (done) {
-    await page.route("**/scan-stream**", (r) =>
-      r.fulfill({
-        contentType: "text/event-stream",
-        body: `event: done\ndata: ${JSON.stringify(done)}\n\n`,
-      }),
-    );
-  }
-}
 
 const DONE = {
   ok: true,
@@ -41,21 +24,8 @@ const DONE = {
   },
 };
 
-// Disable fade-in/slide animations so element screenshots are crisp and stable.
-async function killAnim(page: Page) {
-  await page.addStyleTag({
-    content: "*,*::before,*::after{animation:none!important;transition:none!important;opacity:1!important}",
-  });
-}
-
-async function fillAndRun(page: Page) {
-  await page.fill("#project", "trelay");
-  await page.fill("#version", "26.4.0");
-  await page.getByRole("button", { name: /Run scan/i }).click();
-}
-
 test("@capture advanced toggle", async ({ page }) => {
-  await stub(page, { firmware: false, scanoss: true, docker: true });
+  await stubBackend(page, { caps: { scanoss: true } });
   await page.goto("/");
   await killAnim(page);
   await page.getByText("Advanced", { exact: true }).click();
@@ -64,9 +34,9 @@ test("@capture advanced toggle", async ({ page }) => {
 });
 
 test("@capture result banner", async ({ page }) => {
-  await stub(page, { firmware: false, scanoss: true, docker: true }, DONE);
+  await stubBackend(page, { caps: { scanoss: true }, done: DONE });
   await page.goto("/");
-  await fillAndRun(page);
+  await runScan(page, "trelay", "26.4.0");
   // The banner is the amber rounded-md box that holds the suggestion text.
   const banner = page
     .locator("div.rounded-md")
@@ -79,9 +49,9 @@ test("@capture result banner", async ({ page }) => {
 });
 
 test("@capture vendored badge in components table", async ({ page }) => {
-  await stub(page, { firmware: false, scanoss: true, docker: true }, DONE);
+  await stubBackend(page, { caps: { scanoss: true }, done: DONE });
   await page.goto("/");
-  await fillAndRun(page);
+  await runScan(page, "trelay", "26.4.0");
   await page.getByRole("button", { name: /^Components/ }).click();
   const table = page.locator("table").first();
   await table.waitFor({ state: "visible" });
