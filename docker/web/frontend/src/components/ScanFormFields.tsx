@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { SiblingImagePanel } from "@/components/SiblingImagePanel";
 import { Switch } from "@/components/ui/switch";
-import { USAGE_CONTEXTS, type UsageContext } from "@/lib/api";
+import { USAGE_CONTEXTS, type UploadKind, type UsageContext } from "@/lib/api";
 import { demoInstallUrl, IS_STATIC_DEMO } from "@/lib/demo";
 import { canManageScanFolders, desktopBridge } from "@/lib/desktop";
 import { USAGE_LABEL_KEY } from "@/lib/models";
@@ -22,6 +22,16 @@ import { ACCEPT, type ScanFormState } from "@/lib/useScanForm";
  * new two-pane NewScan, so there is one markup source for the source controls,
  * generation options, validation messages and the run button.
  */
+
+/** File-picker label per upload kind. A record rather than a chain of ternaries
+ *  so a new kind is a type error here until it is named. */
+const UPLOAD_LABEL: Record<UploadKind, string> = {
+  zip: "source.zipUpload",
+  sbom: "source.sbomUpload",
+  package: "source.packageUpload",
+  firmware: "source.firmwareUpload",
+  model: "source.modelUpload",
+};
 
 /** Red asterisk marking a required field; hidden from AT — the input itself
  *  carries `aria-required`, so the mark is purely visual. */
@@ -198,13 +208,7 @@ export function SourceControls({ state }: { state: ScanFormState }) {
       {uploadKind && (
         <div className="space-y-2">
           <Label htmlFor="file">
-            {uploadKind === "zip"
-              ? t("source.zipUpload")
-              : uploadKind === "sbom"
-                ? t("source.sbomUpload")
-                : uploadKind === "package"
-                  ? t("source.packageUpload")
-                  : t("source.firmwareUpload")}
+            {t(UPLOAD_LABEL[uploadKind])}
             <RequiredMark />
           </Label>
           <input
@@ -228,10 +232,13 @@ export function SourceControls({ state }: { state: ScanFormState }) {
           {source === "package-upload" && (
             <p className="text-xs text-muted-foreground">{t("source.packageUploadHint")}</p>
           )}
+          {source === "model-upload" && (
+            <p className="text-xs text-muted-foreground">{t("source.modelUploadHint")}</p>
+          )}
         </div>
       )}
 
-      {source === "ai-model" && <UsageContextSelect state={state} />}
+      {(source === "ai-model" || source === "model-upload") && <UsageContextSelect state={state} />}
 
       <SiblingPullNotice state={state} />
       <HfAuthNotice state={state} />

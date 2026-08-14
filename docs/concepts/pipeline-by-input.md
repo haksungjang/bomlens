@@ -57,6 +57,8 @@ A HuggingFace model id (`org/model`), handled by the opt-in `bomlens-aibom` imag
 
 ![AI model flow: the OWASP AIBOM Generator builds a CycloneDX 1.7 ML-BOM that goes through shared post-processing](../images/diagrams/pipeline-ai-model.png)
 
+There is a second AI input that runs entirely in the base image: a model **file** (`--model-file`, or a model upload in the web UI). No generator and no network are involved — a stdlib reader parses the file's own header, decides the format from its magic bytes rather than its name, hashes the file, and writes the same CycloneDX 1.7 ML-BOM shape, which then takes the identical post-processing. It is the path for weights a supplier sent you and for models that were never published. What it can fill depends on the format: GGUF declares a name, a license and an architecture, safetensors usually declares only tensor shapes, and a file that declares neither still contributes its integrity hash.
+
 > The model card's disclosure (weights, architecture, training data, training process) and the G7 result appear in the web UI's Models & datasets and G7 sections — see the [web UI reference](../reference/ui.md). For a step-by-step walkthrough, see the [AI model guide](../guides/ai-model.md).
 
 ---

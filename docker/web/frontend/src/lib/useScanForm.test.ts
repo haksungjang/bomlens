@@ -18,6 +18,7 @@ describe("UPLOAD_KIND", () => {
     expect(UPLOAD_KIND["zip-upload"]).toBe("zip");
     expect(UPLOAD_KIND["sbom-upload"]).toBe("sbom");
     expect(UPLOAD_KIND["firmware-upload"]).toBe("firmware");
+    expect(UPLOAD_KIND["model-upload"]).toBe("model");
   });
 
   it("leaves non-upload sources undefined", () => {
@@ -34,7 +35,13 @@ describe("UPLOAD_KIND", () => {
 
 describe("ACCEPT", () => {
   it("offers an accept list for every upload kind", () => {
-    expect(Object.keys(ACCEPT).sort()).toEqual(["firmware", "package", "sbom", "zip"]);
+    expect(Object.keys(ACCEPT).sort()).toEqual([
+      "firmware",
+      "model",
+      "package",
+      "sbom",
+      "zip",
+    ]);
   });
 
   it("includes the expected representative extensions", () => {
@@ -42,6 +49,12 @@ describe("ACCEPT", () => {
     expect(ACCEPT.zip).toContain(".tar.gz");
     expect(ACCEPT.sbom).toContain(".json");
     expect(ACCEPT.sbom).toContain(".spdx.json");
+    // Weight formats the model reader identifies by magic bytes. .bin is absent:
+    // it names both a PyTorch checkpoint and a firmware image, and firmware
+    // claims it.
+    expect(ACCEPT.model).toContain(".gguf");
+    expect(ACCEPT.model).toContain(".safetensors");
+    expect(ACCEPT.model).not.toContain(".bin");
     // Measured formats only: a jar is read as a file, a wheel after unpacking.
     // A gem is absent on purpose — it yielded nothing either way.
     expect(ACCEPT.package).toContain(".jar");
