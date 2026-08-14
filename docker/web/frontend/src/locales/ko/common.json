@@ -336,6 +336,9 @@
     "open": "결과물 보기",
     "close": "닫기"
   },
+  "dialog": {
+    "cancel": "취소"
+  },
   "theme": {
     "toLight": "라이트 모드로",
     "toDark": "다크 모드로"
@@ -898,6 +901,9 @@
     "colComponents": "컴포넌트",
     "colSeverity": "최고 심각도",
     "delete": "삭제",
+    "deleted": "스캔을 삭제했습니다",
+    "confirmDeleteTitle": "이 스캔을 삭제할까요?",
+    "confirmDeleteBody": "{{scan}}의 산출물 파일이 이 컴퓨터에서 지워집니다. 다른 곳에 사본이 없으므로 되돌릴 수 없습니다.",
     "typeAi": "AI 모델",
     "typeSbom": "SBOM",
     "typeSource": "소스",

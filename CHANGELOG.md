@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Deleting a scan asks for confirmation first, naming the scan it is about to remove. The delete control in the scan table and the one in the top bar's scan menu both removed a scan's output folder on a single click, and because the files are gone from disk with no copy kept, a mis-click could not be taken back. The prompt opens on Cancel, and a confirmed delete says so. Modal dialogs also hold the keyboard now: focus moves into the panel when one opens, Tab stays inside it, and it returns to whatever opened the dialog on close.
+
 ### Added
 
 - A scanned AI model file is checked for whether loading it runs code. Pickle-format weights (`.pkl`, and the pickle inside a PyTorch archive or an `object`-dtype `.npz` member) are analyzed with picklescan, now installed in the base image, and the verdict feeds the file-security axis of the model risk assessment: a dangerous global reads `caution`, globals that need a human reads `review`, and a format that cannot execute code on load reads `ok`. BomLens reported this for models on HuggingFace by reading the Hub's own scan; a file that was never published had no such record and therefore no verdict at all. A clean result states its scope — it is a pickle analysis, not a malware scan — and a scan that could not run leaves no security axis rather than implying the file is safe.
