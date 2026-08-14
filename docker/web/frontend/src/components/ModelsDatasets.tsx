@@ -345,6 +345,30 @@ function ModelCardView({ model: m }: { model: ModelCard }) {
           </Field>
         )}
 
+        {m.localScan && (
+          <Field label={t("models.localScan")}>
+            <span
+              className={
+                m.localScan === "unsafe"
+                  ? "font-medium text-destructive"
+                  : m.localScan === "suspicious" || m.localScan === "error"
+                    ? "text-foreground"
+                    : "text-muted-foreground"
+              }
+            >
+              {t(`models.localScan_${m.localScan.replace("-", "_")}`)}
+            </span>
+            {m.localScanFindings && (
+              <span className="ml-1 break-all font-mono text-xs text-muted-foreground">
+                {m.localScanFindings}
+              </span>
+            )}
+            {m.localScanTool && (
+              <span className="ml-1 text-xs text-muted-foreground">({m.localScanTool})</span>
+            )}
+          </Field>
+        )}
+
         <div className="space-y-1.5">
           <div className="text-xs text-muted-foreground" title={t("models.disclosureHint")}>
             {t("models.disclosure")}

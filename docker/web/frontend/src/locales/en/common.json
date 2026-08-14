@@ -478,6 +478,12 @@
     "usageProduct": "Product integration",
     "usageRedistribute": "Fine-tune & redistribute",
     "usageOutputsOnly": "Outputs only",
+    "localScan": "Load-time code execution",
+    "localScan_clean": "No code-execution globals found in the pickle payload",
+    "localScan_suspicious": "Globals that need a look",
+    "localScan_unsafe": "Code-execution globals found",
+    "localScan_not_applicable": "This weight format does not execute code on load",
+    "localScan_error": "The file could not be read for this check",
     "customLicenseQuote": "Custom license excerpt",
     "lineageConflict": "The declared license conflicts with the upstream model {{name}}.",
     "disclaimer": "This assessment is guidance, not legal advice."

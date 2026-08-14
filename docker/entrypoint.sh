@@ -370,6 +370,13 @@ EOF
             echo "[ERROR] could not identify the model file: $(basename "$TARGET_FILE")"
             exit 1
         fi
+        # Does loading this file run code? pickle weights do, and no Hub scan
+        # result exists for a file that was never published, so the answer has
+        # to be produced here. Best-effort: a failure leaves the property unset
+        # and the risk assessment then has no security axis at all, which reads
+        # as "not scanned" rather than as safe.
+        run_optional_step model-security python3 "$LIBDIR/scan-model-file-security.py" \
+            "$OUTPUT_FILE" "$TARGET_FILE"
         ;;
 
     MERGE)
