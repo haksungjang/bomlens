@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The Components and Vulnerabilities sections link to each other. A component's expanded detail opens the vulnerability list filtered to that component, and a vulnerability's detail opens the component list filtered to its package. Moving between the two lists meant retyping the name into the other section's search box. The links sit in the expanded detail because each table row is itself the expand control, and a control nested inside a control is not announced reliably by screen readers.
+
+- The fixed-version column reads in a darker green. The previous shade measured 3.77:1 against the light background, below the 4.5:1 minimum.
+
 - Deleting a scan asks for confirmation first, naming the scan it is about to remove. The delete control in the scan table and the one in the top bar's scan menu both removed a scan's output folder on a single click, and because the files are gone from disk with no copy kept, a mis-click could not be taken back. The prompt opens on Cancel, and a confirmed delete says so. Modal dialogs also hold the keyboard now: focus moves into the panel when one opens, Tab stays inside it, and it returns to whatever opened the dialog on close.
 
 ### Added

@@ -27,6 +27,9 @@ interface Props {
   /** License id seeded from a Licenses distribution row; selects that license
    *  in the license filter, leaving the other filters open. */
   initialLicense?: string;
+  /** Open the Vulnerabilities section filtered to this component — the other
+   *  half of the investigation loop (which CVEs does this row stand for?). */
+  onPickVulns?: (name: string) => void;
 }
 
 type Sort = { key: ComponentSortKey; dir: SortDir };
@@ -127,6 +130,7 @@ export function ComponentsTable({
   truncated,
   initialQuery,
   initialLicense,
+  onPickVulns,
 }: Props) {
   const { t } = useTranslation();
   const [filters, setFilters] = useState<ComponentFilters>(() => ({
@@ -541,9 +545,28 @@ export function ComponentsTable({
                       {c.vulnCount ? (
                         <>
                           <dt className="font-medium text-muted-foreground">{t("nav.vulnerabilities")}</dt>
-                          <dd>
-                            {c.maxSeverity ? `${t(`severity.${c.maxSeverity}`)} · ` : ""}
-                            {c.vulnCount}
+                          <dd className="flex flex-wrap items-baseline gap-2">
+                            <span>
+                              {c.maxSeverity ? `${t(`severity.${c.maxSeverity}`)} · ` : ""}
+                              {c.vulnCount}
+                            </span>
+                            {/* Into the CVEs behind this row. It sits in the
+                                expanded detail rather than on the risk badge
+                                because the row itself is the toggle control,
+                                and a control inside a control is not announced
+                                reliably. */}
+                            {onPickVulns && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onPickVulns(c.name);
+                                }}
+                                className="rounded text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                              >
+                                {t("result.viewInVulns", { name: c.name })}
+                              </button>
+                            )}
                           </dd>
                         </>
                       ) : null}

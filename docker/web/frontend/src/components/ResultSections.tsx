@@ -57,11 +57,17 @@ export function ResultSection({
   seedTier?: LicenseRiskTier | "";
   /** License id seeded into the Components license filter (Licenses row click). */
   seedLicense?: string;
-  /** Route into a section with a filter pre-applied (the Overview risk bars,
-   *  a Licenses distribution row). */
+  /** Route into a section with a filter pre-applied (the Overview risk bars, a
+   *  Licenses distribution row, a component or package name from the table the
+   *  user is reading). */
   onPick?: (
     section: SectionId,
-    seed: { severity?: Severity; tier?: LicenseRiskTier; license?: string },
+    seed: {
+      severity?: Severity;
+      tier?: LicenseRiskTier;
+      license?: string;
+      term?: string;
+    },
   ) => void;
   /** An artifact was produced after the scan (the on-demand SPDX export), so
    *  the owner can refresh the result it holds. */
@@ -83,6 +89,11 @@ export function ResultSection({
           truncated={result.sbom?.truncated}
           initialQuery={searchQuery}
           initialLicense={seedLicense}
+          onPickVulns={
+            onPick && result.security
+              ? (name) => onPick("vulnerabilities", { term: name })
+              : undefined
+          }
         />
       );
 
@@ -92,6 +103,9 @@ export function ResultSection({
           security={result.security}
           initialQuery={searchQuery}
           initialSeverity={seedSeverity}
+          onPickComponent={
+            onPick ? (name) => onPick("components", { term: name }) : undefined
+          }
         />
       ) : (
         <EmptyState>{t("result.noSecurity")}</EmptyState>
