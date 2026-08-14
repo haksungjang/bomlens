@@ -160,6 +160,7 @@ export function suggestIdentity(
     case "zip-upload":
     case "package-upload":
     case "firmware-upload":
+    case "model-upload":
     case "sbom-upload":
       return fileIdentity(ctx.fileName ?? "");
     case "current-dir": {

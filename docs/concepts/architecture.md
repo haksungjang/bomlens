@@ -202,6 +202,7 @@ flowchart TD
 | `ROOTFS` | `--target <directory>` | syft | `dir:` scheme |
 | `IMAGE` | `--target <image name>` | syft | docker.sock mount |
 | `AIBOM` | `--model <owner/name>` | OWASP AIBOM Generator | **Opt-in image** `bomlens-aibom`. CycloneDX 1.7 ML-BOM from a HuggingFace model card; adds a G7 conformance check |
+| `MODELFILE` | `--model-file <path>` | `identify-model-file.py` (stdlib) | Base image, offline. CycloneDX 1.7 ML-BOM read from a model file's own header (GGUF, safetensors, PyTorch, pickle, npz, npy, ONNX); adds the same G7 check |
 | `UI` | `--ui` | — | Browser UI; runs every scan target type through the form or file upload |
 
 ---
@@ -221,6 +222,7 @@ How CLI flags translate into environment variables and which steps they enable (
 | `--analyze <sbom>` | `MODE=ANALYZE` | Supplier SBOM validation, conversion, and report |
 | `--firmware` | `MODE=FIRMWARE` (firmware image) | Unpack, then syft + cve-bin-tool |
 | `--model <owner/name>` | `MODE=AIBOM` (aibom image) | Generate an ML-BOM from a HuggingFace model, plus a G7 check |
+| `--model-file <path>` | `MODE=MODELFILE` | Read one model file's header into an ML-BOM, offline, plus a G7 check |
 | `--deep-license` | `DEEP_LICENSE=true` | ② scancode |
 | `--byte-stable` | `BYTE_STABLE=true` | ① deterministic normalization (also the UI's Reproducible output toggle) |
 | `--sign` | `SIGN_SBOM=true` (plus `COSIGN_KEY`/`COSIGN_PASSWORD`) | ⑤ signing |

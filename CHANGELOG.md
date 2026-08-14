@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- An AI model file can be scanned directly: `--model-file <path>` on the CLI, or the Model file tile in the web UI (up to 8 GB). The file's own header is read — GGUF, safetensors, PyTorch, pickle, npz, npy and ONNX are recognized by their magic bytes rather than their extension — and the result is the same CycloneDX 1.7 ML-BOM, with the same G7 conformance check and risk assessment, produced offline in the base image. Until now an AI SBOM required a HuggingFace model id, which left out weights a supplier delivers, internal models that were never published, and machines with no network. What each format can fill differs and is reported as such: GGUF declares a name, a license and an architecture, safetensors usually declares only tensor shapes, and a field the file does not carry is left empty rather than guessed. Every format contributes a SHA-256 over the whole file.
+
 ## [v1.10.5] - 2026-08-12
 
 ### Changed

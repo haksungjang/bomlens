@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Cpu,
   FileArchive,
+  FileBox,
   FileJson,
   Folder,
   FolderTree,
@@ -63,6 +64,7 @@ const SOURCE_META: Record<SourceType, { labelKey: string; icon: LucideIcon }> = 
   "firmware-upload": { labelKey: "source.firmwareUpload", icon: Cpu },
   "sbom-upload": { labelKey: "source.sbomUpload", icon: FileJson },
   "ai-model": { labelKey: "source.aiModel", icon: Brain },
+  "model-upload": { labelKey: "source.modelUpload", icon: FileBox },
 };
 
 // Grouped tiles: scan source code, scan a built artifact, analyze an SBOM, or
@@ -71,7 +73,7 @@ const SOURCE_GROUPS: Array<{ key: string; sources: SourceType[] }> = [
   { key: "catCode", sources: ["current-dir", "rootfs-dir", "git-url", "zip-upload"] },
   { key: "catArtifact", sources: ["docker-image", "package-upload", "firmware-upload"] },
   { key: "catSbom", sources: ["sbom-upload"] },
-  { key: "catAiModel", sources: ["ai-model"] },
+  { key: "catAiModel", sources: ["ai-model", "model-upload"] },
 ];
 
 const SECTION_LABEL =

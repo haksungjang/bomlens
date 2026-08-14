@@ -489,6 +489,11 @@ export type SourceType =
   | "sbom-upload"
   | "firmware-upload"
   | "ai-model"
+  // An AI model weight file, read from its own header. Distinct from "ai-model",
+  // which names a model on HuggingFace and reads the card the Hub serves: this
+  // one needs no account and no network, and works on a model that was never
+  // published.
+  | "model-upload"
   | "docker-image";
 
 export const SOURCE_TYPES: SourceType[] = [
@@ -500,6 +505,7 @@ export const SOURCE_TYPES: SourceType[] = [
   "sbom-upload",
   "firmware-upload",
   "ai-model",
+  "model-upload",
   "docker-image",
 ];
 
@@ -514,7 +520,7 @@ export function formSourceOf(source: SourceType): SourceType {
   return source === "yocto-build-dir" ? "rootfs-dir" : source;
 }
 
-export type UploadKind = "zip" | "sbom" | "firmware" | "package";
+export type UploadKind = "zip" | "sbom" | "firmware" | "package" | "model";
 
 /** How the user intends to use a scanned AI model. Sent with the scan start so
  *  the pipeline grades the license assessment against this use, and stamped

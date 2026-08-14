@@ -29,6 +29,7 @@ export const UPLOAD_KIND: Partial<Record<SourceType, UploadKind>> = {
   "package-upload": "package",
   "sbom-upload": "sbom",
   "firmware-upload": "firmware",
+  "model-upload": "model",
 };
 
 export const ACCEPT: Record<UploadKind, string> = {
@@ -38,6 +39,7 @@ export const ACCEPT: Record<UploadKind, string> = {
   firmware:
     ".bin,.img,.squashfs,.sqsh,.ubi,.ubifs,.trx,.chk,.fw,.rom,.dlf," +
     ".gz,.tgz,.tar,.xz,.bz2,.lzma,.zst,.img.gz,.tar.gz",
+  model: ".gguf,.safetensors,.pt,.pth,.ckpt,.pkl,.pickle,.onnx,.npz,.npy",
 };
 
 /** Free-text inputs: the single `target` field, with per-source i18n keys. */
@@ -202,8 +204,10 @@ export function useScanForm({
     showDeepSource && deepSource ? "scan-target-src" : source;
   const isAnalyze = source === "sbom-upload";
   // AI-model scans have no source tree and no package CVEs, so the security
-  // report (Trivy → 0 results) and deep-license (needs /src) don't apply.
-  const isAiModel = source === "ai-model";
+  // report (Trivy → 0 results) and deep-license (needs /src) don't apply. True
+  // of both AI inputs: the model named on HuggingFace and the model file read
+  // from its own header.
+  const isAiModel = source === "ai-model" || source === "model-upload";
   // OSV.dev advisories are only fetched for firmware scans (cve-bin-tool), and
   // the osv.dev DB is not in the image, so it downloads on this run when on.
   const isFirmware = source === "firmware-upload";

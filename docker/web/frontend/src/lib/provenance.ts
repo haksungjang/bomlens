@@ -52,6 +52,7 @@ const KIND_BY_SOURCE: Record<SourceType, ProvenanceKind> = {
   "firmware-upload": "file",
   "sbom-upload": "sbom",
   "ai-model": "model",
+  "model-upload": "model",
 };
 
 const LABEL_KEY: Record<ProvenanceKind, string> = {

@@ -197,6 +197,13 @@ jobs:
       - name: AI SBOM post-process tests
         run: bash tests/test-aibom.sh
 
+      # No Docker: reads model files built on the spot (GGUF, safetensors, torch
+      # archive, pickle, npz) and asserts the header facts that end up in the
+      # SBOM — including that the magic bytes, not the extension, decide the
+      # format and that an unidentifiable file is refused rather than described.
+      - name: Model-file reader tests
+        run: bash tests/test-modelfile.sh
+
       - name: Vendored-OSS adversarial tests
         run: bash tests/test-vendored-adversarial.sh
 

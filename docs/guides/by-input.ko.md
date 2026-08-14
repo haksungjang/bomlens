@@ -50,6 +50,7 @@ SBOM=/path/to/bomlens/scripts/scan-sbom.sh
 | 모바일 앱(`.apk`, `.ipa`) | FIRMWARE | `$SBOM --target app.apk --all --generate-only` | 〃 |
 | 펌웨어 `.bin` | FIRMWARE | `$SBOM --target dev.bin --firmware --all --generate-only` | 〃 |
 | AI 모델(HuggingFace) | AIBOM | `$SBOM --model owner/name --generate-only` | 고지문, ML-BOM(1.7), 위험분석보고서(보안 없음) |
+| AI 모델 파일(GGUF, safetensors 등) | MODELFILE | `$SBOM --model-file ./model.gguf --generate-only` | 고지문, ML-BOM(1.7), 위험분석보고서(보안 없음) |
 
 > 모든 명령에 `--project <이름> --version <버전>`이 필요합니다(아래 예시 참고).
 >
@@ -174,6 +175,21 @@ $SBOM --project bert-base --version 1.0.0 \
 - 모델 카드, 데이터셋, G7 세부는 [AI 모델 가이드](ai-model.ko.md)를 참고하세요.
 
 **산출물**: 고지문, ML-BOM(CycloneDX 1.7), 위험분석보고서, G7 적합성
+
+### 모델 id가 아니라 모델 파일을 받았다면
+
+공급사가 Hub 링크 대신 가중치 파일을 보내왔거나, 사내 모델이라 공개한 적이 없는 경우입니다. 파일을 직접 가리킵니다.
+
+```bash
+$SBOM --project internal-llm --version 1.0.0 \
+  --model-file ./models/internal-llm-q4.gguf \
+  --generate-only
+```
+
+- 파일의 헤더를 직접 읽습니다. 네트워크도 HuggingFace 계정도 필요 없고 기본 이미지에서 동작하므로 따로 받을 opt-in 이미지가 없습니다.
+- 인식하는 형식은 GGUF, safetensors, PyTorch(`.pt`/`.pth`/`.ckpt`), pickle, npz, npy, ONNX입니다. 식별하지 못한 파일은 기술하지 않고 거부합니다.
+- SBOM에 담기는 내용은 형식마다 다릅니다. GGUF는 이름과 라이선스, 아키텍처를 담고 있고 safetensors는 대개 텐서 정보와 dtype만 있습니다. 어떤 형식이든 파일의 SHA-256은 기록하며, 이 값이 받은 파일과 문서를 잇습니다. 파일이 선언하지 않은 값은 추측하지 않고 비워 둡니다.
+- 산출물은 위와 같고, 모델 카드에서 오던 정보만 빠집니다.
 
 ## 산출물 3종 해석
 

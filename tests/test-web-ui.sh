@@ -751,6 +751,39 @@ c_fw_bad=$(curl -s -o /dev/null -w '%{http_code}' -F "kind=firmware" \
 [ "$c_fw_bad" = "415" ] && pass "a .txt is still refused as firmware (415)" \
     || fail ".txt as firmware returned $c_fw_bad (expected 415)"
 
+# An AI model weight file, read by its own header (MODE=MODELFILE). The cap is
+# in gigabytes because that is what a quantized model weighs, and .bin stays out
+# of the list on purpose: it names both a checkpoint and a firmware image.
+printf 'GGUF\x03\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00' \
+    > "$WORK/tiny.gguf"
+c_ml=$(curl -s -o /dev/null -w '%{http_code}' -F "kind=model" \
+       -F "file=@$WORK/tiny.gguf" "$BASE/upload?kind=model")
+[ "$c_ml" = "200" ] && pass "a .gguf is accepted as a model upload" \
+    || fail "a model upload returned $c_ml (expected 200)"
+c_ml_bad=$(curl -s -o /dev/null -w '%{http_code}' -F "kind=model" \
+           -F "file=@$WORK/payload.txt" "$BASE/upload?kind=model")
+[ "$c_ml_bad" = "415" ] && pass "a .txt is refused as a model file (415)" \
+    || fail ".txt as model returned $c_ml_bad (expected 415)"
+if python3 - "$SERVER" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("server", sys.argv[1])
+server = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(server)
+# 8 GB: the common quantized sizes fit, and anything past it is a CLI job.
+assert server.MAX_BYTES["model"] == 8 * 1024 * 1024 * 1024, server.MAX_BYTES["model"]
+exts = server.UPLOAD_EXTS["model"]
+for want in (".gguf", ".safetensors", ".pt", ".onnx", ".npz"):
+    assert want in exts, (want, exts)
+# .bin belongs to firmware; a checkpoint named .bin goes through the CLI.
+assert ".bin" not in exts, exts
+assert ".bin" in server.UPLOAD_EXTS["firmware"], server.UPLOAD_EXTS["firmware"]
+PY
+then
+    pass "model upload cap is 8 GB and .bin stays with firmware"
+else
+    fail "model upload kind contract failed (see assertion above)"
+fi
+
 # A Yocto SPDX 2.2 build deploys one <image>.spdx.tar.zst and no document, so
 # that archive is the only SBOM such a build can hand over. It has to be
 # uploadable, while a bare zstd tarball stays out.
@@ -2194,6 +2227,35 @@ assert re.fullmatch(r'demo2_1\.0_\d{8}-\d{6}', d['id']), d['id']
     pass "done event id carries the timestamped run id"
 else
     fail "done id is not the timestamped run id" "$events"
+fi
+
+echo "== model upload: the file is read where it lies, as MODELFILE =="
+# The one AI input that needs no image and no network: the scan runs in this
+# container, so the mode has to arrive with the uploaded file's own path.
+echo ok > "$STUB_MODE_FILE"
+printf 'GGUF\x03\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00' \
+    > "$WORK/w.gguf"
+mtoken=$(curl -fsS -F "kind=model" -F "file=@$WORK/w.gguf" "$BASE2/upload?kind=model" 2>/dev/null \
+         | python3 -c "import sys,json;print(json.load(sys.stdin).get('token',''))" 2>/dev/null)
+rm -f "$WORK/stub-env"
+sse_events "project=mdl&version=1.0&source=model-upload&token=$mtoken" >/dev/null
+if [ "$(sed -n 's/^MODE=//p' "$WORK/stub-env")" = "MODELFILE" ] \
+   && grep -q '^TARGET_FILE=.*\.gguf$' "$WORK/stub-env"; then
+    pass "model-upload -> MODE=MODELFILE with TARGET_FILE"
+else
+    fail "model upload did not route to MODELFILE" "$(cat "$WORK/stub-env")"
+fi
+# The usage scenario tailors the risk verdict for a model file exactly as it
+# does for a model named on HuggingFace. Uploaded again: a scan consumes the
+# upload, so replaying the first token would fail before reaching the env.
+mtoken2=$(curl -fsS -F "kind=model" -F "file=@$WORK/w.gguf" "$BASE2/upload?kind=model" 2>/dev/null \
+          | python3 -c "import sys,json;print(json.load(sys.stdin).get('token',''))" 2>/dev/null)
+rm -f "$WORK/stub-env"
+sse_events "project=mdl&version=1.0&source=model-upload&token=$mtoken2&usage=product" >/dev/null
+if [ "$(sed -n 's/^AI_USAGE_CONTEXT=//p' "$WORK/stub-env")" = "product" ]; then
+    pass "usage scenario reaches a model-file scan"
+else
+    fail "usage not forwarded for model-upload" "$(cat "$WORK/stub-env")"
 fi
 
 echo "== package upload: extension decides the scan mode =="

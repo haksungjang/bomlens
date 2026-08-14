@@ -87,6 +87,12 @@ MAX_BYTES = {
     "zip": 500 * 1024 * 1024,        # 500 MB
     "package": 500 * 1024 * 1024,    # 500 MB
     "firmware": 500 * 1024 * 1024,   # 500 MB
+    # Model weights are the one input measured in gigabytes: a quantized GGUF is
+    # commonly 1-8 GB and a safetensors shard 1-5 GB. The upload streams to disk
+    # and only the header is parsed, so the cost of a large file is transfer time
+    # rather than memory. 8 GB admits the common quantizations; anything past it
+    # belongs on the CLI, which reads the file in place with no transfer at all.
+    "model": 8 * 1024 * 1024 * 1024,  # 8 GB
 }
 # Accepted extensions per upload kind (lowercased).
 UPLOAD_EXTS = {
@@ -109,6 +115,12 @@ UPLOAD_EXTS = {
     # 39 unpacked, the macOS disk image 0 and 25.
     "package": (".jar", ".war", ".ear", ".deb", ".rpm", ".whl",
                 ".exe", ".msi", ".dmg"),
+    # AI model weight files, read by their own header (MODE=MODELFILE). .bin is
+    # absent on purpose: it names both a PyTorch checkpoint and a firmware image,
+    # and the firmware kind already claims it. A .bin checkpoint goes through the
+    # CLI's --model-file instead of being guessed at here.
+    "model": (".gguf", ".safetensors", ".pt", ".pth", ".ckpt", ".pkl", ".pickle",
+              ".onnx", ".npz", ".npy"),
     "firmware": (".bin", ".img", ".squashfs", ".sqsh", ".ubi", ".ubifs",
                  ".trx", ".chk", ".fw", ".rom", ".dlf",
                  # Compressed firmware images (unblob unpacks these), e.g. the
@@ -3520,6 +3532,18 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     fail("Firmware analysis requires Docker (to run the firmware image) "
                          "or relaunching the UI from the firmware image."); return
+
+            elif source == "model-upload":
+                # An AI model file the user uploaded. Read from its own header by
+                # a stdlib script in THIS image: no HuggingFace account, no
+                # network, and no sibling container — which is why, unlike
+                # ai-model below, there is no capability gate here.
+                up = resolve_upload(token)
+                if not up:
+                    fail("uploaded model file not found (re-upload)"); return
+                mode = "MODELFILE"
+                env["MODE"] = "MODELFILE"
+                env["TARGET_FILE"] = up
 
             elif source == "ai-model":
                 # Generate an AI SBOM (CycloneDX 1.7 ML-BOM) for a HuggingFace

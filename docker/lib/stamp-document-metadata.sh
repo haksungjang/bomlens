@@ -57,7 +57,7 @@ fi
 LIFECYCLE=""
 case "$MODE" in
     SOURCE|POSTPROCESS)                 LIFECYCLE="pre-build" ;;
-    ROOTFS|IMAGE|BINARY|FIRMWARE|AIBOM) LIFECYCLE="post-build" ;;
+    ROOTFS|IMAGE|BINARY|FIRMWARE|AIBOM|MODELFILE) LIFECYCLE="post-build" ;;
     MERGE)                              LIFECYCLE="" ;;
     *)
         echo "[docmeta] WARN: no lifecycle phase defined for MODE=$MODE; leaving it unset." >&2
