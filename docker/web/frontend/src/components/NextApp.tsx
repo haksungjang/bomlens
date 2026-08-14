@@ -11,6 +11,7 @@ import { ProgressLog } from "./ProgressLog";
 import { RecentScans } from "./RecentScans";
 import { ResultSection } from "./ResultSections";
 import { ScanRunning } from "./ScanRunning";
+import { ConfirmDialog } from "./ui/dialog";
 import {
   deleteScan,
   getCapabilities,
@@ -33,6 +34,7 @@ import {
 } from "@/lib/nav";
 import { homeHash, newHash, parseHash, scanHash } from "@/lib/route";
 import { deriveScanContext, sectionCounts } from "@/lib/results";
+import { useToast } from "@/lib/toast";
 
 type Status = "idle" | "running" | "done" | "error";
 
@@ -91,6 +93,7 @@ function toRecentLink(s: RecentScan): RecentScanLink {
  */
 export function NextApp() {
   const { t } = useTranslation();
+  const { toast } = useToast();
   const [status, setStatus] = useState<Status>("idle");
   const [logs, setLogs] = useState<string[]>([]);
   // The failure message surfaced on the Scan-running screen when a scan can't
@@ -110,6 +113,8 @@ export function NextApp() {
     docker: true,
   });
   const [recent, setRecent] = useState<RecentScan[]>([]);
+  // The scan a delete button asked to remove, waiting on the confirm dialog.
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   // A finished scan's config, parked here when the user hits "Re-scan" so the
   // New scan form can seed itself from it. The form reads it once on mount and
   // clears it, so a subsequent plain New scan starts blank.
@@ -248,10 +253,24 @@ export function NextApp() {
   // Close the live scan stream if the app unmounts.
   useEffect(() => () => streamRef.current?.close(), []);
 
-  // Delete a past scan (its artifacts) and refresh the Recent list.
-  const deleteRecent = (id: string) => {
+  // Deleting a scan removes its output files from disk, and the server keeps no
+  // copy — there is nothing to undo afterwards. So the guard goes in front: both
+  // delete controls (the Recent table and the top-bar menu) park the id here and
+  // the dialog is what actually calls the API.
+  const pendingScan = recent.find((s) => s.id === pendingDelete);
+  // Name the scan in the prompt so the user sees which one is going. Falls back
+  // to the id when the list hasn't caught up with the menu.
+  const pendingLabel = pendingScan
+    ? [pendingScan.project, pendingScan.version].filter(Boolean).join(" ")
+    : (pendingDelete ?? "");
+
+  const confirmDelete = () => {
+    const id = pendingDelete;
+    setPendingDelete(null);
+    if (!id) return;
     void deleteScan(id).then(() => {
       void refreshRecent();
+      toast(t("recent.deleted"));
       // If we're viewing the scan we just deleted, drop back to New scan.
       if (loadedIdRef.current === id) window.location.hash = homeHash();
     });
@@ -358,7 +377,7 @@ export function NextApp() {
       activeSection={activeSection}
       activeScanId={loadedIdRef.current}
       recent={recentLinks}
-      onDeleteRecent={deleteRecent}
+      onDeleteRecent={setPendingDelete}
       counts={counts}
       showSections={Boolean(result)}
       homeHref={homeHash()}
@@ -377,7 +396,7 @@ export function NextApp() {
             <RecentScans
               scans={recent}
               newHref={newHash()}
-              onDelete={deleteRecent}
+              onDelete={setPendingDelete}
             />
           ) : (
             <NewScan
@@ -475,6 +494,18 @@ export function NextApp() {
             )}
         </div>
       )}
+
+      {/* Fixed-position overlay, so it renders the same wherever it sits in the
+          tree — kept here to cover both the home and the result screens. */}
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title={t("recent.confirmDeleteTitle")}
+        description={t("recent.confirmDeleteBody", { scan: pendingLabel })}
+        confirmLabel={t("recent.delete")}
+        destructive
+        onConfirm={confirmDelete}
+        onCancel={() => setPendingDelete(null)}
+      />
     </AppShell>
   );
 }

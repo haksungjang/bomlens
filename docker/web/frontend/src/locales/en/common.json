@@ -336,6 +336,9 @@
     "open": "View artifact",
     "close": "Close"
   },
+  "dialog": {
+    "cancel": "Cancel"
+  },
   "theme": {
     "toLight": "Switch to light",
     "toDark": "Switch to dark"
@@ -898,6 +901,9 @@
     "colComponents": "Components",
     "colSeverity": "Top severity",
     "delete": "Delete",
+    "deleted": "Scan deleted",
+    "confirmDeleteTitle": "Delete this scan?",
+    "confirmDeleteBody": "The output files for {{scan}} are removed from this machine. Nothing is kept elsewhere, so this cannot be undone.",
     "typeAi": "AI model",
     "typeSbom": "SBOM",
     "typeSource": "Source",
