@@ -227,6 +227,67 @@ AI_RISK_KNOWLEDGE="$LIB/ai-risk-knowledge.json" bash "$LIB/assess-ai-risk.sh" "$
 v=$(jq -r '.components[0].properties[] | select(.name=="bomlens:assessment:overall") | .value' "$WORK/nolic.json")
 [ "$v" = "review" ] && pass "no declared licence assesses review, never ok" || fail "assessment='$v', expected review"
 
+echo "== the risk assessment reads the local pickle scan =="
+# Driven through stamped properties rather than the scanner, so this holds even
+# where picklescan is not installed. The mapping is the contract between
+# scan-model-file-security.py and assess-ai-risk.sh.
+stamp_and_assess() {   # $1 = status, $2 = findings (may be empty)
+    cp "$WORK/model.pt.bom.json" "$WORK/ls.json"
+    jq --arg s "$1" --arg f "$2" '
+      .components[0].properties += ([{name:"bomlens:localscan:status", value:$s}]
+        + (if $f != "" then [{name:"bomlens:localscan:findings", value:$f}] else [] end))
+    ' "$WORK/ls.json" > "$WORK/ls2.json" && mv "$WORK/ls2.json" "$WORK/ls.json"
+    bash "$LIB/normalize-sbom.sh" "$WORK/ls.json" >/dev/null 2>&1
+    AI_RISK_KNOWLEDGE="$LIB/ai-risk-knowledge.json" bash "$LIB/assess-ai-risk.sh" "$WORK/ls.json" >/dev/null 2>&1
+    jq -r '.components[0].properties[] | select(.name=="bomlens:assessment:security") | .value' "$WORK/ls.json"
+}
+[ "$(stamp_and_assess unsafe 'posix.system')" = "caution" ] && pass "unsafe -> caution" || fail "unsafe did not raise caution"
+[ "$(stamp_and_assess suspicious '__main__.Net')" = "review" ] && pass "suspicious -> review (a custom class is common and not an alarm)" || fail "suspicious did not map to review"
+[ "$(stamp_and_assess clean '')" = "ok" ] && pass "clean -> ok" || fail "clean did not map to ok"
+[ "$(stamp_and_assess not-applicable '')" = "ok" ] && pass "not-applicable -> ok" || fail "not-applicable did not map to ok"
+[ "$(stamp_and_assess error '')" = "review" ] && pass "error -> review, never a pass" || fail "an unreadable file did not map to review"
+# The finding has to reach the reader, not just the verdict.
+stamp_and_assess unsafe 'posix.system' >/dev/null
+if jq -e '[.components[0].properties[] | select(.name=="bomlens:assessment:reasons") | .value] | any(test("posix.system"))' "$WORK/ls.json" >/dev/null; then
+    pass "the flagged global is named in the reasons"
+else
+    fail "the finding did not reach the assessment reasons"
+fi
+# Without the property there is no security axis at all — "not scanned" must not
+# read as "safe".
+cp "$WORK/model.pt.bom.json" "$WORK/nols.json"
+bash "$LIB/normalize-sbom.sh" "$WORK/nols.json" >/dev/null 2>&1
+AI_RISK_KNOWLEDGE="$LIB/ai-risk-knowledge.json" bash "$LIB/assess-ai-risk.sh" "$WORK/nols.json" >/dev/null 2>&1
+axes=$(jq -r '.components[0].properties[] | select(.name=="bomlens:assessment:axes") | .value' "$WORK/nols.json")
+case "$axes" in
+    *security*) fail "a security axis appeared with nothing to base it on ($axes)" ;;
+    *) pass "no scan recorded -> no security axis" ;;
+esac
+
+echo "== the status vocabulary is the same on both sides =="
+py_states=$(grep -oE '^#   (clean|suspicious|unsafe|not-applicable|error)' "$LIB/scan-model-file-security.py" \
+            | awk '{print $2}' | sort | tr '\n' ' ')
+ts_states=$(sed -n '/LOCAL_SCAN_STATUSES/,/\]/p' "$ROOT_DIR/docker/web/frontend/src/lib/models.ts" \
+            | grep -oE '"[a-z-]+"' | tr -d '"' | sort | tr '\n' ' ')
+[ "$py_states" = "$ts_states" ] && pass "scanner and web UI agree on the status values" \
+    || fail "status vocabulary drifted" "scanner: $py_states / ui: $ts_states"
+
+if python3 -c "import picklescan" 2>/dev/null; then
+    echo "== picklescan verdicts on real files =="
+    run_scan() { python3 "$ROOT_DIR/docker/lib/scan-model-file-security.py" "$WORK/$1.bom.json" "$WORK/$1" >/dev/null 2>&1; prop "$1" bomlens:localscan:status; }
+    [ "$(run_scan evil.pkl)" = "unsafe" ] && pass "an os.system payload reads unsafe" || fail "the malicious pickle was not flagged"
+    [ "$(run_scan model.pt)" = "clean" ] && pass "a plain torch archive reads clean" || fail "a benign torch archive was flagged"
+    [ "$(run_scan model.gguf)" = "not-applicable" ] && pass "GGUF is not put through a pickle scanner" || fail "GGUF got a pickle verdict"
+    [ "$(run_scan model.safetensors)" = "not-applicable" ] && pass "safetensors is not put through a pickle scanner" || fail "safetensors got a pickle verdict"
+    if jq -e '[.components[0].properties[] | select(.name=="bomlens:localscan:findings") | .value] | any(test("system"))' "$WORK/evil.pkl.bom.json" >/dev/null; then
+        pass "the dangerous global is named on the component"
+    else
+        fail "no finding recorded for the malicious pickle"
+    fi
+else
+    echo "  SKIP: picklescan not installed (pip install picklescan) — verdict mapping still covered above"
+fi
+
 echo ""
 echo "=========================================="
 echo " model-file reader: $PASS passed, $FAIL failed"

@@ -25,6 +25,7 @@ BomLens (Apache-2.0) keeps its own code in shell scripts and bundles several ope
 | scancode-toolkit | Detailed license detection. Build-time opt-in (`SBOM_DEEP_LICENSE=true`); **not present in the published images**, which are built with the default `false` | Apache-2.0 (parts of the dataset CC-BY-4.0 and others) | https://github.com/aboutcode-org/scancode-toolkit |
 | scanoss (scanoss.py) | Vendored open-source identification (bundled by default; disable with `SBOM_SCANOSS=false`) | MIT (the bundled `osadl-copyleft.json` dataset is CC-BY-4.0) | https://github.com/scanoss/scanoss.py |
 | owasp-aibom-generator | AI model SBOM generation (opt-in `SBOM_AIBOM`, separate image `bomlens-aibom`; calls the HuggingFace API) | Apache-2.0 | https://github.com/GenAI-Security-Project/aibom-generator |
+| picklescan | Pickle analysis for scanned AI model files — whether loading the weights would run code (always installed; pure Python, no network) | MIT | https://github.com/mmaitre314/picklescan |
 | jq | SBOM post-processing helper | MIT (some components BSD, ICU, or Lucent) | https://github.com/jqlang/jq |
 
 Data: NVD, the vulnerability source, is public domain and requires attribution to "NIST/NVD".

@@ -99,7 +99,29 @@ The file's own header is the only source, and no image is pulled — this runs i
 
 Every format contributes the file size and a SHA-256 over the whole file, which is what ties the document to the artifact you were sent. A field the file does not declare is left out: a model whose weights carry no license produces an SBOM with no license, and the risk assessment then reads `review` rather than treating silence as permission.
 
-Two things this path cannot do, by construction. It has no model card, so the G7 checks that ask about training data, intended use and evaluation report as gaps — accurately, since the file says nothing about them. And it describes one file: a model split into shards is currently scanned a shard at a time.
+#### Does loading it run code?
+
+Pickle is not a data format. Loading one runs whatever the stream tells the interpreter to run, which is why a checkpoint in that format is a risk of its own — separate from its license, and separate from any CVE. For a model on HuggingFace, BomLens reports what the Hub's own scan found. A file nobody published has no such record, so the scan runs here instead, with [picklescan](https://github.com/mmaitre314/picklescan) — the same tool the Hub uses.
+
+The verdict lands on the model component and feeds the file-security axis of the risk assessment:
+
+| Verdict | Meaning | Assessment |
+| --- | --- | --- |
+| Code-execution globals found | a dangerous global such as `os.system` is reachable | caution |
+| Globals that need a look | something that could be code, typically a custom class | review |
+| No code-execution globals | the pickle payload was parsed and held nothing of the kind | ok |
+| Format does not execute code | GGUF, safetensors, ONNX, plain npy | ok |
+| Could not be read | the file did not parse | review |
+
+Two things worth knowing about the middle rows. "Globals that need a look" is common in perfectly legitimate checkpoints — a model class of its own is enough to trigger it — so it asks for a human rather than raising an alarm. And a clean result answers one question only: it says the weights do not execute code on load, not that the file has been cleared of everything. It is a pickle analysis, not a malware scan.
+
+An `.npz` is opened and only the members that actually hold a pickle are examined: a numpy array of dtype `object` stores its contents as a pickle, which is how a payload hides in what looks like a numeric archive. A file with no such member is reported as not applicable rather than as clean, because nothing was examined.
+
+If the scan cannot run at all, no verdict is written and the assessment simply has no file-security axis. A missing scan reads as "not scanned", never as safe.
+
+#### What this path cannot do
+
+Two things, by construction. It has no model card, so the G7 checks that ask about training data, intended use and evaluation report as gaps — accurately, since the file says nothing about them. And it describes one file: a model split into shards is currently scanned a shard at a time.
 
 ## Reading the result
 

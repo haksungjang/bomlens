@@ -27,6 +27,20 @@ const HF_SCAN_STATUSES: readonly string[] = [
   "safe", "queued", "suspicious", "unsafe", "unavailable",
 ];
 
+/** Outcome of the pickle scan run locally (`bomlens:localscan:status`). The
+ *  only file-security source for a model file that was never published, where
+ *  no Hub scan result exists to read. */
+export type LocalScanStatus =
+  | "clean"
+  | "suspicious"
+  | "unsafe"
+  | "not-applicable"
+  | "error";
+
+const LOCAL_SCAN_STATUSES: readonly string[] = [
+  "clean", "suspicious", "unsafe", "not-applicable", "error",
+];
+
 /** i18n label key per usage-context value (scan form + model card share it). */
 export const USAGE_LABEL_KEY: Record<UsageContext, string> = {
   internal: "models.usageInternal",
@@ -106,6 +120,13 @@ export interface ModelCard {
   scanStatus?: HfScanStatus;
   /** The concrete issue the file scan reported (`bomlens:hf:scan:issue`). */
   scanIssue?: string;
+  /** Outcome of the pickle scan run here (`bomlens:localscan:*`), which is the
+   *  only file-security source for a model file read from disk. */
+  localScan?: LocalScanStatus;
+  /** The tool and version behind that verdict, so the reader knows its scope. */
+  localScanTool?: string;
+  /** The globals it flagged, when it flagged any. */
+  localScanFindings?: string;
   /** Weight file formats present (`bomlens:weights:formats`, comma-joined). */
   weightFormats?: string[];
   /** Excerpt of a custom (non-SPDX) license the pipeline scanned. */
@@ -146,6 +167,9 @@ const usageContext = (v: string | undefined): UsageContext | undefined =>
 
 const scanStatus = (v: string | undefined): HfScanStatus | undefined =>
   v && HF_SCAN_STATUSES.includes(v) ? (v as HfScanStatus) : undefined;
+
+const localScanStatus = (v: string | undefined): LocalScanStatus | undefined =>
+  v && LOCAL_SCAN_STATUSES.includes(v) ? (v as LocalScanStatus) : undefined;
 
 /** A comma-joined list property (e.g. `bomlens:weights:formats`). */
 const splitList = (v: string | undefined): string[] =>
@@ -276,6 +300,9 @@ function parseModel(component: Obj): ModelCard {
     assessment: readAssessment(one),
     scanStatus: scanStatus(one("bomlens:hf:scan:status")),
     scanIssue: one("bomlens:hf:scan:issue"),
+    localScan: localScanStatus(one("bomlens:localscan:status")),
+    localScanTool: one("bomlens:localscan:tool"),
+    localScanFindings: one("bomlens:localscan:findings"),
     weightFormats: weightFormats.length > 0 ? weightFormats : undefined,
     customLicenseQuote: one("bomlens:license:customScan:quote"),
     lineageConflictWith: one("bomlens:lineage:conflictWith"),

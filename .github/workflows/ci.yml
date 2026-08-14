@@ -201,8 +201,12 @@ jobs:
       # archive, pickle, npz) and asserts the header facts that end up in the
       # SBOM — including that the magic bytes, not the extension, decide the
       # format and that an unidentifiable file is refused rather than described.
+      # picklescan is installed so the local pickle verdicts are exercised here
+      # too; the test skips those cases without it, which would hide a break.
       - name: Model-file reader tests
-        run: bash tests/test-modelfile.sh
+        run: |
+          pip install --quiet "picklescan==1.0.5"
+          bash tests/test-modelfile.sh
 
       - name: Vendored-OSS adversarial tests
         run: bash tests/test-vendored-adversarial.sh

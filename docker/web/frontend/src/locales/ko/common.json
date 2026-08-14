@@ -478,6 +478,12 @@
     "usageProduct": "제품 탑재",
     "usageRedistribute": "파인튜닝·재배포",
     "usageOutputsOnly": "산출물만 이용",
+    "localScan": "불러올 때 코드 실행",
+    "localScan_clean": "pickle 데이터에서 코드를 실행하는 항목을 찾지 못함",
+    "localScan_suspicious": "확인이 필요한 항목 있음",
+    "localScan_unsafe": "코드를 실행하는 항목 발견",
+    "localScan_not_applicable": "이 가중치 형식은 불러올 때 코드를 실행하지 않음",
+    "localScan_error": "이 검사를 위해 파일을 읽지 못함",
     "customLicenseQuote": "커스텀 라이선스 발췌",
     "lineageConflict": "선언된 라이선스가 상위 모델 {{name}}의 라이선스와 충돌합니다.",
     "disclaimer": "이 판정은 법적 자문이 아닌 안내입니다."
