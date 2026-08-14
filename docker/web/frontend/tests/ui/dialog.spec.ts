@@ -4,6 +4,8 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
+import { waitForSettled } from "./settle";
+
 /**
  * Modal behaviour that the visual snapshots and axe cannot see: the confirm
  * step in front of a delete (the files go from disk, so there is no undo), and
@@ -137,6 +139,8 @@ test("the prompt is accessible", async ({ page }) => {
   await page.goto("/?ui=next#/");
   await page.getByRole("button", { name: "Delete" }).first().click();
   await expect(page.getByRole("dialog")).toBeVisible();
+  // The panel fades in; a contrast check taken mid-fade reads blended colours.
+  await waitForSettled(page.getByRole("dialog"));
 
   const axe = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])

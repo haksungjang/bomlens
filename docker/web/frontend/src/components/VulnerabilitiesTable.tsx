@@ -34,6 +34,9 @@ interface Props {
   initialQuery?: string;
   /** Severity seeded from an Overview severity-bar click (filters on open). */
   initialSeverity?: string;
+  /** Open the Components section filtered to this package — the other half of
+   *  the investigation loop (what does this CVE's package ship under?). */
+  onPickComponent?: (name: string) => void;
 }
 
 type Sort = { key: VulnSortKey; dir: SortDir };
@@ -88,7 +91,15 @@ function vulnLinks(v: VulnItem): string[] {
 }
 
 /** Expanded detail for one CVE — CVSS, description and reference links. */
-function VulnDetail({ vuln, links }: { vuln: VulnItem; links: string[] }) {
+function VulnDetail({
+  vuln,
+  links,
+  onPickComponent,
+}: {
+  vuln: VulnItem;
+  links: string[];
+  onPickComponent?: (name: string) => void;
+}) {
   const { t } = useTranslation();
   if (vuln.cvss == null && !vuln.description && links.length === 0) {
     return <p className="text-muted-foreground">{t("result.vulnNoDetail")}</p>;
@@ -134,6 +145,21 @@ function VulnDetail({ vuln, links }: { vuln: VulnItem; links: string[] }) {
           </ul>
         </div>
       ) : null}
+      {/* Back to the package this CVE is against, in the component inventory.
+          It lives in the expanded detail because the row itself is the toggle
+          control, and a control nested in a control is not announced reliably. */}
+      {onPickComponent && vuln.pkg ? (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onPickComponent(vuln.pkg);
+          }}
+          className="rounded text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {t("result.viewInComponents", { name: vuln.pkg })}
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -143,7 +169,12 @@ function VulnDetail({ vuln, links }: { vuln: VulnItem; links: string[] }) {
  * CVSS score, description and reference links already present in the Trivy
  * report — no extra fetch, no side panel.
  */
-export function VulnerabilitiesTable({ security, initialQuery, initialSeverity }: Props) {
+export function VulnerabilitiesTable({
+  security,
+  initialQuery,
+  initialSeverity,
+  onPickComponent,
+}: Props) {
   const { t } = useTranslation();
   const items = security.vulnerabilities ?? [];
   const [openKey, setOpenKey] = useState<string | null>(null);
@@ -324,9 +355,11 @@ export function VulnerabilitiesTable({ security, initialQuery, initialSeverity }
                   <td className="px-3 py-2 font-mono tabular-nums text-muted-foreground">
                     {v.installed || "—"}
                   </td>
+                  {/* Fixed version: -700 rather than -600, which measures 3.77
+                      against the light surface, under the 4.5 minimum. */}
                   <td className="px-3 py-2 font-mono tabular-nums">
                     {v.fixed ? (
-                      <span className="text-emerald-600 dark:text-emerald-400">
+                      <span className="text-emerald-700 dark:text-emerald-400">
                         {v.fixed}
                       </span>
                     ) : (
@@ -337,7 +370,11 @@ export function VulnerabilitiesTable({ security, initialQuery, initialSeverity }
                 {isOpen && (
                   <tr className="border-b last:border-0">
                     <td colSpan={anyEpss ? 7 : 6} className="bg-muted/30 px-3 py-3">
-                      <VulnDetail vuln={v} links={links} />
+                      <VulnDetail
+                        vuln={v}
+                        links={links}
+                        onPickComponent={onPickComponent}
+                      />
                     </td>
                   </tr>
                 )}

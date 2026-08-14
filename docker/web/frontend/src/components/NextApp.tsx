@@ -349,10 +349,16 @@ export function NextApp() {
     }
   };
 
-  // An Overview risk-bar click routes into the section with that filter applied.
+  // An Overview risk-bar click, or a name picked out of a result table, routes
+  // into the section with that filter applied.
   const handleFilterPick = (
     section: SectionId,
-    filter: { severity?: Severity; tier?: LicenseRiskTier; license?: string },
+    filter: {
+      severity?: Severity;
+      tier?: LicenseRiskTier;
+      license?: string;
+      term?: string;
+    },
   ) => {
     setSeed({ section, ...filter });
     if (loadedIdRef.current) {
