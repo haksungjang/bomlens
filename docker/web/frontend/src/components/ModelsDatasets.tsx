@@ -170,7 +170,7 @@ export function ModelsDatasets({
                     </td>
                     <td className="px-3 py-2 align-top">
                       {d.hasIntegrity ? (
-                        <CircleCheck className="h-4 w-4 text-emerald-600" aria-hidden />
+                        <CircleCheck className="h-4 w-4 text-success" aria-hidden />
                       ) : (
                         <CircleDashed className="h-4 w-4 text-muted-foreground" aria-hidden />
                       )}

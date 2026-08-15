@@ -188,14 +188,14 @@ export function Overview({
       )}
 
       {!ai && result.sbom?.suggestIdentifyVendored && (
-        <div className="rounded-md border border-amber-300/60 bg-amber-50 px-4 py-3 text-amber-900 dark:border-amber-400/20 dark:bg-amber-950/30 dark:text-amber-200">
+        <div className="rounded-md border border-warning-border/60 bg-warning-surface px-4 py-3 text-warning dark:border-warning-border/20 dark:bg-warning-surface/30">
           <div className="text-sm font-medium">{t("result.vendoredHintTitle")}</div>
           <p className="mt-1 text-xs">{t("result.vendoredHintBody")}</p>
         </div>
       )}
 
       {result.sbom?.sbomToolDegraded && (
-        <div className="rounded-md border border-amber-300/60 bg-amber-50 px-4 py-3 text-amber-900 dark:border-amber-400/20 dark:bg-amber-950/30 dark:text-amber-200">
+        <div className="rounded-md border border-warning-border/60 bg-warning-surface px-4 py-3 text-warning dark:border-warning-border/20 dark:bg-warning-surface/30">
           <div className="text-sm font-medium">{t("result.sbomDegradedTitle")}</div>
           <p className="mt-1 text-xs">
             {t(
@@ -208,7 +208,7 @@ export function Overview({
       )}
 
       {result.scanoss?.status === "unavailable" && (
-        <div className="rounded-md border border-amber-300/60 bg-amber-50 px-4 py-3 text-amber-900 dark:border-amber-400/20 dark:bg-amber-950/30 dark:text-amber-200">
+        <div className="rounded-md border border-warning-border/60 bg-warning-surface px-4 py-3 text-warning dark:border-warning-border/20 dark:bg-warning-surface/30">
           <div className="text-sm font-medium">{t("result.scanossUnavailableTitle")}</div>
           <p className="mt-1 text-xs">{t("result.scanossUnavailableBody")}</p>
         </div>

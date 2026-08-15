@@ -80,6 +80,23 @@
     --risk-medium: 202 138 4;
     --risk-low: 37 99 235;
     --risk-info: 113 113 122;
+
+    /* Success and warning — the two state colours that were spelled out as
+     * palette literals in components. Channels, like the risk tokens, so that
+     * the existing alpha modifiers (`/10`, `/60`) keep working.
+     *
+     * Three shades each because the components need three distinct jobs, not
+     * one: the foreground a label is written in, the solid a bar or dot is
+     * filled with, and the tinted surface a badge or card sits on. Collapsing
+     * them would change the rendering. */
+    --success: 4 120 87; /* emerald-700 */
+    --success-solid: 16 185 129; /* emerald-500 */
+    --success-surface: 209 250 229; /* emerald-100 */
+
+    --warning: 120 53 15; /* amber-900 */
+    --warning-solid: 245 158 11; /* amber-500 */
+    --warning-border: 252 211 77; /* amber-300 */
+    --warning-surface: 255 251 235; /* amber-50 */
   }
 
   /* Dark theme — populated (mirrors the portal's reserved token names). */
@@ -132,6 +149,22 @@
     --risk-medium: 250 204 21;
     --risk-low: 96 165 250;
     --risk-info: 161 161 170;
+
+    /* Success and warning lift the same way the risk hues do: the foreground
+     * goes lighter so it stays legible on the near-black canvas, the surface
+     * goes darker so the tint stays a tint.
+     *
+     * The dark success surface is the solid hue, not a pale one, because on
+     * this canvas the badge renders it at `/15` — a low-alpha wash of the
+     * saturated green rather than a light fill. */
+    --success: 110 231 183; /* emerald-300 */
+    --success-solid: 16 185 129; /* emerald-500 */
+    --success-surface: 16 185 129; /* emerald-500, used at /15 */
+
+    --warning: 253 230 138; /* amber-200 */
+    --warning-solid: 245 158 11; /* amber-500 */
+    --warning-border: 251 191 36; /* amber-400 */
+    --warning-surface: 69 26 3; /* amber-950 */
   }
 
   * {

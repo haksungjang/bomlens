@@ -37,15 +37,14 @@ const badgeVariants = cva(
         low: "border-transparent bg-risk-low/10 text-blue-700 dark:text-blue-300",
         info: "border-transparent bg-risk-info/15 text-slate-600 dark:text-slate-300",
         success:
-          "border-transparent bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300",
+          "border-transparent bg-success-surface text-success dark:bg-success-surface/15",
         // Text-only green matching the visual weight of the risk tones
         // (critical/high/info render as coloured text on a transparent tint),
         // so in a row of grade badges the RISK colour draws the eye rather than
         // a solid-green "ok" outshouting the "caution" beside it. Distinct from
         // `success`, which stays a solid positive-confirmation badge for
         // scan-complete / conformance-pass.
-        positive:
-          "border-transparent text-emerald-700 dark:text-emerald-300",
+        positive: "border-transparent text-success",
       },
     },
     defaultVariants: { variant: "outline", tone: "none" },

@@ -78,6 +78,19 @@ const config: Config = {
           low: "rgb(var(--risk-low) / <alpha-value>)",
           info: "rgb(var(--risk-info) / <alpha-value>)",
         },
+        // Success and warning states — same channel form as `risk` above, and
+        // for the same reason: components tint these with alpha modifiers.
+        success: {
+          DEFAULT: "rgb(var(--success) / <alpha-value>)",
+          solid: "rgb(var(--success-solid) / <alpha-value>)",
+          surface: "rgb(var(--success-surface) / <alpha-value>)",
+        },
+        warning: {
+          DEFAULT: "rgb(var(--warning) / <alpha-value>)",
+          solid: "rgb(var(--warning-solid) / <alpha-value>)",
+          border: "rgb(var(--warning-border) / <alpha-value>)",
+          surface: "rgb(var(--warning-surface) / <alpha-value>)",
+        },
       },
       fontFamily: {
         sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"],

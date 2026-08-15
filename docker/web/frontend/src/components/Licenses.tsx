@@ -101,7 +101,7 @@ export function Licenses({
       <LicenseSummary components={filtered} onPickLicense={onPickLicense} />
 
       {outboundLicense && conflicts.length > 0 && (
-        <Card className="border-amber-300/60 bg-amber-50/60 dark:border-amber-400/20 dark:bg-amber-950/20">
+        <Card className="border-warning-border/60 bg-warning-surface/60 dark:border-warning-border/20 dark:bg-warning-surface/20">
           <CardContent className="space-y-3 p-4">
             <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
               <Scale className="h-4 w-4 text-risk-medium" aria-hidden />
@@ -146,7 +146,7 @@ export function Licenses({
       )}
 
       {review.length > 0 && (
-        <Card className="border-amber-300/60 bg-amber-50/60 dark:border-amber-400/20 dark:bg-amber-950/20">
+        <Card className="border-warning-border/60 bg-warning-surface/60 dark:border-warning-border/20 dark:bg-warning-surface/20">
           <CardContent className="space-y-3 p-4">
             <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
               <TriangleAlert className="h-4 w-4 text-risk-medium" aria-hidden />

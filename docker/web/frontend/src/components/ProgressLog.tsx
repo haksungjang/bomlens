@@ -80,7 +80,7 @@ export function ProgressLog({
         aria-label={t("progress.title")}
         indicatorClassName={cn(
           status === "error" && "bg-destructive",
-          status === "done" && "bg-emerald-500",
+          status === "done" && "bg-success-solid",
         )}
       />
       <div

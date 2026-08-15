@@ -355,11 +355,12 @@ export function VulnerabilitiesTable({
                   <td className="px-3 py-2 font-mono tabular-nums text-muted-foreground">
                     {v.installed || "—"}
                   </td>
-                  {/* Fixed version: -700 rather than -600, which measures 3.77
-                      against the light surface, under the 4.5 minimum. */}
+                  {/* Fixed version carries the success foreground, which is set
+                      to the darker green on light surfaces: the lighter one
+                      measures 3.77 there, under the 4.5 minimum. */}
                   <td className="px-3 py-2 font-mono tabular-nums">
                     {v.fixed ? (
-                      <span className="text-emerald-700 dark:text-emerald-400">
+                      <span className="text-success">
                         {v.fixed}
                       </span>
                     ) : (
