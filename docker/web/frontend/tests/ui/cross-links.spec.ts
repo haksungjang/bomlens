@@ -116,7 +116,9 @@ test("a CVE's detail opens Components filtered to its package", async ({ page })
 
   await expect
     .poll(() => page.evaluate(() => window.location.hash))
-    .toBe("#/scan/demo_2.1/components");
+    // The term rides in the URL, which is what makes the filtered view
+    // shareable and survive a reload.
+    .toBe("#/scan/demo_2.1/components?q=openssl");
   await expect(
     page.getByRole("textbox", { name: "Search name, license, type…" }),
   ).toHaveValue("openssl");
@@ -137,7 +139,7 @@ test("a component's detail opens Vulnerabilities filtered to it", async ({
 
   await expect
     .poll(() => page.evaluate(() => window.location.hash))
-    .toBe("#/scan/demo_2.1/vulnerabilities");
+    .toBe("#/scan/demo_2.1/vulnerabilities?q=zlib");
   await expect(
     page.getByRole("textbox", { name: "Search CVE, component, title" }),
   ).toHaveValue("zlib");

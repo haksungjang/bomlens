@@ -1,7 +1,7 @@
 // Copyright 2026 SK Telecom Co., Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   ArrowDown,
@@ -15,6 +15,8 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { EmptyState, ErrorState } from "@/components/ui/state";
 import { type SecuritySummary, type Severity, type VulnItem } from "@/lib/api";
+import { buildQuery, parseQuery, type RouteQuery } from "@/lib/route";
+import { vulnsFromQuery, vulnsToQuery } from "@/lib/section-query";
 import { compareVulns, type SortDir, type VulnSortKey } from "@/lib/vulns";
 import { cn } from "@/lib/utils";
 
@@ -30,10 +32,11 @@ const TONE: Record<string, "critical" | "high" | "medium" | "low" | "info"> = {
 
 interface Props {
   security: SecuritySummary;
-  /** Search term seeded from global search (CVE / package / title). */
-  initialQuery?: string;
-  /** Severity seeded from an Overview severity-bar click (filters on open). */
-  initialSeverity?: string;
+  /** Filter and sort state from the URL — a shared link, a reload, or a term
+   *  or severity routed in from another section. */
+  query?: RouteQuery;
+  /** Report state back so the URL can carry it; the shell replaces the hash. */
+  onQueryChange?: (query: RouteQuery) => void;
   /** Open the Components section filtered to this package — the other half of
    *  the investigation loop (what does this CVE's package ship under?). */
   onPickComponent?: (name: string) => void;
@@ -171,25 +174,38 @@ function VulnDetail({
  */
 export function VulnerabilitiesTable({
   security,
-  initialQuery,
-  initialSeverity,
+  query: urlState,
+  onQueryChange,
   onPickComponent,
 }: Props) {
   const { t } = useTranslation();
   const items = security.vulnerabilities ?? [];
   const [openKey, setOpenKey] = useState<string | null>(null);
-  const [severityFilter, setSeverityFilter] = useState(initialSeverity ?? "");
-  const [query, setQuery] = useState(initialQuery ?? "");
-  // Re-seed the search when global search routes in a new term.
-  useEffect(() => {
-    if (initialQuery !== undefined) setQuery(initialQuery);
-  }, [initialQuery]);
-  // Re-seed the severity filter when an Overview bar click routes one in.
-  useEffect(() => {
-    if (initialSeverity !== undefined) setSeverityFilter(initialSeverity);
-  }, [initialSeverity]);
+  const initial = vulnsFromQuery(urlState);
+  const [severityFilter, setSeverityFilter] = useState(initial.severity);
+  const [query, setQuery] = useState(initial.term);
   // Default: most severe first, highest CVSS within a severity band.
-  const [sort, setSort] = useState<Sort>({ key: "severity", dir: "desc" });
+  const [sort, setSort] = useState<Sort>(initial.sort);
+
+  // The URL is the source; see ComponentsTable for why this compares strings.
+  const urlQuery = buildQuery(urlState);
+  const appliedRef = useRef(urlQuery);
+  useEffect(() => {
+    if (appliedRef.current === urlQuery) return;
+    appliedRef.current = urlQuery;
+    const next = vulnsFromQuery(parseQuery(urlQuery));
+    setQuery(next.term);
+    setSeverityFilter(next.severity);
+    setSort(next.sort);
+  }, [urlQuery]);
+
+  useEffect(() => {
+    const next = buildQuery(vulnsToQuery(query, severityFilter, sort));
+    if (next === appliedRef.current) return;
+    appliedRef.current = next;
+    onQueryChange?.(parseQuery(next));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, severityFilter, sort]);
 
   // EPSS column appears only when the report was enriched (online run).
   const anyEpss = useMemo(() => items.some((v) => typeof v.epss === "number"), [items]);

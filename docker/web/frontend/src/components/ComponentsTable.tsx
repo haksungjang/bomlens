@@ -16,17 +16,19 @@ import {
   selectComponents,
   type SortDir,
 } from "@/lib/components";
+import { buildQuery, parseQuery, type RouteQuery } from "@/lib/route";
+import { componentsFromQuery, componentsToQuery } from "@/lib/section-query";
 import { cn } from "@/lib/utils";
 
 interface Props {
   items: ComponentItem[];
   total: number;
   truncated?: boolean;
-  /** Search term seeded from global search; applied to the name/license filter. */
-  initialQuery?: string;
-  /** License id seeded from a Licenses distribution row; selects that license
-   *  in the license filter, leaving the other filters open. */
-  initialLicense?: string;
+  /** Filter and sort state from the URL — what a shared link or a reload
+   *  restores, and what a global-search term or a picked license arrives as. */
+  query?: RouteQuery;
+  /** Report state back so the URL can carry it; the shell replaces the hash. */
+  onQueryChange?: (query: RouteQuery) => void;
   /** Open the Vulnerabilities section filtered to this component — the other
    *  half of the investigation loop (which CVEs does this row stand for?). */
   onPickVulns?: (name: string) => void;
@@ -124,33 +126,37 @@ function FilterChip({
 
 /** Searchable, sortable, filterable table of detected SBOM components, with
  *  decision-first Scope and Risk columns (shown when the scan carries that data). */
-export function ComponentsTable({
-  items,
-  total,
-  truncated,
-  initialQuery,
-  initialLicense,
-  onPickVulns,
-}: Props) {
+export function ComponentsTable({ items, total, truncated, query, onQueryChange, onPickVulns }: Props) {
   const { t } = useTranslation();
-  const [filters, setFilters] = useState<ComponentFilters>(() => ({
-    ...EMPTY_FILTERS,
-    query: initialQuery ?? "",
-    license: initialLicense ?? "",
-  }));
-  // Re-seed the search when global search routes in a new term.
+  const [filters, setFilters] = useState<ComponentFilters>(
+    () => componentsFromQuery(query).filters,
+  );
+  const [sort, setSort] = useState<Sort | null>(() => componentsFromQuery(query).sort);
+
+  // The URL is the source: a link opened elsewhere, a reload, or a term routed
+  // in from global search all arrive here. Compared as a serialised string so
+  // that a re-render with an equal-but-new object does not reset the table
+  // under the user's fingers.
+  const urlQuery = buildQuery(query);
+  const appliedRef = useRef(urlQuery);
   useEffect(() => {
-    if (initialQuery !== undefined) {
-      setFilters((f) => ({ ...f, query: initialQuery }));
-    }
-  }, [initialQuery]);
-  // Same for a license routed in from the Licenses distribution.
+    if (appliedRef.current === urlQuery) return;
+    appliedRef.current = urlQuery;
+    const next = componentsFromQuery(parseQuery(urlQuery));
+    setFilters(next.filters);
+    setSort(next.sort);
+  }, [urlQuery]);
+
+  // Report the other way: the user's own filtering goes back out to the URL.
   useEffect(() => {
-    if (initialLicense !== undefined) {
-      setFilters((f) => ({ ...f, license: initialLicense }));
-    }
-  }, [initialLicense]);
-  const [sort, setSort] = useState<Sort | null>(null);
+    const next = buildQuery(componentsToQuery(filters, sort));
+    if (next === appliedRef.current) return;
+    appliedRef.current = next;
+    onQueryChange?.(parseQuery(next));
+    // onQueryChange is a stable shell callback; re-running on its identity
+    // would fire on every parent render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters, sort]);
   const [openKey, setOpenKey] = useState<string | null>(null);
   // Chunk recycling state: which chunks render real rows, and the measured
   // pixel height of chunks currently recycled into spacers.

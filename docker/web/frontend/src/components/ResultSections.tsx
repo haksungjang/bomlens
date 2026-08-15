@@ -14,7 +14,7 @@ import {
   sourceSnapshotFileName,
   sourceTreeFileName,
 } from "@/lib/results";
-import { scanHash } from "@/lib/route";
+import { scanHash, type RouteQuery } from "@/lib/route";
 
 import { ArtifactsSection, Overview } from "./Overview";
 import { ComponentsTable } from "./ComponentsTable";
@@ -36,10 +36,8 @@ export function ResultSection({
   result,
   scanId,
   recent,
-  searchQuery,
-  seedSeverity,
-  seedTier,
-  seedLicense,
+  query,
+  onQueryChange,
   onPick,
   onResultsChange,
 }: {
@@ -49,14 +47,11 @@ export function ResultSection({
   scanId: string | null;
   /** Local Recent-scans list, for the Overview "vs previous scan" line. */
   recent?: RecentScan[];
-  /** Term seeded from global search into this section's table search. */
-  searchQuery?: string;
-  /** Severity seeded into the Vulnerabilities filter (Overview bar click). */
-  seedSeverity?: string;
-  /** License tier seeded into the Licenses filter (Overview bar click). */
-  seedTier?: LicenseRiskTier | "";
-  /** License id seeded into the Components license filter (Licenses row click). */
-  seedLicense?: string;
+  /** This section's filter and sort state, as carried in the URL hash. Arrives
+   *  from a shared link, a reload, or a pick routed in from another section. */
+  query?: RouteQuery;
+  /** The section changed its own filters; the shell puts them in the URL. */
+  onQueryChange?: (query: RouteQuery) => void;
   /** Route into a section with a filter pre-applied (the Overview risk bars, a
    *  Licenses distribution row, a component or package name from the table the
    *  user is reading). */
@@ -87,8 +82,8 @@ export function ResultSection({
           items={result.sbom?.componentList ?? []}
           total={result.sbom?.components ?? 0}
           truncated={result.sbom?.truncated}
-          initialQuery={searchQuery}
-          initialLicense={seedLicense}
+          query={query}
+          onQueryChange={onQueryChange}
           onPickVulns={
             onPick && result.security
               ? (name) => onPick("vulnerabilities", { term: name })
@@ -101,8 +96,8 @@ export function ResultSection({
       return result.security ? (
         <VulnerabilitiesTable
           security={result.security}
-          initialQuery={searchQuery}
-          initialSeverity={seedSeverity}
+          query={query}
+          onQueryChange={onQueryChange}
           onPickComponent={
             onPick ? (name) => onPick("components", { term: name }) : undefined
           }
@@ -115,7 +110,8 @@ export function ResultSection({
       return (
         <Licenses
           components={result.sbom?.componentList ?? []}
-          initialTier={seedTier}
+          query={query}
+          onQueryChange={onQueryChange}
           outboundLicense={result.sbom?.outboundLicense}
           onPickLicense={
             onPick ? (license) => onPick("components", { license }) : undefined
