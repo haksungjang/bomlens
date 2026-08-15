@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Scale, ScrollText, TriangleAlert } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
@@ -17,6 +17,9 @@ import {
   type LicenseRiskTier,
   reviewGroups,
 } from "@/lib/licenses";
+
+import { buildQuery, parseQuery, type RouteQuery } from "@/lib/route";
+import { licensesFromQuery, licensesToQuery } from "@/lib/section-query";
 
 import { LicenseRiskBar } from "./LicenseRiskBar";
 import { LicenseSummary } from "./LicenseSummary";
@@ -53,13 +56,17 @@ const CONFLICT_TONE: Record<ConflictVerdict, "high" | "medium" | "info"> = {
  */
 export function Licenses({
   components,
-  initialTier,
+  query,
+  onQueryChange,
   outboundLicense,
   onPickLicense,
 }: {
   components: ComponentItem[];
-  /** Tier seeded from an Overview classification-bar click (filters on open). */
-  initialTier?: LicenseRiskTier | "";
+  /** Tier filter as carried in the URL — a shared link, a reload, or a tier
+   *  routed in from an Overview classification-bar click. */
+  query?: RouteQuery;
+  /** Report the tier back so the URL can carry it. */
+  onQueryChange?: (query: RouteQuery) => void;
   /** The license the project declares it ships under. Absent means the conflict
    *  check never ran, which the section states outright rather than leaving the
    *  reader to read an empty table as an all-clear. */
@@ -69,11 +76,24 @@ export function Licenses({
 }) {
   const { t } = useTranslation();
   // Clicking a classification tier filters the rest of the tab to that tier.
-  const [tier, setTier] = useState<LicenseRiskTier | "">(initialTier ?? "");
-  // Re-seed the tier filter when an Overview bar click routes one in.
+  const [tier, setTier] = useState<LicenseRiskTier | "">(() => licensesFromQuery(query).tier);
+
+  // The URL is the source; see ComponentsTable for why this compares strings.
+  const urlQuery = buildQuery(query);
+  const appliedRef = useRef(urlQuery);
   useEffect(() => {
-    if (initialTier !== undefined) setTier(initialTier);
-  }, [initialTier]);
+    if (appliedRef.current === urlQuery) return;
+    appliedRef.current = urlQuery;
+    setTier(licensesFromQuery(parseQuery(urlQuery)).tier);
+  }, [urlQuery]);
+
+  useEffect(() => {
+    const next = buildQuery(licensesToQuery(tier));
+    if (next === appliedRef.current) return;
+    appliedRef.current = next;
+    onQueryChange?.(parseQuery(next));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tier]);
 
   const filtered = useMemo(
     () =>
