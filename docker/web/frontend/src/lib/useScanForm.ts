@@ -174,6 +174,10 @@ export function useScanForm({
   const [errors, setErrors] = useState<FieldErrors>({});
   const [uploadError, setUploadError] = useState<UploadErrorInfo | null>(null);
   const [uploading, setUploading] = useState(false);
+  // Percentage of the chosen file that has reached the server, or null when no
+  // upload is in flight. Only the file upload reports this; the credential
+  // stashes below are a few bytes and finish before a bar would be seen.
+  const [uploadPercent, setUploadPercent] = useState<number | null>(null);
 
   /** Typing into a field resolves its inline error immediately. */
   const clearError = (k: keyof FieldErrors) =>
@@ -363,13 +367,16 @@ export function useScanForm({
     if (uploadKind && file) {
       try {
         setUploading(true);
-        token = (await uploadFile(file, uploadKind)).token;
+        setUploadPercent(0);
+        token = (await uploadFile(file, uploadKind, setUploadPercent)).token;
       } catch (e) {
         setUploadError(describeUploadError(e));
         setUploading(false);
+        setUploadPercent(null);
         return;
       }
       setUploading(false);
+      setUploadPercent(null);
     }
     // Private git URL: stash the token (single-use) so it never hits the query string.
     if (source === "git-url" && gitToken.trim()) {
@@ -481,7 +488,7 @@ export function useScanForm({
     uploadUrl, setUploadUrl,
     uploadToken, setUploadToken,
     truscaProjectId, setTruscaProjectId,
-    errors, uploadError, uploading,
+    errors, uploadError, uploading, uploadPercent,
     busy, uploadKind, textInput, isText, isAnalyze, isAiModel, showVendored,
     showDeepLicense, showIncludeOsv, showDeepCve, showByteStable, showOutboundLicense,
     showScanOptions, showUpload,
