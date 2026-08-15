@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The Components and Vulnerabilities sections link to each other. A component's expanded detail opens the vulnerability list filtered to that component, and a vulnerability's detail opens the component list filtered to its package. Moving between the two lists meant retyping the name into the other section's search box. The links sit in the expanded detail because each table row is itself the expand control, and a control nested inside a control is not announced reliably by screen readers.
 
+- The top bar has a help menu: documentation, the live demo, and the version that is running. Every link out of the app was inside a scan form before, so getting to the docs meant starting a scan first. The version comes from the running image; a local build that carries no version stamp says so rather than showing a blank.
+
 - Korean text in the web UI is set in Pretendard, bundled with the app. It fell back to whatever the operating system supplied — Apple SD Gothic on macOS, Malgun Gothic on Windows — so a Korean screen looked different on each platform and its letterforms did not line up with the Latin text beside them. Latin still uses Inter; Korean falls through to Pretendard, which is drawn to match it. The face is split across unicode ranges, so a screen loads the ranges it actually shows.
 
 - The Components and Vulnerabilities lists export to CSV, carrying whatever the table is currently showing rather than everything. Getting a filtered list into a spreadsheet meant copying rows out of the browser by hand. The file is written in the browser, so nothing about the scan leaves the machine, and it opens with the right characters in Excel.

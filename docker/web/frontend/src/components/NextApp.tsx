@@ -401,6 +401,7 @@ export function NextApp() {
       activeScanId={loadedIdRef.current}
       recent={recentLinks}
       onDeleteRecent={setPendingDelete}
+      version={capabilities.version}
       counts={counts}
       showSections={Boolean(result)}
       homeHref={homeHash()}

@@ -23,6 +23,8 @@ interface AppShellProps {
   recent?: RecentScanLink[];
   /** Delete a past scan from the Recent list. */
   onDeleteRecent?: (id: string) => void;
+  /** The running image's version, passed through to the help menu. */
+  version?: string;
   /** Per-section counts shown as trailing rail badges (dependencies is a split string). */
   counts?: Partial<Record<SectionId, number | string>>;
   /** Show the section rail (a scan is loaded); hidden on the idle home screens. */
@@ -66,6 +68,7 @@ export function AppShell({
   homeHref,
   showHomeLink,
   children,
+  version,
 }: AppShellProps) {
   // `null` until the user toggles manually; until then we follow the viewport.
   const [manualCollapsed, setManualCollapsed] = useState<boolean | null>(null);
@@ -92,6 +95,7 @@ export function AppShell({
         newHref={newHash()}
         recent={recent}
         onDeleteRecent={onDeleteRecent}
+        version={version}
       />
       {IS_STATIC_DEMO && <DemoBanner />}
       <div className="flex min-h-0 flex-1">
