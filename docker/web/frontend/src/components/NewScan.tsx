@@ -4,7 +4,6 @@
 import {
   Box,
   Brain,
-  ChevronRight,
   Cpu,
   FileArchive,
   FileBox,
@@ -24,6 +23,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { Capabilities, ScanConfig, ScanParams, SourceType } from "@/lib/api";
 import { useScanForm } from "@/lib/useScanForm";
+import { Disclosure } from "@/components/ui/disclosure";
 import { cn } from "@/lib/utils";
 
 import {
@@ -79,7 +79,7 @@ const SOURCE_GROUPS: Array<{ key: string; sources: SourceType[] }> = [
 const SECTION_LABEL =
   "text-xs font-semibold uppercase tracking-wider text-muted-foreground";
 
-/** Collapsed-by-default panel section (same <details> pattern as ProgressLog).
+/** Collapsed-by-default panel section, on the shared disclosure.
  *  Keeps the settings panel within one viewport: only identity, outputs and
  *  the run action stay always-visible; advanced groups fold away. `badge`
  *  keeps the enabled state readable while the section is closed. */
@@ -94,30 +94,23 @@ function PanelDisclosure({
   defaultOpen: boolean;
   children: ReactNode;
 }) {
-  // Captured once so React never fights the user's own open/close toggling.
-  const [initialOpen] = useState(defaultOpen);
   return (
-    <details className="group border-t pt-5" open={initialOpen}>
-      <summary
-        className={cn(
-          "flex cursor-pointer list-none items-center gap-1.5 rounded-sm",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-          "[&::-webkit-details-marker]:hidden",
-        )}
-      >
-        <ChevronRight
-          className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-fast ease-out-soft group-open:rotate-90"
-          aria-hidden
-        />
-        <span className={SECTION_LABEL}>{label}</span>
-        {badge && (
-          <span className="ml-auto rounded-full bg-brand/10 px-2 py-0.5 text-xs font-medium text-brand">
-            {badge}
-          </span>
-        )}
-      </summary>
+    <Disclosure
+      className="border-t pt-5"
+      defaultOpen={defaultOpen}
+      summary={
+        <>
+          <span className={SECTION_LABEL}>{label}</span>
+          {badge && (
+            <span className="ml-auto rounded-full bg-brand/10 px-2 py-0.5 text-xs font-medium text-brand">
+              {badge}
+            </span>
+          )}
+        </>
+      }
+    >
       <div className="mt-3 space-y-3">{children}</div>
-    </details>
+    </Disclosure>
   );
 }
 

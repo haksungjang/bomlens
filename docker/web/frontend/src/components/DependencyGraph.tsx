@@ -3,10 +3,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Search } from "lucide-react";
+import { Search, Workflow } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { EmptyState, ErrorState } from "@/components/ui/state";
 import { SEVERITY_ORDER, type Severity } from "@/lib/api";
 import type { GraphEdge, GraphNode } from "@/lib/sbomGraph";
 
@@ -285,17 +286,17 @@ export function DependencyGraph({
   // firmware SBOM): a node-only graph is unreadable overlapping dots, so show
   // the "no relationships" note and let the user use Components / Tree instead.
   if (nodes.length === 0 || edges.length === 0) {
-    return <p className="text-sm text-muted-foreground">{t("deps.empty")}</p>;
+    return <EmptyState icon={Workflow}>{t("deps.empty")}</EmptyState>;
   }
   if (tooLarge) {
     return (
-      <p className="text-sm text-muted-foreground">
+      <EmptyState icon={Workflow}>
         {t("deps.tooLarge", { count: nodes.length, cap: NODE_CAP })}
-      </p>
+      </EmptyState>
     );
   }
   if (error) {
-    return <p className="text-sm text-muted-foreground">{t("deps.graphError")}</p>;
+    return <ErrorState>{t("deps.graphError")}</ErrorState>;
   }
 
   return (

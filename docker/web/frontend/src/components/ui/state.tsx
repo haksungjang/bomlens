@@ -19,12 +19,17 @@ import { cn } from "@/lib/utils";
 function StateShell({
   className,
   children,
+  testId,
 }: {
   className?: string;
   children: ReactNode;
+  /** Lets a test assert that a section uses the shared state rather than its
+   *  own paragraph, which is how the three empty states drifted apart before. */
+  testId?: string;
 }) {
   return (
     <div
+      data-testid={testId}
       className={cn(
         "flex flex-col items-center justify-center gap-2 px-4 py-8 text-center text-sm text-muted-foreground",
         className,
@@ -44,7 +49,7 @@ export function LoadingState({
   className?: string;
 }) {
   return (
-    <StateShell className={className}>
+    <StateShell className={className} testId="loading-state">
       <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
       <span>{children}</span>
     </StateShell>
@@ -62,7 +67,7 @@ export function EmptyState({
   className?: string;
 }) {
   return (
-    <StateShell className={className}>
+    <StateShell className={className} testId="empty-state">
       {Icon ? (
         // The icon sits on a soft tinted plate (same language as the first-run
         // hero) so a blank section reads as intentional, not unfinished.
@@ -127,7 +132,7 @@ export function ErrorState({
   className?: string;
 }) {
   return (
-    <StateShell className={className}>
+    <StateShell className={className} testId="error-state">
       <div className="mb-1 flex h-12 w-12 items-center justify-center rounded-xl bg-destructive/10 text-destructive">
         <TriangleAlert className="h-6 w-6" aria-hidden />
       </div>
