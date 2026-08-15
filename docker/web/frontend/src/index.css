@@ -97,6 +97,18 @@
     --warning-solid: 245 158 11; /* amber-500 */
     --warning-border: 252 211 77; /* amber-300 */
     --warning-surface: 255 251 235; /* amber-50 */
+
+    /* Severity label colours. The risk tokens above are the hue a bar or a tint
+     * is filled with; these are the darker cut of the same hue that a label can
+     * be written in and still meet contrast on the tint. Two tokens per severity
+     * rather than one because a fill and a label have different jobs: the fill
+     * at label darkness is a heavy block, and the label at fill lightness fails
+     * contrast. */
+    --risk-critical-fg: 185 28 28; /* red-700 */
+    --risk-high-fg: 154 52 18; /* orange-800 */
+    --risk-medium-fg: 133 77 14; /* yellow-800 */
+    --risk-low-fg: 29 78 216; /* blue-700 */
+    --risk-info-fg: 71 85 105; /* slate-600 */
   }
 
   /* Dark theme — populated (mirrors the portal's reserved token names). */
@@ -165,6 +177,13 @@
     --warning-solid: 245 158 11; /* amber-500 */
     --warning-border: 251 191 36; /* amber-400 */
     --warning-surface: 69 26 3; /* amber-950 */
+
+    /* Severity labels lift on the dark canvas the same way the fills do. */
+    --risk-critical-fg: 252 165 165; /* red-300 */
+    --risk-high-fg: 253 186 116; /* orange-300 */
+    --risk-medium-fg: 253 224 71; /* yellow-300 */
+    --risk-low-fg: 147 197 253; /* blue-300 */
+    --risk-info-fg: 203 213 225; /* slate-300 */
   }
 
   * {

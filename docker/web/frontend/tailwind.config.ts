@@ -77,6 +77,13 @@ const config: Config = {
           medium: "rgb(var(--risk-medium) / <alpha-value>)",
           low: "rgb(var(--risk-low) / <alpha-value>)",
           info: "rgb(var(--risk-info) / <alpha-value>)",
+          // The label cut of each hue — see index.css for why a fill and a
+          // label cannot be the same value.
+          "critical-fg": "rgb(var(--risk-critical-fg) / <alpha-value>)",
+          "high-fg": "rgb(var(--risk-high-fg) / <alpha-value>)",
+          "medium-fg": "rgb(var(--risk-medium-fg) / <alpha-value>)",
+          "low-fg": "rgb(var(--risk-low-fg) / <alpha-value>)",
+          "info-fg": "rgb(var(--risk-info-fg) / <alpha-value>)",
         },
         // Success and warning states — same channel form as `risk` above, and
         // for the same reason: components tint these with alpha modifiers.
