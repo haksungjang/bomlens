@@ -15,8 +15,15 @@
  * whether or not the colours arrive.
  */
 
-/** Grammar loaders, keyed by the names `languageForPath` returns. */
-const GRAMMARS: Record<string, () => Promise<{ default: unknown }>> = {
+/**
+ * Grammar loaders, keyed by the names `languageForPath` returns.
+ *
+ * Exported so a test can hold the two halves against each other: a language the
+ * path mapper names but this map has no loader for highlights nothing, and does
+ * so silently — the viewer just shows plain text, which is also what it does
+ * when there is no grammar at all.
+ */
+export const GRAMMARS: Record<string, () => Promise<{ default: unknown }>> = {
   bash: () => import("highlight.js/lib/languages/bash"),
   c: () => import("highlight.js/lib/languages/c"),
   cpp: () => import("highlight.js/lib/languages/cpp"),
