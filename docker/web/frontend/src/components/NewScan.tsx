@@ -188,6 +188,10 @@ export function NewScan({
                         <button
                           key={s}
                           type="button"
+                          // The source id, not its label: a test that drives
+                          // this picker in both languages needs an anchor that
+                          // does not translate.
+                          data-testid={`source-${s}`}
                           aria-pressed={active}
                           aria-disabled={locked || undefined}
                           disabled={state.busy}

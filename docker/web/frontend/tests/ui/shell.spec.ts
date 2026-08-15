@@ -75,6 +75,20 @@ test("New scan screen has no axe violations", async ({ page }) => {
   expect(results.violations).toEqual([]);
 });
 
+// The upload field only exists once an upload source is picked, so the New scan
+// baseline above — which captures the screen in its default current-folder
+// state — never sees it. Without this the dropzone had no pixel guard at all:
+// its first baseline would be whatever it was told to be, and nothing would
+// notice it drifting afterwards.
+for (const { theme, lang } of COMBOS) {
+  test(`upload dropzone matches baseline — ${theme}/${lang} @visual`, async ({ page }) => {
+    await openNewScan(page, theme, lang);
+    await page.getByTestId("source-zip-upload").click();
+    await expect(page.getByTestId("dropzone")).toBeVisible();
+    await captureMain(page, "upload-dropzone", theme, lang);
+  });
+}
+
 test("New scan screen matches baseline — light/en @visual", async ({ page }) => {
   await openNewScan(page, "light", "en");
   await page.mouse.move(0, 0); // neutral pointer — avoid hover-state flake
