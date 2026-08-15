@@ -155,7 +155,11 @@ jobs:
           set -euo pipefail
           test -d out || { echo "::error::no scan output to capture"; exit 1; }
           echo "run folders:"; ls -1 out
-          ./scripts/capture-demo-data.sh "$PWD/out"
+          # The capabilities response comes from server.py run here rather than
+          # from the image, so the version it reports has to be passed in. A
+          # capture against `latest` leaves it empty, which the UI states.
+          DEMO_VERSION="$(printf '%s' "${{ inputs.image_tag }}" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true)" \
+            ./scripts/capture-demo-data.sh "$PWD/out"
 
       - name: Summarize what changed
         run: |

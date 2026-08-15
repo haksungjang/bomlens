@@ -132,7 +132,7 @@ fetch "/scans" "$DEST/scans.json"
 # jq-free python edit so the script needs no extra tool.
 fetch "/capabilities" "$DEST/capabilities.json"
 python3 - "$DEST/capabilities.json" <<'PY'
-import json, sys
+import json, os, sys
 p = sys.argv[1]
 caps = json.load(open(p))
 for k in ("firmware", "scanoss", "docker", "aibom", "deepCve"):
@@ -143,6 +143,12 @@ for k in ("spdxExport", "hfAuth", "firmwareSibling", "aibomSibling",
         caps[k] = False
 caps["hostDir"] = ""
 caps["scanRoots"] = []
+# The version this capture represents. It comes from the environment rather
+# than from the response because the responder is server.py run straight on
+# the capture machine, where BOMLENS_VERSION is not set — the scans themselves
+# ran in the released image and do carry it. Left empty when unknown, which
+# the UI states outright rather than showing a blank.
+caps["version"] = os.environ.get("DEMO_VERSION", "")
 json.dump(caps, open(p, "w"), indent=1)
 PY
 
