@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The Components and Vulnerabilities sections link to each other. A component's expanded detail opens the vulnerability list filtered to that component, and a vulnerability's detail opens the component list filtered to its package. Moving between the two lists meant retyping the name into the other section's search box. The links sit in the expanded detail because each table row is itself the expand control, and a control nested inside a control is not announced reliably by screen readers.
 
+- Collapsible sections show that they can be opened. The conformance crosswalk row and its "Met with:" and "Example:" toggles were bare text with no chevron, so the way to see which requirements a count stood for was to guess that the label was clickable. Every folding surface in the app now carries the same turning chevron.
+
+- Sections with nothing to show say so the same way everywhere. The dependency graph's "no relationships" and "too large" notes, its error, and the empty artifacts list were bare paragraphs while the rest of the app used a shared empty state.
+
 - A file can be dropped onto the upload sources instead of picked through a dialog, and the upload reports how far along it is. The field was a bare file input: the firmware images and model weights these sources take run to gigabytes, and once the run started there was nothing on screen to say whether anything was moving. The chosen file now shows its name and size with a way to replace or remove it, and a percentage while it uploads.
 
 - The progress bar reports its position to screen readers. It was rendered without its value reaching the underlying control, so it moved on screen while announcing nothing — this affected the scan progress bar as well.

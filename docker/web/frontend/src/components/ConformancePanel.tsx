@@ -27,6 +27,7 @@ import {
   splitChecks,
   verdictTally,
 } from "@/lib/conformance";
+import { Disclosure } from "@/components/ui/disclosure";
 import { cn } from "@/lib/utils";
 
 const STATUS = {
@@ -168,8 +169,10 @@ function CrosswalkBlock({
                         the reader to work out which. The rows are already in the
                         payload; folding them under the framework answers the
                         question the table raises. */}
-                    <details>
-                      <summary className="cursor-pointer text-foreground">{fw.title}</summary>
+                    <Disclosure
+                      summaryClassName="text-foreground"
+                      summary={<span>{fw.title}</span>}
+                    >
                       <ul className="mt-1 space-y-0.5">
                         {fw.elements.map((el, i) => {
                           const { Icon, color } = statusOfValue(el.status);
@@ -186,7 +189,7 @@ function CrosswalkBlock({
                           );
                         })}
                       </ul>
-                    </details>
+                    </Disclosure>
                     <div className="text-xs text-muted-foreground">{fw.source}</div>
                   </td>
                   <td className="py-1.5 px-2 text-right tabular-nums text-foreground">{fw.present}</td>
@@ -324,10 +327,11 @@ function CheckRow({ check }: { check: ConformanceCheck }) {
           // Folded: the values that satisfied an element are worth having, and
           // worth having on request. Open by default they made every met row as
           // tall as an unmet one.
-          <details className="mt-1">
-            <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
-              {t("g7.evidence")}
-            </summary>
+          <Disclosure
+            className="mt-1"
+            summaryClassName="text-xs font-medium text-muted-foreground"
+            summary={<span>{t("g7.evidence")}</span>}
+          >
             <div className="mt-0.5 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
               {evidence.map((e, i) => (
                 <code
@@ -338,7 +342,7 @@ function CheckRow({ check }: { check: ConformanceCheck }) {
                 </code>
               ))}
             </div>
-          </details>
+          </Disclosure>
         ) : null}
         {fix ? (
           <div className="mt-1 rounded-md bg-muted/50 px-2.5 py-1.5 text-xs leading-relaxed text-foreground">
@@ -354,14 +358,15 @@ function CheckRow({ check }: { check: ConformanceCheck }) {
           // Folded away: a page that shows every fragment open runs to twelve
           // thousand pixels, and the fragment is only wanted once a reader has
           // decided to act on that row.
-          <details className="mt-1">
-            <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
-              {t("g7.example")}
-            </summary>
+          <Disclosure
+            className="mt-1"
+            summaryClassName="text-xs font-medium text-muted-foreground"
+            summary={<span>{t("g7.example")}</span>}
+          >
             <pre className="mt-0.5 overflow-x-auto rounded-md bg-muted px-2.5 py-2 text-[11px] leading-relaxed text-foreground">
               <code className="font-mono">{guidance.snippet}</code>
             </pre>
-          </details>
+          </Disclosure>
         ) : null}
         {guidance?.docUrl ? (
           <a

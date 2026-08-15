@@ -1,7 +1,6 @@
 // Copyright 2026 SK Telecom Co., Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
-import { ChevronRight } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -14,6 +13,7 @@ import {
 import { Progress } from "@/components/ui/progress";
 import type { ScanProgress } from "@/lib/api";
 import { stageProgress } from "@/lib/scanProgress";
+import { Disclosure } from "@/components/ui/disclosure";
 import { cn } from "@/lib/utils";
 
 export type RunStatus = "running" | "done" | "error";
@@ -110,16 +110,13 @@ export function ProgressLog({
   if (collapsible) {
     return (
       <Card className="animate-fade-in">
-        <details className="group">
-          <summary className="flex cursor-pointer list-none items-center gap-2 p-6 text-base font-semibold tracking-tight [&::-webkit-details-marker]:hidden">
-            <ChevronRight
-              className="h-4 w-4 text-muted-foreground transition-transform duration-fast ease-out-soft group-open:rotate-90"
-              aria-hidden
-            />
-            {t("progress.title")}
-          </summary>
+        <Disclosure
+          size="md"
+          summaryClassName="p-6 text-base font-semibold tracking-tight"
+          summary={t("progress.title")}
+        >
           <div className="space-y-3 px-6 pb-6">{body}</div>
-        </details>
+        </Disclosure>
       </Card>
     );
   }
