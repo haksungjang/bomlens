@@ -453,7 +453,7 @@ export function NextApp() {
                 role="status"
                 className={
                   result.ok
-                    ? "rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-300"
+                    ? "rounded-full bg-success-solid/10 px-2 py-0.5 text-xs font-medium text-success"
                     : "rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive"
                 }
               >

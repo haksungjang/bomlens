@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The fixed-version column reads in a darker green. The previous shade measured 3.77:1 against the light background, below the 4.5:1 minimum.
 
+- The model integrity check reads in the same green as every other success mark. It used a shade that measured 3.77:1 on the light background, under the 4.5:1 minimum, and carried no dark-mode pair at all, so it stayed dark green against the near-black canvas.
+
 - Deleting a scan asks for confirmation first, naming the scan it is about to remove. The delete control in the scan table and the one in the top bar's scan menu both removed a scan's output folder on a single click, and because the files are gone from disk with no copy kept, a mis-click could not be taken back. The prompt opens on Cancel, and a confirmed delete says so. Modal dialogs also hold the keyboard now: focus moves into the panel when one opens, Tab stays inside it, and it returns to whatever opened the dialog on close.
 
 ### Added
