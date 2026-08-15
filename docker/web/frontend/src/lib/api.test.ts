@@ -115,24 +115,98 @@ describe("network functions", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
+  /** Minimal XMLHttpRequest stand-in: this suite runs in node, which has none. */
+  function stubXhr() {
+    const handlers: Record<string, (e?: unknown) => void> = {};
+    const uploadHandlers: Record<string, (e: unknown) => void> = {};
+    const xhr = {
+      method: "",
+      url: "",
+      body: undefined as unknown,
+      status: 0,
+      responseText: "",
+      responseType: "",
+      upload: {
+        addEventListener: (type: string, fn: (e: unknown) => void) => {
+          uploadHandlers[type] = fn;
+        },
+      },
+      open(method: string, url: string) {
+        this.method = method;
+        this.url = url;
+      },
+      addEventListener(type: string, fn: (e?: unknown) => void) {
+        handlers[type] = fn;
+      },
+      send(body: unknown) {
+        this.body = body;
+      },
+      progress(loaded: number, total: number, lengthComputable = true) {
+        uploadHandlers.progress?.({ loaded, total, lengthComputable });
+      },
+      finish(status: number, responseText: string) {
+        this.status = status;
+        this.responseText = responseText;
+        handlers.load?.();
+      },
+      fail() {
+        handlers.error?.();
+      },
+    };
+    vi.stubGlobal(
+      "XMLHttpRequest",
+      function XMLHttpRequestStub(this: unknown) {
+        return xhr;
+      } as unknown as typeof XMLHttpRequest,
+    );
+    return xhr;
+  }
+
+  // uploadFile is the one call that does not go through fetch: it needs the
+  // upload progress only XHR reports. The request it builds is the same
+  // multipart POST fetch sent, which is what these assert.
   it("uploadFile POSTs multipart with the kind in query and body", async () => {
-    fetchMock.mockResolvedValue(ok({ token: "T1", filename: "a.zip" }));
+    const xhr = stubXhr();
     const file = new File(["data"], "a.zip");
-    const res = await uploadFile(file, "zip");
-    expect(res).toEqual({ token: "T1", filename: "a.zip" });
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("/upload?kind=zip");
-    expect(init.method).toBe("POST");
-    expect(init.body).toBeInstanceOf(FormData);
-    expect((init.body as FormData).get("kind")).toBe("zip");
+    const pending = uploadFile(file, "zip");
+    xhr.finish(200, JSON.stringify({ token: "T1", filename: "a.zip" }));
+    expect(await pending).toEqual({ token: "T1", filename: "a.zip" });
+    expect(xhr.method).toBe("POST");
+    expect(xhr.url).toBe("/upload?kind=zip");
+    expect(xhr.body).toBeInstanceOf(FormData);
+    expect((xhr.body as FormData).get("kind")).toBe("zip");
   });
 
   it("uploadFile throws an ApiError carrying the status and server message", async () => {
-    fetchMock.mockResolvedValue(fail(413, { error: "too big" }));
-    const err = await uploadFile(new File([""], "a"), "zip").catch((e) => e);
+    const xhr = stubXhr();
+    const pending = uploadFile(new File([""], "a"), "zip").catch((e) => e);
+    xhr.finish(413, JSON.stringify({ error: "too big" }));
+    const err = await pending;
     expect(err).toBeInstanceOf(ApiError);
     expect(err.status).toBe(413);
     expect(err.message).toBe("too big");
+  });
+
+  it("uploadFile reports progress as a percentage", async () => {
+    const xhr = stubXhr();
+    const seen: number[] = [];
+    const pending = uploadFile(new File([""], "a"), "zip", (p) => seen.push(p));
+    xhr.progress(25, 100);
+    xhr.progress(100, 100);
+    // A body of unknown length reports nothing rather than a made-up number.
+    xhr.progress(1, 0, false);
+    xhr.finish(200, JSON.stringify({ token: "T", filename: "a" }));
+    await pending;
+    expect(seen).toEqual([25, 100]);
+  });
+
+  it("uploadFile turns a dropped connection into an ApiError", async () => {
+    const xhr = stubXhr();
+    const pending = uploadFile(new File([""], "a"), "zip").catch((e) => e);
+    xhr.fail();
+    const err = await pending;
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(0);
   });
 
   it("stashGitCred POSTs a JSON token and returns the credId", async () => {

@@ -748,30 +748,67 @@ export function describeUploadError(e: unknown): UploadErrorInfo {
   };
 }
 
-/** Upload a file (zip/sbom/firmware) and get back a server-side token. */
-export async function uploadFile(
+/**
+ * Upload a file (zip/sbom/firmware) and get back a server-side token.
+ *
+ * XMLHttpRequest rather than fetch: only XHR reports how much of the request
+ * body has gone out, and these uploads are firmware images and model weights
+ * measured in gigabytes, where a spinner says nothing about whether anything
+ * is happening. `onProgress` receives a 0-100 percentage, and is not called at
+ * all when the browser cannot say how large the body is.
+ *
+ * The request contract is byte-for-byte what fetch sent: the same multipart
+ * body with the same two fields, to the same URL. The server is untouched.
+ */
+export function uploadFile(
   file: File,
   kind: UploadKind,
+  onProgress?: (percent: number) => void,
 ): Promise<{ token: string; filename: string }> {
   if (IS_STATIC_DEMO) demoWriteRefused();
   const fd = new FormData();
   fd.append("kind", kind);
   fd.append("file", file);
-  const res = await fetch(`/upload?kind=${encodeURIComponent(kind)}`, {
-    method: "POST",
-    body: fd,
-  });
-  if (!res.ok) {
-    let msg = `upload failed (${res.status})`;
-    try {
-      const j = await res.json();
-      if (j && j.error) msg = j.error;
-    } catch {
-      /* keep default */
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `/upload?kind=${encodeURIComponent(kind)}`);
+    xhr.responseType = "text";
+
+    if (onProgress) {
+      xhr.upload.addEventListener("progress", (e) => {
+        if (!e.lengthComputable || !e.total) return;
+        onProgress(Math.min(100, Math.round((e.loaded / e.total) * 100)));
+      });
     }
-    throw new ApiError(msg, res.status);
-  }
-  return (await res.json()) as { token: string; filename: string };
+
+    xhr.addEventListener("load", () => {
+      const body = xhr.responseText;
+      if (xhr.status < 200 || xhr.status >= 300) {
+        let msg = `upload failed (${xhr.status})`;
+        try {
+          const j = JSON.parse(body);
+          if (j && j.error) msg = j.error;
+        } catch {
+          /* keep default */
+        }
+        reject(new ApiError(msg, xhr.status));
+        return;
+      }
+      try {
+        resolve(JSON.parse(body) as { token: string; filename: string });
+      } catch {
+        reject(new ApiError("upload failed (bad response)", xhr.status));
+      }
+    });
+    // A dropped connection and an aborted request both land here; neither
+    // carries a status, so they read as a network failure rather than a
+    // server error.
+    xhr.addEventListener("error", () => reject(new ApiError("upload failed", 0)));
+    xhr.addEventListener("abort", () => reject(new ApiError("upload failed", 0)));
+
+    xhr.send(fd);
+  });
 }
 
 /** Stash a private-repo token; returns a single-use credId for the scan. */

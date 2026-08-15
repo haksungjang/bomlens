@@ -1,6 +1,7 @@
 // Copyright 2026 SK Telecom Co., Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
+import AxeBuilder from "@axe-core/playwright";
 import { test, expect, type Page } from "@playwright/test";
 
 // Exercises the ZIP-upload flow end-to-end in the frontend: selecting the upload
@@ -70,4 +71,118 @@ test("a failed upload surfaces an error instead of running the scan", async ({ p
   // error text, and the scan does not start.
   await expect(page.getByText(/file is too large for the server/i)).toBeVisible();
   await expect(page.getByText("file too large for zip")).toHaveCount(0);
+});
+
+/**
+ * The dropzone: a file arrives either by the picker or by being dropped, and
+ * both land in the same native input so the form has one source of truth.
+ *
+ * Drops are synthesised here. Playwright cannot drive the OS file manager, so
+ * what these cover is the page's own handling of a drop event carrying a file;
+ * dragging from a real file manager is checked by hand.
+ */
+async function dropFile(page: Page, name: string, body: string) {
+  await page.evaluate(
+    ({ name, body }) => {
+      const dt = new DataTransfer();
+      dt.items.add(new File([body], name, { type: "application/zip" }));
+      const zone = document.querySelector('[data-testid="dropzone"]');
+      if (!zone) throw new Error("no dropzone on screen");
+      zone.dispatchEvent(new DragEvent("dragover", { dataTransfer: dt, bubbles: true }));
+      zone.dispatchEvent(new DragEvent("drop", { dataTransfer: dt, bubbles: true }));
+    },
+    { name, body },
+  );
+}
+
+test("a dropped file is attached and can be scanned", async ({ page }) => {
+  await stub(page, { uploadOk: true });
+  let uploaded = false;
+  page.on("request", (req) => {
+    if (req.url().includes("/upload")) uploaded = true;
+  });
+  await page.goto("/#/new");
+  await page.fill("#project", "demo");
+  await page.fill("#version", "1.0");
+  await page.getByRole("button", { name: /ZIP upload/i }).click();
+
+  await dropFile(page, "dropped.zip", "PK dropped bytes");
+
+  // The zone becomes a summary of the file rather than an invitation to pick one.
+  await expect(page.getByTestId("dropzone-name")).toHaveText("dropped.zip");
+  await expect(page.locator("#file")).toHaveJSProperty("files.0.name", "dropped.zip");
+
+  await page.getByTestId("run-scan").click();
+  await expect.poll(() => uploaded).toBe(true);
+  await expect(page.getByText(/Failed to fetch/i)).toHaveCount(0);
+});
+
+test("the chosen file can be taken back off", async ({ page }) => {
+  await stub(page, { uploadOk: true });
+  await page.goto("/#/new");
+  await page.getByRole("button", { name: /ZIP upload/i }).click();
+  await dropFile(page, "wrong.zip", "PK wrong");
+  await expect(page.getByTestId("dropzone-name")).toHaveText("wrong.zip");
+
+  await page.getByRole("button", { name: /Remove the chosen file/i }).click();
+
+  await expect(page.getByTestId("dropzone-name")).toHaveCount(0);
+  await expect(page.locator("#file")).toHaveJSProperty("files.length", 0);
+});
+
+test("upload progress is reported while the file goes out", async ({ page }) => {
+  await stub(page, { uploadOk: true });
+  // Hold the response open so the in-flight state stays on screen, and drive
+  // the upload's progress events directly: a stubbed route transfers nothing,
+  // so the browser has no real progress to report.
+  await page.route("**/upload**", async (r) => {
+    await new Promise((res) => setTimeout(res, 1500));
+    await r.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ token: "tok123", filename: "demo.zip" }),
+    });
+  });
+  await page.addInitScript(() => {
+    const send = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.send = function (this: XMLHttpRequest, body?: unknown) {
+      setTimeout(() => {
+        this.upload.dispatchEvent(
+          new ProgressEvent("progress", { lengthComputable: true, loaded: 42, total: 100 }),
+        );
+      }, 50);
+      return send.call(this, body as Document | XMLHttpRequestBodyInit | null);
+    };
+  });
+
+  await page.goto("/#/new");
+  await page.fill("#project", "demo");
+  await page.fill("#version", "1.0");
+  await page.getByRole("button", { name: /ZIP upload/i }).click();
+  await dropFile(page, "demo.zip", "PK demo");
+  await page.getByTestId("run-scan").click();
+
+  await expect(page.getByText("Uploading… 42%")).toBeVisible();
+  await expect(page.getByRole("progressbar", { name: "Upload progress" })).toHaveAttribute(
+    "aria-valuenow",
+    "42",
+  );
+});
+
+test("the dropzone has no axe violations, before and after a file", async ({ page }) => {
+  await stub(page, { uploadOk: true });
+  await page.goto("/#/new");
+  await page.getByRole("button", { name: /ZIP upload/i }).click();
+  await expect(page.getByTestId("dropzone")).toBeVisible();
+
+  const empty = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  expect(empty.violations).toEqual([]);
+
+  await dropFile(page, "demo.zip", "PK demo");
+  await expect(page.getByTestId("dropzone-name")).toBeVisible();
+  const filled = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  expect(filled.violations).toEqual([]);
 });
