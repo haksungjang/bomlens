@@ -450,11 +450,11 @@ test("global search routes to a component with the term applied", async ({ page 
   await stubAndRun(page);
   await expect(page.getByRole("link", { name: /^Overview/ })).toBeVisible();
 
-  const box = page.getByPlaceholder("Search components, CVEs…");
+  const box = page.getByTestId("global-search");
   await box.click();
   await box.fill("openssl");
   // The popover lists the matching component; pick it (the CVE row starts "CVE-").
-  await page.getByRole("listbox").getByRole("button", { name: /^openssl/ }).click();
+  await page.getByRole("listbox").getByRole("option", { name: /^openssl/ }).click();
 
   // Lands on Components, filtered to openssl (the transitive zlib is gone).
   await expect(page.getByRole("link", { name: /^Components/ })).toHaveAttribute(
@@ -463,6 +463,85 @@ test("global search routes to a component with the term applied", async ({ page 
   );
   await expect(page.getByText("openssl", { exact: true })).toBeVisible();
   await expect(page.getByText("zlib", { exact: true })).toHaveCount(0);
+});
+
+test("global search is reachable and usable by keyboard alone", async ({ page }) => {
+  await stubAndRun(page);
+  await expect(page.getByRole("link", { name: /^Overview/ })).toBeVisible();
+
+  const box = page.getByTestId("global-search");
+  // Landing on a section moves focus to its heading (NextApp's section-change
+  // effect); let that settle before testing where focus goes next.
+  await waitForMainSettled(page);
+  await page.keyboard.press("ControlOrMeta+k");
+  await expect(box).toBeFocused();
+
+  // The query goes in with fill rather than keystrokes: the heading-focus
+  // effect can land between two keypresses and take the rest of the word with
+  // it. What this test is about — reaching the box, walking the list, choosing
+  // without a mouse — is unaffected.
+  await box.fill("openssl");
+  await expect(box).toBeFocused();
+  const listbox = page.getByRole("listbox");
+  await expect(listbox).toBeVisible();
+  // Closed combobox has no active option until the user arrows into the list.
+  await expect(box).not.toHaveAttribute("aria-activedescendant", /./);
+
+  await page.keyboard.press("ArrowDown");
+  const first = listbox.getByRole("option").first();
+  await expect(first).toHaveAttribute("aria-selected", "true");
+  const activeId = await box.getAttribute("aria-activedescendant");
+  expect(activeId).toBe(await first.getAttribute("id"));
+
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("link", { name: /^Components/ })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await expect(page.getByText("openssl", { exact: true })).toBeVisible();
+});
+
+test("arrow keys cross the component/CVE boundary and wrap", async ({ page }) => {
+  await stubAndRun(page);
+  const box = page.getByTestId("global-search");
+  await box.click();
+  // "ssl" matches the openssl component and the CVE row that names it, so the
+  // list spans both groups.
+  await box.fill("ssl");
+  const options = page.getByRole("listbox").getByRole("option");
+  const count = await options.count();
+  expect(count).toBeGreaterThan(1);
+
+  await page.keyboard.press("ArrowDown");
+  await expect(options.first()).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("ArrowUp");
+  // Up from the first wraps to the last, which lives in the other group.
+  await expect(options.nth(count - 1)).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("End");
+  await expect(options.nth(count - 1)).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("Home");
+  await expect(options.first()).toHaveAttribute("aria-selected", "true");
+
+  // Escape closes without navigating.
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("listbox")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: /^Overview/ })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+});
+
+test("open search popover has no axe violations", async ({ page }) => {
+  await stubAndRun(page);
+  const box = page.getByTestId("global-search");
+  await box.click();
+  await box.fill("ssl");
+  await expect(page.getByRole("listbox")).toBeVisible();
+  await page.keyboard.press("ArrowDown");
+  const results = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  expect(results.violations).toEqual([]);
 });
 
 test("cancelling a running scan returns to New scan", async ({ page }) => {

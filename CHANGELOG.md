@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The Components and Vulnerabilities sections link to each other. A component's expanded detail opens the vulnerability list filtered to that component, and a vulnerability's detail opens the component list filtered to its package. Moving between the two lists meant retyping the name into the other section's search box. The links sit in the expanded detail because each table row is itself the expand control, and a control nested inside a control is not announced reliably by screen readers.
 
+- The global search takes Cmd/Ctrl+K from anywhere in the app and shows that shortcut in the box, and its results walk with the arrow keys. Reaching the search needed a mouse or a long tab sequence, and the result list could only be clicked: it carried a listbox role but no options to move between, so a keyboard user could type a query and then have nowhere to go. The list follows the ARIA combobox pattern now — focus stays in the input and the active result is named by `aria-activedescendant` — with Home and End for either end, Escape to close, and Enter still taking the first result when nothing is active.
+
 - The fixed-version column reads in a darker green. The previous shade measured 3.77:1 against the light background, below the 4.5:1 minimum.
 
 - The model integrity check reads in the same green as every other success mark. It used a shade that measured 3.77:1 on the light background, under the 4.5:1 minimum, and carried no dark-mode pair at all, so it stayed dark green against the near-black canvas.
