@@ -216,3 +216,31 @@ for (const { theme, lang } of COMBOS) {
     await captureMain(page, "source-tree", theme, lang);
   });
 }
+
+/**
+ * Syntax highlighting. It is a reading aid rather than the content, so what is
+ * asserted is that it arrives for a file whose grammar is known, that it does
+ * not for one that has none, and that the text itself is unchanged either way —
+ * the highlighter marks up the source, it does not rewrite it.
+ */
+test("a file with a known grammar is highlighted", async ({ page }) => {
+  await runScan(page);
+  await page.getByRole("button", { name: /main\.go/ }).click();
+
+  // The grammar loads on demand, so the markup arrives a beat after the text.
+  await expect(page.locator(".hljs-keyword").first()).toBeVisible();
+  await expect(page.locator(".hljs-string").first()).toHaveText('"hi"');
+
+  // The body still reads as the file, with its line count unchanged.
+  await expect(page.getByText("package main")).toBeVisible();
+  await expect(page.getByText("5 lines")).toBeVisible();
+});
+
+test("a file with no grammar is shown as plain text", async ({ page }) => {
+  await runScan(page);
+  // LICENSE carries no extension and no grammar worth guessing at.
+  await page.getByRole("button", { name: /LICENSE/ }).click();
+
+  await expect(page.getByText("MIT License")).toBeVisible();
+  await expect(page.locator(".hljs-keyword")).toHaveCount(0);
+});
