@@ -34,11 +34,29 @@ function packageRootOf(id) {
   return id.slice(0, at + marker.length) + rest.slice(0, depth).join(path.sep);
 }
 
-function readLicenseText(dir) {
+/**
+ * License texts kept in the repo for packages that ship none of their own.
+ * A licence that requires its text to travel with the work (OFL, MIT, BSD)
+ * is not discharged by naming it in a manifest, so where the package leaves
+ * the text out we carry it: `licenses/<package>.txt`, scoped names flattened
+ * with a dash.
+ */
+const VENDORED_LICENSES = path.join(process.cwd(), "licenses");
+
+function readLicenseText(dir, pkgName) {
   for (const name of LICENSE_FILENAMES) {
     const p = path.join(dir, name);
     if (fs.existsSync(p) && fs.statSync(p).isFile()) {
       return { text: fs.readFileSync(p, "utf8").trim(), file: name };
+    }
+  }
+  if (pkgName) {
+    const vendored = path.join(VENDORED_LICENSES, `${pkgName.replace(/\//g, "-")}.txt`);
+    if (fs.existsSync(vendored)) {
+      return {
+        text: fs.readFileSync(vendored, "utf8").trim(),
+        file: path.join("licenses", path.basename(vendored)),
+      };
     }
   }
   return { text: null, file: null };
@@ -73,7 +91,7 @@ export function thirdPartyNotices({ fileName = "third-party-licenses.txt" } = {}
         const manifestPath = path.join(root, "package.json");
         if (!fs.existsSync(manifestPath)) continue;
         const pkg = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-        const { text, file } = readLicenseText(root);
+        const { text, file } = readLicenseText(root, pkg.name);
         entries.push({
           name: pkg.name,
           version: pkg.version,
