@@ -267,7 +267,25 @@
     "maliciousBadgeHint": "Published to attack whoever installs it. Remove it and rotate any credential the build could reach — there is no version to upgrade to.",
     "kernelAdvisories": "{{count}} kernel advisories are reported in the security report and are not counted above. Most advisories against a kernel are for subsystems a device never compiled in, and the SBOM cannot tell which.",
     "viewInComponents": "View {{name}} in Components",
-    "viewInVulns": "View vulnerabilities for {{name}}"
+    "viewInVulns": "View vulnerabilities for {{name}}",
+    "exportCsv": "Export CSV",
+    "csvName": "Name",
+    "csvVersion": "Version",
+    "csvType": "Type",
+    "csvLicenses": "Licenses",
+    "csvScope": "Scope",
+    "csvVulnCount": "Vulnerabilities",
+    "csvMaxSeverity": "Max severity",
+    "csvPurl": "Package URL",
+    "csvCve": "CVE",
+    "csvSeverity": "Severity",
+    "csvPackage": "Package",
+    "csvInstalled": "Installed",
+    "csvFixed": "Fixed in",
+    "csvCvss": "CVSS",
+    "csvEpss": "EPSS",
+    "csvKev": "Known exploited",
+    "csvTitle": "Title"
   },
   "deps": {
     "loading": "Loading dependencies…",
@@ -289,7 +307,11 @@
     "interactHint": "Hover to trace a package's links; click for details.",
     "keyboardHint": "Keyboard users: switch to Tree to navigate.",
     "graphAria": "Dependency graph (visual). Switch to Tree view to navigate by keyboard.",
-    "hasVuln": "Has known vulnerabilities"
+    "hasVuln": "Has known vulnerabilities",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "fit": "Fit to view",
+    "savePng": "Save as PNG"
   },
   "sourceTree": {
     "loading": "Loading source tree…",
