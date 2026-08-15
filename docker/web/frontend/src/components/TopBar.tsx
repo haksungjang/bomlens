@@ -1,11 +1,21 @@
 // Copyright 2026 SK Telecom Co., Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Clock, Plus, RotateCw, X } from "lucide-react";
+import {
+  BookOpen,
+  CircleQuestionMark,
+  Clock,
+  ExternalLink,
+  MonitorPlay,
+  Plus,
+  RotateCw,
+  X,
+} from "lucide-react";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Button, buttonVariants } from "@/components/ui/button";
+import { demoUrl, docsUrl } from "@/lib/demo";
 import { IS_STATIC_DEMO } from "@/lib/demo";
 import { type RecentScanLink } from "@/lib/nav";
 import { scanHash } from "@/lib/route";
@@ -27,6 +37,9 @@ interface TopBarProps {
   onRescan?: () => void;
   /** Hash for the home (Recent scans) screen — the logo links here. */
   homeHref: string;
+  /** The running image's version, from `capabilities`. Absent on a local build,
+   *  where the help menu says the build carries no version rather than blank. */
+  version?: string;
   /** Render the logo as a link home (off on the Recent home screen itself). */
   showHomeLink?: boolean;
   /** Hash for the New scan screen — the primary global action. */
@@ -63,6 +76,7 @@ export function TopBar({
   newHref,
   recent = [],
   onDeleteRecent,
+  version,
 }: TopBarProps) {
   const { t, i18n } = useTranslation();
   // BASE_URL, not "/": the demo is served from a sub-path, where a rooted src
@@ -136,6 +150,7 @@ export function TopBar({
           homeHref={homeHref}
           onDeleteRecent={onDeleteRecent}
         />
+        <HelpMenu version={version} />
         <LangToggle />
         <ThemeToggle />
       </div>
@@ -148,6 +163,95 @@ export function TopBar({
  * (severity dot + label, optional delete) with a link to the full Recent home.
  * Closes on outside pointer-down or Escape, mirroring GlobalSearch.
  */
+/**
+ * Documentation, the demo, and which version is running.
+ *
+ * Every other way out of the app was inside a scan form, so a reader who
+ * wanted the docs had to already be starting a scan. The version matters when
+ * someone reports a problem: "the one I downloaded" is not an answer, and a
+ * local build that carries no stamp says so rather than showing a blank.
+ */
+function HelpMenu({ version }: { version?: string }) {
+  const { t, i18n } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const panelId = useId();
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (e: PointerEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const item =
+    "flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted focus-visible:bg-muted focus-visible:outline-none";
+
+  return (
+    <div ref={wrapRef} className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="true"
+        aria-expanded={open}
+        aria-controls={open ? panelId : undefined}
+        aria-label={t("nav.help")}
+        title={t("nav.help")}
+        data-testid="help-menu"
+        className={cn(
+          "inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground",
+          "transition-colors duration-fast ease-out-soft hover:bg-muted hover:text-foreground",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
+          open && "bg-muted text-foreground",
+        )}
+      >
+        <CircleQuestionMark className="h-4 w-4" aria-hidden />
+      </button>
+      {open && (
+        <div
+          id={panelId}
+          className="absolute right-0 top-full z-30 mt-1 w-64 max-w-[90vw] overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-lg"
+        >
+          <a
+            href={docsUrl(i18n.language)}
+            target="_blank"
+            rel="noreferrer noopener"
+            onClick={() => setOpen(false)}
+            className={item}
+          >
+            <BookOpen className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+            {t("nav.helpDocs")}
+            <ExternalLink className="ml-auto h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />
+          </a>
+          <a
+            href={demoUrl()}
+            target="_blank"
+            rel="noreferrer noopener"
+            onClick={() => setOpen(false)}
+            className={item}
+          >
+            <MonitorPlay className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+            {t("nav.helpDemo")}
+            <ExternalLink className="ml-auto h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />
+          </a>
+          <p className="border-t px-3 py-2 text-xs text-muted-foreground" data-testid="app-version">
+            {version ? t("nav.helpVersion", { version }) : t("nav.helpVersionUnknown")}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RecentMenu({
   recent,
   homeHref,

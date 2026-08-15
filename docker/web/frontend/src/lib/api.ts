@@ -682,6 +682,10 @@ export interface Capabilities {
   /** Deep CVE is satisfied by a sibling container, so the first run pulls the
    *  (large) deep-cve image — show the one-time notice. */
   deepCveSibling?: boolean;
+  /** The running image's version, as stamped at build time. Empty on a local
+   *  build; the UI then omits the version rather than showing a blank or a
+   *  guess. */
+  version?: string;
   /** The results screen can convert a finished BOM to SPDX 2.3 (syft here, or a
    *  sibling scanner container). False hides the export action. */
   spdxExport?: boolean;

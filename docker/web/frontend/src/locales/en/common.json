@@ -401,7 +401,12 @@
     "conformance": "SBOM conformance",
     "models": "Models & datasets",
     "artifacts": "Artifacts",
-    "inputSbom": "Submitted SBOM"
+    "inputSbom": "Submitted SBOM",
+    "help": "Help",
+    "helpDocs": "Documentation",
+    "helpDemo": "Live demo",
+    "helpVersion": "Version {{version}}",
+    "helpVersionUnknown": "Version not stamped in this build"
   },
   "shell": {
     "newScan": "New scan",

@@ -2645,6 +2645,10 @@ class Handler(BaseHTTPRequestHandler):
                 "firmwareImage": FIRMWARE_IMAGE,
                 "aibomImage": AIBOM_IMAGE,
                 "deepCveImage": DEEP_CVE_IMAGE,
+                # The image's own version, as the publish workflow stamped it
+                # (empty on a local build, which the UI reads as "unknown" and
+                # says nothing rather than inventing a number).
+                "version": os.environ.get("BOMLENS_VERSION", ""),
                 "hostDir": os.environ.get("SBOM_UI_HOST_DIR", ""),
                 # Extra --mount scan targets the rootfs-dir input can pick
                 # from: container path (what the scan request sends) + host
