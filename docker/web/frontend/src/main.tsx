@@ -12,6 +12,12 @@ import "@fontsource/inter/500.css";
 import "@fontsource/inter/600.css";
 import "@fontsource/inter/700.css";
 import "@fontsource/jetbrains-mono/400.css";
+// Korean text fell back to whatever the OS supplies (Apple SD Gothic on macOS,
+// Malgun Gothic on Windows), so a ko screen rendered differently per platform
+// and its weights did not line up with Inter's beside it. The dynamic subset
+// splits the face across unicode ranges, so a screen loads the ranges it
+// actually shows rather than the whole face.
+import "pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css";
 import "@fontsource/jetbrains-mono/500.css";
 
 import App from "./App";

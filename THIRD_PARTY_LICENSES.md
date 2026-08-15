@@ -78,19 +78,21 @@ Those seven carry the upstream MIT notice alongside our own copyright line, and 
 
 ### Web UI fonts
 
-The web UI (`--ui`) bundles two typefaces through `@fontsource` for consistent typography and for offline and desktop (Electron) operation. The font files (woff2) are compiled into the web SPA at build time and ship with the base image; no external font CDN is called.
+The web UI (`--ui`) bundles three typefaces for consistent typography and for offline and desktop (Electron) operation. The font files (woff2) are compiled into the web SPA at build time and ship with the base image; no external font CDN is called.
 
 | Font | Purpose | License (SPDX) | Source |
 |------|---------|----------------|--------|
-| Inter | Body and UI typeface | OFL-1.1 | https://github.com/rsms/inter |
+| Inter | Body and UI typeface (Latin) | OFL-1.1 | https://github.com/rsms/inter |
 | JetBrains Mono | Code and monospace typeface | OFL-1.1 | https://github.com/JetBrains/JetBrainsMono |
+| Pretendard | Body and UI typeface (Hangul) | OFL-1.1 | https://github.com/orioncactus/pretendard |
 
 The SIL Open Font License 1.1 requires attribution, and both fonts are bundled unmodified:
 
 - Inter: Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter)
 - JetBrains Mono: Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
+- Pretendard: Copyright 2021 Kil Hyung-jin (https://github.com/orioncactus/pretendard), with Reserved Font Name 'Pretendard'. Includes Source Sans Pro: Copyright 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'.
 
-The full OFL-1.1 text is available as `OFL.txt` in each repository listed under Source.
+The full OFL-1.1 text is available as `OFL.txt` in each repository listed under Source. The Pretendard npm package ships no license file of its own, so its text is carried in this repository at `docker/web/frontend/licenses/pretendard.txt` and reproduced in the web UI's generated `third-party-licenses.txt`.
 
 ### Vendored open-source identification and the OSSKB API (opt-in)
 

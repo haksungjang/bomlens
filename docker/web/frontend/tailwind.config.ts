@@ -93,7 +93,10 @@ const config: Config = {
         },
       },
       fontFamily: {
-        sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"],
+        // Inter first, Pretendard behind it: Inter carries no Hangul, so Latin
+        // keeps the face the design was built on and Korean falls through to
+        // the one that matches its proportions.
+        sans: ["Inter", "Pretendard Variable", "ui-sans-serif", "system-ui", "sans-serif"],
         mono: ["JetBrains Mono", "ui-monospace", "SFMono-Regular", "monospace"],
       },
       borderRadius: {
