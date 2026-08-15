@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v1.11.0] - 2026-08-15
+
+The web UI is the headline. A scan result was already thorough; this release is
+about what a reader can do with one — reach it by keyboard, narrow it and send
+someone the link, take a filtered list into a spreadsheet, and read the source
+it was built from. Alongside that, an AI model file can now be scanned directly
+from disk rather than only by HuggingFace id.
+
+Three accessibility defects are fixed rather than added to: a progress bar that
+announced nothing, and two labels rendering under the contrast minimum.
+
 ### Changed
 
 - The Components and Vulnerabilities sections link to each other. A component's expanded detail opens the vulnerability list filtered to that component, and a vulnerability's detail opens the component list filtered to its package. Moving between the two lists meant retyping the name into the other section's search box. The links sit in the expanded detail because each table row is itself the expand control, and a control nested inside a control is not announced reliably by screen readers.
@@ -674,7 +685,8 @@ Three changes alter what an AI-model scan writes, so a consumer of those artifac
 
 - No publicly known vulnerabilities have been reported or fixed in this project to date.
 
-[Unreleased]: https://github.com/sktelecom/bomlens/compare/v1.10.5...HEAD
+[Unreleased]: https://github.com/sktelecom/bomlens/compare/v1.11.0...HEAD
+[v1.11.0]: https://github.com/sktelecom/bomlens/releases/tag/v1.11.0
 [v1.10.5]: https://github.com/sktelecom/bomlens/releases/tag/v1.10.5
 [v1.10.4]: https://github.com/sktelecom/bomlens/releases/tag/v1.10.4
 [v1.10.3]: https://github.com/sktelecom/bomlens/releases/tag/v1.10.3
