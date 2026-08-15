@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The Components and Vulnerabilities sections link to each other. A component's expanded detail opens the vulnerability list filtered to that component, and a vulnerability's detail opens the component list filtered to its package. Moving between the two lists meant retyping the name into the other section's search box. The links sit in the expanded detail because each table row is itself the expand control, and a control nested inside a control is not announced reliably by screen readers.
 
+- The Components and Vulnerabilities lists export to CSV, carrying whatever the table is currently showing rather than everything. Getting a filtered list into a spreadsheet meant copying rows out of the browser by hand. The file is written in the browser, so nothing about the scan leaves the machine, and it opens with the right characters in Excel.
+
+- The dependency graph has zoom, fit-to-view and save-as-PNG controls. It could only be driven by a trackpad gesture before, which left a mouse or keyboard user with no way to change what was in view.
+
 - Collapsible sections show that they can be opened. The conformance crosswalk row and its "Met with:" and "Example:" toggles were bare text with no chevron, so the way to see which requirements a count stood for was to guess that the label was clickable. Every folding surface in the app now carries the same turning chevron.
 
 - Sections with nothing to show say so the same way everywhere. The dependency graph's "no relationships" and "too large" notes, its error, and the empty artifacts list were bare paragraphs while the rest of the app used a shared empty state.

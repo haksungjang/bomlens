@@ -3,9 +3,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Search, Workflow } from "lucide-react";
+import { Download, Maximize2, Search, Workflow, ZoomIn, ZoomOut } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { EmptyState, ErrorState } from "@/components/ui/state";
 import { SEVERITY_ORDER, type Severity } from "@/lib/api";
@@ -76,6 +77,9 @@ export function DependencyGraph({
 }) {
   const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
+  // Mirrored out of cytoscape so the control row can publish it; the canvas
+  // itself tells the DOM nothing.
+  const [zoomLevel, setZoomLevel] = useState(1);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const cyRef = useRef<any>(null);
   const [error, setError] = useState(false);
@@ -228,6 +232,10 @@ export function DependencyGraph({
         snapLegible();
         cy.one("layoutstop", snapLegible);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        // Every zoom lands here — the buttons, the wheel, the initial fit — so
+        // the published level is the graph's own, not a guess at what it became.
+        cy.on("zoom", () => setZoomLevel(cy.zoom()));
+
         cy.on("tap", "node", (evt: any) => {
           setSelected(nodeById.get(evt.target.id()) ?? null);
         });
@@ -299,6 +307,36 @@ export function DependencyGraph({
     return <ErrorState>{t("deps.graphError")}</ErrorState>;
   }
 
+  const zoomBy = (factor: number) => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    // Zoom about the middle of the viewport rather than the graph's origin, so
+    // what the reader is looking at stays where it is.
+    cy.zoom({ level: cy.zoom() * factor, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
+    setZoomLevel(cy.zoom());
+  };
+
+  const fitToView = () => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    cy.fit(undefined, 24);
+    setZoomLevel(cy.zoom());
+  };
+
+  const savePng = () => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    // Rendered on the card colour rather than transparent: a transparent PNG
+    // pasted into a light document loses every pale node.
+    const uri = cy.png({ full: true, scale: 2, bg: getComputedStyle(document.body).backgroundColor });
+    const a = document.createElement("a");
+    a.href = uri;
+    a.download = "dependency-graph.png";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
   return (
     <div className="space-y-2">
       <div className="relative max-w-xs">
@@ -330,10 +368,32 @@ export function DependencyGraph({
           {t("deps.arrowHint")} {t("deps.interactHint")} {t("deps.keyboardHint")}
         </span>
       </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Button type="button" variant="outline" size="sm" onClick={() => zoomBy(1.25)}>
+          <ZoomIn className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+          {t("deps.zoomIn")}
+        </Button>
+        <Button type="button" variant="outline" size="sm" onClick={() => zoomBy(0.8)}>
+          <ZoomOut className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+          {t("deps.zoomOut")}
+        </Button>
+        <Button type="button" variant="outline" size="sm" onClick={fitToView}>
+          <Maximize2 className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+          {t("deps.fit")}
+        </Button>
+        <Button type="button" variant="outline" size="sm" onClick={savePng}>
+          <Download className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+          {t("deps.savePng")}
+        </Button>
+      </div>
       <div
         ref={containerRef}
         role="img"
         aria-label={t("deps.graphAria")}
+        // The graph is a canvas, so its zoom is invisible to the DOM and a test
+        // could otherwise only assert that a button exists. Publishing the level
+        // makes "the button actually zoomed" observable.
+        data-zoom={zoomLevel.toFixed(2)}
         className="h-[28rem] w-full rounded-md border bg-card"
       />
       {selected && (

@@ -8,13 +8,16 @@ import {
   ArrowUp,
   ArrowUpDown,
   ChevronRight,
+  Download,
   ExternalLink,
   ShieldCheck,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { EmptyState, ErrorState } from "@/components/ui/state";
 import { type SecuritySummary, type Severity, type VulnItem } from "@/lib/api";
+import { csvFilename, downloadCsv, toCsv, vulnCsvRows } from "@/lib/csv";
 import { buildQuery, parseQuery, type RouteQuery } from "@/lib/route";
 import { vulnsFromQuery, vulnsToQuery } from "@/lib/section-query";
 import { compareVulns, type SortDir, type VulnSortKey } from "@/lib/vulns";
@@ -32,6 +35,8 @@ const TONE: Record<string, "critical" | "high" | "medium" | "low" | "info"> = {
 
 interface Props {
   security: SecuritySummary;
+  /** The scan's id, so an export says which scan it came from. */
+  scanId?: string | null;
   /** Filter and sort state from the URL — a shared link, a reload, or a term
    *  or severity routed in from another section. */
   query?: RouteQuery;
@@ -174,6 +179,7 @@ function VulnDetail({
  */
 export function VulnerabilitiesTable({
   security,
+  scanId,
   query: urlState,
   onQueryChange,
   onPickComponent,
@@ -208,6 +214,25 @@ export function VulnerabilitiesTable({
   }, [query, severityFilter, sort]);
 
   // EPSS column appears only when the report was enriched (online run).
+  // Exports what the table is showing: this filter, this sort, this order.
+  const exportCsv = () => {
+    const headers = [
+      t("result.csvCve"),
+      t("result.csvSeverity"),
+      t("result.csvPackage"),
+      t("result.csvInstalled"),
+      t("result.csvFixed"),
+      t("result.csvCvss"),
+      t("result.csvEpss"),
+      t("result.csvKev"),
+      t("result.csvTitle"),
+    ];
+    downloadCsv(
+      csvFilename(scanId ?? "scan", "vulnerabilities", new Date().toISOString().slice(0, 10)),
+      toCsv(vulnCsvRows(visible, headers)),
+    );
+  };
+
   const anyEpss = useMemo(() => items.some((v) => typeof v.epss === "number"), [items]);
 
   const sorted = useMemo(
@@ -277,6 +302,17 @@ export function VulnerabilitiesTable({
             {t("result.vulnShown", { shown: visible.length, total: items.length })}
           </span>
         )}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="ml-auto shrink-0"
+          disabled={visible.length === 0}
+          onClick={exportCsv}
+        >
+          <Download className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+          {t("result.exportCsv")}
+        </Button>
       </div>
       <div className="max-h-[44rem] resize-y overflow-auto rounded-md border">
         <table className="w-full text-left text-xs">

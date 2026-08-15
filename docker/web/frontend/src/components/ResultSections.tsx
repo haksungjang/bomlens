@@ -82,6 +82,7 @@ export function ResultSection({
           items={result.sbom?.componentList ?? []}
           total={result.sbom?.components ?? 0}
           truncated={result.sbom?.truncated}
+          scanId={scanId}
           query={query}
           onQueryChange={onQueryChange}
           onPickVulns={
@@ -96,6 +97,7 @@ export function ResultSection({
       return result.security ? (
         <VulnerabilitiesTable
           security={result.security}
+          scanId={scanId}
           query={query}
           onQueryChange={onQueryChange}
           onPickComponent={

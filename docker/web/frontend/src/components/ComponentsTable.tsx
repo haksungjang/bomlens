@@ -3,9 +3,10 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowDown, ArrowUp, ArrowUpDown, Package, Search } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Download, Package, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { EmptyState } from "@/components/ui/state";
 import type { ComponentItem, Severity } from "@/lib/api";
@@ -16,6 +17,7 @@ import {
   selectComponents,
   type SortDir,
 } from "@/lib/components";
+import { componentCsvRows, csvFilename, downloadCsv, toCsv } from "@/lib/csv";
 import { buildQuery, parseQuery, type RouteQuery } from "@/lib/route";
 import { componentsFromQuery, componentsToQuery } from "@/lib/section-query";
 import { cn } from "@/lib/utils";
@@ -24,6 +26,8 @@ interface Props {
   items: ComponentItem[];
   total: number;
   truncated?: boolean;
+  /** The scan's id, so an export says which scan it came from. */
+  scanId?: string | null;
   /** Filter and sort state from the URL — what a shared link or a reload
    *  restores, and what a global-search term or a picked license arrives as. */
   query?: RouteQuery;
@@ -126,7 +130,7 @@ function FilterChip({
 
 /** Searchable, sortable, filterable table of detected SBOM components, with
  *  decision-first Scope and Risk columns (shown when the scan carries that data). */
-export function ComponentsTable({ items, total, truncated, query, onQueryChange, onPickVulns }: Props) {
+export function ComponentsTable({ items, total, truncated, scanId, query, onQueryChange, onPickVulns }: Props) {
   const { t } = useTranslation();
   const [filters, setFilters] = useState<ComponentFilters>(
     () => componentsFromQuery(query).filters,
@@ -178,6 +182,24 @@ export function ComponentsTable({ items, total, truncated, query, onQueryChange,
     () => selectComponents(items, filters, sort),
     [items, filters, sort],
   );
+
+  // Exports what the table is showing: this filter, this sort, this order.
+  const exportCsv = () => {
+    const headers = [
+      t("result.csvName"),
+      t("result.csvVersion"),
+      t("result.csvType"),
+      t("result.csvLicenses"),
+      t("result.csvScope"),
+      t("result.csvVulnCount"),
+      t("result.csvMaxSeverity"),
+      t("result.csvPurl"),
+    ];
+    downloadCsv(
+      csvFilename(scanId ?? "scan", "components", new Date().toISOString().slice(0, 10)),
+      toCsv(componentCsvRows(filtered, headers)),
+    );
+  };
 
   // A new visible set invalidates every measurement and starts from the top.
   useEffect(() => {
@@ -282,6 +304,17 @@ export function ComponentsTable({ items, total, truncated, query, onQueryChange,
             ))}
           </Select>
         )}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="ml-auto shrink-0"
+          disabled={filtered.length === 0}
+          onClick={exportCsv}
+        >
+          <Download className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+          {t("result.exportCsv")}
+        </Button>
       </div>
 
       {(anyVulns || anyScope || anyVendored || anyEol || anyOutdated) && (
