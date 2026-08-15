@@ -3,10 +3,12 @@
 
 import { test, expect, type Page } from "@playwright/test";
 
+import { captureMain, COMBOS, seedThemeLang, type Lang, type Theme } from "./visual";
+
 /**
  * The submitted-SBOM section: for a scan whose input was someone else's SBOM,
- * what that document said before it was converted to CycloneDX. Like the source
- * tree it has no @visual baseline, so these assertions are its only guard.
+ * what that document said before it was converted to CycloneDX. The assertions
+ * here cover the fields; the @visual baseline at the end covers the layout.
  */
 
 const INPUT = {
@@ -43,7 +45,13 @@ const DONE = {
   sbom: { components: 2, componentList: [] },
 };
 
-async function runAnalyze(page: Page, input: unknown = INPUT) {
+async function runAnalyze(
+  page: Page,
+  input: unknown = INPUT,
+  theme: Theme = "light",
+  lang: Lang = "en",
+) {
+  await seedThemeLang(page, theme, lang);
   await page.route("**/capabilities", (r) =>
     r.fulfill({
       contentType: "application/json",
@@ -71,7 +79,7 @@ async function runAnalyze(page: Page, input: unknown = INPUT) {
   await page.goto("/#/new");
   await page.fill("#project", "supplier");
   await page.fill("#version", "1.0");
-  await page.getByRole("button", { name: /Run scan/i }).click();
+  await page.getByTestId("run-scan").click(); // language-independent
   await page
     .getByRole("navigation")
     .locator('a[href$="/inputSbom"]')
@@ -149,8 +157,16 @@ test("a source scan never offers the submitted-SBOM section", async ({ page }) =
   await page.goto("/#/new");
   await page.fill("#project", "supplier");
   await page.fill("#version", "1.0");
-  await page.getByRole("button", { name: /Run scan/i }).click();
+  await page.getByTestId("run-scan").click(); // language-independent
   await expect(
     page.getByRole("navigation").locator('a[href$="/inputSbom"]'),
   ).toHaveCount(0);
 });
+
+for (const { theme, lang } of COMBOS) {
+  test(`submitted SBOM matches baseline — ${theme}/${lang} @visual`, async ({ page }) => {
+    await runAnalyze(page, INPUT, theme, lang);
+    await expect(page.getByText("supplier.spdx.json")).toBeVisible();
+    await captureMain(page, "input-sbom", theme, lang);
+  });
+}

@@ -4,6 +4,15 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
+import {
+  captureMain,
+  COMBOS,
+  seedThemeLang,
+  waitForMainSettled,
+  type Lang,
+  type Theme,
+} from "./visual";
+
 /**
  * Shell gates for the new UI behind `?ui=next`:
  *  - accessibility (axe) + visual regression for the idle home screen — now
@@ -16,34 +25,6 @@ import { expect, test, type Page } from "@playwright/test";
  * combination is deterministic. Visual snapshots are tagged @visual and run in
  * the pinned Playwright container so pixels are stable.
  */
-
-type Theme = "light" | "dark";
-type Lang = "en" | "ko";
-
-// `main` is the scroll container (overflow-y-auto) AND mounts with
-// `animate-fade-in` (translateY(4px) -> 0) on every section switch. Element
-// screenshots of `main` scroll it into view first, so a non-zero scrollTop or an
-// unsettled transform shifts the whole tall section a few px — a deterministic-
-// looking but flaky ~3% diff. Pin the transform to its end state, reset the
-// scroll to the top, and wait two animation frames so layout has fully settled
-// before the capture.
-async function waitForMainSettled(page: Page) {
-  await page.locator("main").evaluate(async (el) => {
-    await Promise.all(el.getAnimations().map((a) => a.finished.catch(() => undefined)));
-    el.scrollTop = 0;
-    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-  });
-}
-
-async function seedThemeLang(page: Page, theme: Theme, lang: Lang) {
-  await page.addInitScript(
-    ([t, l]) => {
-      localStorage.setItem("sbom.theme", t);
-      localStorage.setItem("sbom.lang", l);
-    },
-    [theme, lang],
-  );
-}
 
 /** Open the idle home screen (Recent scans, `#/`). */
 async function openShell(page: Page, theme: Theme, lang: Lang) {
@@ -61,13 +42,6 @@ async function openNewScan(page: Page, theme: Theme, lang: Lang) {
   // The settings pane mounts the project field on the New scan screen only.
   await page.locator("#project").waitFor();
 }
-
-const COMBOS: Array<{ theme: Theme; lang: Lang }> = [
-  { theme: "light", lang: "en" },
-  { theme: "dark", lang: "en" },
-  { theme: "light", lang: "ko" },
-  { theme: "dark", lang: "ko" },
-];
 
 for (const { theme, lang } of COMBOS) {
   test(`idle shell has no axe violations — ${theme}/${lang}`, async ({ page }) => {
@@ -760,11 +734,7 @@ for (const { theme, lang } of COMBOS) {
     await stubAndRun(page, theme, lang);
     // The result Overview renders its h1 only once loaded (locale-agnostic anchor).
     await expect(page.locator("main h1")).toBeVisible();
-    await waitForMainSettled(page);
-    await page.mouse.move(0, 0); // neutral pointer — avoid hover-state flake
-    await expect(page.locator("main")).toHaveScreenshot(`overview-${theme}-${lang}.png`, {
-      animations: "disabled",
-    });
+    await captureMain(page, "overview", theme, lang);
   });
 }
 
@@ -907,11 +877,7 @@ for (const { theme, lang } of COMBOS) {
     await stubAiAndRun(page, theme, lang);
     await page.getByRole("navigation").locator('a[href$="/models"]').first().click();
     await expect(page.getByText("bert-base-uncased").first()).toBeVisible();
-    await waitForMainSettled(page);
-    await page.mouse.move(0, 0); // neutral pointer — avoid hover-state flake
-    await expect(page.locator("main")).toHaveScreenshot(`models-${theme}-${lang}.png`, {
-      animations: "disabled",
-    });
+    await captureMain(page, "models", theme, lang);
   });
 }
 
@@ -1061,11 +1027,7 @@ for (const { theme, lang } of COMBOS) {
     // non-deterministic frame, so the whole tall section is sometimes captured 4px
     // low — a constant ~3% diff. Wait for main's own animations to finish so the
     // transform has settled to translateY(0) before the screenshot.
-    await waitForMainSettled(page);
-    await page.mouse.move(0, 0); // neutral pointer — avoid hover-state flake
-    await expect(page.locator("main")).toHaveScreenshot(`conformance-${theme}-${lang}.png`, {
-      animations: "disabled",
-    });
+    await captureMain(page, "conformance", theme, lang);
   });
 }
 
@@ -1294,11 +1256,7 @@ for (const { theme, lang } of COMBOS) {
     await stubLicensesAndRun(page, theme, lang);
     await page.getByRole("navigation").locator('a[href$="/licenses"]').first().click();
     await expect(page.getByText("some-llama-model")).toBeVisible();
-    await waitForMainSettled(page);
-    await page.mouse.move(0, 0); // neutral pointer — avoid hover-state flake
-    await expect(page.locator("main")).toHaveScreenshot(`licenses-${theme}-${lang}.png`, {
-      animations: "disabled",
-    });
+    await captureMain(page, "licenses", theme, lang);
   });
 }
 
@@ -1325,11 +1283,7 @@ for (const { theme, lang } of COMBOS) {
     await page.getByRole("navigation").locator('a[href$="/dependencies"]').first().click();
     await page.getByTestId("deps-view-tree").click();
     await expect(page.getByText("openssl").first()).toBeVisible();
-    await waitForMainSettled(page);
-    await page.mouse.move(0, 0); // neutral pointer — avoid hover-state flake
-    await expect(page.locator("main")).toHaveScreenshot(`dependencies-tree-${theme}-${lang}.png`, {
-      animations: "disabled",
-    });
+    await captureMain(page, "dependencies-tree", theme, lang);
   });
 }
 
@@ -1366,11 +1320,7 @@ for (const { theme, lang } of COMBOS) {
     await stubAndRun(page, theme, lang);
     await page.getByRole("navigation").locator('a[href$="/vulnerabilities"]').first().click();
     await expect(page.getByText("9.8", { exact: true })).toBeVisible();
-    await waitForMainSettled(page);
-    await page.mouse.move(0, 0); // neutral pointer — avoid hover-state flake
-    await expect(page.locator("main")).toHaveScreenshot(`vulnerabilities-${theme}-${lang}.png`, {
-      animations: "disabled",
-    });
+    await captureMain(page, "vulnerabilities", theme, lang);
   });
 }
 
@@ -1401,11 +1351,16 @@ for (const { theme, lang } of COMBOS) {
     await stubAndRun(page, theme, lang);
     await page.getByRole("navigation").locator('a[href$="/components"]').first().click();
     await expect(page.getByText("openssl", { exact: true })).toBeVisible();
-    await waitForMainSettled(page);
-    await page.mouse.move(0, 0); // neutral pointer — avoid hover-state flake
-    await expect(page.locator("main")).toHaveScreenshot(`components-${theme}-${lang}.png`, {
-      animations: "disabled",
-    });
+    await captureMain(page, "components", theme, lang);
+  });
+}
+
+for (const { theme, lang } of COMBOS) {
+  test(`artifacts section matches baseline — ${theme}/${lang} @visual`, async ({ page }) => {
+    await stubAndRun(page, theme, lang);
+    await page.getByRole("navigation").locator('a[href$="/artifacts"]').first().click();
+    await expect(page.getByText("SBOM (CycloneDX)")).toBeVisible();
+    await captureMain(page, "artifacts", theme, lang);
   });
 }
 
