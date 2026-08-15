@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Boxes, Search, ShieldAlert } from "lucide-react";
-import { type KeyboardEvent, useRef, useState } from "react";
+import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Input } from "@/components/ui/input";
@@ -10,11 +10,22 @@ import type { DoneEvent } from "@/lib/api";
 import type { SectionId } from "@/lib/nav";
 import { searchScan } from "@/lib/search";
 
+/** Meta on Apple keyboards, Control elsewhere — only affects the hint glyph. */
+function isAppleKeyboard() {
+  if (typeof navigator === "undefined") return false;
+  return /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
+}
+
 /**
  * Cross-section quick search in the top bar (shown only with a scan loaded).
  * Type to find a component or CVE from anywhere; picking a result routes to its
  * section with the term pre-applied. Lives in the chrome (outside `main`), so it
  * doesn't touch the result-section visual snapshots.
+ *
+ * Keyboard follows the APG combobox-with-listbox pattern: focus stays in the
+ * input and the active option is named by `aria-activedescendant` rather than
+ * moved to. Options are therefore not tab stops and carry no tabIndex — a
+ * screen reader announces the active one because the input points at it.
  */
 export function GlobalSearch({
   result,
@@ -27,27 +38,97 @@ export function GlobalSearch({
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(-1);
   const blurTimer = useRef<number>();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const baseId = useId();
 
   const { components, vulns } = searchScan(result, query);
   const hasResults = components.length > 0 || vulns.length > 0;
   const show = open && query.trim().length > 0;
 
+  // One flat list so arrow keys cross the group boundary without special cases.
+  const options: { section: SectionId; term: string }[] = [
+    ...components.map((c) => ({ section: "components" as SectionId, term: c.name })),
+    ...vulns.map((v) => ({ section: "vulnerabilities" as SectionId, term: v.id })),
+  ];
+  // A shrinking result set can strand the index past the end.
+  const activeIdx = active >= 0 && active < options.length ? active : -1;
+
+  const listboxId = `${baseId}-listbox`;
+  const optionId = (i: number) => `${baseId}-opt-${i}`;
+  const componentsHeadingId = `${baseId}-h-components`;
+  const vulnsHeadingId = `${baseId}-h-vulns`;
+
   const pick = (section: SectionId, term: string) => {
     onPick(section, term);
     setQuery("");
     setOpen(false);
+    setActive(-1);
+  };
+
+  // Keep the active option in view when arrowing past the visible window.
+  useEffect(() => {
+    if (activeIdx < 0) return;
+    document.getElementById(optionId(activeIdx))?.scrollIntoView({ block: "nearest" });
+    // optionId is derived from baseId, which is stable for the component's life.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeIdx, baseId]);
+
+  // Cmd/Ctrl+K from anywhere in the app focuses the search.
+  useEffect(() => {
+    const onShortcut = (e: globalThis.KeyboardEvent) => {
+      if (e.key.toLowerCase() !== "k" || !(e.metaKey || e.ctrlKey)) return;
+      e.preventDefault();
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    };
+    window.addEventListener("keydown", onShortcut);
+    return () => window.removeEventListener("keydown", onShortcut);
+  }, []);
+
+  const move = (delta: number) => {
+    if (!options.length) return;
+    setActive((prev) => {
+      const next = (prev < 0 ? (delta > 0 ? -1 : 0) : prev) + delta;
+      if (next < 0) return options.length - 1;
+      if (next >= options.length) return 0;
+      return next;
+    });
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Escape") {
       setOpen(false);
+      setActive(-1);
       e.currentTarget.blur();
+      return;
+    }
+    if (!show) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      move(1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      move(-1);
+    } else if (e.key === "Home" && options.length) {
+      e.preventDefault();
+      setActive(0);
+    } else if (e.key === "End" && options.length) {
+      e.preventDefault();
+      setActive(options.length - 1);
     } else if (e.key === "Enter") {
-      if (components[0]) pick("components", components[0].name);
-      else if (vulns[0]) pick("vulnerabilities", vulns[0].id);
+      // No arrowing yet: Enter takes the first result, as it always has.
+      const target = options[activeIdx] ?? options[0];
+      if (target) pick(target.section, target.term);
     }
   };
+
+  const optionClass = (i: number) =>
+    [
+      "flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left",
+      i === activeIdx ? "bg-muted" : "hover:bg-muted",
+    ].join(" ");
 
   return (
     <div className="relative hidden min-w-0 md:block">
@@ -56,11 +137,20 @@ export function GlobalSearch({
         aria-hidden
       />
       <Input
+        ref={inputRef}
         type="search"
+        role="combobox"
+        aria-expanded={show}
+        aria-controls={show ? listboxId : undefined}
+        aria-activedescendant={activeIdx >= 0 ? optionId(activeIdx) : undefined}
+        aria-autocomplete="list"
+        aria-keyshortcuts="Meta+K Control+K"
+        data-testid="global-search"
         value={query}
         onChange={(e) => {
           setQuery(e.target.value);
           setOpen(true);
+          setActive(-1);
         }}
         onFocus={() => setOpen(true)}
         onBlur={() => {
@@ -69,10 +159,17 @@ export function GlobalSearch({
         onKeyDown={onKeyDown}
         placeholder={t("search.placeholder")}
         aria-label={t("search.placeholder")}
-        className="h-8 w-56 pl-8"
+        className="h-8 w-56 pl-8 pr-14"
       />
+      <kbd
+        className="pointer-events-none absolute right-2 top-1/2 hidden -translate-y-1/2 select-none rounded border bg-muted px-1.5 py-0.5 font-sans text-[10px] font-medium text-muted-foreground lg:block"
+        aria-hidden
+      >
+        {isAppleKeyboard() ? "⌘K" : "Ctrl K"}
+      </kbd>
       {show && (
         <div
+          id={listboxId}
           role="listbox"
           aria-label={t("search.placeholder")}
           className="absolute left-0 top-full z-30 mt-1 w-80 max-w-[90vw] overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-lg"
@@ -85,46 +182,61 @@ export function GlobalSearch({
           {!hasResults ? (
             <p className="px-3 py-3 text-sm text-muted-foreground">{t("search.none")}</p>
           ) : (
-            <ul className="max-h-80 overflow-auto py-1 text-sm">
+            <div className="max-h-80 overflow-auto py-1 text-sm">
               {components.length > 0 && (
-                <li className="px-3 pb-1 pt-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  {t("search.components")}
-                </li>
-              )}
-              {components.map((c, i) => (
-                <li key={`c-${c.purl || c.name}-${i}`}>
-                  <button
-                    type="button"
-                    onClick={() => pick("components", c.name)}
-                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+                <div role="group" aria-labelledby={componentsHeadingId}>
+                  <div
+                    id={componentsHeadingId}
+                    className="px-3 pb-1 pt-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground"
                   >
-                    <Boxes className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
-                    <span className="truncate">{c.name}</span>
-                    {c.version && (
-                      <span className="shrink-0 text-xs text-muted-foreground">{c.version}</span>
-                    )}
-                  </button>
-                </li>
-              ))}
+                    {t("search.components")}
+                  </div>
+                  {components.map((c, i) => (
+                    <div
+                      key={`c-${c.purl || c.name}-${i}`}
+                      id={optionId(i)}
+                      role="option"
+                      aria-selected={i === activeIdx}
+                      onClick={() => pick("components", c.name)}
+                      className={optionClass(i)}
+                    >
+                      <Boxes className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                      <span className="truncate">{c.name}</span>
+                      {c.version && (
+                        <span className="shrink-0 text-xs text-muted-foreground">{c.version}</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
               {vulns.length > 0 && (
-                <li className="px-3 pb-1 pt-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  {t("search.vulnerabilities")}
-                </li>
-              )}
-              {vulns.map((v, i) => (
-                <li key={`v-${v.id}-${i}`}>
-                  <button
-                    type="button"
-                    onClick={() => pick("vulnerabilities", v.id)}
-                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+                <div role="group" aria-labelledby={vulnsHeadingId}>
+                  <div
+                    id={vulnsHeadingId}
+                    className="px-3 pb-1 pt-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground"
                   >
-                    <ShieldAlert className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
-                    <span className="truncate font-mono text-xs">{v.id}</span>
-                    <span className="shrink-0 text-xs text-muted-foreground">{v.pkg}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
+                    {t("search.vulnerabilities")}
+                  </div>
+                  {vulns.map((v, i) => (
+                    <div
+                      key={`v-${v.id}-${i}`}
+                      id={optionId(components.length + i)}
+                      role="option"
+                      aria-selected={components.length + i === activeIdx}
+                      onClick={() => pick("vulnerabilities", v.id)}
+                      className={optionClass(components.length + i)}
+                    >
+                      <ShieldAlert
+                        className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+                        aria-hidden
+                      />
+                      <span className="truncate font-mono text-xs">{v.id}</span>
+                      <span className="shrink-0 text-xs text-muted-foreground">{v.pkg}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}
