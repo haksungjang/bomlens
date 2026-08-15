@@ -60,7 +60,8 @@ The 23 packages currently in the bundle are below. All are permissive; none is c
 | class-variance-authority | Component variant definitions | Apache-2.0 |
 | clsx, tailwind-merge | Class name composition | MIT |
 | lucide-react | Icons | ISC |
-| @fontsource/inter, @fontsource/jetbrains-mono | Fonts (see the section below) | OFL-1.1 |
+| highlight.js | Syntax highlighting in the source viewer (grammars loaded on demand) | BSD-3-Clause |
+| @fontsource/inter, @fontsource/jetbrains-mono, pretendard | Fonts (see the section below) | OFL-1.1 |
 
 `npm run notices:check` keeps the list from going stale by checking the generated file. CI fails when a bundled package declares no license, when no license text was found to reproduce, or when any copyleft license appears.
 

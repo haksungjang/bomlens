@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { FileCode, FileSymlink, FileWarning } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +14,8 @@ import {
   type SnapshotFile,
   type SourceSnapshot,
 } from "@/lib/sourceSnapshot";
+import { highlightSource } from "@/lib/highlight-runtime";
+import { languageForPath, splitHighlightedLines } from "@/lib/highlight";
 import { formatBytes } from "@/lib/utils";
 
 /**
@@ -49,6 +51,25 @@ export function SourceFileContent({
       : file.content;
     return body.length ? body.split("\n") : [];
   }, [file]);
+
+  // Highlighted markup, one balanced fragment per line, or null while the
+  // grammar loads and for anything without one.
+  const [highlighted, setHighlighted] = useState<string[] | null>(null);
+  const language = path ? languageForPath(path) : null;
+
+  useEffect(() => {
+    setHighlighted(null);
+    if (!file || !language || !lines.length) return;
+    let cancelled = false;
+    // Loaded on demand: the grammars are the bulk of the highlighter, and a
+    // reader who never opens a file should not pay for them.
+    void highlightSource(file.content, language).then((html) => {
+      if (!cancelled && html !== null) setHighlighted(splitHighlightedLines(html));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [file, language, lines.length]);
 
   if (!path) {
     return (
@@ -127,9 +148,18 @@ export function SourceFileContent({
                 >
                   {i + 1}
                 </td>
-                <td className="whitespace-pre-wrap break-all px-3 py-0.5">
-                  {line || " "}
-                </td>
+                {highlighted?.[i] !== undefined ? (
+                  <td
+                    className="whitespace-pre-wrap break-all px-3 py-0.5"
+                    // The markup is the highlighter's, whose text it already
+                    // escaped; lib/highlight only rebalances the tags around it.
+                    dangerouslySetInnerHTML={{ __html: highlighted[i] || " " }}
+                  />
+                ) : (
+                  <td className="whitespace-pre-wrap break-all px-3 py-0.5">
+                    {line || " "}
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>

@@ -109,6 +109,16 @@
     --risk-medium-fg: 133 77 14; /* yellow-800 */
     --risk-low-fg: 29 78 216; /* blue-700 */
     --risk-info-fg: 71 85 105; /* slate-600 */
+
+    /* Syntax colours for the source viewer. Its own small palette rather than
+     * borrowed severity hues: a keyword is not a warning, and reusing the risk
+     * colours here would make a Python file look like a findings list. Each is
+     * checked against the surface it is read on (ratios in the comments). */
+    --code-keyword: 207 34 46; /* 5.36:1 on white */
+    --code-string: 10 48 105; /* 12.81:1 */
+    --code-comment: 110 119 129; /* 4.55:1 */
+    --code-number: 5 80 174; /* 7.59:1 */
+    --code-title: 102 57 186; /* 7.34:1 */
   }
 
   /* Dark theme — populated (mirrors the portal's reserved token names). */
@@ -184,6 +194,13 @@
     --risk-medium-fg: 253 224 71; /* yellow-300 */
     --risk-low-fg: 147 197 253; /* blue-300 */
     --risk-info-fg: 203 213 225; /* slate-300 */
+
+    /* Syntax colours lift for the dark card (#18181b); ratios against it. */
+    --code-keyword: 255 123 114; /* 7.03:1 */
+    --code-string: 165 214 255; /* 11.53:1 */
+    --code-comment: 145 152 161; /* 6.08:1 */
+    --code-number: 121 192 255; /* 9.11:1 */
+    --code-title: 210 168 255; /* 9.10:1 */
   }
 
   * {
@@ -221,4 +238,50 @@
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* Syntax highlighting for the source viewer.
+ *
+ * Only the classes highlight.js actually emits for the grammars bundled here,
+ * mapped onto the --code-* tokens. Everything the highlighter marks up but
+ * this file does not name inherits the body colour, which is the same as not
+ * highlighting it — a missing rule shows plain text rather than nothing. */
+.hljs-keyword,
+.hljs-built_in,
+.hljs-literal,
+.hljs-type,
+.hljs-selector-tag,
+.hljs-doctag,
+.hljs-name {
+  color: rgb(var(--code-keyword));
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-symbol,
+.hljs-quote,
+.hljs-addition {
+  color: rgb(var(--code-string));
+}
+
+.hljs-comment,
+.hljs-meta {
+  color: rgb(var(--code-comment));
+}
+
+.hljs-number,
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable {
+  color: rgb(var(--code-number));
+}
+
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.function_,
+.hljs-section,
+.hljs-selector-class,
+.hljs-selector-id {
+  color: rgb(var(--code-title));
 }

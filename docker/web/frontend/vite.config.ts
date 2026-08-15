@@ -37,7 +37,13 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/lib/**/*.ts"],
-      exclude: ["src/lib/**/*.test.ts"],
+      // highlight-runtime is the loading half of the syntax highlighter: dynamic
+      // grammar imports and a call into the library, which run in the browser
+      // and are covered by the Playwright tests. Same reason the components are
+      // out — measuring it here would only depress the number. Its seam with
+      // the pure half (that every language the mapper names has a loader) is
+      // unit tested; only the loading itself is excluded.
+      exclude: ["src/lib/**/*.test.ts", "src/lib/highlight-runtime.ts"],
       reporter: ["text-summary", "json-summary"],
       // Re-baselined for Vitest 4: its v8 provider remaps coverage through the
       // AST rather than counting raw v8 ranges, so the same tests over the same

@@ -33,6 +33,7 @@
     "clsx": "2.1.1",
     "cytoscape": "3.34.0",
     "cytoscape-dagre": "2.5.0",
+    "highlight.js": "^11.11.1",
     "i18next": "23.16.8",
     "i18next-browser-languagedetector": "8.2.1",
     "lucide-react": "0.577.0",

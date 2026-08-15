@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The Components and Vulnerabilities sections link to each other. A component's expanded detail opens the vulnerability list filtered to that component, and a vulnerability's detail opens the component list filtered to its package. Moving between the two lists meant retyping the name into the other section's search box. The links sit in the expanded detail because each table row is itself the expand control, and a control nested inside a control is not announced reliably by screen readers.
 
+- The source viewer highlights what it is showing. A scanned file was rendered as numbered plain text, which is readable but says nothing about what is code and what is a comment. Grammars load only when a file that has one is opened, so a session that never opens a file carries none of them, and a file with no grammar — a licence, a binary, an unfamiliar extension — is shown as plain text rather than guessed at.
+
 - Severity labels read from design tokens rather than colours written into the badge component. The five severity badges and the muted one each carried a light shade and a dark one as palette classes, kept in step by hand; the colours are unchanged, but they now live where every other colour in the app lives.
 
 - The top bar has a help menu: documentation, the live demo, and the version that is running. Every link out of the app was inside a scan form before, so getting to the docs meant starting a scan first. The version comes from the running image; a local build that carries no version stamp says so rather than showing a blank.
