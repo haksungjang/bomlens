@@ -3,10 +3,11 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowDown, ArrowUp, ArrowUpDown, Download, Package, Search } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Download, Package, Search, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { CheckMenu, type CheckMenuItem } from "@/components/ui/check-menu";
 import { Select } from "@/components/ui/select";
 import { EmptyState } from "@/components/ui/state";
 import type { ComponentItem, Severity } from "@/lib/api";
@@ -19,6 +20,13 @@ import {
   type SortDir,
 } from "@/lib/components";
 import { componentCsvRows, csvFilename, downloadCsv, toCsv } from "@/lib/csv";
+import {
+  COMPONENT_COLUMNS,
+  COMPONENT_VIEW_KEY,
+  readHidden,
+  toggleHidden,
+  writeHidden,
+} from "@/lib/tableView";
 import { buildQuery, parseQuery, type RouteQuery } from "@/lib/route";
 import { componentsFromQuery, componentsToQuery } from "@/lib/section-query";
 import { cn } from "@/lib/utils";
@@ -165,6 +173,11 @@ export function ComponentsTable({ items, total, truncated, scanId, query, onQuer
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters, sort]);
   const [openKey, setOpenKey] = useState<string | null>(null);
+  // Which columns the reader has hidden, read once from browser-local storage
+  // (the same place the theme and language live — no account, nothing sent).
+  const [hiddenCols, setHiddenCols] = useState<string[]>(() =>
+    readHidden(COMPONENT_VIEW_KEY, COMPONENT_COLUMNS.map((c) => c.id)),
+  );
   // Chunk recycling state: which chunks render real rows, and the measured
   // pixel height of chunks currently recycled into spacers.
   const [liveChunks, setLiveChunks] = useState<ReadonlySet<number>>(INITIAL_LIVE);
@@ -252,7 +265,80 @@ export function ComponentsTable({ items, total, truncated, scanId, query, onQuer
     );
   const patch = (p: Partial<ComponentFilters>) => setFilters((f) => ({ ...f, ...p }));
 
-  const colCount = 4 + (anyScope ? 1 : 0) + (anyVulns ? 1 : 0);
+  // Which optional columns this scan can offer at all, and which of those the
+  // reader has hidden. A column the scan has no data for is not offered, so the
+  // menu never lists a column that would come up empty.
+  const columnAvailable: Record<string, boolean> = {
+    version: true,
+    type: true,
+    scope: anyScope,
+    risk: anyVulns,
+    license: true,
+  };
+  const shows = (id: string) => columnAvailable[id] && !hiddenCols.includes(id);
+  const showVersion = shows("version");
+  const showType = shows("type");
+  const showScope = shows("scope");
+  const showRisk = shows("risk");
+  const showLicense = shows("license");
+  const colCount =
+    1 + [showVersion, showType, showScope, showRisk, showLicense].filter(Boolean).length;
+
+  const toggleColumn = (id: string) => {
+    setHiddenCols((prev) => {
+      const next = toggleHidden(prev, id);
+      writeHidden(COMPONENT_VIEW_KEY, next);
+      return next;
+    });
+  };
+
+  // The toggles that used to sit in a row of chips, as one menu. Only the ones
+  // this scan has data for appear.
+  const filterItems: CheckMenuItem[] = [
+    anyVulns && {
+      id: "hasVulns",
+      label: t("result.filterHasVulns"),
+      checked: filters.hasVulns,
+      onToggle: () => patch({ hasVulns: !filters.hasVulns }),
+    },
+    anyScope && {
+      id: "directOnly",
+      label: t("result.filterDirectOnly"),
+      checked: filters.directOnly,
+      onToggle: () => patch({ directOnly: !filters.directOnly }),
+    },
+    anyVendored && {
+      id: "needsReview",
+      label: t("result.filterNeedsReview"),
+      checked: filters.needsReview,
+      onToggle: () => patch({ needsReview: !filters.needsReview }),
+    },
+    anyEol && {
+      id: "eolOnly",
+      label: t("result.filterEol"),
+      checked: filters.eolOnly,
+      onToggle: () => patch({ eolOnly: !filters.eolOnly }),
+    },
+    anyOutdated && {
+      id: "outdatedOnly",
+      label: t("result.filterOutdated"),
+      checked: filters.outdatedOnly,
+      onToggle: () => patch({ outdatedOnly: !filters.outdatedOnly }),
+    },
+  ].filter(Boolean) as CheckMenuItem[];
+
+  const columnItems: CheckMenuItem[] = COMPONENT_COLUMNS.filter(
+    (c) => columnAvailable[c.id],
+  ).map((c) => ({
+    id: c.id,
+    label: t(c.labelKey),
+    checked: !hiddenCols.includes(c.id),
+    onToggle: () => toggleColumn(c.id),
+  }));
+
+  // The active toggles, as removable chips. They appear only once something is
+  // on, so an unfiltered table carries no row of controls it is not using.
+  const activeChips = filterItems.filter((i) => i.checked);
 
   // Row keys are purl-or-name based (stable across chunk boundaries); the
   // chunk holding the expanded row is pinned live so it can never be recycled
@@ -268,7 +354,7 @@ export function ComponentsTable({ items, total, truncated, scanId, query, onQuer
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-[12rem] flex-1">
+        <div className="relative min-w-[10rem] flex-1">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={filters.query}
@@ -282,6 +368,9 @@ export function ComponentsTable({ items, total, truncated, scanId, query, onQuer
             value={filters.type}
             onChange={(e) => patch({ type: e.target.value })}
             aria-label={t("result.allTypes")}
+            // Capped so a long option value cannot push the toolbar onto a
+            // second line; the native select still shows the full text open.
+            className="max-w-40"
           >
             <option value="">{t("result.allTypes")}</option>
             {types.map((ty) => (
@@ -298,6 +387,7 @@ export function ComponentsTable({ items, total, truncated, scanId, query, onQuer
             value={filters.license}
             onChange={(e) => patch({ license: e.target.value })}
             aria-label={t("result.allLicenses")}
+            className="max-w-44"
           >
             <option value="">{t("result.allLicenses")}</option>
             {licenses.map((l) => (
@@ -307,70 +397,56 @@ export function ComponentsTable({ items, total, truncated, scanId, query, onQuer
             ))}
           </Select>
         )}
+        {filterItems.length > 0 && (
+          <CheckMenu label={t("result.filters")} items={filterItems} />
+        )}
+        <CheckMenu label={t("result.columns")} items={columnItems} />
         <Button
           type="button"
           variant="outline"
           size="sm"
-          className="ml-auto shrink-0"
+          className="shrink-0"
           disabled={filtered.length === 0}
           onClick={exportCsv}
         >
           <Download className="mr-1.5 h-3.5 w-3.5" aria-hidden />
           {t("result.exportCsv")}
         </Button>
+        {/* The count closes the toolbar rather than starting a line of its own,
+            which is what made the controls read as four stacked rows. */}
+        <div className="ml-auto text-xs text-muted-foreground">
+          {t("result.componentsCount", { shown: filtered.length, total })}
+          {/* "list truncated" left the reader guessing how much they were
+              looking at. items.length is what the server sent for this scan. */}
+          {truncated ? ` · ${t("result.truncated", { count: items.length })}` : ""}
+        </div>
       </div>
 
-      {(anyVulns || anyScope || anyVendored || anyEol || anyOutdated) && (
+      {activeChips.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
-          {anyVulns && (
-            <FilterChip
-              active={filters.hasVulns}
-              onClick={() => patch({ hasVulns: !filters.hasVulns })}
-            >
-              {t("result.filterHasVulns")}
+          {activeChips.map((chip) => (
+            <FilterChip key={chip.id} active onClick={chip.onToggle}>
+              {chip.label}
+              <X className="ml-1 h-3 w-3" aria-hidden />
             </FilterChip>
-          )}
-          {anyScope && (
-            <FilterChip
-              active={filters.directOnly}
-              onClick={() => patch({ directOnly: !filters.directOnly })}
-            >
-              {t("result.filterDirectOnly")}
-            </FilterChip>
-          )}
-          {anyVendored && (
-            <FilterChip
-              active={filters.needsReview}
-              onClick={() => patch({ needsReview: !filters.needsReview })}
-            >
-              {t("result.filterNeedsReview")}
-            </FilterChip>
-          )}
-          {anyEol && (
-            <FilterChip
-              active={filters.eolOnly}
-              onClick={() => patch({ eolOnly: !filters.eolOnly })}
-            >
-              {t("result.filterEol")}
-            </FilterChip>
-          )}
-          {anyOutdated && (
-            <FilterChip
-              active={filters.outdatedOnly}
-              onClick={() => patch({ outdatedOnly: !filters.outdatedOnly })}
-            >
-              {t("result.filterOutdated")}
-            </FilterChip>
-          )}
+          ))}
+          <button
+            type="button"
+            onClick={() =>
+              patch({
+                hasVulns: false,
+                directOnly: false,
+                needsReview: false,
+                eolOnly: false,
+                outdatedOnly: false,
+              })
+            }
+            className="rounded text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          >
+            {t("result.clearFilters")}
+          </button>
         </div>
       )}
-
-      <div className="text-xs text-muted-foreground">
-        {t("result.componentsCount", { shown: filtered.length, total })}
-        {/* "list truncated" left the reader guessing how much they were looking
-            at. items.length is what the server actually sent for this scan. */}
-        {truncated ? ` · ${t("result.truncated", { count: items.length })}` : ""}
-      </div>
 
       <div ref={scrollRef} className="max-h-[44rem] resize-y overflow-auto rounded-md border">
         <table className="w-full text-left text-xs">
@@ -389,15 +465,21 @@ export function ComponentsTable({ items, total, truncated, scanId, query, onQuer
                 onSort={onSort}
                 className="sticky left-0 z-30 bg-muted"
               />
-              <SortHeader label={t("result.colVersion")} sortKey="version" sort={sort} onSort={onSort} className="min-w-24" />
-              <SortHeader label={t("result.colType")} sortKey="type" sort={sort} onSort={onSort} className="min-w-24" />
-              {anyScope && (
+              {showVersion && (
+                <SortHeader label={t("result.colVersion")} sortKey="version" sort={sort} onSort={onSort} className="min-w-24" />
+              )}
+              {showType && (
+                <SortHeader label={t("result.colType")} sortKey="type" sort={sort} onSort={onSort} className="min-w-24" />
+              )}
+              {showScope && (
                 <SortHeader label={t("result.colScope")} sortKey="scope" sort={sort} onSort={onSort} className="min-w-20" />
               )}
-              {anyVulns && (
+              {showRisk && (
                 <SortHeader label={t("result.colRisk")} sortKey="risk" sort={sort} onSort={onSort} className="min-w-24" />
               )}
-              <th className="whitespace-nowrap px-3 py-2 font-medium">{t("result.colLicense")}</th>
+              {showLicense && (
+                <th className="whitespace-nowrap px-3 py-2 font-medium">{t("result.colLicense")}</th>
+              )}
             </tr>
           </thead>
           {chunks.map((chunkItems, ci) =>
@@ -488,6 +570,7 @@ export function ComponentsTable({ items, total, truncated, scanId, query, onQuer
                     em dash here would read as a gap in the data rather than as
                     the finding it is: the component is there, the version is
                     not recoverable, and no advisory lookup applies to it. */}
+                {showVersion && (
                 <td className="whitespace-nowrap px-3 py-2 font-mono tabular-nums text-muted-foreground">
                   {c.version || (c.presenceOnly ? (
                     <span
@@ -498,8 +581,11 @@ export function ComponentsTable({ items, total, truncated, scanId, query, onQuer
                     </span>
                   ) : "—")}
                 </td>
+                )}
+                {showType && (
                 <td className="whitespace-nowrap px-3 py-2 text-muted-foreground">{c.type || "—"}</td>
-                {anyScope && (
+                )}
+                {showScope && (
                   <td className="whitespace-nowrap px-3 py-2">
                     {c.scope ? (
                       <span
@@ -516,7 +602,7 @@ export function ComponentsTable({ items, total, truncated, scanId, query, onQuer
                     )}
                   </td>
                 )}
-                {anyVulns && (
+                {showRisk && (
                   <td className="whitespace-nowrap px-3 py-2">
                     {c.maxSeverity ? (
                       <Badge tone={SEV_TONE[c.maxSeverity]}>
@@ -531,6 +617,7 @@ export function ComponentsTable({ items, total, truncated, scanId, query, onQuer
                 {/* Badges past the limit fold into a count so a component with a
                     dozen licenses does not stand three rows tall. The expanded
                     row below lists them all. */}
+                {showLicense && (
                 <td className="whitespace-nowrap px-3 py-2">
                   {c.licenses.length ? (
                     <div className="flex items-center gap-1">
@@ -552,6 +639,7 @@ export function ComponentsTable({ items, total, truncated, scanId, query, onQuer
                     <span className="text-muted-foreground">{t("result.licenseNone")}</span>
                   )}
                 </td>
+                )}
               </tr>
               {isOpen && (
                 <tr className="border-b last:border-0">
