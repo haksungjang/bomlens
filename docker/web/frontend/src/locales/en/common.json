@@ -470,6 +470,10 @@
     "sevUp": "more severe than before",
     "sevDown": "less severe than before",
     "sevSame": "severity unchanged",
+    "sevTrendLabel": "Worst severity",
+    "topRisk": "Highest risk components",
+    "topRiskOf": "{{shown}} of {{total}} with vulnerabilities",
+    "topRiskAll": "All components",
     "attnMalicious": "{{count}} known-malicious package(s) — remove and rotate credentials"
   },
   "models": {

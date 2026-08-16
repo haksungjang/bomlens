@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ComponentItem, DoneEvent } from "./api";
-import { needsAttention } from "./overview";
+import { needsAttention, riskyComponentCount, topRiskComponents } from "./overview";
 
 function result(over: Partial<DoneEvent> = {}): DoneEvent {
   return {
@@ -116,5 +116,67 @@ describe("needsAttention", () => {
     );
     expect(items.map((i) => i.id)).toEqual(["vulns", "review"]);
     expect(items[1]).toMatchObject({ id: "review", count: 1, target: "components" });
+  });
+});
+
+describe("topRiskComponents", () => {
+  const list = [
+    comp({ name: "clean" }),
+    comp({ name: "low-one", maxSeverity: "LOW", vulnCount: 1 }),
+    comp({ name: "crit-two", maxSeverity: "CRITICAL", vulnCount: 2 }),
+    comp({ name: "crit-nine", maxSeverity: "CRITICAL", vulnCount: 9 }),
+    comp({ name: "high-one", maxSeverity: "HIGH", vulnCount: 1 }),
+  ];
+  const scan = result({ sbom: { components: list.length, componentList: list } });
+
+  it("ranks worst severity first, then by how many at that severity", () => {
+    expect(topRiskComponents(scan).map((c) => c.name)).toEqual([
+      "crit-nine",
+      "crit-two",
+      "high-one",
+      "low-one",
+    ]);
+  });
+
+  it("leaves out components with nothing against them", () => {
+    // A "top risk" list padded with clean rows would imply a ranking that the
+    // data does not support.
+    expect(topRiskComponents(scan).map((c) => c.name)).not.toContain("clean");
+  });
+
+  it("caps the list, and takes the worst ones when it does", () => {
+    expect(topRiskComponents(scan, 2).map((c) => c.name)).toEqual(["crit-nine", "crit-two"]);
+    expect(topRiskComponents(scan, 0)).toEqual([]);
+  });
+
+  it("is empty when the scan has no vulnerable components at all", () => {
+    expect(topRiskComponents(result())).toEqual([]);
+    const clean = [comp({ name: "a" }), comp({ name: "b" })];
+    expect(topRiskComponents(result({ sbom: { components: 2, componentList: clean } }))).toEqual([]);
+  });
+
+  it("breaks ties by name so the order never wobbles between renders", () => {
+    const tied = [
+      comp({ name: "zlib", maxSeverity: "HIGH", vulnCount: 1 }),
+      comp({ name: "acorn", maxSeverity: "HIGH", vulnCount: 1 }),
+    ];
+    const r = result({ sbom: { components: 2, componentList: tied } });
+    expect(topRiskComponents(r).map((c) => c.name)).toEqual(["acorn", "zlib"]);
+  });
+});
+
+describe("riskyComponentCount", () => {
+  it("counts every component with something against it, not just the listed ones", () => {
+    // The block lists a handful; this is what sits behind it.
+    const many = Array.from({ length: 9 }, (_, i) =>
+      comp({ name: `c${i}`, maxSeverity: "HIGH", vulnCount: 1 }),
+    );
+    const r = result({ sbom: { components: 10, componentList: [...many, comp({ name: "clean" })] } });
+    expect(riskyComponentCount(r)).toBe(9);
+    expect(topRiskComponents(r)).toHaveLength(6);
+  });
+
+  it("is zero when nothing was found", () => {
+    expect(riskyComponentCount(result())).toBe(0);
   });
 });

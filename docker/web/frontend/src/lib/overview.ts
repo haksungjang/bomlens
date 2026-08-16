@@ -6,7 +6,8 @@
  * attention right now. Pure and unit tested so the leading "Needs attention"
  * block reflects the data, not guesswork.
  */
-import type { DoneEvent } from "./api";
+import type { ComponentItem, DoneEvent } from "./api";
+import { riskRank } from "./components";
 import { baseTally, splitChecks } from "./conformance";
 import type { SectionId } from "./nav";
 
@@ -68,4 +69,51 @@ export function needsAttention(result: DoneEvent): AttentionItem[] {
   }
 
   return items;
+}
+
+/**
+ * The components carrying the most risk, worst first — what the reader would
+ * otherwise have to go and sort the Components table to find.
+ *
+ * Only components that actually carry a vulnerability are listed: a "top risk"
+ * table padded with clean components would suggest a ranking where there is
+ * none. An empty list means the scan found nothing to rank, and the caller
+ * leaves the block out rather than showing an empty one.
+ *
+ * Ordering is worst severity, then how many vulnerabilities at that severity,
+ * then name — the same weighting the Components table's risk sort uses, so the
+ * two never disagree about what is worst.
+ */
+export function topRiskComponents(
+  result: DoneEvent,
+  limit = 6,
+): ComponentItem[] {
+  return [...riskyComponents(result)]
+    .sort((a, b) => {
+      const d = riskRank(b) - riskRank(a);
+      if (d !== 0) return d;
+      const n = (b.vulnCount ?? 0) - (a.vulnCount ?? 0);
+      if (n !== 0) return n;
+      return `${a.group} ${a.name}`.trim().localeCompare(`${b.group} ${b.name}`.trim());
+    })
+    .slice(0, Math.max(0, limit));
+}
+
+/** The components a scan found something against — what topRiskComponents ranks. */
+function riskyComponents(result: DoneEvent): ComponentItem[] {
+  return (result.sbom?.componentList ?? []).filter(
+    (c) => (c.vulnCount ?? 0) > 0 || c.maxSeverity,
+  );
+}
+
+/**
+ * How many components carry a vulnerability at all.
+ *
+ * The top-risk block shows a handful, and on an OS image the worst handful can
+ * be six variants of the same kernel package — true, but it reads as if that
+ * were the whole story. Naming the total beside the list says how much sits
+ * behind it.
+ */
+export function riskyComponentCount(result: DoneEvent): number {
+  return riskyComponents(result).length;
 }
