@@ -85,7 +85,11 @@ export function ModelsDatasets({
     );
   }
   if (data.models.length === 0) {
-    return <EmptyState icon={Boxes}>{t("models.empty")}</EmptyState>;
+    return (
+      <EmptyState icon={Boxes} hint={t("models.emptyHint")}>
+        {t("models.empty")}
+      </EmptyState>
+    );
   }
 
   // The assessment surface only exists when the pipeline stamped one (older

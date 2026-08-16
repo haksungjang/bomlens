@@ -102,3 +102,15 @@ test("an empty section uses the shared empty state", async ({ page }) => {
   await open(page, "artifacts");
   await expect(page.getByTestId("empty-state")).toBeVisible();
 });
+
+test("a section with no findings says which of the two it is", async ({ page }) => {
+  // "No vulnerabilities" reads the same whether the scan checked and found
+  // nothing or never checked. The reason says which, and the link leads to the
+  // inventory the check actually covered.
+  await open(page, "vulnerabilities");
+  const empty = page.getByTestId("empty-state");
+  await expect(empty).toBeVisible();
+  // This stub has no security report at all, so the reason is the other one:
+  // nothing was checked, which is not the same as nothing being wrong.
+  await expect(empty).toContainText("not the same as a clean result");
+});

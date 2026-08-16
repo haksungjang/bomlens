@@ -294,7 +294,11 @@ export function DependencyGraph({
   // firmware SBOM): a node-only graph is unreadable overlapping dots, so show
   // the "no relationships" note and let the user use Components / Tree instead.
   if (nodes.length === 0 || edges.length === 0) {
-    return <EmptyState icon={Workflow}>{t("deps.empty")}</EmptyState>;
+    return (
+      <EmptyState icon={Workflow} hint={t("deps.emptyHint")}>
+        {t("deps.empty")}
+      </EmptyState>
+    );
   }
   if (tooLarge) {
     return (

@@ -18,7 +18,7 @@ import { Input } from "@/components/ui/input";
 import { EmptyState, ErrorState } from "@/components/ui/state";
 import { type SecuritySummary, type Severity, type VulnItem } from "@/lib/api";
 import { csvFilename, downloadCsv, toCsv, vulnCsvRows } from "@/lib/csv";
-import { buildQuery, parseQuery, type RouteQuery } from "@/lib/route";
+import { buildQuery, parseQuery, type RouteQuery, scanHash } from "@/lib/route";
 import { vulnsFromQuery, vulnsToQuery } from "@/lib/section-query";
 import { compareVulns, type SortDir, type VulnSortKey } from "@/lib/vulns";
 import { cn } from "@/lib/utils";
@@ -257,7 +257,24 @@ export function VulnerabilitiesTable({
         </ErrorState>
       );
     }
-    return <EmptyState icon={ShieldCheck}>{t("result.noVulns")}</EmptyState>;
+    return (
+      <EmptyState
+        icon={ShieldCheck}
+        hint={t("result.noVulnsHint")}
+        action={
+          scanId ? (
+            <a
+              href={scanHash(scanId, "components")}
+              className="rounded text-xs text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+            >
+              {t("result.noVulnsAction")}
+            </a>
+          ) : undefined
+        }
+      >
+        {t("result.noVulns")}
+      </EmptyState>
+    );
   }
 
   const q = query.trim().toLowerCase();
