@@ -932,13 +932,32 @@ const AI_SBOM = {
   ],
 };
 
-async function stubAiAndRun(page: Page, theme: Theme = "light", lang: Lang = "en") {
+// The same model in the shape the scanner writes for a model scan: the model is
+// the document's own component and components[] holds only the datasets it
+// references. Kept beside the components[] shape rather than replacing it — the
+// visual baselines run on the original, and both shapes must render the card.
+const AI_SBOM_ROOT_MODEL = {
+  bomFormat: "CycloneDX",
+  specVersion: "1.7",
+  metadata: { component: AI_SBOM.components[0] },
+  components: [
+    { type: "data", "bom-ref": "d1", name: "bookcorpus", version: "d917559b" },
+    { type: "data", "bom-ref": "d2", name: "wikipedia", version: "97a0b052" },
+  ],
+};
+
+async function stubAiAndRun(
+  page: Page,
+  theme: Theme = "light",
+  lang: Lang = "en",
+  sbom: unknown = AI_SBOM,
+) {
   await seedThemeLang(page, theme, lang);
   await page.route("**/capabilities", (r) =>
     r.fulfill({ contentType: "application/json", body: JSON.stringify({ firmware: false, scanoss: false, docker: true }) }),
   );
   await page.route("**/results", (r) => r.fulfill({ contentType: "application/json", body: "[]" }));
-  await page.route("**/file**", (r) => r.fulfill({ contentType: "application/json", body: JSON.stringify(AI_SBOM) }));
+  await page.route("**/file**", (r) => r.fulfill({ contentType: "application/json", body: JSON.stringify(sbom) }));
   await page.route("**/scan-stream**", (r) =>
     r.fulfill({ contentType: "text/event-stream", body: `event: done\ndata: ${JSON.stringify(AI_DONE)}\n\n` }),
   );
@@ -963,6 +982,16 @@ test("AI scan exposes Models & Datasets with the model card", async ({ page }) =
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
     .analyze();
   expect(results.violations).toEqual([]);
+});
+
+test("the model card renders when the model is the document's own component", async ({ page }) => {
+  await stubAiAndRun(page, "light", "en", AI_SBOM_ROOT_MODEL);
+  await page.getByRole("navigation").getByRole("link", { name: /Models & datasets/ }).click();
+
+  await expect(page.getByText("bert-base-uncased").first()).toBeVisible();
+  await expect(page.getByText("fill-mask")).toBeVisible();
+  await expect(page.getByText("bookcorpus").first()).toBeVisible();
+  await expect(page.getByText("wikipedia").first()).toBeVisible();
 });
 
 for (const { theme, lang } of COMBOS) {
