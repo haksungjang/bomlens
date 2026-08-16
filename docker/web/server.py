@@ -1762,6 +1762,16 @@ def list_scans():
         comp_count = len(_as_list(data.get("components")))
         comps = _dicts(data.get("components"))
         meta = _as_dict(_as_dict(data.get("metadata")).get("component"))
+        # A spec-shaped AI SBOM names the model as the document's own component
+        # and lists only its datasets under components[]. Reading that array
+        # alone, this list would neither recognise the scan as an AI one nor
+        # count the model, and would disagree with the count sbom_summary shows
+        # on the scan's own page. Fold a machine-learning-model root in, by the
+        # same rule as sbom_summary: every other root is the scanned project
+        # itself, which is not one of its own components and stays out.
+        if meta.get("type") == "machine-learning-model":
+            comps = [meta] + comps
+            comp_count += 1
         # The OWASP AIBOM generator names the root metadata.component after its
         # job id (job-<timestamp>), which is meaningless in the Recent list. For
         # AI scans, label by the model component instead.
