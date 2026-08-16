@@ -716,6 +716,53 @@ test("end-of-life surfaces as a KPI tile, a badge and a filter chip", async ({ p
   await expect(page.getByText("zlib", { exact: true })).toHaveCount(0);
 });
 
+test("the overview names the components carrying the most risk", async ({ page }) => {
+  await stubAndRun(page);
+
+  // The counts alone never named a component. The overview has no components
+  // table, so a component name appearing here is this block naming it.
+  await expect(page.getByText("Highest risk components")).toBeVisible();
+  await expect(page.getByText("openssl", { exact: true })).toBeVisible();
+
+  // A row opens the vulnerabilities that made it the worst one.
+  await page.getByText("openssl", { exact: true }).click();
+  await expect(page.getByRole("link", { name: /^Vulnerabilities/ })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+});
+
+test("a scan with nothing against any component shows no risk block", async ({ page }) => {
+  // Padding the block with clean components would imply a ranking the data
+  // does not support, so it is absent rather than empty.
+  const CLEAN = {
+    ...DONE,
+    security: null,
+    sbom: {
+      components: 1,
+      componentList: [
+        { name: "flask", version: "2.0", group: "", purl: "pkg:pypi/flask@2.0", type: "library", licenses: ["BSD-3-Clause"] },
+      ],
+    },
+  };
+  await seedThemeLang(page, "light", "en");
+  await page.route("**/capabilities", (r) =>
+    r.fulfill({ contentType: "application/json", body: JSON.stringify({ firmware: false, scanoss: false, docker: true }) }),
+  );
+  await page.route("**/results", (r) => r.fulfill({ contentType: "application/json", body: "[]" }));
+  await page.route("**/scan-stream**", (r) =>
+    r.fulfill({ contentType: "text/event-stream", body: `event: done\ndata: ${JSON.stringify(CLEAN)}\n\n` }),
+  );
+  await page.goto("/?ui=next#/new");
+  await page.fill("#project", "demo");
+  await page.fill("#version", "1.0");
+  await page.getByTestId("run-scan").click();
+
+  // The scan landed on the overview (its jump card is there) and the block is not.
+  await expect(page.getByRole("link", { name: "View Components" }).first()).toBeVisible();
+  await expect(page.getByText("Highest risk components")).toHaveCount(0);
+});
+
 test("Overview leads with needs-attention and jumps into sections", async ({ page }) => {
   await stubAndRun(page);
 

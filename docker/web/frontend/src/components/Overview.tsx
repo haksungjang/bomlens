@@ -19,9 +19,12 @@ import {
   Package,
   ShieldAlert,
   ShieldCheck,
+  TrendingDown,
+  TrendingUp,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import type {
   ComponentItem,
@@ -33,7 +36,12 @@ import type {
 } from "@/lib/api";
 import type { LicenseRiskTier } from "@/lib/licenses";
 import type { SectionId } from "@/lib/nav";
-import { type AttentionItem, needsAttention } from "@/lib/overview";
+import {
+  type AttentionItem,
+  needsAttention,
+  riskyComponentCount,
+  topRiskComponents,
+} from "@/lib/overview";
 import { type ProvenanceKind, provenanceOf } from "@/lib/provenance";
 import { formatRelativeTime, scanComparison } from "@/lib/recent";
 import { conformanceCount, isAiScan, sbomFileName } from "@/lib/results";
@@ -74,6 +82,101 @@ function ProvenanceIcon({
 }: { kind: ProvenanceKind } & React.ComponentProps<LucideIcon>) {
   const Icon = PROVENANCE_ICON[kind];
   return <Icon {...props} />;
+}
+
+/** Arrow for the severity trend. Direction carries the meaning; the colour and
+ *  the wording beside it say the same thing, so it is decorative here. */
+function TrendIcon({ up, ...props }: { up: boolean } & React.ComponentProps<LucideIcon>) {
+  const Icon = up ? TrendingUp : TrendingDown;
+  return <Icon {...props} aria-hidden />;
+}
+
+/** Severity tone for the risk badge, matching the components table. */
+const SEV_TONE: Record<Severity, "critical" | "high" | "medium" | "low" | "info"> = {
+  CRITICAL: "critical",
+  HIGH: "high",
+  MEDIUM: "medium",
+  LOW: "low",
+  UNKNOWN: "info",
+};
+
+/**
+ * The handful of components carrying the most risk, as a short table that links
+ * into the row it names.
+ *
+ * The overview used to stop at counts and distributions: it could say 973
+ * critical-or-high findings without naming one component, so every reader's
+ * next move was the same — open Components, sort by risk. This does that sort
+ * for them. It is not a replacement for the table (six rows, no filtering),
+ * and it renders nothing at all when no component carries a vulnerability.
+ */
+function TopRisk({
+  result,
+  scanId,
+}: {
+  result: DoneEvent;
+  scanId: string | null;
+}) {
+  const { t } = useTranslation();
+  const rows = topRiskComponents(result);
+  const affected = riskyComponentCount(result);
+  if (rows.length === 0) return null;
+  return (
+    <Card>
+      <CardContent className="p-4">
+        <div className="mb-3 flex items-baseline justify-between gap-4">
+          <div className="flex flex-wrap items-baseline gap-x-2">
+            <span className="text-sm font-semibold text-foreground">
+              {t("overview.topRisk")}
+            </span>
+            {/* On an OS image the worst six can all be variants of one kernel
+                package. True, but it reads as the whole story unless the size
+                of what sits behind it is stated. */}
+            <span className="text-xs text-muted-foreground">
+              {t("overview.topRiskOf", { shown: rows.length, total: affected })}
+            </span>
+          </div>
+          {scanId && (
+            <a
+              href={scanHash(scanId, "components")}
+              className="rounded text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+            >
+              {t("overview.topRiskAll")}
+            </a>
+          )}
+        </div>
+        <ul className="flex flex-col">
+          {rows.map((c) => (
+            <li key={c.purl || `${c.group}-${c.name}-${c.version}`}>
+              <a
+                href={scanId ? scanHash(scanId, "vulnerabilities", { q: c.name }) : undefined}
+                className={cn(
+                  "flex items-center gap-3 rounded-md px-2 py-2 text-sm",
+                  "transition-colors duration-fast ease-out-soft hover:bg-muted",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
+                )}
+              >
+                <span className="min-w-0 flex-1 truncate font-mono text-foreground">
+                  {c.group ? `${c.group} / ` : ""}
+                  {c.name}
+                </span>
+                <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                  {c.version}
+                </span>
+                {c.maxSeverity && (
+                  <Badge tone={SEV_TONE[c.maxSeverity]} className="shrink-0">
+                    {t(`severity.${c.maxSeverity}`)}
+                    {c.vulnCount ? ` · ${c.vulnCount}` : ""}
+                  </Badge>
+                )}
+                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+              </a>
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
+  );
 }
 
 /**
@@ -141,44 +244,65 @@ export function Overview({
           </code>
         </div>
       )}
+      {/* How this run moved against the last one of the same project. It used to
+          be a line of grey text under the title, which is where a reader's eye
+          goes last; a scan that got worse deserves better than that. Absent
+          entirely when there is no earlier run to compare against. */}
       {comparison && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-          <span>
-            {t("overview.vsPrevious", {
-              label:
-                comparison.prev.version ||
-                formatRelativeTime(
-                  comparison.prev.generatedAt,
-                  Date.now(),
-                  i18n.language,
-                ),
-            })}
-          </span>
-          <span className="text-foreground">
-            {comparison.componentsDelta === 0
-              ? t("overview.compSame")
-              : t("overview.compDelta", {
-                  delta:
-                    comparison.componentsDelta > 0
-                      ? `+${comparison.componentsDelta}`
-                      : `${comparison.componentsDelta}`,
+        <Card>
+          <CardContent className="flex flex-wrap items-center gap-x-8 gap-y-3 p-4">
+            <div>
+              <div className="text-xs text-muted-foreground">
+                {t("overview.vsPrevious", {
+                  label:
+                    comparison.prev.version ||
+                    formatRelativeTime(
+                      comparison.prev.generatedAt,
+                      Date.now(),
+                      i18n.language,
+                    ),
                 })}
-          </span>
-          <span
-            className={cn(
-              comparison.severityDir === "up" && "text-risk-high",
-              comparison.severityDir === "down" && "text-risk-low",
-            )}
-          >
-            {t(
-              comparison.severityDir === "up"
-                ? "overview.sevUp"
-                : comparison.severityDir === "down"
-                  ? "overview.sevDown"
-                  : "overview.sevSame",
-            )}
-          </span>
-        </div>
+              </div>
+              <div className="mt-1 text-sm font-medium text-foreground">
+                {comparison.componentsDelta === 0
+                  ? t("overview.compSame")
+                  : t("overview.compDelta", {
+                      delta:
+                        comparison.componentsDelta > 0
+                          ? `+${comparison.componentsDelta}`
+                          : `${comparison.componentsDelta}`,
+                    })}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-muted-foreground">
+                {t("overview.sevTrendLabel")}
+              </div>
+              <div
+                className={cn(
+                  "mt-1 flex items-center gap-1.5 text-sm font-medium",
+                  comparison.severityDir === "up" && "text-risk-high",
+                  comparison.severityDir === "down" && "text-risk-low",
+                  comparison.severityDir === "same" && "text-foreground",
+                )}
+              >
+                {comparison.severityDir !== "same" && (
+                  <TrendIcon
+                    className="h-4 w-4 shrink-0"
+                    up={comparison.severityDir === "up"}
+                  />
+                )}
+                {t(
+                  comparison.severityDir === "up"
+                    ? "overview.sevUp"
+                    : comparison.severityDir === "down"
+                      ? "overview.sevDown"
+                      : "overview.sevSame",
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
       )}
       {ai && (
         <div className="rounded-md border bg-muted/40 px-4 py-3 text-muted-foreground">
@@ -286,6 +410,8 @@ export function Overview({
           onSelect={onPick ? (tier) => onPick("licenses", { tier }) : undefined}
         />
       </div>
+
+      <TopRisk result={result} scanId={scanId} />
     </div>
   );
 }
