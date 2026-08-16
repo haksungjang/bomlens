@@ -708,8 +708,10 @@ test("end-of-life surfaces as a KPI tile, a badge and a filter chip", async ({ p
   // The EOL component carries the badge; the supported one does not.
   await expect(page.getByText("End of life · since 2023-09-11")).toBeVisible();
 
-  // The filter chip narrows the table to end-of-life rows only.
-  await page.getByRole("button", { name: "End of life", exact: true }).click();
+  // The filter narrows the table to end-of-life rows only.
+  await page.getByRole("button", { name: /^Filters/ }).click();
+  await page.getByRole("checkbox", { name: "End of life" }).check();
+  await page.keyboard.press("Escape");
   await expect(page.getByText("openssl", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("zlib", { exact: true })).toHaveCount(0);
 });
@@ -1457,15 +1459,71 @@ test("Components table shows Scope/Risk and filters on the full set", async ({ p
   await expect(page.getByText("zlib", { exact: true })).toBeVisible();
 
   // "Has vulnerabilities" narrows to the component with a CVE (openssl only).
-  await page.getByRole("button", { name: "Has vulnerabilities" }).click();
+  // The toggles live in the Filters menu; the active ones also appear as
+  // removable chips under the toolbar.
+  await page.getByRole("button", { name: /^Filters/ }).click();
+  await page.getByRole("checkbox", { name: "Has vulnerabilities" }).check();
+  await page.keyboard.press("Escape");
   await expect(page.getByText("openssl", { exact: true })).toBeVisible();
   await expect(page.getByText("zlib", { exact: true })).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: /Has vulnerabilities/ }).last(),
+  ).toBeVisible();
 
   // Clearing it brings zlib back; "Direct only" then also excludes the transitive zlib.
-  await page.getByRole("button", { name: "Has vulnerabilities" }).click();
-  await page.getByRole("button", { name: "Direct only" }).click();
+  await page.getByRole("button", { name: /^Filters/ }).click();
+  await page.getByRole("checkbox", { name: "Has vulnerabilities" }).uncheck();
+  await page.getByRole("checkbox", { name: "Direct only" }).check();
+  await page.keyboard.press("Escape");
   await expect(page.getByText("zlib", { exact: true })).toHaveCount(0);
   await expect(page.getByText("openssl", { exact: true })).toBeVisible();
+
+  // "Clear filters" drops every active toggle at once.
+  await page.getByRole("button", { name: "Clear filters" }).click();
+  await expect(page.getByText("zlib", { exact: true })).toBeVisible();
+});
+
+test("columns can be hidden, and the choice is kept for next time", async ({ page }) => {
+  await stubAndRun(page);
+  await page.getByRole("link", { name: /^Components/ }).first().click();
+  await expect(page.getByRole("button", { name: "Version", exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: /^Columns/ }).click();
+  await page.getByRole("checkbox", { name: "Version" }).uncheck();
+  await page.keyboard.press("Escape");
+
+  // The column is gone from the header and the rows keep their shape.
+  await expect(page.getByRole("button", { name: "Version", exact: true })).toHaveCount(0);
+  await expect(page.getByText("openssl", { exact: true })).toBeVisible();
+
+  // Kept browser-local, like the theme and the language — nothing is sent.
+  expect(
+    await page.evaluate(() => localStorage.getItem("sbom.components.hiddenColumns")),
+  ).toContain("version");
+
+  // And it comes back.
+  await page.getByRole("button", { name: /^Columns/ }).click();
+  await page.getByRole("checkbox", { name: "Version" }).check();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("button", { name: "Version", exact: true })).toBeVisible();
+});
+
+test("the toolbar menus have no axe violations, open or closed", async ({ page }) => {
+  await stubAndRun(page);
+  await page.getByRole("link", { name: /^Components/ }).first().click();
+  await expect(page.getByText("openssl", { exact: true })).toBeVisible();
+
+  const closed = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  expect(closed.violations).toEqual([]);
+
+  await page.getByRole("button", { name: /^Columns/ }).click();
+  await expect(page.getByRole("checkbox", { name: "Version" })).toBeVisible();
+  const open = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  expect(open.violations).toEqual([]);
 });
 
 for (const { theme, lang } of COMBOS) {

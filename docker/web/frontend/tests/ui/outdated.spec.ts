@@ -67,8 +67,10 @@ test("outdated badge + latest version render; filter narrows the table", async (
   await expect(page.getByText("latest: 4.17.21").first()).toBeVisible();
   await expect(page.getByText("latest: 3.0.3").first()).toBeVisible();
 
-  // The Outdated filter chip keeps only the two outdated rows (express drops out).
-  await page.getByRole("button", { name: "Outdated", exact: true }).click();
+  // The Outdated filter keeps only the two outdated rows (express drops out).
+  await page.getByRole("button", { name: /^Filters/ }).click();
+  await page.getByRole("checkbox", { name: "Outdated" }).check();
+  await page.keyboard.press("Escape");
   await expect(page.getByText("lodash", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("jinja2", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("express", { exact: true })).toHaveCount(0);
