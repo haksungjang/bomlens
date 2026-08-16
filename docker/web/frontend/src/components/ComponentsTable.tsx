@@ -256,7 +256,11 @@ export function ComponentsTable({ items, total, truncated, scanId, query, onQuer
   }, [chunkCount]);
 
   if (total === 0) {
-    return <EmptyState icon={Package}>{t("result.componentsEmpty")}</EmptyState>;
+    return (
+      <EmptyState icon={Package} hint={t("result.componentsEmptyHint")}>
+        {t("result.componentsEmpty")}
+      </EmptyState>
+    );
   }
 
   const onSort = (key: ComponentSortKey) =>

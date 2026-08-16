@@ -104,7 +104,11 @@ export function Licenses({
   const conflicts = useMemo(() => conflictGroups(filtered), [filtered]);
 
   if (components.length === 0) {
-    return <EmptyState icon={ScrollText}>{t("licenses.empty")}</EmptyState>;
+    return (
+      <EmptyState icon={ScrollText} hint={t("licenses.emptyHint")}>
+        {t("licenses.empty")}
+      </EmptyState>
+    );
   }
 
   const toggleTier = (next: LicenseRiskTier) => {

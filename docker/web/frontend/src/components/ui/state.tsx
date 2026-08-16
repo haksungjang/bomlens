@@ -56,14 +56,28 @@ export function LoadingState({
   );
 }
 
-/** Nothing-to-show state with an optional leading icon. */
+/**
+ * Nothing-to-show state with an optional leading icon.
+ *
+ * An empty section reads the same whether the scan looked and found nothing or
+ * never looked at all, and the reader is left to guess which. `hint` says which
+ * of the two it was, and `action` offers the one thing worth doing next. Both
+ * are optional: a section with nothing useful to add stays a single line rather
+ * than padding itself with a sentence that says the heading again.
+ */
 export function EmptyState({
   icon: Icon,
   children,
+  hint,
+  action,
   className,
 }: {
   icon?: LucideIcon;
   children: ReactNode;
+  /** Why this section is empty — found nothing, or was never run. */
+  hint?: ReactNode;
+  /** The next step, as a link or a button. */
+  action?: ReactNode;
   className?: string;
 }) {
   return (
@@ -75,7 +89,13 @@ export function EmptyState({
           <Icon className="h-6 w-6" aria-hidden />
         </div>
       ) : null}
-      <span>{children}</span>
+      {/* The heading only steps up in weight when there is a reason under it to
+          step down from. A one-line empty state has no hierarchy to express,
+          and darkening it there would change screens this section never
+          touched. */}
+      <span className={hint ? "text-foreground" : undefined}>{children}</span>
+      {hint ? <p className="max-w-prose text-xs">{hint}</p> : null}
+      {action ? <div className="mt-1">{action}</div> : null}
     </StateShell>
   );
 }

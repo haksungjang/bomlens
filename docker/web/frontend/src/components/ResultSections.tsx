@@ -105,7 +105,9 @@ export function ResultSection({
           }
         />
       ) : (
-        <EmptyState>{t("result.noSecurity")}</EmptyState>
+        <EmptyState hint={t("result.noSecurityHint")}>
+          {t("result.noSecurity")}
+        </EmptyState>
       );
 
     case "licenses":
