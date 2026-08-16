@@ -89,7 +89,11 @@ export function EmptyState({
           <Icon className="h-6 w-6" aria-hidden />
         </div>
       ) : null}
-      <span className="text-foreground">{children}</span>
+      {/* The heading only steps up in weight when there is a reason under it to
+          step down from. A one-line empty state has no hierarchy to express,
+          and darkening it there would change screens this section never
+          touched. */}
+      <span className={hint ? "text-foreground" : undefined}>{children}</span>
       {hint ? <p className="max-w-prose text-xs">{hint}</p> : null}
       {action ? <div className="mt-1">{action}</div> : null}
     </StateShell>
