@@ -167,6 +167,33 @@ test("Recent menu re-opens a past scan from the top bar", async ({ page }) => {
   await expect(page.getByRole("link", { name: /^Overview/ })).toHaveAttribute("aria-current", "page");
   await expect(page.getByText("2 critical or high vulnerabilities")).toBeVisible();
 });
+test("a project scanned twice shows how it moved", async ({ page }) => {
+  await page.route("**/capabilities", (r) =>
+    r.fulfill({ contentType: "application/json", body: JSON.stringify({ firmware: false, scanoss: false, docker: true }) }),
+  );
+  // Same project, two runs: 10 -> 13 components, HIGH -> CRITICAL. And a
+  // project scanned once, which has nothing to compare against.
+  await page.route("**/scans", (r) =>
+    r.fulfill({ contentType: "application/json", body: JSON.stringify([
+      { id: "api_2.0", project: "api", version: "2.0", components: 13, maxSeverity: "CRITICAL", isAiScan: false, componentType: "application", generatedAt: 1700000200 },
+      { id: "api_1.0", project: "api", version: "1.0", components: 10, maxSeverity: "HIGH", isAiScan: false, componentType: "application", generatedAt: 1700000100 },
+      { id: "once_1.0", project: "once", version: "1.0", components: 5, maxSeverity: "LOW", isAiScan: false, componentType: "application", generatedAt: 1700000000 },
+    ]) }),
+  );
+  await page.goto("/?ui=next");
+
+  const newer = page.getByRole("row").filter({ hasText: "api @2.0" });
+  await expect(newer).toContainText("+3");
+  await expect(newer.getByText("Worse than the previous scan")).toBeAttached();
+
+  // The first run of a project compares against nothing and says nothing —
+  // a "0" there would read as "unchanged" rather than "not known".
+  const first = page.getByRole("row").filter({ hasText: "api @1.0" });
+  await expect(first).not.toContainText("+");
+  const alone = page.getByRole("row").filter({ hasText: "once @1.0" });
+  await expect(alone).not.toContainText("+");
+});
+
 test("Recent home renders the summary strip and the scan table", async ({ page }) => {
   await page.route("**/capabilities", (r) =>
     r.fulfill({ contentType: "application/json", body: JSON.stringify({ firmware: false, scanoss: false, docker: true }) }),
