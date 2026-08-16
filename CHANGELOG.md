@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v1.11.1] - 2026-08-16
+
+Reading a scan result, rather than producing one. The components table on a
+real image was hard to work through: Korean headers split down the middle of a
+word, rows changed height with their contents, and scrolling right lost track
+of which row was which. The controls above it had grown into four stacked
+lines with no common axis.
+
+An AI model scan also had its own section come up empty. A model SBOM names the
+model as the document's own component and lists only its datasets underneath,
+and both the scan list and the model view read the list alone.
+
+### Fixed
+
+- The Models & datasets section renders the model card when the model is the document's own component rather than an entry in the component list, which is the shape a model scan actually produces. The section showed its empty state on exactly the scans it exists for, while the rail badge beside it counted one.
+
+- The scan list labels such a scan as an AI model scan and counts the model, instead of calling it a plain SBOM and reporting one component fewer than the scan's own page.
+
+- Table headers stay on one line. Korean text breaks between any two characters, so a two-character header in a narrow column stacked itself vertically.
+
+- Rows keep an even height. A component carrying many licences wrapped its badges over several lines; the first few are shown now, with the rest folded into a count that the expanded row already spells out in full.
+
+### Added
+
+- The name column stays in place while the table scrolls sideways, so a wide table can be read across without losing the row.
+
+- Columns can be hidden from a menu, and the choice is remembered in the browser for next time — the same local storage the theme and the language already use.
+
+- The overview names the components carrying the most risk and links into what put them there, instead of stopping at a count. It states how many affected components sit behind the list, and is absent when nothing carries a vulnerability.
+
+- The comparison with the previous scan of the same project moves from a line of text into a card, and the scan list carries it too: the change in component count and the direction of the worst severity, on the rows that have an earlier run to compare against.
+
+- Empty sections say why they are empty. A vulnerability list that ran and found nothing now reads differently from one that was never produced — the second says so, because an empty section is not the same as a clean result.
+
+### Changed
+
+- The components toolbar is a single row: search, the type and licence filters, the filter and column menus, the export button, and the row count. The state toggles moved into the filter menu, and the ones that are on appear as removable chips under it.
+
+- A truncated component list says how many rows it is showing rather than only that it was truncated.
+
 ## [v1.11.0] - 2026-08-15
 
 The web UI is the headline. A scan result was already thorough; this release is
@@ -685,7 +725,8 @@ Three changes alter what an AI-model scan writes, so a consumer of those artifac
 
 - No publicly known vulnerabilities have been reported or fixed in this project to date.
 
-[Unreleased]: https://github.com/sktelecom/bomlens/compare/v1.11.0...HEAD
+[Unreleased]: https://github.com/sktelecom/bomlens/compare/v1.11.1...HEAD
+[v1.11.1]: https://github.com/sktelecom/bomlens/releases/tag/v1.11.1
 [v1.11.0]: https://github.com/sktelecom/bomlens/releases/tag/v1.11.0
 [v1.10.5]: https://github.com/sktelecom/bomlens/releases/tag/v1.10.5
 [v1.10.4]: https://github.com/sktelecom/bomlens/releases/tag/v1.10.4
