@@ -30,6 +30,7 @@ import {
   type RecentSortDir,
   type RecentSortKey,
   type ScanType,
+  scanType,
   scanTypeLabelKey,
   scanTypeLabelKeyFor,
   sortRecent,
@@ -351,7 +352,7 @@ export function RecentScans({ scans, newHref, onDelete }: Props) {
                         </a>
                       </td>
                       <td className="px-4 py-3">
-                        {s.isAiScan ? (
+                        {scanType(s) === "ai" ? (
                           <Badge className="border-transparent bg-brand/10 text-brand">
                             {t(scanTypeLabelKey(s))}
                           </Badge>

@@ -1660,6 +1660,30 @@ assert d['security']['TOTAL'] == 1, d
 else
     fail "/scan?id= did not return the scan detail"
 fi
+# An AI SBOM names the model as the document's own component and lists only its
+# datasets under components[]. The list must recognise it as an AI scan and
+# count the model, or the same scan reads as a plain SBOM of 1 component here
+# and as a model of 2 on its own page.
+cat > "$OUT/aimodel_1.0_bom.json" <<'JSON'
+{"bomFormat":"CycloneDX","metadata":{"component":
+  {"name":"bert-base-uncased","version":"86b5e093","type":"machine-learning-model"}},
+ "components":[{"name":"bookcorpus","version":"d917559b","type":"data"}]}
+JSON
+scans=$(curl -fsS "$BASE/scans" 2>/dev/null)
+detail=$(curl -fsS "$BASE/scan?id=aimodel_1.0" 2>/dev/null)
+if echo "$scans" | SCAN_DETAIL="$detail" python3 -c "
+import os, sys, json
+s = next(x for x in json.load(sys.stdin) if x['id'] == 'aimodel_1.0')
+assert s['isAiScan'] is True, s
+assert s['componentType'] == 'machine-learning-model', s
+assert s['project'] == 'bert-base-uncased' and s['version'] == '86b5e093', s
+assert s['components'] == json.loads(os.environ['SCAN_DETAIL'])['sbom']['components'], s
+"; then
+    pass "/scans reports a root-component AI model as an AI scan, counted as /scan does"
+else
+    fail "/scans mislabelled an AI SBOM whose model is the root component" "$scans"
+fi
+curl -fsS -X POST "$BASE/scan-delete?id=aimodel_1.0" >/dev/null 2>&1
 c_bad=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/scan?id=../../etc/passwd")
 [ "$c_bad" = "400" ] && pass "/scan blocks traversal id (400)" || fail "/scan traversal id returned $c_bad (expected 400)"
 c_missing=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/scan?id=nope_9.9")

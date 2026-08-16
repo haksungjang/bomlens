@@ -82,6 +82,11 @@ export function scanType(scan: RecentScan): ScanType {
   // with, so they stay on the SBOM's own declaration.
   if (scan.inputSource === "sbom-upload") return "sbom";
   switch (scan.componentType) {
+    // A model can also be the SBOM's own root component rather than an entry in
+    // components[], which is what `isAiScan` reads. Both spellings are the same
+    // kind of scan, so neither is allowed to fall through to a generic SBOM.
+    case "machine-learning-model":
+      return "ai";
     case "firmware":
       return "firmware";
     case "container":
