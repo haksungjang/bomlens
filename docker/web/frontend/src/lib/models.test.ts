@@ -64,6 +64,35 @@ describe("parseModelCards", () => {
     expect(datasets[0].url).toContain("bookcorpus");
   });
 
+  // The shape the scanner actually writes for a model scan: the model is the
+  // document's own component and components[] holds only the datasets it
+  // references (docs/demo/data/files/BertBaseUncased_1.0/*_bom.json).
+  const ROOT_MODEL_BOM = {
+    specVersion: "1.7",
+    metadata: { component: ML_BOM.components[0] },
+    components: [
+      { type: "data", "bom-ref": "d1", name: "bookcorpus", version: "d917559b" },
+      { type: "data", "bom-ref": "d2", name: "wikipedia", version: "97a0b052" },
+    ],
+  };
+
+  it("reads the model card when the model is the document's own component", () => {
+    const { models, datasets } = parseModelCards(ROOT_MODEL_BOM);
+    expect(models).toHaveLength(1);
+    expect(models[0].name).toBe("bert-base-uncased");
+    expect(models[0].architecture).toBe("bert");
+    expect(datasets.map((d) => d.name)).toEqual(["bookcorpus", "wikipedia"]);
+  });
+
+  it("leaves every other root out — it is the scanned project, not a component", () => {
+    const appRoot = {
+      specVersion: "1.7",
+      metadata: { component: { type: "application", name: "web-api", version: "2.0" } },
+      components: [{ type: "library", name: "flask", version: "2.0" }],
+    };
+    expect(parseModelCards(appRoot).models).toHaveLength(0);
+  });
+
   it("derives disclosure axes from documented fields", () => {
     const d = parseModelCards(ML_BOM).models[0].disclosure;
     expect(d.architecture).toBe(true); // modelArchitecture present

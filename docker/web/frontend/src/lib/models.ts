@@ -319,7 +319,18 @@ function parseModel(component: Obj): ModelCard {
 /** Extract model cards and the datasets they reference from a raw SBOM. */
 export function parseModelCards(sbom: unknown): AiModelData {
   const components = arr(obj(sbom).components).map((c) => obj(c));
-  const models = components
+  // A spec-shaped AI SBOM names the model as the document's own component and
+  // lists only its datasets under components[], so reading that array alone
+  // leaves this view empty on exactly the scans it exists for. Fold a
+  // machine-learning-model root in, by the rule the server summary applies:
+  // every other root is the scanned project itself, which is not one of its own
+  // components and stays out.
+  const root = obj(obj(sbom).metadata).component;
+  const cards =
+    obj(root).type === "machine-learning-model"
+      ? [obj(root), ...components]
+      : components;
+  const models = cards
     .filter((c) => c.type === "machine-learning-model")
     .map(parseModel);
 
