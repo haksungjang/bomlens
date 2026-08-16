@@ -141,3 +141,30 @@ export function selectComponents(
   if (!sort) return rows;
   return [...rows].sort((a, b) => compareComponents(a, b, sort.key, sort.dir));
 }
+
+/**
+ * How many license badges a row shows before the rest collapse into a "+n".
+ * A row with a dozen licenses used to wrap its badges over three lines, which
+ * made the row taller than its neighbours and cost the table its rhythm. The
+ * expanded row still lists every license, so nothing is hidden from the reader.
+ */
+export const LICENSE_BADGE_LIMIT = 2;
+
+export interface LicenseBadges {
+  /** The licenses to render as badges, in the order given. */
+  shown: string[];
+  /** How many were left out; 0 when they all fit. */
+  hidden: number;
+}
+
+/** Split a row's licenses into the badges it shows and the count it folds away. */
+export function licenseBadges(
+  licenses: string[],
+  limit: number = LICENSE_BADGE_LIMIT,
+): LicenseBadges {
+  // A limit below 1 would fold everything away and leave the cell reading "+n"
+  // with nothing to anchor it, so keep at least one badge visible.
+  const cap = Math.max(1, limit);
+  if (licenses.length <= cap) return { shown: licenses, hidden: 0 };
+  return { shown: licenses.slice(0, cap), hidden: licenses.length - cap };
+}

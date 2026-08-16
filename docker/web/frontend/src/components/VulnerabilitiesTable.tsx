@@ -66,8 +66,10 @@ function SortableTh({
   const active = sort.key === sortKey;
   const Icon = !active ? ArrowUpDown : sort.dir === "asc" ? ArrowUp : ArrowDown;
   return (
+    // Same reason as the components table: a Korean header splits between any
+    // two characters, so a narrow column stacked it vertically.
     <th
-      className={cn("px-3 py-2 font-medium", className)}
+      className={cn("whitespace-nowrap px-3 py-2 font-medium", className)}
       aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
     >
       <button
@@ -323,10 +325,10 @@ export function VulnerabilitiesTable({
             {anyEpss && (
               <SortableTh label={t("result.colEpss")} sortKey="epss" sort={sort} onSort={onSort} />
             )}
-            <th className="px-3 py-2 font-medium">{t("result.colCve")}</th>
-            <th className="px-3 py-2 font-medium">{t("result.colPackage")}</th>
-            <th className="px-3 py-2 font-medium">{t("result.colInstalled")}</th>
-            <th className="px-3 py-2 font-medium">{t("result.colFixed")}</th>
+            <th className="whitespace-nowrap px-3 py-2 font-medium">{t("result.colCve")}</th>
+            <th className="whitespace-nowrap px-3 py-2 font-medium">{t("result.colPackage")}</th>
+            <th className="whitespace-nowrap px-3 py-2 font-medium">{t("result.colInstalled")}</th>
+            <th className="whitespace-nowrap px-3 py-2 font-medium">{t("result.colFixed")}</th>
           </tr>
         </thead>
         <tbody>

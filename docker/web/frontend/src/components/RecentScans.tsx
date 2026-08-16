@@ -105,7 +105,7 @@ function SummaryCard({
   );
 }
 
-const TH = "px-4 py-3 text-left font-medium";
+const TH = "whitespace-nowrap px-4 py-3 text-left font-medium";
 
 /** A pill toggle for the Scan management filters (AI only / at-risk only). */
 function FilterChip({
@@ -157,7 +157,7 @@ function SortHeader({
   const Icon = !active ? ArrowUpDown : sort.dir === "asc" ? ArrowUp : ArrowDown;
   return (
     <th
-      className={cn("px-4 py-3 font-medium", className)}
+      className={cn("whitespace-nowrap px-4 py-3 font-medium", className)}
       aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
     >
       <button

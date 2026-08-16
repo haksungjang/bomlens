@@ -14,6 +14,7 @@ import {
   type ComponentFilters,
   type ComponentSortKey,
   EMPTY_FILTERS,
+  licenseBadges,
   selectComponents,
   type SortDir,
 } from "@/lib/components";
@@ -82,8 +83,10 @@ function SortHeader({
   const active = sort?.key === sortKey;
   const Icon = !active ? ArrowUpDown : sort.dir === "asc" ? ArrowUp : ArrowDown;
   return (
+    // whitespace-nowrap: CJK text breaks between any two characters, so a
+    // two-character Korean header in a narrow column split down the middle.
     <th
-      className={cn("px-3 py-2 font-medium", className)}
+      className={cn("whitespace-nowrap px-3 py-2 font-medium", className)}
       aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
     >
       <button
@@ -364,23 +367,37 @@ export function ComponentsTable({ items, total, truncated, scanId, query, onQuer
 
       <div className="text-xs text-muted-foreground">
         {t("result.componentsCount", { shown: filtered.length, total })}
-        {truncated ? ` · ${t("result.truncated")}` : ""}
+        {/* "list truncated" left the reader guessing how much they were looking
+            at. items.length is what the server actually sent for this scan. */}
+        {truncated ? ` · ${t("result.truncated", { count: items.length })}` : ""}
       </div>
 
       <div ref={scrollRef} className="max-h-[44rem] resize-y overflow-auto rounded-md border">
         <table className="w-full text-left text-xs">
           <thead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">
             <tr className="border-b">
-              <SortHeader label={t("result.colName")} sortKey="name" sort={sort} onSort={onSort} />
-              <SortHeader label={t("result.colVersion")} sortKey="version" sort={sort} onSort={onSort} />
-              <SortHeader label={t("result.colType")} sortKey="type" sort={sort} onSort={onSort} />
+              {/* The name column is pinned: reading the columns on the right of a
+                  wide table used to lose track of which component the row was.
+                  Its background must be opaque — the pinned cell slides over the
+                  others, and the header's translucent tint would show them
+                  through. z-30 keeps it above both the sticky header (z-10) and
+                  the pinned body cells (z-10). */}
+              <SortHeader
+                label={t("result.colName")}
+                sortKey="name"
+                sort={sort}
+                onSort={onSort}
+                className="sticky left-0 z-30 bg-muted"
+              />
+              <SortHeader label={t("result.colVersion")} sortKey="version" sort={sort} onSort={onSort} className="min-w-24" />
+              <SortHeader label={t("result.colType")} sortKey="type" sort={sort} onSort={onSort} className="min-w-24" />
               {anyScope && (
-                <SortHeader label={t("result.colScope")} sortKey="scope" sort={sort} onSort={onSort} />
+                <SortHeader label={t("result.colScope")} sortKey="scope" sort={sort} onSort={onSort} className="min-w-20" />
               )}
               {anyVulns && (
-                <SortHeader label={t("result.colRisk")} sortKey="risk" sort={sort} onSort={onSort} />
+                <SortHeader label={t("result.colRisk")} sortKey="risk" sort={sort} onSort={onSort} className="min-w-24" />
               )}
-              <th className="px-3 py-2 font-medium">{t("result.colLicense")}</th>
+              <th className="whitespace-nowrap px-3 py-2 font-medium">{t("result.colLicense")}</th>
             </tr>
           </thead>
           {chunks.map((chunkItems, ci) =>
@@ -390,13 +407,14 @@ export function ComponentsTable({ items, total, truncated, scanId, query, onQuer
               const key = rowKey(c, ci * CHUNK + i);
               const isOpen = openKey === key;
               const toggle = () => setOpenKey(isOpen ? null : key);
+              const lic = licenseBadges(c.licenses);
               return (
               <Fragment key={key}>
               {/* role="button" makes aria-expanded valid here (it is not allowed
                   on a plain table row) and, with tabIndex + the key handler,
                   keeps the expandable row reachable by keyboard. */}
               <tr
-                className="cursor-pointer border-b last:border-0 hover:bg-accent/50"
+                className="group cursor-pointer border-b last:border-0 hover:bg-accent/50"
                 role="button"
                 tabIndex={0}
                 aria-expanded={isOpen}
@@ -409,10 +427,16 @@ export function ComponentsTable({ items, total, truncated, scanId, query, onQuer
                   }
                 }}
               >
-                <td className="px-3 py-2">
+                {/* Pinned like its header. The row tint is painted per-cell here
+                    (group-hover) because a pinned cell needs its own opaque
+                    background and would otherwise stay unhighlighted. */}
+                <td className="sticky left-0 z-10 max-w-80 bg-background px-3 py-2 group-hover:bg-accent/50">
                   <div className="flex items-center gap-2">
                     <Package className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    <span className="font-mono">
+                    <span
+                      className="truncate font-mono"
+                      title={`${c.group ? `${c.group} / ` : ""}${c.name}`}
+                    >
                       {c.group ? `${c.group} / ` : ""}
                       {c.name}
                     </span>
@@ -464,7 +488,7 @@ export function ComponentsTable({ items, total, truncated, scanId, query, onQuer
                     em dash here would read as a gap in the data rather than as
                     the finding it is: the component is there, the version is
                     not recoverable, and no advisory lookup applies to it. */}
-                <td className="px-3 py-2 font-mono tabular-nums text-muted-foreground">
+                <td className="whitespace-nowrap px-3 py-2 font-mono tabular-nums text-muted-foreground">
                   {c.version || (c.presenceOnly ? (
                     <span
                       className="font-sans text-xs"
@@ -474,9 +498,9 @@ export function ComponentsTable({ items, total, truncated, scanId, query, onQuer
                     </span>
                   ) : "—")}
                 </td>
-                <td className="px-3 py-2 text-muted-foreground">{c.type || "—"}</td>
+                <td className="whitespace-nowrap px-3 py-2 text-muted-foreground">{c.type || "—"}</td>
                 {anyScope && (
-                  <td className="px-3 py-2">
+                  <td className="whitespace-nowrap px-3 py-2">
                     {c.scope ? (
                       <span
                         className={
@@ -493,7 +517,7 @@ export function ComponentsTable({ items, total, truncated, scanId, query, onQuer
                   </td>
                 )}
                 {anyVulns && (
-                  <td className="px-3 py-2">
+                  <td className="whitespace-nowrap px-3 py-2">
                     {c.maxSeverity ? (
                       <Badge tone={SEV_TONE[c.maxSeverity]}>
                         {t(`severity.${c.maxSeverity}`)}
@@ -504,14 +528,25 @@ export function ComponentsTable({ items, total, truncated, scanId, query, onQuer
                     )}
                   </td>
                 )}
-                <td className="px-3 py-2">
+                {/* Badges past the limit fold into a count so a component with a
+                    dozen licenses does not stand three rows tall. The expanded
+                    row below lists them all. */}
+                <td className="whitespace-nowrap px-3 py-2">
                   {c.licenses.length ? (
-                    <div className="flex flex-wrap gap-1">
-                      {c.licenses.map((l, j) => (
+                    <div className="flex items-center gap-1">
+                      {lic.shown.map((l, j) => (
                         <Badge key={j} variant="muted">
                           {l}
                         </Badge>
                       ))}
+                      {lic.hidden > 0 && (
+                        <span
+                          className="text-muted-foreground"
+                          title={c.licenses.join(", ")}
+                        >
+                          {t("result.licenseMore", { count: lic.hidden })}
+                        </span>
+                      )}
                     </div>
                   ) : (
                     <span className="text-muted-foreground">{t("result.licenseNone")}</span>

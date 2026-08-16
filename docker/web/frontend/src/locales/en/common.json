@@ -216,7 +216,7 @@
     "licenseMore": "+{{count}} more",
     "licenseRowHint": "Click a license for its components",
     "componentsCount": "{{shown}} of {{total}} components",
-    "truncated": "list truncated",
+    "truncated": "first {{count}} rows shown",
     "noMatch": "No matching rows.",
     "licenseNone": "Unknown",
     "filterHasVulns": "Has vulnerabilities",
