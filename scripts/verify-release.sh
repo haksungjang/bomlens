@@ -112,9 +112,26 @@ else
     echo "  ❌ skipped — published image not available"; fail=1
 fi
 
+# ---------------------------------------------------------------------------
+# 4) The release describes itself. upload-assets attaches an SBOM for the
+#    desktop dependency tree and one for the source bundles; a release that
+#    quietly lost them would still install and scan, so nothing else notices.
+# ---------------------------------------------------------------------------
+echo "4) SBOM assets attached to release $TAG"
+sbom_assets="$(gh release view "$TAG" --repo "$REPO" --json assets \
+    -q '.assets[] | .name + ":" + (.size|tostring)' 2>/dev/null || true)"
+for kind in desktop source; do
+    line="$(printf '%s\n' "$sbom_assets" | sed -n "s/^bomlens-${kind}-${TAG}\.cdx\.json://p" | head -1)"
+    if [ -n "$line" ] && [ "$line" -ge 100 ] 2>/dev/null; then
+        echo "  ✓ bomlens-${kind}-${TAG}.cdx.json attached (${line} bytes)"
+    else
+        echo "  ❌ bomlens-${kind}-${TAG}.cdx.json missing or empty (got '${line:-none}')"; fail=1
+    fi
+done
+
 echo ""
 if [ "$fail" -ne 0 ]; then
     echo "❌ release $TAG is NOT ready (a recommended entry point is broken)"
     exit 1
 fi
-echo "✅ release $TAG verified: installers attached, image published, documented command works"
+echo "✅ release $TAG verified: installers attached, image published, documented command works, SBOMs attached"

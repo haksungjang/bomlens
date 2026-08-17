@@ -163,12 +163,52 @@ jobs:
           tar -czf release-assets/bomlens-${{ needs.create-release.outputs.version }}.tar.gz \
             scripts/ docker/ examples/ docs/ README.md $LICENSE_FILES
 
-          # Checksums so downloaders can verify integrity of these assets.
+      # A tool that generates SBOMs ships one for itself. This one covers the
+      # source bundles: every manifest this repository ships, which is where the
+      # desktop app's and the web UI's dependencies are declared. The scanner
+      # image has its own SBOM, signed as an attestation in docker-publish.yml
+      # and attached to the release there.
+      - name: Install syft (pinned release tarball)
+        run: |
+          # Single source of truth: the version pinned in docker/Dockerfile.
+          SYFT_VERSION=$(grep -oP 'ARG SYFT_VERSION=\K\S+' docker/Dockerfile)
+          ver="${SYFT_VERSION#v}"
+          curl -sSfL "https://github.com/anchore/syft/releases/download/${SYFT_VERSION}/syft_${ver}_linux_amd64.tar.gz" -o /tmp/syft.tgz
+          sudo tar -C /usr/local/bin -xzf /tmp/syft.tgz syft
+          syft version
+
+      - name: Generate the release SBOM
+        env:
+          VERSION: ${{ needs.create-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          # examples/ is left out on purpose: those fixtures pin old versions so
+          # the scanner has something to find, and listing them here would read
+          # as this project's own dependencies.
+          syft scan dir:. \
+            --exclude './examples/**' --exclude './electron/node_modules/**' \
+            --exclude './release-assets/**' \
+            --source-name bomlens --source-version "$VERSION" \
+            -o "cyclonedx-json=release-assets/bomlens-source-${VERSION}.cdx.json"
+
+          # An SBOM with nothing in it is indistinguishable from a clean result,
+          # which is the one failure this asset must not ship with.
+          n=$(jq '.components | length' "release-assets/bomlens-source-${VERSION}.cdx.json")
+          echo "release SBOM: $n components"
+          [ "$n" -gt 0 ] || { echo "::error::the release SBOM has no components"; exit 1; }
+
+      - name: Write the checksum file
+        env:
+          VERSION: ${{ needs.create-release.outputs.version }}
+        run: |
+          # Checksums so downloaders can verify integrity of these assets. The
+          # release gate appends the installer lines later and signs the result.
           ( cd release-assets && sha256sum \
             bomlens-cli-linux.tar.gz \
             bomlens-cli-windows.zip \
-            bomlens-examples-${{ needs.create-release.outputs.version }}.tar.gz \
-            bomlens-${{ needs.create-release.outputs.version }}.tar.gz \
+            "bomlens-examples-${VERSION}.tar.gz" \
+            "bomlens-${VERSION}.tar.gz" \
+            "bomlens-source-${VERSION}.cdx.json" \
             > SHA256SUMS.txt )
 
       - name: Verify the CLI bundles are self-sufficient
@@ -214,6 +254,7 @@ jobs:
             release-assets/bomlens-cli-windows.zip
             release-assets/bomlens-examples-${{ needs.create-release.outputs.version }}.tar.gz
             release-assets/bomlens-${{ needs.create-release.outputs.version }}.tar.gz
+            release-assets/bomlens-source-${{ needs.create-release.outputs.version }}.cdx.json
             release-assets/SHA256SUMS.txt
   
   # Run the docs walkthrough on the TAGGED COMMIT before the gate publishes
@@ -234,6 +275,7 @@ jobs:
     permissions:
       contents: write
       packages: read
+      id-token: write   # keyless cosign signing of the checksum file
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -261,6 +303,34 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: bash scripts/attach-installer-checksums.sh "${{ needs.create-release.outputs.version }}"
+
+      # Signed here rather than in upload-assets because the installer lines are
+      # appended above: this is the first moment SHA256SUMS.txt is final. The
+      # signature covers the checksum file, and the checksum file covers every
+      # asset, so one keyless signature is enough to tie the release together.
+      # Verify with:
+      #   cosign verify-blob SHA256SUMS.txt --signature SHA256SUMS.txt.sig \
+      #     --certificate SHA256SUMS.txt.pem \
+      #     --certificate-identity-regexp '^https://github.com/sktelecom/bomlens/' \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+      - name: Install cosign
+        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+
+      - name: Sign the checksum file
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.create-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          gh release download "$TAG" --repo "${{ github.repository }}" \
+            --pattern 'SHA256SUMS.txt' --dir "$work" --clobber
+          cosign sign-blob --yes \
+            --output-signature "$work/SHA256SUMS.txt.sig" \
+            --output-certificate "$work/SHA256SUMS.txt.pem" \
+            "$work/SHA256SUMS.txt"
+          gh release upload "$TAG" --repo "${{ github.repository }}" --clobber \
+            "$work/SHA256SUMS.txt.sig" "$work/SHA256SUMS.txt.pem"
 
       # Only now make it the public, latest release.
       - name: Publish the release
