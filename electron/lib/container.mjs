@@ -344,7 +344,9 @@ export class UiContainer {
       "--label",
       DESKTOP_LABEL,
       "-p",
-      `${this.hostPort}:8080`,
+      // 데스크톱 앱은 이 기기에서만 UI를 연다. 컨테이너가 엔진 소켓을 쥐고
+      // 있으므로 루프백에만 게시해 같은 네트워크의 다른 기기에서 닿지 않게 한다.
+      `127.0.0.1:${this.hostPort}:8080`,
       "-v",
       `${this.outputDir}:/src`,
       "-v",

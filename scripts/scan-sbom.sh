@@ -76,6 +76,10 @@ GENERATE_NOTICE="false"; GENERATE_SECURITY="false"; GENERATE_SPDX="false"; DEEP_
 # cannot produce the report.
 SECURITY_REQUESTED="false"
 SIGN_SBOM="false"; BYTE_STABLE="false"; UI_MODE="false"; UI_PORT="${UI_PORT:-8080}"
+# The web UI is a local tool: it reaches the engine socket to run scans, so it
+# is published to the loopback interface only. Set UI_BIND_ADDRESS=0.0.0.0 to
+# reach it from another machine, and put it behind something that authenticates.
+UI_BIND_ADDRESS="${UI_BIND_ADDRESS:-127.0.0.1}"
 # Report language for the conformance + AI-profile reports: en (default) or ko.
 # Only these two are honored; anything else is normalized to en further down.
 REPORT_LANG="${REPORT_LANG:-en}"
@@ -364,7 +368,7 @@ if [ "$UI_MODE" = "true" ]; then
     # to keep a secret, so it comes from the environment that launched the tool.
     HF_FLAGS=()
     if [ -n "$HF_TOKEN" ]; then HF_FLAGS=(-e HF_TOKEN); fi
-    exec "${DOCKER_ENV[@]}" docker run --rm "${TTY_FLAGS[@]}" -p "${UI_PORT}:8080" \
+    exec "${DOCKER_ENV[@]}" docker run --rm "${TTY_FLAGS[@]}" -p "${UI_BIND_ADDRESS}:${UI_PORT}:8080" \
         -v "$(hostpath "$UI_BASE")":/src -v "$(hostpath "$UI_BASE")":/host-output \
         "${MOUNT_FLAGS[@]}" "${HF_FLAGS[@]}" \
         -v /var/run/docker.sock:/var/run/docker.sock \

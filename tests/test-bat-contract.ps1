@@ -191,8 +191,8 @@ try {
         elseif ($r.ExitCode -ne 0) { Failed "sbom-ui.bat 종료 코드 $($r.ExitCode):`n$($r.Output)" }
         else {
             $log = if ($r.StubLog) { $r.StubLog } else { '' }
-            if ($log -match 'docker run ' -and $log -match '-p 18093:8080' -and $log -match 'MODE=UI') {
-                Pass 'docker run 에 UI_PORT 포트 매핑과 MODE=UI 가 전달되었습니다.'
+            if ($log -match 'docker run ' -and $log -match '-p 127\.0\.0\.1:18093:8080' -and $log -match 'MODE=UI') {
+                Pass 'docker run 에 루프백 포트 매핑과 MODE=UI 가 전달되었습니다.'
             } else {
                 Failed "docker run 인자가 기대와 다릅니다:`n$log"
             }
