@@ -1,0 +1,18 @@
+# gitleaks configuration for the CI secret scan (.github/workflows/ci.yml) and
+# the weekly full-history sweep (.github/workflows/nightly.yml).
+#
+# The default rule set is kept in full; the entries below only describe what is
+# known not to be a credential.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Build-time secret declarations name a secret; they never carry its value"
+regexTarget = "line"
+regexes = [
+  # `docker build --secret id=<name>,env=<VAR>` and the docs that quote it.
+  # BuildKit resolves the value at build time from the environment, so the
+  # string that appears in a Dockerfile or a README is a name pair, not a key.
+  '''id=[A-Za-z0-9_-]+,env=[A-Za-z0-9_]+''',
+]
