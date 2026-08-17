@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v1.11.2] - 2026-08-17
+
+The local web UI now answers only on the machine that started it.
+
+### Changed
+
+- `scan-sbom.sh --ui`, `sbom-ui.bat` and the desktop app publish the web UI on 127.0.0.1 rather than on every interface of the host. The UI container is given the engine socket so that it can start sibling scan containers for firmware and AI-model inputs, which makes reaching that port enough to start a scan. If you open the UI from another machine, set `UI_BIND_ADDRESS=0.0.0.0` and put something that authenticates in front of it; both launchers read the variable, and the Windows settings file accepts it as a key. (reference/ui.md)
+
+- The scanner image carries syft 1.51.0 and grype 0.117.0.
+
+### Added
+
+- A release carries `bomlens-source-<version>.cdx.json`, a CycloneDX SBOM of what the source bundles ship, and `SHA256SUMS.txt` comes with a keyless signature (`.sig` and `.pem`) from the release workflow. The checksum file already covers every asset, so verifying that one signature covers the release. The scanner image keeps its own signed SBOM attestation.
+
 ## [v1.11.1] - 2026-08-16
 
 Reading a scan result, rather than producing one. The components table on a
@@ -725,7 +739,8 @@ Three changes alter what an AI-model scan writes, so a consumer of those artifac
 
 - No publicly known vulnerabilities have been reported or fixed in this project to date.
 
-[Unreleased]: https://github.com/sktelecom/bomlens/compare/v1.11.1...HEAD
+[Unreleased]: https://github.com/sktelecom/bomlens/compare/v1.11.2...HEAD
+[v1.11.2]: https://github.com/sktelecom/bomlens/releases/tag/v1.11.2
 [v1.11.1]: https://github.com/sktelecom/bomlens/releases/tag/v1.11.1
 [v1.11.0]: https://github.com/sktelecom/bomlens/releases/tag/v1.11.0
 [v1.10.5]: https://github.com/sktelecom/bomlens/releases/tag/v1.10.5
