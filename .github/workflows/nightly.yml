@@ -159,6 +159,210 @@ jobs:
   # GitHub's arm64 macOS runners support nested virtualization or lima's
   # qemu driver boots there.
 
+  # --- Security sweep ---------------------------------------------------
+  # What the publish gate deliberately does not block on, plus everything that
+  # only appears with time: a CVE published after the last release still
+  # reaches the image users already pulled. These jobs never fail on a finding.
+  # They upload SARIF under a fixed category, which makes GitHub code scanning
+  # the state store: it decides what is new, what is still open and what got
+  # fixed, so this workflow does not have to remember anything between runs.
+  security-images:
+    name: Published image CVE sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [bomlens, bomlens-firmware, bomlens-aibom, bomlens-deep-cve]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Trivy (pinned release tarball)
+        run: |
+          TRIVY_VERSION=$(grep -oP 'ARG TRIVY_VERSION=\K\S+' docker/Dockerfile)
+          ver="${TRIVY_VERSION#v}"
+          curl -sSfL "https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/trivy_${ver}_Linux-64bit.tar.gz" -o /tmp/trivy.tgz
+          sudo tar -C /usr/local/bin -xzf /tmp/trivy.tgz trivy
+          trivy --version
+
+      # Full severity and both package types: wider than the publish gate on
+      # purpose, because nothing here holds up a release.
+      - name: Scan the published image
+        run: |
+          set -euo pipefail
+          trivy image --quiet --format sarif --output "trivy-${{ matrix.image }}.sarif" \
+            --exit-code 0 --scanners vuln \
+            "ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:latest"
+
+      - name: Upload results
+        uses: github/codeql-action/upload-sarif@c4dd10e44af883a891fe31ced449bcb4a6728b9b # v3
+        with:
+          sarif_file: "trivy-${{ matrix.image }}.sarif"
+          category: "nightly-image-${{ matrix.image }}"
+
+  security-deps:
+    name: Dependency CVE sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Trivy (pinned release tarball)
+        run: |
+          TRIVY_VERSION=$(grep -oP 'ARG TRIVY_VERSION=\K\S+' docker/Dockerfile)
+          ver="${TRIVY_VERSION#v}"
+          curl -sSfL "https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/trivy_${ver}_Linux-64bit.tar.gz" -o /tmp/trivy.tgz
+          sudo tar -C /usr/local/bin -xzf /tmp/trivy.tgz trivy
+          trivy --version
+
+      # examples/ is skipped on purpose. Those fixtures pin old versions so the
+      # scanner has something to find, and new advisories keep landing on them;
+      # reporting that every night would drown the entries that can be acted on.
+      - name: Scan the shipped dependency manifests
+        run: |
+          set -euo pipefail
+          trivy fs --quiet --format sarif --output trivy-deps.sarif \
+            --exit-code 0 --scanners vuln \
+            --skip-dirs examples --skip-dirs tests/test-workspace .
+
+      - name: Upload results
+        uses: github/codeql-action/upload-sarif@c4dd10e44af883a891fe31ced449bcb4a6728b9b # v3
+        with:
+          sarif_file: trivy-deps.sarif
+          category: nightly-deps
+
+  security-secrets:
+    name: Secret history sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      # CI scans the commits each change adds; this is the whole history, which
+      # only produces something new when the rule set changes. Weekly is enough,
+      # and a manual run always does it.
+      - name: Decide whether the sweep runs today
+        id: due
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$(date -u +%u)" = "1" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Not Monday and not a manual run — skipping the history sweep."
+          fi
+
+      - name: Checkout repository
+        if: steps.due.outputs.run == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        if: steps.due.outputs.run == 'true'
+        env:
+          # renovate: datasource=github-releases depName=gitleaks/gitleaks
+          GITLEAKS_VERSION: v8.30.1
+        run: |
+          ver="${GITLEAKS_VERSION#v}"
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/gitleaks_${ver}_linux_x64.tar.gz" -o /tmp/gitleaks.tgz
+          sudo tar -C /usr/local/bin -xzf /tmp/gitleaks.tgz gitleaks
+          gitleaks version
+
+      - name: Scan the whole history
+        if: steps.due.outputs.run == 'true'
+        run: gitleaks git --redact --no-banner .
+
+  # The findings channel, kept separate from report-failure on purpose: a CVE
+  # that cannot be fixed today would otherwise hold the functional-regression
+  # issue open until nobody reads it. Only alerts GitHub recorded as new in the
+  # last day are reported, so a quiet night says nothing at all.
+  security-report:
+    name: Report new security findings
+    runs-on: ubuntu-latest
+    needs: [security-images, security-deps, security-secrets]
+    if: always()
+    permissions:
+      contents: read
+      issues: write
+      security-events: read
+    steps:
+      - name: Comment on the rolling security issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          IMAGES: ${{ needs.security-images.result }}
+          DEPS: ${{ needs.security-deps.result }}
+          SECRETS: ${{ needs.security-secrets.result }}
+        run: |
+          set -euo pipefail
+          title="Security findings (nightly)"
+          cutoff="$(date -u -d '25 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
+
+          # Open alerts, narrowed to what these sweeps uploaded and to what
+          # GitHub first recorded since the previous run. The category is the
+          # reliable marker; analysis_key is a fallback for older payloads.
+          gh api --paginate "repos/$REPO/code-scanning/alerts?state=open&per_page=100" \
+            > /tmp/alerts.json 2>/dev/null || echo '[]' > /tmp/alerts.json
+          jq --arg cutoff "$cutoff" '
+            [ .[]
+              | select(.created_at > $cutoff)
+              | select(((.most_recent_instance.category // "") | startswith("nightly-"))
+                       or ((.most_recent_instance.analysis_key // "") | test("nightly.yml")))
+            ]' /tmp/alerts.json > /tmp/new-alerts.json
+          new_count="$(jq -r 'length' /tmp/new-alerts.json)"
+
+          broke=""
+          for pair in "images:$IMAGES" "deps:$DEPS" "secrets:$SECRETS"; do
+            case "${pair#*:}" in success|skipped) ;; *) broke="$broke ${pair%%:*}" ;; esac
+          done
+
+          if [ "$new_count" = "0" ] && [ -z "$broke" ]; then
+            echo "Nothing new and every sweep job ran. Staying quiet."
+            exit 0
+          fi
+
+          # Written to a file rather than a shell variable so the markdown is
+          # not indented by this step's own block indentation.
+          : > /tmp/body.md
+          echo "Nightly security sweep: ${RUN_URL}" >> /tmp/body.md
+          if [ -n "$broke" ]; then
+            echo "" >> /tmp/body.md
+            echo "A sweep job did not complete:${broke}. Anything below only covers what did run." >> /tmp/body.md
+          fi
+          if [ "$new_count" != "0" ]; then
+            echo "" >> /tmp/body.md
+            echo "${new_count} new alert(s) since the last sweep:" >> /tmp/body.md
+            echo "" >> /tmp/body.md
+            jq -r '
+              sort_by(.rule.security_severity_level // "")
+              | reverse
+              | .[0:10]
+              | .[]
+              | "- \((.rule.security_severity_level // .rule.severity // "unknown") | ascii_upcase): \(.rule.id) in \(.most_recent_instance.location.path // "the published image") ([alert](\(.html_url)))"
+            ' /tmp/new-alerts.json >> /tmp/body.md
+            if [ "$new_count" -gt 10 ]; then
+              echo "" >> /tmp/body.md
+              echo "Showing the ten highest severities; the rest are in the Security tab." >> /tmp/body.md
+            fi
+          fi
+
+          num=$(gh issue list --repo "$REPO" --state open --search "in:title \"$title\"" \
+                --json number --jq '.[0].number // empty')
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --repo "$REPO" --body-file /tmp/body.md
+          else
+            gh issue create --repo "$REPO" --title "$title" --body-file /tmp/body.md
+          fi
+
   # Nightly is never a required check, so a red run is invisible unless someone
   # opens the Actions tab. Surface failures as a single rolling issue instead:
   # first failure opens it, repeats comment on it, and it is closed by hand once
