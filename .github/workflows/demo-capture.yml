@@ -193,9 +193,14 @@ jobs:
           include-hidden-files: true
           retention-days: 7
 
+      # PR을 기본 GITHUB_TOKEN으로 열면 GitHub이 pull_request 워크플로를 발화시키지
+      # 않는다(워크플로가 워크플로를 부르는 고리를 막는 장치다). 그러면 이 PR에는
+      # 필수 검사가 아예 붙지 않아 병합할 수 없다. PAT로 열면 정상 발화한다.
+      # DEMO_PR_TOKEN이 없으면 Renovate가 쓰는 PAT를 쓰고, 둘 다 없으면 기본
+      # 토큰으로 열되 사람이 무엇을 해야 하는지 경고로 남긴다.
       - name: Open a pull request with the recaptured data
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.DEMO_PR_TOKEN || secrets.RENOVATE_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           if git diff --quiet -- docs/demo/data; then
@@ -225,3 +230,9 @@ jobs:
             --title "chore(demo): recapture the demo data" \
             --body-file /tmp/demo-pr-body.md \
             --base main --head "$branch"
+
+          # `gh api user` answers for a PAT and fails for the default token, so
+          # it says which one opened the PR without printing either of them.
+          if ! gh api user -q .login >/dev/null 2>&1; then
+            echo "::warning::The PR was opened with the default token, so no CI ran on it and the required checks cannot pass. Close and reopen the PR to start them, or set a DEMO_PR_TOKEN secret."
+          fi
