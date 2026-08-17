@@ -63,6 +63,28 @@ jobs:
           done
           [ "$fail" -eq 0 ] || { echo "one or more advertised downloads are missing or broken"; exit 1; }
 
+      # The signature covers SHA256SUMS.txt, and that file covers every other
+      # asset, so verifying it here is what makes the published checksums worth
+      # trusting. Releases from before signing started have no .sig, and the
+      # step says so rather than failing the weekly schedule.
+      - name: Verify the checksum signature
+        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+      - name: Check the signature over the published checksums
+        run: |
+          base="https://github.com/sktelecom/bomlens/releases/latest/download"
+          curl -sfL -o SHA256SUMS.txt.sig "$base/SHA256SUMS.txt.sig" || true
+          curl -sfL -o SHA256SUMS.txt.pem "$base/SHA256SUMS.txt.pem" || true
+          if [ ! -s SHA256SUMS.txt.sig ] || [ ! -s SHA256SUMS.txt.pem ]; then
+            echo "no signature published for the latest release — nothing to verify"
+            exit 0
+          fi
+          cosign verify-blob SHA256SUMS.txt \
+            --signature SHA256SUMS.txt.sig \
+            --certificate SHA256SUMS.txt.pem \
+            --certificate-identity-regexp '^https://github\.com/sktelecom/bomlens/' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          echo "✓ SHA256SUMS.txt carries a valid signature from this repository's release workflow"
+
   # Dry-run of the release-gate check against an existing tag — same script the
   # Release workflow runs before publishing, so the gate logic can be exercised
   # without cutting a release. Only runs when a tag is supplied on manual dispatch.
