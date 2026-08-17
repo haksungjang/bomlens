@@ -134,4 +134,9 @@ AI G7 최소 요소 검사는 위의 **SBOM 적합성** 섹션 안에 나타납�
 UI_PORT=9090 ./scripts/scan-sbom.sh --ui      # http://localhost:9090
 ```
 
+**다른 기기에서 접속:** UI는 루프백 인터페이스에만 게시되어 실행한 기기에서만 응답합니다. 엔진 소켓을 통해 스캔을 실행하기 때문에 기본값으로는 네트워크에 열지 않습니다. 다른 기기에서 써야 한다면 바인드 주소를 지정하고 앞에 인증을 거치는 프록시를 두세요.
+```bash
+UI_BIND_ADDRESS=0.0.0.0 ./scripts/scan-sbom.sh --ui
+```
+
 > **참고:** UI가 쉬워도 Docker 엔진이 설치·실행되어 있어야 합니다(무료: WSL2 + docker-ce, 또는 Rancher Desktop). 런처가 Docker 미설치·중지를 감지해 설치 링크를 보여줍니다.

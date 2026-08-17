@@ -136,4 +136,9 @@ The home screen — opened from the rail's Scan management link, the logo, or th
 UI_PORT=9090 ./scripts/scan-sbom.sh --ui      # http://localhost:9090
 ```
 
+**Reaching the UI from another machine:** the UI is published to the loopback interface, so it answers only on the machine that started it. It runs scans through the engine socket, which is why it is not offered to the network by default. If you do need it elsewhere, set the bind address and put an authenticating proxy in front of it:
+```bash
+UI_BIND_ADDRESS=0.0.0.0 ./scripts/scan-sbom.sh --ui
+```
+
 > **Note:** even though the UI is easy, a Docker engine must be installed and running (free: WSL2 + docker-ce, or Rancher Desktop). The launcher detects a missing or stopped Docker and shows the install link.

@@ -23,6 +23,10 @@ REM --- defaults ------------------------------------------------------------
 if not defined SBOM_SCANNER_IMAGE set "SBOM_SCANNER_IMAGE=ghcr.io/sktelecom/bomlens:latest"
 set "DOCKER_IMAGE=%SBOM_SCANNER_IMAGE%"
 if not defined UI_PORT set "UI_PORT=8080"
+REM The web UI reaches the engine socket to run scans, so it is published to the
+REM loopback interface only. Set UI_BIND_ADDRESS=0.0.0.0 to reach it from another
+REM machine, and put it behind something that authenticates.
+if not defined UI_BIND_ADDRESS set "UI_BIND_ADDRESS=127.0.0.1"
 REM missing = pull only when absent (default), always = refresh, never = offline
 if not defined SBOM_PULL set "SBOM_PULL=missing"
 
@@ -134,7 +138,7 @@ REM free above, so the bind below is very likely to succeed.
 start "" cmd /c "timeout /t 4 >nul & start http://localhost:%UI_PORT%"
 
 docker run --rm -it ^
-    -p %UI_PORT%:8080 ^
+    -p %UI_BIND_ADDRESS%:%UI_PORT%:8080 ^
     -v "%OUTDIR%":/src ^
     -v "%OUTDIR%":/host-output ^
     %MOUNT_V% ^
@@ -305,7 +309,7 @@ set "V=%~2"
 if not defined K goto :eof
 REM Whitelist: never `set` an arbitrary name out of a text file.
 set "OK="
-for %%w in (SBOM_LANG UI_PORT SBOM_SCANNER_IMAGE SBOM_OUTPUT_DIR SBOM_UI_MOUNT_DIR SBOM_PULL SBOM_IMAGE_TAR) do if /i "%K%"=="%%w" set "OK=1"
+for %%w in (SBOM_LANG UI_PORT UI_BIND_ADDRESS SBOM_SCANNER_IMAGE SBOM_OUTPUT_DIR SBOM_UI_MOUNT_DIR SBOM_PULL SBOM_IMAGE_TAR) do if /i "%K%"=="%%w" set "OK=1"
 if not defined OK goto :eof
 REM A real environment variable always wins over the file.
 if defined %K% goto :eof

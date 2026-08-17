@@ -191,8 +191,8 @@ try {
         elseif ($r.ExitCode -ne 0) { Failed "sbom-ui.bat 종료 코드 $($r.ExitCode):`n$($r.Output)" }
         else {
             $log = if ($r.StubLog) { $r.StubLog } else { '' }
-            if ($log -match 'docker run ' -and $log -match '-p 18093:8080' -and $log -match 'MODE=UI') {
-                Pass 'docker run 에 UI_PORT 포트 매핑과 MODE=UI 가 전달되었습니다.'
+            if ($log -match 'docker run ' -and $log -match '-p 127\.0\.0\.1:18093:8080' -and $log -match 'MODE=UI') {
+                Pass 'docker run 에 루프백 포트 매핑과 MODE=UI 가 전달되었습니다.'
             } else {
                 Failed "docker run 인자가 기대와 다릅니다:`n$log"
             }
@@ -264,7 +264,7 @@ try {
     try {
         $env:SBOM_SCANNER_IMAGE = 'ghcr.io/example/stub-image:test'
         $r = Invoke-Bat -Bat (Join-Path $script:RepoRoot 'scripts\sbom-ui.bat')
-        if ($r.StubLog -match '-p 18096:8080') {
+        if ($r.StubLog -match '-p 127\.0\.0\.1:18096:8080') {
             Pass '설정 파일의 UI_PORT 가 적용되었습니다.'
         } else {
             Failed "설정 파일 UI_PORT 가 무시되었습니다:`n$($r.StubLog)"
@@ -273,7 +273,7 @@ try {
         # 같은 파일이 있는 상태에서 환경변수를 주면 환경변수가 이겨야 한다.
         $env:UI_PORT = '18097'
         $r = Invoke-Bat -Bat (Join-Path $script:RepoRoot 'scripts\sbom-ui.bat')
-        if ($r.StubLog -match '-p 18097:8080') {
+        if ($r.StubLog -match '-p 127\.0\.0\.1:18097:8080') {
             Pass '실제 환경변수가 설정 파일을 덮어썼습니다.'
         } else {
             Failed "환경변수 우선순위가 깨졌습니다:`n$($r.StubLog)"

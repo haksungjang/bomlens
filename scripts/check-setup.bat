@@ -160,7 +160,7 @@ set "K=%~1"
 set "V=%~2"
 if not defined K goto :eof
 set "OK="
-for %%w in (SBOM_LANG UI_PORT SBOM_SCANNER_IMAGE SBOM_OUTPUT_DIR SBOM_UI_MOUNT_DIR SBOM_PULL SBOM_IMAGE_TAR) do if /i "%K%"=="%%w" set "OK=1"
+for %%w in (SBOM_LANG UI_PORT UI_BIND_ADDRESS SBOM_SCANNER_IMAGE SBOM_OUTPUT_DIR SBOM_UI_MOUNT_DIR SBOM_PULL SBOM_IMAGE_TAR) do if /i "%K%"=="%%w" set "OK=1"
 if not defined OK goto :eof
 if defined %K% goto :eof
 call :cfg_rtrim
