@@ -1,6 +1,6 @@
 Third-party Open Source Licenses for NginxRuntimeImage
-Generated: 2026-08-16T09:45:24Z
-Total components: 1393 · Distinct licenses: 30
+Generated: 2026-08-17T07:08:21Z
+Total components: 1885 · Distinct licenses: 30
 
 This product includes the following open source software.
 Each component lists its source/download location and copyright/attribution.
@@ -244,8 +244,8 @@ Components (2):
       Copyright: holders not captured in SBOM — see source (https://www.mozilla.org/en-US/about/governance/policies/security-group/certs/)
 
 License: NOASSERTION
-Components (1331):
-  - Catalogued files (1330) — paths recorded by the scan, listed in the SBOM, not components
+Components (1823):
+  - Catalogued files (1822) — paths recorded by the scan, listed in the SBOM, not components
       Copyright: holders not captured in SBOM — see source
   - alpine@3.17.7
       Source: https://alpinelinux.org/
