@@ -34,13 +34,20 @@ case "${1:-}" in
         exit 0
         ;;
     run)
-        # UiContainer.start: parse `-p <host>:8080`, boot the real server.py on
-        # that port, then print a container id like a detached docker run.
+        # UiContainer.start: parse `-p [<bind address>:]<host>:8080`, boot the
+        # real server.py on that port, then print a container id like a detached
+        # docker run. The app publishes on loopback, so the mapping carries a
+        # bind address in front of the host port.
         shift
         hostport=""
         prev=""
         for a in "$@"; do
-            case "$prev" in -p) hostport="${a%%:*}" ;; esac
+            case "$prev" in
+                -p)
+                    hostport="${a%:*}"        # drop the container port
+                    hostport="${hostport##*:}" # drop the bind address, if any
+                    ;;
+            esac
             prev="$a"
         done
         [ -n "$hostport" ] || { echo "fake-docker: no -p mapping" >&2; exit 125; }
