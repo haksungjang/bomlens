@@ -120,14 +120,12 @@ fi
 echo "4) SBOM assets attached to release $TAG"
 sbom_assets="$(gh release view "$TAG" --repo "$REPO" --json assets \
     -q '.assets[] | .name + ":" + (.size|tostring)' 2>/dev/null || true)"
-for kind in desktop source; do
-    line="$(printf '%s\n' "$sbom_assets" | sed -n "s/^bomlens-${kind}-${TAG}\.cdx\.json://p" | head -1)"
-    if [ -n "$line" ] && [ "$line" -ge 100 ] 2>/dev/null; then
-        echo "  ✓ bomlens-${kind}-${TAG}.cdx.json attached (${line} bytes)"
-    else
-        echo "  ❌ bomlens-${kind}-${TAG}.cdx.json missing or empty (got '${line:-none}')"; fail=1
-    fi
-done
+sbom_size="$(printf '%s\n' "$sbom_assets" | sed -n "s/^bomlens-source-${TAG}\.cdx\.json://p" | head -1)"
+if [ -n "$sbom_size" ] && [ "$sbom_size" -ge 100 ] 2>/dev/null; then
+    echo "  ✓ bomlens-source-${TAG}.cdx.json attached (${sbom_size} bytes)"
+else
+    echo "  ❌ bomlens-source-${TAG}.cdx.json missing or empty (got '${sbom_size:-none}')"; fail=1
+fi
 
 echo ""
 if [ "$fail" -ne 0 ]; then
