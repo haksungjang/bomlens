@@ -25,6 +25,7 @@ BomLens (Apache-2.0) keeps its own code in shell scripts and bundles several ope
 | scancode-toolkit | Detailed license detection. Build-time opt-in (`SBOM_DEEP_LICENSE=true`); **not present in the published images**, which are built with the default `false` | Apache-2.0 (parts of the dataset CC-BY-4.0 and others) | https://github.com/aboutcode-org/scancode-toolkit |
 | scanoss (scanoss.py) | Vendored open-source identification (bundled by default; disable with `SBOM_SCANOSS=false`) | MIT (the bundled `osadl-copyleft.json` dataset is CC-BY-4.0) | https://github.com/scanoss/scanoss.py |
 | owasp-aibom-generator | AI model SBOM generation (opt-in `SBOM_AIBOM`, separate image `bomlens-aibom`; calls the HuggingFace API) | Apache-2.0 | https://github.com/GenAI-Security-Project/aibom-generator |
+| picklescan | Pickle analysis for scanned AI model files — whether loading the weights would run code (always installed; pure Python, no network) | MIT | https://github.com/mmaitre314/picklescan |
 | jq | SBOM post-processing helper | MIT (some components BSD, ICU, or Lucent) | https://github.com/jqlang/jq |
 
 Data: NVD, the vulnerability source, is public domain and requires attribution to "NIST/NVD".
@@ -59,7 +60,8 @@ The 23 packages currently in the bundle are below. All are permissive; none is c
 | class-variance-authority | Component variant definitions | Apache-2.0 |
 | clsx, tailwind-merge | Class name composition | MIT |
 | lucide-react | Icons | ISC |
-| @fontsource/inter, @fontsource/jetbrains-mono | Fonts (see the section below) | OFL-1.1 |
+| highlight.js | Syntax highlighting in the source viewer (grammars loaded on demand) | BSD-3-Clause |
+| @fontsource/inter, @fontsource/jetbrains-mono, pretendard | Fonts (see the section below) | OFL-1.1 |
 
 `npm run notices:check` keeps the list from going stale by checking the generated file. CI fails when a bundled package declares no license, when no license text was found to reproduce, or when any copyleft license appears.
 
@@ -77,19 +79,21 @@ Those seven carry the upstream MIT notice alongside our own copyright line, and 
 
 ### Web UI fonts
 
-The web UI (`--ui`) bundles two typefaces through `@fontsource` for consistent typography and for offline and desktop (Electron) operation. The font files (woff2) are compiled into the web SPA at build time and ship with the base image; no external font CDN is called.
+The web UI (`--ui`) bundles three typefaces for consistent typography and for offline and desktop (Electron) operation. The font files (woff2) are compiled into the web SPA at build time and ship with the base image; no external font CDN is called.
 
 | Font | Purpose | License (SPDX) | Source |
 |------|---------|----------------|--------|
-| Inter | Body and UI typeface | OFL-1.1 | https://github.com/rsms/inter |
+| Inter | Body and UI typeface (Latin) | OFL-1.1 | https://github.com/rsms/inter |
 | JetBrains Mono | Code and monospace typeface | OFL-1.1 | https://github.com/JetBrains/JetBrainsMono |
+| Pretendard | Body and UI typeface (Hangul) | OFL-1.1 | https://github.com/orioncactus/pretendard |
 
 The SIL Open Font License 1.1 requires attribution, and both fonts are bundled unmodified:
 
 - Inter: Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter)
 - JetBrains Mono: Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
+- Pretendard: Copyright 2021 Kil Hyung-jin (https://github.com/orioncactus/pretendard), with Reserved Font Name 'Pretendard'. Includes Source Sans Pro: Copyright 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'.
 
-The full OFL-1.1 text is available as `OFL.txt` in each repository listed under Source.
+The full OFL-1.1 text is available as `OFL.txt` in each repository listed under Source. The Pretendard npm package ships no license file of its own, so its text is carried in this repository at `docker/web/frontend/licenses/pretendard.txt` and reproduced in the web UI's generated `third-party-licenses.txt`.
 
 ### Vendored open-source identification and the OSSKB API (opt-in)
 

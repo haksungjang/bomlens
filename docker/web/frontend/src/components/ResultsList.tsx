@@ -1,12 +1,13 @@
 // Copyright 2026 SK Telecom Co., Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Download, Eye, FileSignature, Link2, Loader2, Package } from "lucide-react";
+import { Download, Eye, FileSignature, FileText, Link2, Loader2, Package } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/state";
 import {
   absoluteFileUrl,
   downloadAllUrl,
@@ -250,9 +251,7 @@ export function ResultsList({
   }, []);
 
   if (results.length === 0) {
-    return (
-      <p className="text-sm text-muted-foreground">{t("result.artifactsEmpty")}</p>
-    );
+    return <EmptyState icon={FileText}>{t("result.artifactsEmpty")}</EmptyState>;
   }
 
   const artifacts = groupArtifacts(results);

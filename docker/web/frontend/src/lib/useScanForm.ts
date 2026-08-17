@@ -29,6 +29,7 @@ export const UPLOAD_KIND: Partial<Record<SourceType, UploadKind>> = {
   "package-upload": "package",
   "sbom-upload": "sbom",
   "firmware-upload": "firmware",
+  "model-upload": "model",
 };
 
 export const ACCEPT: Record<UploadKind, string> = {
@@ -38,6 +39,7 @@ export const ACCEPT: Record<UploadKind, string> = {
   firmware:
     ".bin,.img,.squashfs,.sqsh,.ubi,.ubifs,.trx,.chk,.fw,.rom,.dlf," +
     ".gz,.tgz,.tar,.xz,.bz2,.lzma,.zst,.img.gz,.tar.gz",
+  model: ".gguf,.safetensors,.pt,.pth,.ckpt,.pkl,.pickle,.onnx,.npz,.npy",
 };
 
 /** Free-text inputs: the single `target` field, with per-source i18n keys. */
@@ -172,6 +174,10 @@ export function useScanForm({
   const [errors, setErrors] = useState<FieldErrors>({});
   const [uploadError, setUploadError] = useState<UploadErrorInfo | null>(null);
   const [uploading, setUploading] = useState(false);
+  // Percentage of the chosen file that has reached the server, or null when no
+  // upload is in flight. Only the file upload reports this; the credential
+  // stashes below are a few bytes and finish before a bar would be seen.
+  const [uploadPercent, setUploadPercent] = useState<number | null>(null);
 
   /** Typing into a field resolves its inline error immediately. */
   const clearError = (k: keyof FieldErrors) =>
@@ -202,8 +208,10 @@ export function useScanForm({
     showDeepSource && deepSource ? "scan-target-src" : source;
   const isAnalyze = source === "sbom-upload";
   // AI-model scans have no source tree and no package CVEs, so the security
-  // report (Trivy → 0 results) and deep-license (needs /src) don't apply.
-  const isAiModel = source === "ai-model";
+  // report (Trivy → 0 results) and deep-license (needs /src) don't apply. True
+  // of both AI inputs: the model named on HuggingFace and the model file read
+  // from its own header.
+  const isAiModel = source === "ai-model" || source === "model-upload";
   // OSV.dev advisories are only fetched for firmware scans (cve-bin-tool), and
   // the osv.dev DB is not in the image, so it downloads on this run when on.
   const isFirmware = source === "firmware-upload";
@@ -359,13 +367,16 @@ export function useScanForm({
     if (uploadKind && file) {
       try {
         setUploading(true);
-        token = (await uploadFile(file, uploadKind)).token;
+        setUploadPercent(0);
+        token = (await uploadFile(file, uploadKind, setUploadPercent)).token;
       } catch (e) {
         setUploadError(describeUploadError(e));
         setUploading(false);
+        setUploadPercent(null);
         return;
       }
       setUploading(false);
+      setUploadPercent(null);
     }
     // Private git URL: stash the token (single-use) so it never hits the query string.
     if (source === "git-url" && gitToken.trim()) {
@@ -477,7 +488,7 @@ export function useScanForm({
     uploadUrl, setUploadUrl,
     uploadToken, setUploadToken,
     truscaProjectId, setTruscaProjectId,
-    errors, uploadError, uploading,
+    errors, uploadError, uploading, uploadPercent,
     busy, uploadKind, textInput, isText, isAnalyze, isAiModel, showVendored,
     showDeepLicense, showIncludeOsv, showDeepCve, showByteStable, showOutboundLicense,
     showScanOptions, showUpload,

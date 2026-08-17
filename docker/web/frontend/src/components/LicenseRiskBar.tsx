@@ -26,13 +26,13 @@ const TONE: Record<
   permissive: "low",
 };
 
-// Bar segment fill. review-needed uses amber so it reads apart from weak's gold
-// when both are present (the existing review card is amber too).
+// Bar segment fill. review-needed carries the warning hue so it reads apart
+// from weak's gold when both are present (the review card is the same hue).
 const BAR: Record<LicenseRiskTier, string> = {
   "network-copyleft": "bg-risk-critical",
   "strong-copyleft": "bg-risk-high",
   "weak-copyleft": "bg-risk-medium",
-  "review-needed": "bg-amber-500",
+  "review-needed": "bg-warning-solid",
   uncategorized: "bg-risk-info",
   permissive: "bg-risk-low",
 };

@@ -135,26 +135,59 @@ jq --arg ctx "$CTX" --slurpfile kb "$KB" '
          [{ v: "caution", r: "lineage: conditions of base model \($lw) may be inherited but are not declared here (caution)" }]
        else [] end);
 
-  # File-security axis for a model: read the bomlens:hf:scan:* /
-  # bomlens:weights:* properties enrich-aibom.sh stamped from HuggingFace own
-  # scan results (ClamAV + picklescan). null when nothing was recorded — the
-  # axis is then simply not evaluated, never assumed safe.
+  # File-security axis for a model, from either of two sources — and both when
+  # both ran. bomlens:hf:scan:* is what HuggingFace itself found (ClamAV +
+  # picklescan), stamped by enrich-aibom.sh. bomlens:localscan:* is what we
+  # found by running picklescan here, stamped by scan-model-file-security.py;
+  # it is the only source for a model file that was never published, where no
+  # Hub API has an answer. Where both exist the worse verdict wins, and each
+  # reason names which scan it came from. null when neither recorded anything —
+  # the axis is then simply not evaluated, never assumed safe.
   def assess_security($p):
     ($p | map(select(.name == "bomlens:hf:scan:status")) | (.[0].value // "")) as $st
+    | ($p | map(select(.name == "bomlens:localscan:status")) | (.[0].value // "")) as $ls
+    | ($p | map(select(.name == "bomlens:localscan:findings")) | (.[0].value // "")) as $lf
     | ($p | map(select(.name == "bomlens:weights:pickleFiles")) | (.[0].value // "0")
         | (tonumber? // 0)) as $pk
-    | if $st == "" then null
-      elif ($st == "unsafe" or $st == "suspicious") then
-        { verdict: "caution",
-          reasons: ["file security: HuggingFace scan flags \($st) content (caution)"] }
-      elif $st == "safe" then
-        { verdict: "ok",
-          reasons: ["file security: HuggingFace scan reports all files safe (ok)"] }
-      else
-        { verdict: "review",
-          reasons: [("file security: scan \($st)"
-                     + (if $pk > 0 then ", pickle-format weights present" else "" end)
-                     + " (review)")] }
+    | (if $st == "" then []
+       elif ($st == "unsafe" or $st == "suspicious") then
+         [{ v: "caution",
+            r: "file security: HuggingFace scan flags \($st) content (caution)" }]
+       elif $st == "safe" then
+         [{ v: "ok", r: "file security: HuggingFace scan reports all files safe (ok)" }]
+       else
+         [{ v: "review",
+            r: ("file security: scan \($st)"
+                + (if $pk > 0 then ", pickle-format weights present" else "" end)
+                + " (review)") }]
+       end) as $hf
+    # A clean local scan answers one question — does loading this file run code
+    # — and the reason says so rather than implying the file was cleared of
+    # everything. "suspicious" is common in legitimate checkpoints (a custom
+    # class is enough), so it asks for a human instead of raising an alarm.
+    | (if $ls == "" then []
+       elif $ls == "unsafe" then
+         [{ v: "caution",
+            r: ("file security: local pickle scan found code-execution globals"
+                + (if $lf != "" then " — \($lf)" else "" end) + " (caution)") }]
+       elif $ls == "suspicious" then
+         [{ v: "review",
+            r: ("file security: local pickle scan found globals that need review"
+                + (if $lf != "" then " — \($lf)" else "" end) + " (review)") }]
+       elif $ls == "clean" then
+         [{ v: "ok",
+            r: ("file security: local pickle scan found no code-execution globals "
+                + "(pickle analysis only, not a malware scan) (ok)") }]
+       elif $ls == "not-applicable" then
+         [{ v: "ok",
+            r: "file security: this weight format does not execute code on load (ok)" }]
+       else
+         [{ v: "review",
+            r: "file security: local pickle scan could not read the file (review)" }]
+       end) as $loc
+    | ($hf + $loc) as $per
+    | if ($per | length) == 0 then null
+      else { verdict: ($per | map(.v) | max_by(vrank[.])), reasons: ($per | map(.r)) }
       end;
 
   # Dataset-signal axis for a data component: the publisher-declared tag

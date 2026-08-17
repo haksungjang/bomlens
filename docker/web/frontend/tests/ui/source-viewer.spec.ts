@@ -3,10 +3,12 @@
 
 import { test, expect, type Page } from "@playwright/test";
 
+import { captureMain, COMBOS, seedThemeLang, type Lang, type Theme } from "./visual";
+
 /**
  * The source viewer: the tree says WHAT was scanned, the pane beside it shows
- * the file's captured text. The source-tree section has no @visual baseline, so
- * these functional assertions are the only thing guarding the view.
+ * the file's captured text. The functional assertions here carry most of the
+ * weight; the @visual baseline at the end covers the layout they cannot see.
  */
 
 const FILES = {
@@ -63,7 +65,13 @@ const DONE = {
 };
 
 /** Stub the API and land on a finished scan with a source tree + snapshot. */
-async function runScan(page: Page, snapshot: unknown = SNAPSHOT) {
+async function runScan(
+  page: Page,
+  snapshot: unknown = SNAPSHOT,
+  theme: Theme = "light",
+  lang: Lang = "en",
+) {
+  await seedThemeLang(page, theme, lang);
   await page.route("**/capabilities", (r) =>
     r.fulfill({
       contentType: "application/json",
@@ -97,7 +105,7 @@ async function runScan(page: Page, snapshot: unknown = SNAPSHOT) {
   await page.goto("/#/new");
   await page.fill("#project", "testapp");
   await page.fill("#version", "1.0");
-  await page.getByRole("button", { name: /Run scan/i }).click();
+  await page.getByTestId("run-scan").click(); // language-independent
   await page
     .getByRole("navigation")
     .locator('a[href$="/sourceTree"]')
@@ -197,4 +205,42 @@ test("a symlink shows where it points instead of a blank pane", async ({ page })
 test("links are counted in the capture summary", async ({ page }) => {
   await runScan(page);
   await expect(page.getByText("1 symlinks.")).toBeVisible();
+});
+
+for (const { theme, lang } of COMBOS) {
+  test(`source tree matches baseline — ${theme}/${lang} @visual`, async ({ page }) => {
+    await runScan(page, SNAPSHOT, theme, lang);
+    // Captured with nothing selected: the tree plus the empty reading pane is
+    // the state every source scan opens in.
+    await expect(page.getByRole("button", { name: /main\.go/ })).toBeVisible();
+    await captureMain(page, "source-tree", theme, lang);
+  });
+}
+
+/**
+ * Syntax highlighting. It is a reading aid rather than the content, so what is
+ * asserted is that it arrives for a file whose grammar is known, that it does
+ * not for one that has none, and that the text itself is unchanged either way —
+ * the highlighter marks up the source, it does not rewrite it.
+ */
+test("a file with a known grammar is highlighted", async ({ page }) => {
+  await runScan(page);
+  await page.getByRole("button", { name: /main\.go/ }).click();
+
+  // The grammar loads on demand, so the markup arrives a beat after the text.
+  await expect(page.locator(".hljs-keyword").first()).toBeVisible();
+  await expect(page.locator(".hljs-string").first()).toHaveText('"hi"');
+
+  // The body still reads as the file, with its line count unchanged.
+  await expect(page.getByText("package main")).toBeVisible();
+  await expect(page.getByText("5 lines")).toBeVisible();
+});
+
+test("a file with no grammar is shown as plain text", async ({ page }) => {
+  await runScan(page);
+  // LICENSE carries no extension and no grammar worth guessing at.
+  await page.getByRole("button", { name: /LICENSE/ }).click();
+
+  await expect(page.getByText("MIT License")).toBeVisible();
+  await expect(page.locator(".hljs-keyword")).toHaveCount(0);
 });

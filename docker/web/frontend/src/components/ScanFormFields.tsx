@@ -9,9 +9,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
+import { FileDropzone } from "@/components/FileDropzone";
 import { SiblingImagePanel } from "@/components/SiblingImagePanel";
 import { Switch } from "@/components/ui/switch";
-import { USAGE_CONTEXTS, type UsageContext } from "@/lib/api";
+import { USAGE_CONTEXTS, type UploadKind, type UsageContext } from "@/lib/api";
 import { demoInstallUrl, IS_STATIC_DEMO } from "@/lib/demo";
 import { canManageScanFolders, desktopBridge } from "@/lib/desktop";
 import { USAGE_LABEL_KEY } from "@/lib/models";
@@ -22,6 +23,16 @@ import { ACCEPT, type ScanFormState } from "@/lib/useScanForm";
  * new two-pane NewScan, so there is one markup source for the source controls,
  * generation options, validation messages and the run button.
  */
+
+/** File-picker label per upload kind. A record rather than a chain of ternaries
+ *  so a new kind is a type error here until it is named. */
+const UPLOAD_LABEL: Record<UploadKind, string> = {
+  zip: "source.zipUpload",
+  sbom: "source.sbomUpload",
+  package: "source.packageUpload",
+  firmware: "source.firmwareUpload",
+  model: "source.modelUpload",
+};
 
 /** Red asterisk marking a required field; hidden from AT — the input itself
  *  carries `aria-required`, so the mark is purely visual. */
@@ -49,7 +60,7 @@ export function FieldError({ id, msgKey }: { id: string; msgKey?: string }) {
 /** Source-specific control: current-folder hint / free-text target / git token / upload. */
 export function SourceControls({ state }: { state: ScanFormState }) {
   const { t } = useTranslation();
-  const { source, target, setTarget, scanRoot, setScanRoot, scanRoots, deepSource, setDeepSource, showDeepSource, gitToken, setGitToken, setFile, uploadKind, textInput, isAnalyze, busy, capabilities, errors } = state;
+  const { source, target, setTarget, scanRoot, setScanRoot, scanRoots, deepSource, setDeepSource, showDeepSource, gitToken, setGitToken, file, setFile, uploadPercent, uploadKind, textInput, isAnalyze, busy, capabilities, errors } = state;
 
   // Extra --mount scan targets make the rootfs-dir path a subpath inside the
   // chosen base — and optional when a mounted base is selected (empty = scan
@@ -198,25 +209,18 @@ export function SourceControls({ state }: { state: ScanFormState }) {
       {uploadKind && (
         <div className="space-y-2">
           <Label htmlFor="file">
-            {uploadKind === "zip"
-              ? t("source.zipUpload")
-              : uploadKind === "sbom"
-                ? t("source.sbomUpload")
-                : uploadKind === "package"
-                  ? t("source.packageUpload")
-                  : t("source.firmwareUpload")}
+            {t(UPLOAD_LABEL[uploadKind])}
             <RequiredMark />
           </Label>
-          <input
+          <FileDropzone
             id="file"
-            type="file"
             accept={ACCEPT[uploadKind]}
+            file={file}
+            onFile={setFile}
             disabled={busy}
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-            aria-required
-            aria-invalid={errors.file ? true : undefined}
-            aria-describedby={errors.file ? "file-error" : undefined}
-            className="block w-full rounded-md border bg-background text-sm text-muted-foreground file:mr-3 file:cursor-pointer file:border-0 file:border-r file:bg-muted file:px-3 file:py-2 file:text-sm file:font-medium file:text-foreground hover:file:bg-accent"
+            percent={uploadPercent}
+            invalid={!!errors.file}
+            describedBy={errors.file ? "file-error" : undefined}
           />
           <FieldError id="file-error" msgKey={errors.file} />
           {isAnalyze && (
@@ -228,10 +232,13 @@ export function SourceControls({ state }: { state: ScanFormState }) {
           {source === "package-upload" && (
             <p className="text-xs text-muted-foreground">{t("source.packageUploadHint")}</p>
           )}
+          {source === "model-upload" && (
+            <p className="text-xs text-muted-foreground">{t("source.modelUploadHint")}</p>
+          )}
         </div>
       )}
 
-      {source === "ai-model" && <UsageContextSelect state={state} />}
+      {(source === "ai-model" || source === "model-upload") && <UsageContextSelect state={state} />}
 
       <SiblingPullNotice state={state} />
       <HfAuthNotice state={state} />

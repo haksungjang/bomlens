@@ -80,6 +80,45 @@
     --risk-medium: 202 138 4;
     --risk-low: 37 99 235;
     --risk-info: 113 113 122;
+
+    /* Success and warning — the two state colours that were spelled out as
+     * palette literals in components. Channels, like the risk tokens, so that
+     * the existing alpha modifiers (`/10`, `/60`) keep working.
+     *
+     * Three shades each because the components need three distinct jobs, not
+     * one: the foreground a label is written in, the solid a bar or dot is
+     * filled with, and the tinted surface a badge or card sits on. Collapsing
+     * them would change the rendering. */
+    --success: 4 120 87; /* emerald-700 */
+    --success-solid: 16 185 129; /* emerald-500 */
+    --success-surface: 209 250 229; /* emerald-100 */
+
+    --warning: 120 53 15; /* amber-900 */
+    --warning-solid: 245 158 11; /* amber-500 */
+    --warning-border: 252 211 77; /* amber-300 */
+    --warning-surface: 255 251 235; /* amber-50 */
+
+    /* Severity label colours. The risk tokens above are the hue a bar or a tint
+     * is filled with; these are the darker cut of the same hue that a label can
+     * be written in and still meet contrast on the tint. Two tokens per severity
+     * rather than one because a fill and a label have different jobs: the fill
+     * at label darkness is a heavy block, and the label at fill lightness fails
+     * contrast. */
+    --risk-critical-fg: 185 28 28; /* red-700 */
+    --risk-high-fg: 154 52 18; /* orange-800 */
+    --risk-medium-fg: 133 77 14; /* yellow-800 */
+    --risk-low-fg: 29 78 216; /* blue-700 */
+    --risk-info-fg: 71 85 105; /* slate-600 */
+
+    /* Syntax colours for the source viewer. Its own small palette rather than
+     * borrowed severity hues: a keyword is not a warning, and reusing the risk
+     * colours here would make a Python file look like a findings list. Each is
+     * checked against the surface it is read on (ratios in the comments). */
+    --code-keyword: 207 34 46; /* 5.36:1 on white */
+    --code-string: 10 48 105; /* 12.81:1 */
+    --code-comment: 110 119 129; /* 4.55:1 */
+    --code-number: 5 80 174; /* 7.59:1 */
+    --code-title: 102 57 186; /* 7.34:1 */
   }
 
   /* Dark theme — populated (mirrors the portal's reserved token names). */
@@ -132,6 +171,36 @@
     --risk-medium: 250 204 21;
     --risk-low: 96 165 250;
     --risk-info: 161 161 170;
+
+    /* Success and warning lift the same way the risk hues do: the foreground
+     * goes lighter so it stays legible on the near-black canvas, the surface
+     * goes darker so the tint stays a tint.
+     *
+     * The dark success surface is the solid hue, not a pale one, because on
+     * this canvas the badge renders it at `/15` — a low-alpha wash of the
+     * saturated green rather than a light fill. */
+    --success: 110 231 183; /* emerald-300 */
+    --success-solid: 16 185 129; /* emerald-500 */
+    --success-surface: 16 185 129; /* emerald-500, used at /15 */
+
+    --warning: 253 230 138; /* amber-200 */
+    --warning-solid: 245 158 11; /* amber-500 */
+    --warning-border: 251 191 36; /* amber-400 */
+    --warning-surface: 69 26 3; /* amber-950 */
+
+    /* Severity labels lift on the dark canvas the same way the fills do. */
+    --risk-critical-fg: 252 165 165; /* red-300 */
+    --risk-high-fg: 253 186 116; /* orange-300 */
+    --risk-medium-fg: 253 224 71; /* yellow-300 */
+    --risk-low-fg: 147 197 253; /* blue-300 */
+    --risk-info-fg: 203 213 225; /* slate-300 */
+
+    /* Syntax colours lift for the dark card (#18181b); ratios against it. */
+    --code-keyword: 255 123 114; /* 7.03:1 */
+    --code-string: 165 214 255; /* 11.53:1 */
+    --code-comment: 145 152 161; /* 6.08:1 */
+    --code-number: 121 192 255; /* 9.11:1 */
+    --code-title: 210 168 255; /* 9.10:1 */
   }
 
   * {
@@ -169,4 +238,50 @@
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* Syntax highlighting for the source viewer.
+ *
+ * Only the classes highlight.js actually emits for the grammars bundled here,
+ * mapped onto the --code-* tokens. Everything the highlighter marks up but
+ * this file does not name inherits the body colour, which is the same as not
+ * highlighting it — a missing rule shows plain text rather than nothing. */
+.hljs-keyword,
+.hljs-built_in,
+.hljs-literal,
+.hljs-type,
+.hljs-selector-tag,
+.hljs-doctag,
+.hljs-name {
+  color: rgb(var(--code-keyword));
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-symbol,
+.hljs-quote,
+.hljs-addition {
+  color: rgb(var(--code-string));
+}
+
+.hljs-comment,
+.hljs-meta {
+  color: rgb(var(--code-comment));
+}
+
+.hljs-number,
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable {
+  color: rgb(var(--code-number));
+}
+
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.function_,
+.hljs-section,
+.hljs-selector-class,
+.hljs-selector-id {
+  color: rgb(var(--code-title));
 }

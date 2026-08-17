@@ -1,20 +1,25 @@
 // Copyright 2026 SK Telecom Co., Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
   ChevronRight,
+  Download,
   ExternalLink,
   ShieldCheck,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { EmptyState, ErrorState } from "@/components/ui/state";
 import { type SecuritySummary, type Severity, type VulnItem } from "@/lib/api";
+import { csvFilename, downloadCsv, toCsv, vulnCsvRows } from "@/lib/csv";
+import { buildQuery, parseQuery, type RouteQuery, scanHash } from "@/lib/route";
+import { vulnsFromQuery, vulnsToQuery } from "@/lib/section-query";
 import { compareVulns, type SortDir, type VulnSortKey } from "@/lib/vulns";
 import { cn } from "@/lib/utils";
 
@@ -30,10 +35,16 @@ const TONE: Record<string, "critical" | "high" | "medium" | "low" | "info"> = {
 
 interface Props {
   security: SecuritySummary;
-  /** Search term seeded from global search (CVE / package / title). */
-  initialQuery?: string;
-  /** Severity seeded from an Overview severity-bar click (filters on open). */
-  initialSeverity?: string;
+  /** The scan's id, so an export says which scan it came from. */
+  scanId?: string | null;
+  /** Filter and sort state from the URL — a shared link, a reload, or a term
+   *  or severity routed in from another section. */
+  query?: RouteQuery;
+  /** Report state back so the URL can carry it; the shell replaces the hash. */
+  onQueryChange?: (query: RouteQuery) => void;
+  /** Open the Components section filtered to this package — the other half of
+   *  the investigation loop (what does this CVE's package ship under?). */
+  onPickComponent?: (name: string) => void;
 }
 
 type Sort = { key: VulnSortKey; dir: SortDir };
@@ -55,8 +66,10 @@ function SortableTh({
   const active = sort.key === sortKey;
   const Icon = !active ? ArrowUpDown : sort.dir === "asc" ? ArrowUp : ArrowDown;
   return (
+    // Same reason as the components table: a Korean header splits between any
+    // two characters, so a narrow column stacked it vertically.
     <th
-      className={cn("px-3 py-2 font-medium", className)}
+      className={cn("whitespace-nowrap px-3 py-2 font-medium", className)}
       aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
     >
       <button
@@ -88,7 +101,15 @@ function vulnLinks(v: VulnItem): string[] {
 }
 
 /** Expanded detail for one CVE — CVSS, description and reference links. */
-function VulnDetail({ vuln, links }: { vuln: VulnItem; links: string[] }) {
+function VulnDetail({
+  vuln,
+  links,
+  onPickComponent,
+}: {
+  vuln: VulnItem;
+  links: string[];
+  onPickComponent?: (name: string) => void;
+}) {
   const { t } = useTranslation();
   if (vuln.cvss == null && !vuln.description && links.length === 0) {
     return <p className="text-muted-foreground">{t("result.vulnNoDetail")}</p>;
@@ -134,6 +155,21 @@ function VulnDetail({ vuln, links }: { vuln: VulnItem; links: string[] }) {
           </ul>
         </div>
       ) : null}
+      {/* Back to the package this CVE is against, in the component inventory.
+          It lives in the expanded detail because the row itself is the toggle
+          control, and a control nested in a control is not announced reliably. */}
+      {onPickComponent && vuln.pkg ? (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onPickComponent(vuln.pkg);
+          }}
+          className="rounded text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {t("result.viewInComponents", { name: vuln.pkg })}
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -143,24 +179,62 @@ function VulnDetail({ vuln, links }: { vuln: VulnItem; links: string[] }) {
  * CVSS score, description and reference links already present in the Trivy
  * report — no extra fetch, no side panel.
  */
-export function VulnerabilitiesTable({ security, initialQuery, initialSeverity }: Props) {
+export function VulnerabilitiesTable({
+  security,
+  scanId,
+  query: urlState,
+  onQueryChange,
+  onPickComponent,
+}: Props) {
   const { t } = useTranslation();
   const items = security.vulnerabilities ?? [];
   const [openKey, setOpenKey] = useState<string | null>(null);
-  const [severityFilter, setSeverityFilter] = useState(initialSeverity ?? "");
-  const [query, setQuery] = useState(initialQuery ?? "");
-  // Re-seed the search when global search routes in a new term.
-  useEffect(() => {
-    if (initialQuery !== undefined) setQuery(initialQuery);
-  }, [initialQuery]);
-  // Re-seed the severity filter when an Overview bar click routes one in.
-  useEffect(() => {
-    if (initialSeverity !== undefined) setSeverityFilter(initialSeverity);
-  }, [initialSeverity]);
+  const initial = vulnsFromQuery(urlState);
+  const [severityFilter, setSeverityFilter] = useState(initial.severity);
+  const [query, setQuery] = useState(initial.term);
   // Default: most severe first, highest CVSS within a severity band.
-  const [sort, setSort] = useState<Sort>({ key: "severity", dir: "desc" });
+  const [sort, setSort] = useState<Sort>(initial.sort);
+
+  // The URL is the source; see ComponentsTable for why this compares strings.
+  const urlQuery = buildQuery(urlState);
+  const appliedRef = useRef(urlQuery);
+  useEffect(() => {
+    if (appliedRef.current === urlQuery) return;
+    appliedRef.current = urlQuery;
+    const next = vulnsFromQuery(parseQuery(urlQuery));
+    setQuery(next.term);
+    setSeverityFilter(next.severity);
+    setSort(next.sort);
+  }, [urlQuery]);
+
+  useEffect(() => {
+    const next = buildQuery(vulnsToQuery(query, severityFilter, sort));
+    if (next === appliedRef.current) return;
+    appliedRef.current = next;
+    onQueryChange?.(parseQuery(next));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, severityFilter, sort]);
 
   // EPSS column appears only when the report was enriched (online run).
+  // Exports what the table is showing: this filter, this sort, this order.
+  const exportCsv = () => {
+    const headers = [
+      t("result.csvCve"),
+      t("result.csvSeverity"),
+      t("result.csvPackage"),
+      t("result.csvInstalled"),
+      t("result.csvFixed"),
+      t("result.csvCvss"),
+      t("result.csvEpss"),
+      t("result.csvKev"),
+      t("result.csvTitle"),
+    ];
+    downloadCsv(
+      csvFilename(scanId ?? "scan", "vulnerabilities", new Date().toISOString().slice(0, 10)),
+      toCsv(vulnCsvRows(visible, headers)),
+    );
+  };
+
   const anyEpss = useMemo(() => items.some((v) => typeof v.epss === "number"), [items]);
 
   const sorted = useMemo(
@@ -183,7 +257,24 @@ export function VulnerabilitiesTable({ security, initialQuery, initialSeverity }
         </ErrorState>
       );
     }
-    return <EmptyState icon={ShieldCheck}>{t("result.noVulns")}</EmptyState>;
+    return (
+      <EmptyState
+        icon={ShieldCheck}
+        hint={t("result.noVulnsHint")}
+        action={
+          scanId ? (
+            <a
+              href={scanHash(scanId, "components")}
+              className="rounded text-xs text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+            >
+              {t("result.noVulnsAction")}
+            </a>
+          ) : undefined
+        }
+      >
+        {t("result.noVulns")}
+      </EmptyState>
+    );
   }
 
   const q = query.trim().toLowerCase();
@@ -230,6 +321,17 @@ export function VulnerabilitiesTable({ security, initialQuery, initialSeverity }
             {t("result.vulnShown", { shown: visible.length, total: items.length })}
           </span>
         )}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="ml-auto shrink-0"
+          disabled={visible.length === 0}
+          onClick={exportCsv}
+        >
+          <Download className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+          {t("result.exportCsv")}
+        </Button>
       </div>
       <div className="max-h-[44rem] resize-y overflow-auto rounded-md border">
         <table className="w-full text-left text-xs">
@@ -240,10 +342,10 @@ export function VulnerabilitiesTable({ security, initialQuery, initialSeverity }
             {anyEpss && (
               <SortableTh label={t("result.colEpss")} sortKey="epss" sort={sort} onSort={onSort} />
             )}
-            <th className="px-3 py-2 font-medium">{t("result.colCve")}</th>
-            <th className="px-3 py-2 font-medium">{t("result.colPackage")}</th>
-            <th className="px-3 py-2 font-medium">{t("result.colInstalled")}</th>
-            <th className="px-3 py-2 font-medium">{t("result.colFixed")}</th>
+            <th className="whitespace-nowrap px-3 py-2 font-medium">{t("result.colCve")}</th>
+            <th className="whitespace-nowrap px-3 py-2 font-medium">{t("result.colPackage")}</th>
+            <th className="whitespace-nowrap px-3 py-2 font-medium">{t("result.colInstalled")}</th>
+            <th className="whitespace-nowrap px-3 py-2 font-medium">{t("result.colFixed")}</th>
           </tr>
         </thead>
         <tbody>
@@ -324,9 +426,12 @@ export function VulnerabilitiesTable({ security, initialQuery, initialSeverity }
                   <td className="px-3 py-2 font-mono tabular-nums text-muted-foreground">
                     {v.installed || "—"}
                   </td>
+                  {/* Fixed version carries the success foreground, which is set
+                      to the darker green on light surfaces: the lighter one
+                      measures 3.77 there, under the 4.5 minimum. */}
                   <td className="px-3 py-2 font-mono tabular-nums">
                     {v.fixed ? (
-                      <span className="text-emerald-600 dark:text-emerald-400">
+                      <span className="text-success">
                         {v.fixed}
                       </span>
                     ) : (
@@ -337,7 +442,11 @@ export function VulnerabilitiesTable({ security, initialQuery, initialSeverity }
                 {isOpen && (
                   <tr className="border-b last:border-0">
                     <td colSpan={anyEpss ? 7 : 6} className="bg-muted/30 px-3 py-3">
-                      <VulnDetail vuln={v} links={links} />
+                      <VulnDetail
+                        vuln={v}
+                        links={links}
+                        onPickComponent={onPickComponent}
+                      />
                     </td>
                   </tr>
                 )}

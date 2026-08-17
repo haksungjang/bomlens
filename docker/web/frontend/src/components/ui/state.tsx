@@ -19,12 +19,17 @@ import { cn } from "@/lib/utils";
 function StateShell({
   className,
   children,
+  testId,
 }: {
   className?: string;
   children: ReactNode;
+  /** Lets a test assert that a section uses the shared state rather than its
+   *  own paragraph, which is how the three empty states drifted apart before. */
+  testId?: string;
 }) {
   return (
     <div
+      data-testid={testId}
       className={cn(
         "flex flex-col items-center justify-center gap-2 px-4 py-8 text-center text-sm text-muted-foreground",
         className,
@@ -44,25 +49,39 @@ export function LoadingState({
   className?: string;
 }) {
   return (
-    <StateShell className={className}>
+    <StateShell className={className} testId="loading-state">
       <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
       <span>{children}</span>
     </StateShell>
   );
 }
 
-/** Nothing-to-show state with an optional leading icon. */
+/**
+ * Nothing-to-show state with an optional leading icon.
+ *
+ * An empty section reads the same whether the scan looked and found nothing or
+ * never looked at all, and the reader is left to guess which. `hint` says which
+ * of the two it was, and `action` offers the one thing worth doing next. Both
+ * are optional: a section with nothing useful to add stays a single line rather
+ * than padding itself with a sentence that says the heading again.
+ */
 export function EmptyState({
   icon: Icon,
   children,
+  hint,
+  action,
   className,
 }: {
   icon?: LucideIcon;
   children: ReactNode;
+  /** Why this section is empty — found nothing, or was never run. */
+  hint?: ReactNode;
+  /** The next step, as a link or a button. */
+  action?: ReactNode;
   className?: string;
 }) {
   return (
-    <StateShell className={className}>
+    <StateShell className={className} testId="empty-state">
       {Icon ? (
         // The icon sits on a soft tinted plate (same language as the first-run
         // hero) so a blank section reads as intentional, not unfinished.
@@ -70,7 +89,13 @@ export function EmptyState({
           <Icon className="h-6 w-6" aria-hidden />
         </div>
       ) : null}
-      <span>{children}</span>
+      {/* The heading only steps up in weight when there is a reason under it to
+          step down from. A one-line empty state has no hierarchy to express,
+          and darkening it there would change screens this section never
+          touched. */}
+      <span className={hint ? "text-foreground" : undefined}>{children}</span>
+      {hint ? <p className="max-w-prose text-xs">{hint}</p> : null}
+      {action ? <div className="mt-1">{action}</div> : null}
     </StateShell>
   );
 }
@@ -127,7 +152,7 @@ export function ErrorState({
   className?: string;
 }) {
   return (
-    <StateShell className={className}>
+    <StateShell className={className} testId="error-state">
       <div className="mb-1 flex h-12 w-12 items-center justify-center rounded-xl bg-destructive/10 text-destructive">
         <TriangleAlert className="h-6 w-6" aria-hidden />
       </div>

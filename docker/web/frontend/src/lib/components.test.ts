@@ -6,7 +6,9 @@ import { describe, expect, it } from "vitest";
 import type { ComponentItem } from "./api";
 import {
   EMPTY_FILTERS,
+  LICENSE_BADGE_LIMIT,
   compareComponents,
+  licenseBadges,
   matchesFilters,
   riskRank,
   selectComponents,
@@ -105,5 +107,30 @@ describe("selectComponents", () => {
   it("filters then sorts on the full set", () => {
     const out = selectComponents(ALL, { ...EMPTY_FILTERS, hasVulns: true }, { key: "risk", dir: "asc" });
     expect(out.map((x) => x.name)).toEqual(["zlib", "werkzeug"]);
+  });
+});
+
+describe("licenseBadges", () => {
+  it("shows every license when they fit", () => {
+    expect(licenseBadges(["MIT"])).toEqual({ shown: ["MIT"], hidden: 0 });
+    expect(licenseBadges([])).toEqual({ shown: [], hidden: 0 });
+  });
+
+  it("folds the rest into a count once past the limit", () => {
+    const many = ["MIT", "Apache-2.0", "BSD-3-Clause", "ISC"];
+    const { shown, hidden } = licenseBadges(many, 2);
+    expect(shown).toEqual(["MIT", "Apache-2.0"]);
+    expect(hidden).toBe(2);
+    // Nothing is lost: shown + hidden always accounts for the whole list.
+    expect(shown.length + hidden).toBe(many.length);
+  });
+
+  it("keeps one badge visible even when asked for none", () => {
+    expect(licenseBadges(["MIT", "ISC"], 0)).toEqual({ shown: ["MIT"], hidden: 1 });
+  });
+
+  it("defaults to the shared limit", () => {
+    const many = ["MIT", "Apache-2.0", "BSD-3-Clause"];
+    expect(licenseBadges(many).shown).toHaveLength(LICENSE_BADGE_LIMIT);
   });
 });

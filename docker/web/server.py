@@ -87,6 +87,12 @@ MAX_BYTES = {
     "zip": 500 * 1024 * 1024,        # 500 MB
     "package": 500 * 1024 * 1024,    # 500 MB
     "firmware": 500 * 1024 * 1024,   # 500 MB
+    # Model weights are the one input measured in gigabytes: a quantized GGUF is
+    # commonly 1-8 GB and a safetensors shard 1-5 GB. The upload streams to disk
+    # and only the header is parsed, so the cost of a large file is transfer time
+    # rather than memory. 8 GB admits the common quantizations; anything past it
+    # belongs on the CLI, which reads the file in place with no transfer at all.
+    "model": 8 * 1024 * 1024 * 1024,  # 8 GB
 }
 # Accepted extensions per upload kind (lowercased).
 UPLOAD_EXTS = {
@@ -109,6 +115,12 @@ UPLOAD_EXTS = {
     # 39 unpacked, the macOS disk image 0 and 25.
     "package": (".jar", ".war", ".ear", ".deb", ".rpm", ".whl",
                 ".exe", ".msi", ".dmg"),
+    # AI model weight files, read by their own header (MODE=MODELFILE). .bin is
+    # absent on purpose: it names both a PyTorch checkpoint and a firmware image,
+    # and the firmware kind already claims it. A .bin checkpoint goes through the
+    # CLI's --model-file instead of being guessed at here.
+    "model": (".gguf", ".safetensors", ".pt", ".pth", ".ckpt", ".pkl", ".pickle",
+              ".onnx", ".npz", ".npy"),
     "firmware": (".bin", ".img", ".squashfs", ".sqsh", ".ubi", ".ubifs",
                  ".trx", ".chk", ".fw", ".rom", ".dlf",
                  # Compressed firmware images (unblob unpacks these), e.g. the
@@ -1750,6 +1762,16 @@ def list_scans():
         comp_count = len(_as_list(data.get("components")))
         comps = _dicts(data.get("components"))
         meta = _as_dict(_as_dict(data.get("metadata")).get("component"))
+        # A spec-shaped AI SBOM names the model as the document's own component
+        # and lists only its datasets under components[]. Reading that array
+        # alone, this list would neither recognise the scan as an AI one nor
+        # count the model, and would disagree with the count sbom_summary shows
+        # on the scan's own page. Fold a machine-learning-model root in, by the
+        # same rule as sbom_summary: every other root is the scanned project
+        # itself, which is not one of its own components and stays out.
+        if meta.get("type") == "machine-learning-model":
+            comps = [meta] + comps
+            comp_count += 1
         # The OWASP AIBOM generator names the root metadata.component after its
         # job id (job-<timestamp>), which is meaningless in the Recent list. For
         # AI scans, label by the model component instead.
@@ -2633,6 +2655,10 @@ class Handler(BaseHTTPRequestHandler):
                 "firmwareImage": FIRMWARE_IMAGE,
                 "aibomImage": AIBOM_IMAGE,
                 "deepCveImage": DEEP_CVE_IMAGE,
+                # The image's own version, as the publish workflow stamped it
+                # (empty on a local build, which the UI reads as "unknown" and
+                # says nothing rather than inventing a number).
+                "version": os.environ.get("BOMLENS_VERSION", ""),
                 "hostDir": os.environ.get("SBOM_UI_HOST_DIR", ""),
                 # Extra --mount scan targets the rootfs-dir input can pick
                 # from: container path (what the scan request sends) + host
@@ -3520,6 +3546,18 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     fail("Firmware analysis requires Docker (to run the firmware image) "
                          "or relaunching the UI from the firmware image."); return
+
+            elif source == "model-upload":
+                # An AI model file the user uploaded. Read from its own header by
+                # a stdlib script in THIS image: no HuggingFace account, no
+                # network, and no sibling container — which is why, unlike
+                # ai-model below, there is no capability gate here.
+                up = resolve_upload(token)
+                if not up:
+                    fail("uploaded model file not found (re-upload)"); return
+                mode = "MODELFILE"
+                env["MODE"] = "MODELFILE"
+                env["TARGET_FILE"] = up
 
             elif source == "ai-model":
                 # Generate an AI SBOM (CycloneDX 1.7 ML-BOM) for a HuggingFace

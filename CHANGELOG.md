@@ -7,6 +7,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v1.11.1] - 2026-08-16
+
+Reading a scan result, rather than producing one. The components table on a
+real image was hard to work through: Korean headers split down the middle of a
+word, rows changed height with their contents, and scrolling right lost track
+of which row was which. The controls above it had grown into four stacked
+lines with no common axis.
+
+An AI model scan also had its own section come up empty. A model SBOM names the
+model as the document's own component and lists only its datasets underneath,
+and both the scan list and the model view read the list alone.
+
+### Fixed
+
+- The Models & datasets section renders the model card when the model is the document's own component rather than an entry in the component list, which is the shape a model scan actually produces. The section showed its empty state on exactly the scans it exists for, while the rail badge beside it counted one.
+
+- The scan list labels such a scan as an AI model scan and counts the model, instead of calling it a plain SBOM and reporting one component fewer than the scan's own page.
+
+- Table headers stay on one line. Korean text breaks between any two characters, so a two-character header in a narrow column stacked itself vertically.
+
+- Rows keep an even height. A component carrying many licences wrapped its badges over several lines; the first few are shown now, with the rest folded into a count that the expanded row already spells out in full.
+
+### Added
+
+- The name column stays in place while the table scrolls sideways, so a wide table can be read across without losing the row.
+
+- Columns can be hidden from a menu, and the choice is remembered in the browser for next time — the same local storage the theme and the language already use.
+
+- The overview names the components carrying the most risk and links into what put them there, instead of stopping at a count. It states how many affected components sit behind the list, and is absent when nothing carries a vulnerability.
+
+- The comparison with the previous scan of the same project moves from a line of text into a card, and the scan list carries it too: the change in component count and the direction of the worst severity, on the rows that have an earlier run to compare against.
+
+- Empty sections say why they are empty. A vulnerability list that ran and found nothing now reads differently from one that was never produced — the second says so, because an empty section is not the same as a clean result.
+
+### Changed
+
+- The components toolbar is a single row: search, the type and licence filters, the filter and column menus, the export button, and the row count. The state toggles moved into the filter menu, and the ones that are on appear as removable chips under it.
+
+- A truncated component list says how many rows it is showing rather than only that it was truncated.
+
+## [v1.11.0] - 2026-08-15
+
+The web UI is the headline. A scan result was already thorough; this release is
+about what a reader can do with one — reach it by keyboard, narrow it and send
+someone the link, take a filtered list into a spreadsheet, and read the source
+it was built from. Alongside that, an AI model file can now be scanned directly
+from disk rather than only by HuggingFace id.
+
+Three accessibility defects are fixed rather than added to: a progress bar that
+announced nothing, and two labels rendering under the contrast minimum.
+
+### Changed
+
+- The Components and Vulnerabilities sections link to each other. A component's expanded detail opens the vulnerability list filtered to that component, and a vulnerability's detail opens the component list filtered to its package. Moving between the two lists meant retyping the name into the other section's search box. The links sit in the expanded detail because each table row is itself the expand control, and a control nested inside a control is not announced reliably by screen readers.
+
+- The source viewer highlights what it is showing. A scanned file was rendered as numbered plain text, which is readable but says nothing about what is code and what is a comment. Grammars load only when a file that has one is opened, so a session that never opens a file carries none of them, and a file with no grammar — a licence, a binary, an unfamiliar extension — is shown as plain text rather than guessed at.
+
+- Severity labels read from design tokens rather than colours written into the badge component. The five severity badges and the muted one each carried a light shade and a dark one as palette classes, kept in step by hand; the colours are unchanged, but they now live where every other colour in the app lives.
+
+- The top bar has a help menu: documentation, the live demo, and the version that is running. Every link out of the app was inside a scan form before, so getting to the docs meant starting a scan first. The version comes from the running image; a local build that carries no version stamp says so rather than showing a blank.
+
+- Korean text in the web UI is set in Pretendard, bundled with the app. It fell back to whatever the operating system supplied — Apple SD Gothic on macOS, Malgun Gothic on Windows — so a Korean screen looked different on each platform and its letterforms did not line up with the Latin text beside them. Latin still uses Inter; Korean falls through to Pretendard, which is drawn to match it. The face is split across unicode ranges, so a screen loads the ranges it actually shows.
+
+- The Components and Vulnerabilities lists export to CSV, carrying whatever the table is currently showing rather than everything. Getting a filtered list into a spreadsheet meant copying rows out of the browser by hand. The file is written in the browser, so nothing about the scan leaves the machine, and it opens with the right characters in Excel.
+
+- The dependency graph has zoom, fit-to-view and save-as-PNG controls. It could only be driven by a trackpad gesture before, which left a mouse or keyboard user with no way to change what was in view.
+
+- Collapsible sections show that they can be opened. The conformance crosswalk row and its "Met with:" and "Example:" toggles were bare text with no chevron, so the way to see which requirements a count stood for was to guess that the label was clickable. Every folding surface in the app now carries the same turning chevron.
+
+- Sections with nothing to show say so the same way everywhere. The dependency graph's "no relationships" and "too large" notes, its error, and the empty artifacts list were bare paragraphs while the rest of the app used a shared empty state.
+
+- A file can be dropped onto the upload sources instead of picked through a dialog, and the upload reports how far along it is. The field was a bare file input: the firmware images and model weights these sources take run to gigabytes, and once the run started there was nothing on screen to say whether anything was moving. The chosen file now shows its name and size with a way to replace or remove it, and a percentage while it uploads.
+
+- The progress bar reports its position to screen readers. It was rendered without its value reaching the underlying control, so it moved on screen while announcing nothing — this affected the scan progress bar as well.
+
+- A narrowed table is somewhere you can return to. Filtering, searching or sorting the Components, Vulnerabilities or Licenses list writes that state into the URL, so reloading keeps it and the address can be handed to someone else as a link to exactly that view — "the critical CVEs in this scan" rather than "open this scan, then filter". The filters were held in memory before, so a reload dropped them and there was no way to point at a filtered view at all. Typing in a search box replaces the address rather than pushing it, which keeps the Back button meaning the previous screen instead of the previous keystroke.
+
+- The global search takes Cmd/Ctrl+K from anywhere in the app and shows that shortcut in the box, and its results walk with the arrow keys. Reaching the search needed a mouse or a long tab sequence, and the result list could only be clicked: it carried a listbox role but no options to move between, so a keyboard user could type a query and then have nowhere to go. The list follows the ARIA combobox pattern now — focus stays in the input and the active result is named by `aria-activedescendant` — with Home and End for either end, Escape to close, and Enter still taking the first result when nothing is active.
+
+- The fixed-version column reads in a darker green. The previous shade measured 3.77:1 against the light background, below the 4.5:1 minimum.
+
+- The model integrity check reads in the same green as every other success mark. It used a shade that measured 3.77:1 on the light background, under the 4.5:1 minimum, and carried no dark-mode pair at all, so it stayed dark green against the near-black canvas.
+
+- Deleting a scan asks for confirmation first, naming the scan it is about to remove. The delete control in the scan table and the one in the top bar's scan menu both removed a scan's output folder on a single click, and because the files are gone from disk with no copy kept, a mis-click could not be taken back. The prompt opens on Cancel, and a confirmed delete says so. Modal dialogs also hold the keyboard now: focus moves into the panel when one opens, Tab stays inside it, and it returns to whatever opened the dialog on close.
+
+### Added
+
+- A scanned AI model file is checked for whether loading it runs code. Pickle-format weights (`.pkl`, and the pickle inside a PyTorch archive or an `object`-dtype `.npz` member) are analyzed with picklescan, now installed in the base image, and the verdict feeds the file-security axis of the model risk assessment: a dangerous global reads `caution`, globals that need a human reads `review`, and a format that cannot execute code on load reads `ok`. BomLens reported this for models on HuggingFace by reading the Hub's own scan; a file that was never published had no such record and therefore no verdict at all. A clean result states its scope — it is a pickle analysis, not a malware scan — and a scan that could not run leaves no security axis rather than implying the file is safe.
+
+- An AI model file can be scanned directly: `--model-file <path>` on the CLI, or the Model file tile in the web UI (up to 8 GB). The file's own header is read — GGUF, safetensors, PyTorch, pickle, npz, npy and ONNX are recognized by their magic bytes rather than their extension — and the result is the same CycloneDX 1.7 ML-BOM, with the same G7 conformance check and risk assessment, produced offline in the base image. Until now an AI SBOM required a HuggingFace model id, which left out weights a supplier delivers, internal models that were never published, and machines with no network. What each format can fill differs and is reported as such: GGUF declares a name, a license and an architecture, safetensors usually declares only tensor shapes, and a field the file does not carry is left empty rather than guessed. Every format contributes a SHA-256 over the whole file.
+
 ## [v1.10.5] - 2026-08-12
 
 ### Changed
@@ -634,7 +725,9 @@ Three changes alter what an AI-model scan writes, so a consumer of those artifac
 
 - No publicly known vulnerabilities have been reported or fixed in this project to date.
 
-[Unreleased]: https://github.com/sktelecom/bomlens/compare/v1.10.5...HEAD
+[Unreleased]: https://github.com/sktelecom/bomlens/compare/v1.11.1...HEAD
+[v1.11.1]: https://github.com/sktelecom/bomlens/releases/tag/v1.11.1
+[v1.11.0]: https://github.com/sktelecom/bomlens/releases/tag/v1.11.0
 [v1.10.5]: https://github.com/sktelecom/bomlens/releases/tag/v1.10.5
 [v1.10.4]: https://github.com/sktelecom/bomlens/releases/tag/v1.10.4
 [v1.10.3]: https://github.com/sktelecom/bomlens/releases/tag/v1.10.3

@@ -28,9 +28,10 @@ BomLens의 전체 옵션과 분석 모드, CI/CD 통합 방법, 트러블슈팅�
 | `--firmware` | false | `--target` 파일을 펌웨어 모드로 강제 (opt-in 펌웨어 이미지) |
 | `--analyze <sbom>` | — | 공급사 SBOM 검증·분석 (별칭 `--sbom`). CycloneDX/SPDX. `--target`와 배타 |
 | `--model <owner/name>` | — | HuggingFace 모델의 AI SBOM(CycloneDX 1.7 ML-BOM)을 OWASP AIBOM Generator로 생성(opt-in `bomlens-aibom` 이미지; 모델 카드 메타데이터를 네트워크로 가져옴). `--target`/`--analyze`/`--git`/`--merge`와 배타 |
+| `--model-file <경로>` | — | AI 모델 파일 하나를 읽어 그 헤더만으로 기술한다. GGUF, safetensors, PyTorch(`.pt`/`.pth`/`.ckpt`), pickle, npz, npy, ONNX를 인식한다. 오프라인으로 동작하고 HuggingFace 계정이 필요 없어 공개하지 않은 모델도 스캔할 수 있다. 채울 수 있는 정보는 형식마다 다르다. GGUF는 이름과 라이선스, 아키텍처를 담고 있지만 safetensors는 대개 텐서 정보만 있으며, 파일이 선언하지 않은 값은 추측하지 않고 비워 둔다. `--target`에 `.gguf`나 `.safetensors`, `.pt` 같은 경로를 주면 이 방식으로 읽는다. `--target`/`--analyze`/`--git`와 배타 |
 | `--license <spdx-id>` | — | 프로젝트를 배포하는 배포 라이선스(예: `Apache-2.0`). SBOM 루트 컴포넌트에 기록하고, 조건이 충돌하는 의존성을 표시하는 데 쓴다. 소스 스캔으로는 알아낼 수 없어(cdxgen이 maven과 gradle에서 루트 라이선스를 비워 둔다) 지정하지 않으면 충돌 판정을 내리지 않는다. SBOM에 이미 있는 루트 라이선스(공급사가 선언한 값)는 덮어쓰지 않는다 |
 | `--sbom-author <name>` | — | 이 SBOM을 생성한 주체. 스캔을 실행하는 조직이나 사람을 가리키며, 도구도 소프트웨어를 만든 쪽도 아니다. `metadata.authors`에 정식 명칭으로 기록하고 약어는 쓰지 않는다. 스캔으로는 알아낼 수 없는 값이라 지정하지 않으면 자리표시자를 채우지 않고 필드를 빼 둔다 |
-| `--usage <scenario>` | — | AI 모델 위험 판정을 사용 형태에 맞춘다(`--model` 전용): `internal`, `product`, `redistribute`, `outputs-only`. 그 사용 형태에 적용되는 라이선스 조건만으로 판정하고, 보고서에 어떤 형태 기준인지 명시한다. 지정하지 않으면 전체 조건 기준으로 판정한다 |
+| `--usage <scenario>` | — | AI 모델 위험 판정을 사용 형태에 맞춘다(`--model`과 `--model-file`): `internal`, `product`, `redistribute`, `outputs-only`. 그 사용 형태에 적용되는 라이선스 조건만으로 판정하고, 보고서에 어떤 형태 기준인지 명시한다. 지정하지 않으면 전체 조건 기준으로 판정한다 |
 | `--merge <a.json> <b.json> …` | — | CycloneDX SBOM 두 개 이상을 하나로 병합하고 purl 기준으로 중복을 제거한 뒤, 최상위 컴포넌트를 `--project`/`--version`으로 기재. 선택 기능으로, 외부 시스템이 제품당 단일 BOM을 요구할 때 씁니다. 그 외에는 층별로 따로 둡니다([서버 SBOM 작성 가이드](../guides/server-delivery.md) 참고). `--target`/`--analyze`/`--git`와 배타 |
 | `--merge-root <file>` | — | `--merge`와 함께: 새 1.6 루트를 만드는 대신 이 입력 파일의 `specVersion`과 최상위 컴포넌트를 유지합니다(예: ML-BOM의 CycloneDX 1.7 루트와 모델 카드). `--merge` 입력 중 하나여야 하며, 유지된 루트의 이름과 버전은 `--project`/`--version`으로 바뀝니다 |
 | `--generate-only` | false | 업로드 없이 로컬에만 저장 |

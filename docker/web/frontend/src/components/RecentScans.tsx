@@ -13,6 +13,8 @@ import {
   Search,
   ShieldCheck,
   Trash2,
+  TrendingDown,
+  TrendingUp,
 } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -27,9 +29,11 @@ import {
   filterRecent,
   formatRelativeTime,
   presentTypes,
+  scanComparison,
   type RecentSortDir,
   type RecentSortKey,
   type ScanType,
+  scanType,
   scanTypeLabelKey,
   scanTypeLabelKeyFor,
   sortRecent,
@@ -104,7 +108,20 @@ function SummaryCard({
   );
 }
 
-const TH = "px-4 py-3 text-left font-medium";
+const TH = "whitespace-nowrap px-4 py-3 text-left font-medium";
+
+/** Which way the worst severity moved since the previous run of this project.
+ *  The arrow carries the meaning for sighted readers and the label carries it
+ *  for everyone else, so it is not decorative. */
+function TrendArrow({ up, label }: { up: boolean; label: string }) {
+  const Icon = up ? TrendingUp : TrendingDown;
+  return (
+    <span title={label} className={up ? "text-risk-high" : "text-risk-low"}>
+      <Icon className="h-3.5 w-3.5" aria-hidden />
+      <span className="sr-only">{label}</span>
+    </span>
+  );
+}
 
 /** A pill toggle for the Scan management filters (AI only / at-risk only). */
 function FilterChip({
@@ -156,7 +173,7 @@ function SortHeader({
   const Icon = !active ? ArrowUpDown : sort.dir === "asc" ? ArrowUp : ArrowDown;
   return (
     <th
-      className={cn("px-4 py-3 font-medium", className)}
+      className={cn("whitespace-nowrap px-4 py-3 font-medium", className)}
       aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
     >
       <button
@@ -329,7 +346,9 @@ export function RecentScans({ scans, newHref, onDelete }: Props) {
                       </td>
                     </tr>
                   ) : (
-                    sorted.map((s) => (
+                    sorted.map((s) => {
+                      const cmp = scanComparison(scans, s.id);
+                      return (
                     <tr
                       key={s.id}
                       className="border-b transition-colors duration-fast ease-out-soft last:border-0 hover:bg-muted/40"
@@ -351,7 +370,7 @@ export function RecentScans({ scans, newHref, onDelete }: Props) {
                         </a>
                       </td>
                       <td className="px-4 py-3">
-                        {s.isAiScan ? (
+                        {scanType(s) === "ai" ? (
                           <Badge className="border-transparent bg-brand/10 text-brand">
                             {t(scanTypeLabelKey(s))}
                           </Badge>
@@ -362,17 +381,42 @@ export function RecentScans({ scans, newHref, onDelete }: Props) {
                       <td className="px-4 py-3 text-muted-foreground">
                         {formatRelativeTime(s.generatedAt, now, i18n.language)}
                       </td>
+                      {/* Against the previous run of the same project, from
+                          this list alone — no SBOM is re-read. A project scanned
+                          once has nothing to compare against and shows nothing,
+                          rather than a "0" that would read as "unchanged". */}
                       <td className="px-4 py-3 text-right tabular-nums">
                         {s.components}
+                        {cmp && cmp.componentsDelta !== 0 && (
+                          <span
+                            className="ml-1.5 text-xs text-muted-foreground"
+                            title={t("recent.vsPrevious")}
+                          >
+                            {cmp.componentsDelta > 0 ? "+" : ""}
+                            {cmp.componentsDelta}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3">
-                        {s.maxSeverity ? (
-                          <Badge tone={SEV_TONE[s.maxSeverity]}>
-                            {t(`severity.${s.maxSeverity}`)}
-                          </Badge>
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
+                        <span className="inline-flex items-center gap-1.5">
+                          {s.maxSeverity ? (
+                            <Badge tone={SEV_TONE[s.maxSeverity]}>
+                              {t(`severity.${s.maxSeverity}`)}
+                            </Badge>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                          {cmp && cmp.severityDir !== "same" && (
+                            <TrendArrow
+                              up={cmp.severityDir === "up"}
+                              label={t(
+                                cmp.severityDir === "up"
+                                  ? "recent.sevUp"
+                                  : "recent.sevDown",
+                              )}
+                            />
+                          )}
+                        </span>
                       </td>
                       {/* The demo dataset is fixed, so the whole column goes —
                           header included, or the row would gain a blank cell. */}
@@ -390,7 +434,8 @@ export function RecentScans({ scans, newHref, onDelete }: Props) {
                         </td>
                       )}
                     </tr>
-                    ))
+                    );
+                    })
                   )}
                 </tbody>
               </table>

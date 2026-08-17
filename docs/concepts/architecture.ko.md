@@ -202,6 +202,7 @@ flowchart TD
 | `ROOTFS` | `--target <디렉터리>` | syft | `dir:` 스킴 |
 | `IMAGE` | `--target <이미지명>` | syft | docker.sock 마운트 |
 | `AIBOM` | `--model <owner/name>` | OWASP AIBOM Generator | **opt-in 이미지** `bomlens-aibom`. HuggingFace 모델 카드로 CycloneDX 1.7 ML-BOM 생성, G7 적합성 검사 추가 |
+| `MODELFILE` | `--model-file <경로>` | `identify-model-file.py`(표준 라이브러리) | 기본 이미지, 오프라인. 모델 파일 헤더로 CycloneDX 1.7 ML-BOM 생성(GGUF, safetensors, PyTorch, pickle, npz, npy, ONNX), 같은 G7 검사 추가 |
 | `UI` | `--ui` | — | 브라우저 UI, 모든 스캔 대상을 폼/업로드로 실행 |
 
 ---
@@ -221,6 +222,7 @@ CLI 플래그가 어떤 환경변수로 변환되어 어느 단계를 켜는지 
 | `--analyze <sbom>` | `MODE=ANALYZE` | 공급사 SBOM 검증·변환·보고서 |
 | `--firmware` | `MODE=FIRMWARE` (펌웨어 이미지) | 언팩 → syft + cve-bin-tool |
 | `--model <owner/name>` | `MODE=AIBOM` (aibom 이미지) | HuggingFace 모델로 ML-BOM 생성 + G7 검사 |
+| `--model-file <경로>` | `MODE=MODELFILE` | 모델 파일 헤더를 오프라인으로 읽어 ML-BOM 생성 + G7 검사 |
 | `--deep-license` | `DEEP_LICENSE=true` | ② scancode |
 | `--byte-stable` | `BYTE_STABLE=true` | ① 결정론적 정규화 (웹 UI의 Reproducible output 토글도 동일) |
 | `--sign` | `SIGN_SBOM=true` (+ `COSIGN_KEY`/`COSIGN_PASSWORD`) | ⑤ 서명 |

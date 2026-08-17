@@ -11,6 +11,7 @@ import { ProgressLog } from "./ProgressLog";
 import { RecentScans } from "./RecentScans";
 import { ResultSection } from "./ResultSections";
 import { ScanRunning } from "./ScanRunning";
+import { ConfirmDialog } from "./ui/dialog";
 import {
   deleteScan,
   getCapabilities,
@@ -31,8 +32,9 @@ import {
   type SectionId,
   visibleSectionIds,
 } from "@/lib/nav";
-import { homeHash, newHash, parseHash, scanHash } from "@/lib/route";
+import { homeHash, newHash, parseHash, scanHash, type RouteQuery } from "@/lib/route";
 import { deriveScanContext, sectionCounts } from "@/lib/results";
+import { useToast } from "@/lib/toast";
 
 type Status = "idle" | "running" | "done" | "error";
 
@@ -91,6 +93,7 @@ function toRecentLink(s: RecentScan): RecentScanLink {
  */
 export function NextApp() {
   const { t } = useTranslation();
+  const { toast } = useToast();
   const [status, setStatus] = useState<Status>("idle");
   const [logs, setLogs] = useState<string[]>([]);
   // The failure message surfaced on the Scan-running screen when a scan can't
@@ -103,6 +106,10 @@ export function NextApp() {
     version?: string;
   }>();
   const [activeSection, setActiveSection] = useState<SectionId>("overview");
+  // Mirrored into a ref so the URL writer can read the current section without
+  // taking it as a dependency and being rebuilt on every section change.
+  const activeSectionRef = useRef(activeSection);
+  activeSectionRef.current = activeSection;
   // Which idle screen is shown: Recent scans (home/logo) or New scan (#/new).
   const [homeView, setHomeView] = useState<"recent" | "new">("recent");
   const [capabilities, setCapabilities] = useState<Capabilities>({
@@ -110,21 +117,17 @@ export function NextApp() {
     docker: true,
   });
   const [recent, setRecent] = useState<RecentScan[]>([]);
+  // The scan a delete button asked to remove, waiting on the confirm dialog.
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   // A finished scan's config, parked here when the user hits "Re-scan" so the
   // New scan form can seed itself from it. The form reads it once on mount and
   // clears it, so a subsequent plain New scan starts blank.
   const [pendingRescan, setPendingRescan] = useState<ScanConfig | null>(null);
-  // A navigation seed: route into a section with a filter pre-applied — a
-  // global-search term, an Overview risk-bar click (severity / license tier), or
-  // a Licenses distribution row (one license id).
-  // The section's own control re-seeds only when the value changes.
-  const [seed, setSeed] = useState<{
-    section: SectionId;
-    term?: string;
-    severity?: Severity;
-    tier?: LicenseRiskTier;
-    license?: string;
-  } | null>(null);
+  // The active section's filter and sort state, read from the URL hash. Keeping
+  // it here rather than inside each table is what makes a filtered view
+  // linkable and lets it survive a reload: the hash is the one source, and a
+  // pick routed in from another section is just a hash with a query on it.
+  const [sectionQuery, setSectionQuery] = useState<RouteQuery>({});
 
   // The scan id currently held in `result` — so the hash router can tell a
   // section change (no reload) from opening a different scan (reload).
@@ -217,6 +220,7 @@ export function NextApp() {
       if (loadedIdRef.current !== null || status !== "idle") resetToHome();
       return;
     }
+    setSectionQuery(parsed.query ?? {});
     showScan(parsed.id, parsed.section);
   }, [status, resetToHome, showScan]);
 
@@ -248,10 +252,24 @@ export function NextApp() {
   // Close the live scan stream if the app unmounts.
   useEffect(() => () => streamRef.current?.close(), []);
 
-  // Delete a past scan (its artifacts) and refresh the Recent list.
-  const deleteRecent = (id: string) => {
+  // Deleting a scan removes its output files from disk, and the server keeps no
+  // copy — there is nothing to undo afterwards. So the guard goes in front: both
+  // delete controls (the Recent table and the top-bar menu) park the id here and
+  // the dialog is what actually calls the API.
+  const pendingScan = recent.find((s) => s.id === pendingDelete);
+  // Name the scan in the prompt so the user sees which one is going. Falls back
+  // to the id when the list hasn't caught up with the menu.
+  const pendingLabel = pendingScan
+    ? [pendingScan.project, pendingScan.version].filter(Boolean).join(" ")
+    : (pendingDelete ?? "");
+
+  const confirmDelete = () => {
+    const id = pendingDelete;
+    setPendingDelete(null);
+    if (!id) return;
     void deleteScan(id).then(() => {
       void refreshRecent();
+      toast(t("recent.deleted"));
       // If we're viewing the scan we just deleted, drop back to New scan.
       if (loadedIdRef.current === id) window.location.hash = homeHash();
     });
@@ -322,24 +340,48 @@ export function NextApp() {
     window.location.hash = newHash();
   };
 
-  // A global-search pick navigates to the section with the term seeded.
+  // A global-search pick navigates to the section with the term in the URL, so
+  // the view it lands on can be shared or reloaded like any other.
   const handleSearchPick = (section: SectionId, term: string) => {
-    setSeed({ section, term });
     if (loadedIdRef.current) {
-      window.location.hash = scanHash(loadedIdRef.current, section);
+      window.location.hash = scanHash(loadedIdRef.current, section, { q: term });
     }
   };
 
-  // An Overview risk-bar click routes into the section with that filter applied.
+  // An Overview risk-bar click, or a name picked out of a result table, routes
+  // into the section with that filter applied.
   const handleFilterPick = (
     section: SectionId,
-    filter: { severity?: Severity; tier?: LicenseRiskTier; license?: string },
+    filter: {
+      severity?: Severity;
+      tier?: LicenseRiskTier;
+      license?: string;
+      term?: string;
+    },
   ) => {
-    setSeed({ section, ...filter });
-    if (loadedIdRef.current) {
-      window.location.hash = scanHash(loadedIdRef.current, section);
-    }
+    if (!loadedIdRef.current) return;
+    const query: Record<string, string> = {};
+    if (filter.term) query.q = filter.term;
+    if (filter.severity) query.severity = filter.severity;
+    if (filter.tier) query.tier = filter.tier;
+    if (filter.license) query.license = filter.license;
+    window.location.hash = scanHash(loadedIdRef.current, section, query);
   };
+
+  // A section changed its own filters. The hash is replaced rather than pushed:
+  // every keystroke in a search box would otherwise become a history entry, and
+  // replaceState fires no hashchange, so the router does not re-run and the
+  // table keeps the state it just reported.
+  const handleQueryChange = useCallback(
+    (query: RouteQuery) => {
+      const id = loadedIdRef.current;
+      if (!id) return;
+      const next = scanHash(id, activeSectionRef.current, query);
+      if (next === window.location.hash) return;
+      window.history.replaceState(null, "", next);
+    },
+    [],
+  );
 
   const isHome = status === "idle";
   // A failed run can be retried as-is only when its params carry no single-use
@@ -358,7 +400,8 @@ export function NextApp() {
       activeSection={activeSection}
       activeScanId={loadedIdRef.current}
       recent={recentLinks}
-      onDeleteRecent={deleteRecent}
+      onDeleteRecent={setPendingDelete}
+      version={capabilities.version}
       counts={counts}
       showSections={Boolean(result)}
       homeHref={homeHash()}
@@ -377,7 +420,7 @@ export function NextApp() {
             <RecentScans
               scans={recent}
               newHref={newHash()}
-              onDelete={deleteRecent}
+              onDelete={setPendingDelete}
             />
           ) : (
             <NewScan
@@ -428,7 +471,7 @@ export function NextApp() {
                 role="status"
                 className={
                   result.ok
-                    ? "rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-300"
+                    ? "rounded-full bg-success-solid/10 px-2 py-0.5 text-xs font-medium text-success"
                     : "rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive"
                 }
               >
@@ -445,18 +488,8 @@ export function NextApp() {
             result={result}
             scanId={loadedIdRef.current}
             recent={recent}
-            searchQuery={
-              seed && seed.section === activeSection ? seed.term : undefined
-            }
-            seedSeverity={
-              seed && seed.section === activeSection ? seed.severity : undefined
-            }
-            seedTier={
-              seed && seed.section === activeSection ? seed.tier : undefined
-            }
-            seedLicense={
-              seed && seed.section === activeSection ? seed.license : undefined
-            }
+            query={sectionQuery}
+            onQueryChange={handleQueryChange}
             onPick={handleFilterPick}
             // An on-demand SPDX export adds an artifact after the scan ended, so
             // fold the refreshed listing into the result every count reads from.
@@ -475,6 +508,18 @@ export function NextApp() {
             )}
         </div>
       )}
+
+      {/* Fixed-position overlay, so it renders the same wherever it sits in the
+          tree — kept here to cover both the home and the result screens. */}
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title={t("recent.confirmDeleteTitle")}
+        description={t("recent.confirmDeleteBody", { scan: pendingLabel })}
+        confirmLabel={t("recent.delete")}
+        destructive
+        onConfirm={confirmDelete}
+        onCancel={() => setPendingDelete(null)}
+      />
     </AppShell>
   );
 }

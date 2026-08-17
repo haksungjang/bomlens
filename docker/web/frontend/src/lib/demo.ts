@@ -48,3 +48,20 @@ export function demoInstallUrl(language: string | undefined): string {
   const korean = /^ko(-|$)/i.test(language ?? "");
   return `${DOCS_BASE}/${korean ? "ko/" : ""}start/first-scan/`;
 }
+
+/**
+ * The documentation site's home, in the reader's language.
+ *
+ * Shared with `demoInstallUrl` so both follow the same base: a build that
+ * points the demo at a staging site points the help menu there too, rather
+ * than sending one of them to production.
+ */
+export function docsUrl(language: string | undefined): string {
+  const korean = /^ko(-|$)/i.test(language ?? "");
+  return `${DOCS_BASE}/${korean ? "ko/" : ""}`;
+}
+
+/** The public demo, for showing someone the tool without installing it. */
+export function demoUrl(): string {
+  return `${DOCS_BASE}/demo/`;
+}

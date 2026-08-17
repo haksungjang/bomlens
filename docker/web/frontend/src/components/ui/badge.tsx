@@ -25,27 +25,26 @@ const badgeVariants = cva(
         destructive:
           "border-transparent bg-destructive text-destructive-foreground hover:bg-destructive/80",
         muted:
-          "border-transparent bg-muted text-slate-600 hover:bg-muted/80 dark:text-slate-300",
+          "border-transparent bg-muted text-risk-info-fg hover:bg-muted/80",
       },
       tone: {
         none: "",
         critical:
-          "border-transparent bg-risk-critical/10 text-red-700 dark:text-red-300",
-        high: "border-transparent bg-risk-high/10 text-orange-800 dark:text-orange-300",
+          "border-transparent bg-risk-critical/10 text-risk-critical-fg",
+        high: "border-transparent bg-risk-high/10 text-risk-high-fg",
         medium:
-          "border-transparent bg-risk-medium/15 text-yellow-800 dark:text-yellow-300",
-        low: "border-transparent bg-risk-low/10 text-blue-700 dark:text-blue-300",
-        info: "border-transparent bg-risk-info/15 text-slate-600 dark:text-slate-300",
+          "border-transparent bg-risk-medium/15 text-risk-medium-fg",
+        low: "border-transparent bg-risk-low/10 text-risk-low-fg",
+        info: "border-transparent bg-risk-info/15 text-risk-info-fg",
         success:
-          "border-transparent bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300",
+          "border-transparent bg-success-surface text-success dark:bg-success-surface/15",
         // Text-only green matching the visual weight of the risk tones
         // (critical/high/info render as coloured text on a transparent tint),
         // so in a row of grade badges the RISK colour draws the eye rather than
         // a solid-green "ok" outshouting the "caution" beside it. Distinct from
         // `success`, which stays a solid positive-confirmation badge for
         // scan-complete / conformance-pass.
-        positive:
-          "border-transparent text-emerald-700 dark:text-emerald-300",
+        positive: "border-transparent text-success",
       },
     },
     defaultVariants: { variant: "outline", tone: "none" },

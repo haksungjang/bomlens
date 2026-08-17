@@ -56,6 +56,14 @@ describe("scanType / presentTypes", () => {
     expect(scanType(scan({ componentType: null }))).toBe("sbom");
   });
 
+  it("calls a model-rooted SBOM an AI scan even without the isAiScan flag", () => {
+    // A spec-shaped AI SBOM names the model as its own root component, so the
+    // components[] array `isAiScan` reads holds only the datasets.
+    expect(
+      scanType(scan({ isAiScan: false, componentType: "machine-learning-model" })),
+    ).toBe("ai");
+  });
+
   it("calls a submitted SBOM an SBOM, not the source its root claims to be", () => {
     // A supplier's document declares "application" at its root, exactly like a
     // source scan — reading the component type alone labelled it Source.

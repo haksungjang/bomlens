@@ -77,10 +77,33 @@ const config: Config = {
           medium: "rgb(var(--risk-medium) / <alpha-value>)",
           low: "rgb(var(--risk-low) / <alpha-value>)",
           info: "rgb(var(--risk-info) / <alpha-value>)",
+          // The label cut of each hue — see index.css for why a fill and a
+          // label cannot be the same value.
+          "critical-fg": "rgb(var(--risk-critical-fg) / <alpha-value>)",
+          "high-fg": "rgb(var(--risk-high-fg) / <alpha-value>)",
+          "medium-fg": "rgb(var(--risk-medium-fg) / <alpha-value>)",
+          "low-fg": "rgb(var(--risk-low-fg) / <alpha-value>)",
+          "info-fg": "rgb(var(--risk-info-fg) / <alpha-value>)",
+        },
+        // Success and warning states — same channel form as `risk` above, and
+        // for the same reason: components tint these with alpha modifiers.
+        success: {
+          DEFAULT: "rgb(var(--success) / <alpha-value>)",
+          solid: "rgb(var(--success-solid) / <alpha-value>)",
+          surface: "rgb(var(--success-surface) / <alpha-value>)",
+        },
+        warning: {
+          DEFAULT: "rgb(var(--warning) / <alpha-value>)",
+          solid: "rgb(var(--warning-solid) / <alpha-value>)",
+          border: "rgb(var(--warning-border) / <alpha-value>)",
+          surface: "rgb(var(--warning-surface) / <alpha-value>)",
         },
       },
       fontFamily: {
-        sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"],
+        // Inter first, Pretendard behind it: Inter carries no Hangul, so Latin
+        // keeps the face the design was built on and Korean falls through to
+        // the one that matches its proportions.
+        sans: ["Inter", "Pretendard Variable", "ui-sans-serif", "system-ui", "sans-serif"],
         mono: ["JetBrains Mono", "ui-monospace", "SFMono-Regular", "monospace"],
       },
       borderRadius: {

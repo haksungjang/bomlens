@@ -3,9 +3,11 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowDown, ArrowUp, ArrowUpDown, Package, Search } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Download, Package, Search, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { CheckMenu, type CheckMenuItem } from "@/components/ui/check-menu";
 import { Select } from "@/components/ui/select";
 import { EmptyState } from "@/components/ui/state";
 import type { ComponentItem, Severity } from "@/lib/api";
@@ -13,20 +15,36 @@ import {
   type ComponentFilters,
   type ComponentSortKey,
   EMPTY_FILTERS,
+  licenseBadges,
   selectComponents,
   type SortDir,
 } from "@/lib/components";
+import { componentCsvRows, csvFilename, downloadCsv, toCsv } from "@/lib/csv";
+import {
+  COMPONENT_COLUMNS,
+  COMPONENT_VIEW_KEY,
+  readHidden,
+  toggleHidden,
+  writeHidden,
+} from "@/lib/tableView";
+import { buildQuery, parseQuery, type RouteQuery } from "@/lib/route";
+import { componentsFromQuery, componentsToQuery } from "@/lib/section-query";
 import { cn } from "@/lib/utils";
 
 interface Props {
   items: ComponentItem[];
   total: number;
   truncated?: boolean;
-  /** Search term seeded from global search; applied to the name/license filter. */
-  initialQuery?: string;
-  /** License id seeded from a Licenses distribution row; selects that license
-   *  in the license filter, leaving the other filters open. */
-  initialLicense?: string;
+  /** The scan's id, so an export says which scan it came from. */
+  scanId?: string | null;
+  /** Filter and sort state from the URL — what a shared link or a reload
+   *  restores, and what a global-search term or a picked license arrives as. */
+  query?: RouteQuery;
+  /** Report state back so the URL can carry it; the shell replaces the hash. */
+  onQueryChange?: (query: RouteQuery) => void;
+  /** Open the Vulnerabilities section filtered to this component — the other
+   *  half of the investigation loop (which CVEs does this row stand for?). */
+  onPickVulns?: (name: string) => void;
 }
 
 type Sort = { key: ComponentSortKey; dir: SortDir };
@@ -73,8 +91,10 @@ function SortHeader({
   const active = sort?.key === sortKey;
   const Icon = !active ? ArrowUpDown : sort.dir === "asc" ? ArrowUp : ArrowDown;
   return (
+    // whitespace-nowrap: CJK text breaks between any two characters, so a
+    // two-character Korean header in a narrow column split down the middle.
     <th
-      className={cn("px-3 py-2 font-medium", className)}
+      className={cn("whitespace-nowrap px-3 py-2 font-medium", className)}
       aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
     >
       <button
@@ -121,33 +141,43 @@ function FilterChip({
 
 /** Searchable, sortable, filterable table of detected SBOM components, with
  *  decision-first Scope and Risk columns (shown when the scan carries that data). */
-export function ComponentsTable({
-  items,
-  total,
-  truncated,
-  initialQuery,
-  initialLicense,
-}: Props) {
+export function ComponentsTable({ items, total, truncated, scanId, query, onQueryChange, onPickVulns }: Props) {
   const { t } = useTranslation();
-  const [filters, setFilters] = useState<ComponentFilters>(() => ({
-    ...EMPTY_FILTERS,
-    query: initialQuery ?? "",
-    license: initialLicense ?? "",
-  }));
-  // Re-seed the search when global search routes in a new term.
+  const [filters, setFilters] = useState<ComponentFilters>(
+    () => componentsFromQuery(query).filters,
+  );
+  const [sort, setSort] = useState<Sort | null>(() => componentsFromQuery(query).sort);
+
+  // The URL is the source: a link opened elsewhere, a reload, or a term routed
+  // in from global search all arrive here. Compared as a serialised string so
+  // that a re-render with an equal-but-new object does not reset the table
+  // under the user's fingers.
+  const urlQuery = buildQuery(query);
+  const appliedRef = useRef(urlQuery);
   useEffect(() => {
-    if (initialQuery !== undefined) {
-      setFilters((f) => ({ ...f, query: initialQuery }));
-    }
-  }, [initialQuery]);
-  // Same for a license routed in from the Licenses distribution.
+    if (appliedRef.current === urlQuery) return;
+    appliedRef.current = urlQuery;
+    const next = componentsFromQuery(parseQuery(urlQuery));
+    setFilters(next.filters);
+    setSort(next.sort);
+  }, [urlQuery]);
+
+  // Report the other way: the user's own filtering goes back out to the URL.
   useEffect(() => {
-    if (initialLicense !== undefined) {
-      setFilters((f) => ({ ...f, license: initialLicense }));
-    }
-  }, [initialLicense]);
-  const [sort, setSort] = useState<Sort | null>(null);
+    const next = buildQuery(componentsToQuery(filters, sort));
+    if (next === appliedRef.current) return;
+    appliedRef.current = next;
+    onQueryChange?.(parseQuery(next));
+    // onQueryChange is a stable shell callback; re-running on its identity
+    // would fire on every parent render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters, sort]);
   const [openKey, setOpenKey] = useState<string | null>(null);
+  // Which columns the reader has hidden, read once from browser-local storage
+  // (the same place the theme and language live — no account, nothing sent).
+  const [hiddenCols, setHiddenCols] = useState<string[]>(() =>
+    readHidden(COMPONENT_VIEW_KEY, COMPONENT_COLUMNS.map((c) => c.id)),
+  );
   // Chunk recycling state: which chunks render real rows, and the measured
   // pixel height of chunks currently recycled into spacers.
   const [liveChunks, setLiveChunks] = useState<ReadonlySet<number>>(INITIAL_LIVE);
@@ -168,6 +198,24 @@ export function ComponentsTable({
     () => selectComponents(items, filters, sort),
     [items, filters, sort],
   );
+
+  // Exports what the table is showing: this filter, this sort, this order.
+  const exportCsv = () => {
+    const headers = [
+      t("result.csvName"),
+      t("result.csvVersion"),
+      t("result.csvType"),
+      t("result.csvLicenses"),
+      t("result.csvScope"),
+      t("result.csvVulnCount"),
+      t("result.csvMaxSeverity"),
+      t("result.csvPurl"),
+    ];
+    downloadCsv(
+      csvFilename(scanId ?? "scan", "components", new Date().toISOString().slice(0, 10)),
+      toCsv(componentCsvRows(filtered, headers)),
+    );
+  };
 
   // A new visible set invalidates every measurement and starts from the top.
   useEffect(() => {
@@ -208,7 +256,11 @@ export function ComponentsTable({
   }, [chunkCount]);
 
   if (total === 0) {
-    return <EmptyState icon={Package}>{t("result.componentsEmpty")}</EmptyState>;
+    return (
+      <EmptyState icon={Package} hint={t("result.componentsEmptyHint")}>
+        {t("result.componentsEmpty")}
+      </EmptyState>
+    );
   }
 
   const onSort = (key: ComponentSortKey) =>
@@ -217,7 +269,80 @@ export function ComponentsTable({
     );
   const patch = (p: Partial<ComponentFilters>) => setFilters((f) => ({ ...f, ...p }));
 
-  const colCount = 4 + (anyScope ? 1 : 0) + (anyVulns ? 1 : 0);
+  // Which optional columns this scan can offer at all, and which of those the
+  // reader has hidden. A column the scan has no data for is not offered, so the
+  // menu never lists a column that would come up empty.
+  const columnAvailable: Record<string, boolean> = {
+    version: true,
+    type: true,
+    scope: anyScope,
+    risk: anyVulns,
+    license: true,
+  };
+  const shows = (id: string) => columnAvailable[id] && !hiddenCols.includes(id);
+  const showVersion = shows("version");
+  const showType = shows("type");
+  const showScope = shows("scope");
+  const showRisk = shows("risk");
+  const showLicense = shows("license");
+  const colCount =
+    1 + [showVersion, showType, showScope, showRisk, showLicense].filter(Boolean).length;
+
+  const toggleColumn = (id: string) => {
+    setHiddenCols((prev) => {
+      const next = toggleHidden(prev, id);
+      writeHidden(COMPONENT_VIEW_KEY, next);
+      return next;
+    });
+  };
+
+  // The toggles that used to sit in a row of chips, as one menu. Only the ones
+  // this scan has data for appear.
+  const filterItems: CheckMenuItem[] = [
+    anyVulns && {
+      id: "hasVulns",
+      label: t("result.filterHasVulns"),
+      checked: filters.hasVulns,
+      onToggle: () => patch({ hasVulns: !filters.hasVulns }),
+    },
+    anyScope && {
+      id: "directOnly",
+      label: t("result.filterDirectOnly"),
+      checked: filters.directOnly,
+      onToggle: () => patch({ directOnly: !filters.directOnly }),
+    },
+    anyVendored && {
+      id: "needsReview",
+      label: t("result.filterNeedsReview"),
+      checked: filters.needsReview,
+      onToggle: () => patch({ needsReview: !filters.needsReview }),
+    },
+    anyEol && {
+      id: "eolOnly",
+      label: t("result.filterEol"),
+      checked: filters.eolOnly,
+      onToggle: () => patch({ eolOnly: !filters.eolOnly }),
+    },
+    anyOutdated && {
+      id: "outdatedOnly",
+      label: t("result.filterOutdated"),
+      checked: filters.outdatedOnly,
+      onToggle: () => patch({ outdatedOnly: !filters.outdatedOnly }),
+    },
+  ].filter(Boolean) as CheckMenuItem[];
+
+  const columnItems: CheckMenuItem[] = COMPONENT_COLUMNS.filter(
+    (c) => columnAvailable[c.id],
+  ).map((c) => ({
+    id: c.id,
+    label: t(c.labelKey),
+    checked: !hiddenCols.includes(c.id),
+    onToggle: () => toggleColumn(c.id),
+  }));
+
+  // The active toggles, as removable chips. They appear only once something is
+  // on, so an unfiltered table carries no row of controls it is not using.
+  const activeChips = filterItems.filter((i) => i.checked);
 
   // Row keys are purl-or-name based (stable across chunk boundaries); the
   // chunk holding the expanded row is pinned live so it can never be recycled
@@ -233,7 +358,7 @@ export function ComponentsTable({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-[12rem] flex-1">
+        <div className="relative min-w-[10rem] flex-1">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={filters.query}
@@ -247,6 +372,9 @@ export function ComponentsTable({
             value={filters.type}
             onChange={(e) => patch({ type: e.target.value })}
             aria-label={t("result.allTypes")}
+            // Capped so a long option value cannot push the toolbar onto a
+            // second line; the native select still shows the full text open.
+            className="max-w-40"
           >
             <option value="">{t("result.allTypes")}</option>
             {types.map((ty) => (
@@ -263,6 +391,7 @@ export function ComponentsTable({
             value={filters.license}
             onChange={(e) => patch({ license: e.target.value })}
             aria-label={t("result.allLicenses")}
+            className="max-w-44"
           >
             <option value="">{t("result.allLicenses")}</option>
             {licenses.map((l) => (
@@ -272,72 +401,89 @@ export function ComponentsTable({
             ))}
           </Select>
         )}
+        {filterItems.length > 0 && (
+          <CheckMenu label={t("result.filters")} items={filterItems} />
+        )}
+        <CheckMenu label={t("result.columns")} items={columnItems} />
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="shrink-0"
+          disabled={filtered.length === 0}
+          onClick={exportCsv}
+        >
+          <Download className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+          {t("result.exportCsv")}
+        </Button>
+        {/* The count closes the toolbar rather than starting a line of its own,
+            which is what made the controls read as four stacked rows. */}
+        <div className="ml-auto text-xs text-muted-foreground">
+          {t("result.componentsCount", { shown: filtered.length, total })}
+          {/* "list truncated" left the reader guessing how much they were
+              looking at. items.length is what the server sent for this scan. */}
+          {truncated ? ` · ${t("result.truncated", { count: items.length })}` : ""}
+        </div>
       </div>
 
-      {(anyVulns || anyScope || anyVendored || anyEol || anyOutdated) && (
+      {activeChips.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
-          {anyVulns && (
-            <FilterChip
-              active={filters.hasVulns}
-              onClick={() => patch({ hasVulns: !filters.hasVulns })}
-            >
-              {t("result.filterHasVulns")}
+          {activeChips.map((chip) => (
+            <FilterChip key={chip.id} active onClick={chip.onToggle}>
+              {chip.label}
+              <X className="ml-1 h-3 w-3" aria-hidden />
             </FilterChip>
-          )}
-          {anyScope && (
-            <FilterChip
-              active={filters.directOnly}
-              onClick={() => patch({ directOnly: !filters.directOnly })}
-            >
-              {t("result.filterDirectOnly")}
-            </FilterChip>
-          )}
-          {anyVendored && (
-            <FilterChip
-              active={filters.needsReview}
-              onClick={() => patch({ needsReview: !filters.needsReview })}
-            >
-              {t("result.filterNeedsReview")}
-            </FilterChip>
-          )}
-          {anyEol && (
-            <FilterChip
-              active={filters.eolOnly}
-              onClick={() => patch({ eolOnly: !filters.eolOnly })}
-            >
-              {t("result.filterEol")}
-            </FilterChip>
-          )}
-          {anyOutdated && (
-            <FilterChip
-              active={filters.outdatedOnly}
-              onClick={() => patch({ outdatedOnly: !filters.outdatedOnly })}
-            >
-              {t("result.filterOutdated")}
-            </FilterChip>
-          )}
+          ))}
+          <button
+            type="button"
+            onClick={() =>
+              patch({
+                hasVulns: false,
+                directOnly: false,
+                needsReview: false,
+                eolOnly: false,
+                outdatedOnly: false,
+              })
+            }
+            className="rounded text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          >
+            {t("result.clearFilters")}
+          </button>
         </div>
       )}
-
-      <div className="text-xs text-muted-foreground">
-        {t("result.componentsCount", { shown: filtered.length, total })}
-        {truncated ? ` · ${t("result.truncated")}` : ""}
-      </div>
 
       <div ref={scrollRef} className="max-h-[44rem] resize-y overflow-auto rounded-md border">
         <table className="w-full text-left text-xs">
           <thead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">
             <tr className="border-b">
-              <SortHeader label={t("result.colName")} sortKey="name" sort={sort} onSort={onSort} />
-              <SortHeader label={t("result.colVersion")} sortKey="version" sort={sort} onSort={onSort} />
-              <SortHeader label={t("result.colType")} sortKey="type" sort={sort} onSort={onSort} />
-              {anyScope && (
-                <SortHeader label={t("result.colScope")} sortKey="scope" sort={sort} onSort={onSort} />
+              {/* The name column is pinned: reading the columns on the right of a
+                  wide table used to lose track of which component the row was.
+                  Its background must be opaque — the pinned cell slides over the
+                  others, and the header's translucent tint would show them
+                  through. z-30 keeps it above both the sticky header (z-10) and
+                  the pinned body cells (z-10). */}
+              <SortHeader
+                label={t("result.colName")}
+                sortKey="name"
+                sort={sort}
+                onSort={onSort}
+                className="sticky left-0 z-30 bg-muted"
+              />
+              {showVersion && (
+                <SortHeader label={t("result.colVersion")} sortKey="version" sort={sort} onSort={onSort} className="min-w-24" />
               )}
-              {anyVulns && (
-                <SortHeader label={t("result.colRisk")} sortKey="risk" sort={sort} onSort={onSort} />
+              {showType && (
+                <SortHeader label={t("result.colType")} sortKey="type" sort={sort} onSort={onSort} className="min-w-24" />
               )}
-              <th className="px-3 py-2 font-medium">{t("result.colLicense")}</th>
+              {showScope && (
+                <SortHeader label={t("result.colScope")} sortKey="scope" sort={sort} onSort={onSort} className="min-w-20" />
+              )}
+              {showRisk && (
+                <SortHeader label={t("result.colRisk")} sortKey="risk" sort={sort} onSort={onSort} className="min-w-24" />
+              )}
+              {showLicense && (
+                <th className="whitespace-nowrap px-3 py-2 font-medium">{t("result.colLicense")}</th>
+              )}
             </tr>
           </thead>
           {chunks.map((chunkItems, ci) =>
@@ -347,13 +493,14 @@ export function ComponentsTable({
               const key = rowKey(c, ci * CHUNK + i);
               const isOpen = openKey === key;
               const toggle = () => setOpenKey(isOpen ? null : key);
+              const lic = licenseBadges(c.licenses);
               return (
               <Fragment key={key}>
               {/* role="button" makes aria-expanded valid here (it is not allowed
                   on a plain table row) and, with tabIndex + the key handler,
                   keeps the expandable row reachable by keyboard. */}
               <tr
-                className="cursor-pointer border-b last:border-0 hover:bg-accent/50"
+                className="group cursor-pointer border-b last:border-0 hover:bg-accent/50"
                 role="button"
                 tabIndex={0}
                 aria-expanded={isOpen}
@@ -366,10 +513,16 @@ export function ComponentsTable({
                   }
                 }}
               >
-                <td className="px-3 py-2">
+                {/* Pinned like its header. The row tint is painted per-cell here
+                    (group-hover) because a pinned cell needs its own opaque
+                    background and would otherwise stay unhighlighted. */}
+                <td className="sticky left-0 z-10 max-w-80 bg-background px-3 py-2 group-hover:bg-accent/50">
                   <div className="flex items-center gap-2">
                     <Package className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    <span className="font-mono">
+                    <span
+                      className="truncate font-mono"
+                      title={`${c.group ? `${c.group} / ` : ""}${c.name}`}
+                    >
                       {c.group ? `${c.group} / ` : ""}
                       {c.name}
                     </span>
@@ -421,7 +574,8 @@ export function ComponentsTable({
                     em dash here would read as a gap in the data rather than as
                     the finding it is: the component is there, the version is
                     not recoverable, and no advisory lookup applies to it. */}
-                <td className="px-3 py-2 font-mono tabular-nums text-muted-foreground">
+                {showVersion && (
+                <td className="whitespace-nowrap px-3 py-2 font-mono tabular-nums text-muted-foreground">
                   {c.version || (c.presenceOnly ? (
                     <span
                       className="font-sans text-xs"
@@ -431,9 +585,12 @@ export function ComponentsTable({
                     </span>
                   ) : "—")}
                 </td>
-                <td className="px-3 py-2 text-muted-foreground">{c.type || "—"}</td>
-                {anyScope && (
-                  <td className="px-3 py-2">
+                )}
+                {showType && (
+                <td className="whitespace-nowrap px-3 py-2 text-muted-foreground">{c.type || "—"}</td>
+                )}
+                {showScope && (
+                  <td className="whitespace-nowrap px-3 py-2">
                     {c.scope ? (
                       <span
                         className={
@@ -449,8 +606,8 @@ export function ComponentsTable({
                     )}
                   </td>
                 )}
-                {anyVulns && (
-                  <td className="px-3 py-2">
+                {showRisk && (
+                  <td className="whitespace-nowrap px-3 py-2">
                     {c.maxSeverity ? (
                       <Badge tone={SEV_TONE[c.maxSeverity]}>
                         {t(`severity.${c.maxSeverity}`)}
@@ -461,19 +618,32 @@ export function ComponentsTable({
                     )}
                   </td>
                 )}
-                <td className="px-3 py-2">
+                {/* Badges past the limit fold into a count so a component with a
+                    dozen licenses does not stand three rows tall. The expanded
+                    row below lists them all. */}
+                {showLicense && (
+                <td className="whitespace-nowrap px-3 py-2">
                   {c.licenses.length ? (
-                    <div className="flex flex-wrap gap-1">
-                      {c.licenses.map((l, j) => (
+                    <div className="flex items-center gap-1">
+                      {lic.shown.map((l, j) => (
                         <Badge key={j} variant="muted">
                           {l}
                         </Badge>
                       ))}
+                      {lic.hidden > 0 && (
+                        <span
+                          className="text-muted-foreground"
+                          title={c.licenses.join(", ")}
+                        >
+                          {t("result.licenseMore", { count: lic.hidden })}
+                        </span>
+                      )}
                     </div>
                   ) : (
                     <span className="text-muted-foreground">{t("result.licenseNone")}</span>
                   )}
                 </td>
+                )}
               </tr>
               {isOpen && (
                 <tr className="border-b last:border-0">
@@ -541,9 +711,28 @@ export function ComponentsTable({
                       {c.vulnCount ? (
                         <>
                           <dt className="font-medium text-muted-foreground">{t("nav.vulnerabilities")}</dt>
-                          <dd>
-                            {c.maxSeverity ? `${t(`severity.${c.maxSeverity}`)} · ` : ""}
-                            {c.vulnCount}
+                          <dd className="flex flex-wrap items-baseline gap-2">
+                            <span>
+                              {c.maxSeverity ? `${t(`severity.${c.maxSeverity}`)} · ` : ""}
+                              {c.vulnCount}
+                            </span>
+                            {/* Into the CVEs behind this row. It sits in the
+                                expanded detail rather than on the risk badge
+                                because the row itself is the toggle control,
+                                and a control inside a control is not announced
+                                reliably. */}
+                            {onPickVulns && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onPickVulns(c.name);
+                                }}
+                                className="rounded text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                              >
+                                {t("result.viewInVulns", { name: c.name })}
+                              </button>
+                            )}
                           </dd>
                         </>
                       ) : null}

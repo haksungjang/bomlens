@@ -4,6 +4,15 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
+import {
+  captureMain,
+  COMBOS,
+  seedThemeLang,
+  waitForMainSettled,
+  type Lang,
+  type Theme,
+} from "./visual";
+
 /**
  * Shell gates for the new UI behind `?ui=next`:
  *  - accessibility (axe) + visual regression for the idle home screen — now
@@ -16,34 +25,6 @@ import { expect, test, type Page } from "@playwright/test";
  * combination is deterministic. Visual snapshots are tagged @visual and run in
  * the pinned Playwright container so pixels are stable.
  */
-
-type Theme = "light" | "dark";
-type Lang = "en" | "ko";
-
-// `main` is the scroll container (overflow-y-auto) AND mounts with
-// `animate-fade-in` (translateY(4px) -> 0) on every section switch. Element
-// screenshots of `main` scroll it into view first, so a non-zero scrollTop or an
-// unsettled transform shifts the whole tall section a few px — a deterministic-
-// looking but flaky ~3% diff. Pin the transform to its end state, reset the
-// scroll to the top, and wait two animation frames so layout has fully settled
-// before the capture.
-async function waitForMainSettled(page: Page) {
-  await page.locator("main").evaluate(async (el) => {
-    await Promise.all(el.getAnimations().map((a) => a.finished.catch(() => undefined)));
-    el.scrollTop = 0;
-    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-  });
-}
-
-async function seedThemeLang(page: Page, theme: Theme, lang: Lang) {
-  await page.addInitScript(
-    ([t, l]) => {
-      localStorage.setItem("sbom.theme", t);
-      localStorage.setItem("sbom.lang", l);
-    },
-    [theme, lang],
-  );
-}
 
 /** Open the idle home screen (Recent scans, `#/`). */
 async function openShell(page: Page, theme: Theme, lang: Lang) {
@@ -61,13 +42,6 @@ async function openNewScan(page: Page, theme: Theme, lang: Lang) {
   // The settings pane mounts the project field on the New scan screen only.
   await page.locator("#project").waitFor();
 }
-
-const COMBOS: Array<{ theme: Theme; lang: Lang }> = [
-  { theme: "light", lang: "en" },
-  { theme: "dark", lang: "en" },
-  { theme: "light", lang: "ko" },
-  { theme: "dark", lang: "ko" },
-];
 
 for (const { theme, lang } of COMBOS) {
   test(`idle shell has no axe violations — ${theme}/${lang}`, async ({ page }) => {
@@ -100,6 +74,20 @@ test("New scan screen has no axe violations", async ({ page }) => {
     .analyze();
   expect(results.violations).toEqual([]);
 });
+
+// The upload field only exists once an upload source is picked, so the New scan
+// baseline above — which captures the screen in its default current-folder
+// state — never sees it. Without this the dropzone had no pixel guard at all:
+// its first baseline would be whatever it was told to be, and nothing would
+// notice it drifting afterwards.
+for (const { theme, lang } of COMBOS) {
+  test(`upload dropzone matches baseline — ${theme}/${lang} @visual`, async ({ page }) => {
+    await openNewScan(page, theme, lang);
+    await page.getByTestId("source-zip-upload").click();
+    await expect(page.getByTestId("dropzone")).toBeVisible();
+    await captureMain(page, "upload-dropzone", theme, lang);
+  });
+}
 
 test("New scan screen matches baseline — light/en @visual", async ({ page }) => {
   await openNewScan(page, "light", "en");
@@ -179,6 +167,33 @@ test("Recent menu re-opens a past scan from the top bar", async ({ page }) => {
   await expect(page.getByRole("link", { name: /^Overview/ })).toHaveAttribute("aria-current", "page");
   await expect(page.getByText("2 critical or high vulnerabilities")).toBeVisible();
 });
+test("a project scanned twice shows how it moved", async ({ page }) => {
+  await page.route("**/capabilities", (r) =>
+    r.fulfill({ contentType: "application/json", body: JSON.stringify({ firmware: false, scanoss: false, docker: true }) }),
+  );
+  // Same project, two runs: 10 -> 13 components, HIGH -> CRITICAL. And a
+  // project scanned once, which has nothing to compare against.
+  await page.route("**/scans", (r) =>
+    r.fulfill({ contentType: "application/json", body: JSON.stringify([
+      { id: "api_2.0", project: "api", version: "2.0", components: 13, maxSeverity: "CRITICAL", isAiScan: false, componentType: "application", generatedAt: 1700000200 },
+      { id: "api_1.0", project: "api", version: "1.0", components: 10, maxSeverity: "HIGH", isAiScan: false, componentType: "application", generatedAt: 1700000100 },
+      { id: "once_1.0", project: "once", version: "1.0", components: 5, maxSeverity: "LOW", isAiScan: false, componentType: "application", generatedAt: 1700000000 },
+    ]) }),
+  );
+  await page.goto("/?ui=next");
+
+  const newer = page.getByRole("row").filter({ hasText: "api @2.0" });
+  await expect(newer).toContainText("+3");
+  await expect(newer.getByText("Worse than the previous scan")).toBeAttached();
+
+  // The first run of a project compares against nothing and says nothing —
+  // a "0" there would read as "unchanged" rather than "not known".
+  const first = page.getByRole("row").filter({ hasText: "api @1.0" });
+  await expect(first).not.toContainText("+");
+  const alone = page.getByRole("row").filter({ hasText: "once @1.0" });
+  await expect(alone).not.toContainText("+");
+});
+
 test("Recent home renders the summary strip and the scan table", async ({ page }) => {
   await page.route("**/capabilities", (r) =>
     r.fulfill({ contentType: "application/json", body: JSON.stringify({ firmware: false, scanoss: false, docker: true }) }),
@@ -278,8 +293,10 @@ test("Recent home deletes a scan from its row", async ({ page }) => {
 
   const row = page.getByRole("link", { name: /demo @1.0/ });
   await expect(row).toBeVisible();
-  // The row's trash button deletes the scan; the list refreshes to empty.
+  // The row's trash button asks first (dialog.spec covers the prompt itself);
+  // confirming deletes the scan and the list refreshes to empty.
   await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
   await expect(row).toHaveCount(0);
   await expect(page.getByText("Generate your first SBOM")).toBeVisible();
 });
@@ -474,11 +491,11 @@ test("global search routes to a component with the term applied", async ({ page 
   await stubAndRun(page);
   await expect(page.getByRole("link", { name: /^Overview/ })).toBeVisible();
 
-  const box = page.getByPlaceholder("Search components, CVEs…");
+  const box = page.getByTestId("global-search");
   await box.click();
   await box.fill("openssl");
   // The popover lists the matching component; pick it (the CVE row starts "CVE-").
-  await page.getByRole("listbox").getByRole("button", { name: /^openssl/ }).click();
+  await page.getByRole("listbox").getByRole("option", { name: /^openssl/ }).click();
 
   // Lands on Components, filtered to openssl (the transitive zlib is gone).
   await expect(page.getByRole("link", { name: /^Components/ })).toHaveAttribute(
@@ -487,6 +504,85 @@ test("global search routes to a component with the term applied", async ({ page 
   );
   await expect(page.getByText("openssl", { exact: true })).toBeVisible();
   await expect(page.getByText("zlib", { exact: true })).toHaveCount(0);
+});
+
+test("global search is reachable and usable by keyboard alone", async ({ page }) => {
+  await stubAndRun(page);
+  await expect(page.getByRole("link", { name: /^Overview/ })).toBeVisible();
+
+  const box = page.getByTestId("global-search");
+  // Landing on a section moves focus to its heading (NextApp's section-change
+  // effect); let that settle before testing where focus goes next.
+  await waitForMainSettled(page);
+  await page.keyboard.press("ControlOrMeta+k");
+  await expect(box).toBeFocused();
+
+  // The query goes in with fill rather than keystrokes: the heading-focus
+  // effect can land between two keypresses and take the rest of the word with
+  // it. What this test is about — reaching the box, walking the list, choosing
+  // without a mouse — is unaffected.
+  await box.fill("openssl");
+  await expect(box).toBeFocused();
+  const listbox = page.getByRole("listbox");
+  await expect(listbox).toBeVisible();
+  // Closed combobox has no active option until the user arrows into the list.
+  await expect(box).not.toHaveAttribute("aria-activedescendant", /./);
+
+  await page.keyboard.press("ArrowDown");
+  const first = listbox.getByRole("option").first();
+  await expect(first).toHaveAttribute("aria-selected", "true");
+  const activeId = await box.getAttribute("aria-activedescendant");
+  expect(activeId).toBe(await first.getAttribute("id"));
+
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("link", { name: /^Components/ })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await expect(page.getByText("openssl", { exact: true })).toBeVisible();
+});
+
+test("arrow keys cross the component/CVE boundary and wrap", async ({ page }) => {
+  await stubAndRun(page);
+  const box = page.getByTestId("global-search");
+  await box.click();
+  // "ssl" matches the openssl component and the CVE row that names it, so the
+  // list spans both groups.
+  await box.fill("ssl");
+  const options = page.getByRole("listbox").getByRole("option");
+  const count = await options.count();
+  expect(count).toBeGreaterThan(1);
+
+  await page.keyboard.press("ArrowDown");
+  await expect(options.first()).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("ArrowUp");
+  // Up from the first wraps to the last, which lives in the other group.
+  await expect(options.nth(count - 1)).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("End");
+  await expect(options.nth(count - 1)).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("Home");
+  await expect(options.first()).toHaveAttribute("aria-selected", "true");
+
+  // Escape closes without navigating.
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("listbox")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: /^Overview/ })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+});
+
+test("open search popover has no axe violations", async ({ page }) => {
+  await stubAndRun(page);
+  const box = page.getByTestId("global-search");
+  await box.click();
+  await box.fill("ssl");
+  await expect(page.getByRole("listbox")).toBeVisible();
+  await page.keyboard.press("ArrowDown");
+  const results = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  expect(results.violations).toEqual([]);
 });
 
 test("cancelling a running scan returns to New scan", async ({ page }) => {
@@ -639,10 +735,59 @@ test("end-of-life surfaces as a KPI tile, a badge and a filter chip", async ({ p
   // The EOL component carries the badge; the supported one does not.
   await expect(page.getByText("End of life · since 2023-09-11")).toBeVisible();
 
-  // The filter chip narrows the table to end-of-life rows only.
-  await page.getByRole("button", { name: "End of life", exact: true }).click();
+  // The filter narrows the table to end-of-life rows only.
+  await page.getByRole("button", { name: /^Filters/ }).click();
+  await page.getByRole("checkbox", { name: "End of life" }).check();
+  await page.keyboard.press("Escape");
   await expect(page.getByText("openssl", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("zlib", { exact: true })).toHaveCount(0);
+});
+
+test("the overview names the components carrying the most risk", async ({ page }) => {
+  await stubAndRun(page);
+
+  // The counts alone never named a component. The overview has no components
+  // table, so a component name appearing here is this block naming it.
+  await expect(page.getByText("Highest risk components")).toBeVisible();
+  await expect(page.getByText("openssl", { exact: true })).toBeVisible();
+
+  // A row opens the vulnerabilities that made it the worst one.
+  await page.getByText("openssl", { exact: true }).click();
+  await expect(page.getByRole("link", { name: /^Vulnerabilities/ })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+});
+
+test("a scan with nothing against any component shows no risk block", async ({ page }) => {
+  // Padding the block with clean components would imply a ranking the data
+  // does not support, so it is absent rather than empty.
+  const CLEAN = {
+    ...DONE,
+    security: null,
+    sbom: {
+      components: 1,
+      componentList: [
+        { name: "flask", version: "2.0", group: "", purl: "pkg:pypi/flask@2.0", type: "library", licenses: ["BSD-3-Clause"] },
+      ],
+    },
+  };
+  await seedThemeLang(page, "light", "en");
+  await page.route("**/capabilities", (r) =>
+    r.fulfill({ contentType: "application/json", body: JSON.stringify({ firmware: false, scanoss: false, docker: true }) }),
+  );
+  await page.route("**/results", (r) => r.fulfill({ contentType: "application/json", body: "[]" }));
+  await page.route("**/scan-stream**", (r) =>
+    r.fulfill({ contentType: "text/event-stream", body: `event: done\ndata: ${JSON.stringify(CLEAN)}\n\n` }),
+  );
+  await page.goto("/?ui=next#/new");
+  await page.fill("#project", "demo");
+  await page.fill("#version", "1.0");
+  await page.getByTestId("run-scan").click();
+
+  // The scan landed on the overview (its jump card is there) and the block is not.
+  await expect(page.getByRole("link", { name: "View Components" }).first()).toBeVisible();
+  await expect(page.getByText("Highest risk components")).toHaveCount(0);
 });
 
 test("Overview leads with needs-attention and jumps into sections", async ({ page }) => {
@@ -758,11 +903,7 @@ for (const { theme, lang } of COMBOS) {
     await stubAndRun(page, theme, lang);
     // The result Overview renders its h1 only once loaded (locale-agnostic anchor).
     await expect(page.locator("main h1")).toBeVisible();
-    await waitForMainSettled(page);
-    await page.mouse.move(0, 0); // neutral pointer — avoid hover-state flake
-    await expect(page.locator("main")).toHaveScreenshot(`overview-${theme}-${lang}.png`, {
-      animations: "disabled",
-    });
+    await captureMain(page, "overview", theme, lang);
   });
 }
 
@@ -867,13 +1008,32 @@ const AI_SBOM = {
   ],
 };
 
-async function stubAiAndRun(page: Page, theme: Theme = "light", lang: Lang = "en") {
+// The same model in the shape the scanner writes for a model scan: the model is
+// the document's own component and components[] holds only the datasets it
+// references. Kept beside the components[] shape rather than replacing it — the
+// visual baselines run on the original, and both shapes must render the card.
+const AI_SBOM_ROOT_MODEL = {
+  bomFormat: "CycloneDX",
+  specVersion: "1.7",
+  metadata: { component: AI_SBOM.components[0] },
+  components: [
+    { type: "data", "bom-ref": "d1", name: "bookcorpus", version: "d917559b" },
+    { type: "data", "bom-ref": "d2", name: "wikipedia", version: "97a0b052" },
+  ],
+};
+
+async function stubAiAndRun(
+  page: Page,
+  theme: Theme = "light",
+  lang: Lang = "en",
+  sbom: unknown = AI_SBOM,
+) {
   await seedThemeLang(page, theme, lang);
   await page.route("**/capabilities", (r) =>
     r.fulfill({ contentType: "application/json", body: JSON.stringify({ firmware: false, scanoss: false, docker: true }) }),
   );
   await page.route("**/results", (r) => r.fulfill({ contentType: "application/json", body: "[]" }));
-  await page.route("**/file**", (r) => r.fulfill({ contentType: "application/json", body: JSON.stringify(AI_SBOM) }));
+  await page.route("**/file**", (r) => r.fulfill({ contentType: "application/json", body: JSON.stringify(sbom) }));
   await page.route("**/scan-stream**", (r) =>
     r.fulfill({ contentType: "text/event-stream", body: `event: done\ndata: ${JSON.stringify(AI_DONE)}\n\n` }),
   );
@@ -900,16 +1060,22 @@ test("AI scan exposes Models & Datasets with the model card", async ({ page }) =
   expect(results.violations).toEqual([]);
 });
 
+test("the model card renders when the model is the document's own component", async ({ page }) => {
+  await stubAiAndRun(page, "light", "en", AI_SBOM_ROOT_MODEL);
+  await page.getByRole("navigation").getByRole("link", { name: /Models & datasets/ }).click();
+
+  await expect(page.getByText("bert-base-uncased").first()).toBeVisible();
+  await expect(page.getByText("fill-mask")).toBeVisible();
+  await expect(page.getByText("bookcorpus").first()).toBeVisible();
+  await expect(page.getByText("wikipedia").first()).toBeVisible();
+});
+
 for (const { theme, lang } of COMBOS) {
   test(`models section matches baseline — ${theme}/${lang} @visual`, async ({ page }) => {
     await stubAiAndRun(page, theme, lang);
     await page.getByRole("navigation").locator('a[href$="/models"]').first().click();
     await expect(page.getByText("bert-base-uncased").first()).toBeVisible();
-    await waitForMainSettled(page);
-    await page.mouse.move(0, 0); // neutral pointer — avoid hover-state flake
-    await expect(page.locator("main")).toHaveScreenshot(`models-${theme}-${lang}.png`, {
-      animations: "disabled",
-    });
+    await captureMain(page, "models", theme, lang);
   });
 }
 
@@ -1059,11 +1225,7 @@ for (const { theme, lang } of COMBOS) {
     // non-deterministic frame, so the whole tall section is sometimes captured 4px
     // low — a constant ~3% diff. Wait for main's own animations to finish so the
     // transform has settled to translateY(0) before the screenshot.
-    await waitForMainSettled(page);
-    await page.mouse.move(0, 0); // neutral pointer — avoid hover-state flake
-    await expect(page.locator("main")).toHaveScreenshot(`conformance-${theme}-${lang}.png`, {
-      animations: "disabled",
-    });
+    await captureMain(page, "conformance", theme, lang);
   });
 }
 
@@ -1292,11 +1454,7 @@ for (const { theme, lang } of COMBOS) {
     await stubLicensesAndRun(page, theme, lang);
     await page.getByRole("navigation").locator('a[href$="/licenses"]').first().click();
     await expect(page.getByText("some-llama-model")).toBeVisible();
-    await waitForMainSettled(page);
-    await page.mouse.move(0, 0); // neutral pointer — avoid hover-state flake
-    await expect(page.locator("main")).toHaveScreenshot(`licenses-${theme}-${lang}.png`, {
-      animations: "disabled",
-    });
+    await captureMain(page, "licenses", theme, lang);
   });
 }
 
@@ -1323,11 +1481,7 @@ for (const { theme, lang } of COMBOS) {
     await page.getByRole("navigation").locator('a[href$="/dependencies"]').first().click();
     await page.getByTestId("deps-view-tree").click();
     await expect(page.getByText("openssl").first()).toBeVisible();
-    await waitForMainSettled(page);
-    await page.mouse.move(0, 0); // neutral pointer — avoid hover-state flake
-    await expect(page.locator("main")).toHaveScreenshot(`dependencies-tree-${theme}-${lang}.png`, {
-      animations: "disabled",
-    });
+    await captureMain(page, "dependencies-tree", theme, lang);
   });
 }
 
@@ -1364,11 +1518,7 @@ for (const { theme, lang } of COMBOS) {
     await stubAndRun(page, theme, lang);
     await page.getByRole("navigation").locator('a[href$="/vulnerabilities"]').first().click();
     await expect(page.getByText("9.8", { exact: true })).toBeVisible();
-    await waitForMainSettled(page);
-    await page.mouse.move(0, 0); // neutral pointer — avoid hover-state flake
-    await expect(page.locator("main")).toHaveScreenshot(`vulnerabilities-${theme}-${lang}.png`, {
-      animations: "disabled",
-    });
+    await captureMain(page, "vulnerabilities", theme, lang);
   });
 }
 
@@ -1383,15 +1533,71 @@ test("Components table shows Scope/Risk and filters on the full set", async ({ p
   await expect(page.getByText("zlib", { exact: true })).toBeVisible();
 
   // "Has vulnerabilities" narrows to the component with a CVE (openssl only).
-  await page.getByRole("button", { name: "Has vulnerabilities" }).click();
+  // The toggles live in the Filters menu; the active ones also appear as
+  // removable chips under the toolbar.
+  await page.getByRole("button", { name: /^Filters/ }).click();
+  await page.getByRole("checkbox", { name: "Has vulnerabilities" }).check();
+  await page.keyboard.press("Escape");
   await expect(page.getByText("openssl", { exact: true })).toBeVisible();
   await expect(page.getByText("zlib", { exact: true })).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: /Has vulnerabilities/ }).last(),
+  ).toBeVisible();
 
   // Clearing it brings zlib back; "Direct only" then also excludes the transitive zlib.
-  await page.getByRole("button", { name: "Has vulnerabilities" }).click();
-  await page.getByRole("button", { name: "Direct only" }).click();
+  await page.getByRole("button", { name: /^Filters/ }).click();
+  await page.getByRole("checkbox", { name: "Has vulnerabilities" }).uncheck();
+  await page.getByRole("checkbox", { name: "Direct only" }).check();
+  await page.keyboard.press("Escape");
   await expect(page.getByText("zlib", { exact: true })).toHaveCount(0);
   await expect(page.getByText("openssl", { exact: true })).toBeVisible();
+
+  // "Clear filters" drops every active toggle at once.
+  await page.getByRole("button", { name: "Clear filters" }).click();
+  await expect(page.getByText("zlib", { exact: true })).toBeVisible();
+});
+
+test("columns can be hidden, and the choice is kept for next time", async ({ page }) => {
+  await stubAndRun(page);
+  await page.getByRole("link", { name: /^Components/ }).first().click();
+  await expect(page.getByRole("button", { name: "Version", exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: /^Columns/ }).click();
+  await page.getByRole("checkbox", { name: "Version" }).uncheck();
+  await page.keyboard.press("Escape");
+
+  // The column is gone from the header and the rows keep their shape.
+  await expect(page.getByRole("button", { name: "Version", exact: true })).toHaveCount(0);
+  await expect(page.getByText("openssl", { exact: true })).toBeVisible();
+
+  // Kept browser-local, like the theme and the language — nothing is sent.
+  expect(
+    await page.evaluate(() => localStorage.getItem("sbom.components.hiddenColumns")),
+  ).toContain("version");
+
+  // And it comes back.
+  await page.getByRole("button", { name: /^Columns/ }).click();
+  await page.getByRole("checkbox", { name: "Version" }).check();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("button", { name: "Version", exact: true })).toBeVisible();
+});
+
+test("the toolbar menus have no axe violations, open or closed", async ({ page }) => {
+  await stubAndRun(page);
+  await page.getByRole("link", { name: /^Components/ }).first().click();
+  await expect(page.getByText("openssl", { exact: true })).toBeVisible();
+
+  const closed = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  expect(closed.violations).toEqual([]);
+
+  await page.getByRole("button", { name: /^Columns/ }).click();
+  await expect(page.getByRole("checkbox", { name: "Version" })).toBeVisible();
+  const open = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  expect(open.violations).toEqual([]);
 });
 
 for (const { theme, lang } of COMBOS) {
@@ -1399,11 +1605,16 @@ for (const { theme, lang } of COMBOS) {
     await stubAndRun(page, theme, lang);
     await page.getByRole("navigation").locator('a[href$="/components"]').first().click();
     await expect(page.getByText("openssl", { exact: true })).toBeVisible();
-    await waitForMainSettled(page);
-    await page.mouse.move(0, 0); // neutral pointer — avoid hover-state flake
-    await expect(page.locator("main")).toHaveScreenshot(`components-${theme}-${lang}.png`, {
-      animations: "disabled",
-    });
+    await captureMain(page, "components", theme, lang);
+  });
+}
+
+for (const { theme, lang } of COMBOS) {
+  test(`artifacts section matches baseline — ${theme}/${lang} @visual`, async ({ page }) => {
+    await stubAndRun(page, theme, lang);
+    await page.getByRole("navigation").locator('a[href$="/artifacts"]').first().click();
+    await expect(page.getByText("SBOM (CycloneDX)")).toBeVisible();
+    await captureMain(page, "artifacts", theme, lang);
   });
 }
 

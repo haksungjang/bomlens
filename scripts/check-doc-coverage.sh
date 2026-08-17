@@ -50,6 +50,7 @@ ROOTFS :: rootfs|directory path :: cli,architecture
 FIRMWARE :: --firmware|firmware :: by-input,ui,cli,architecture,readme,pipeline-by-input
 ANALYZE :: --analyze|ANALYZE :: by-input,ui,cli,architecture,readme,pipeline-by-input
 AIBOM :: --model|AI model :: by-input,ui,cli,architecture,readme,pipeline-by-input
+MODELFILE :: --model-file|model file :: by-input,ui,cli,architecture,readme,pipeline-by-input
 "
 
 # 1) Pull the authoritative mode list from entrypoint.sh.

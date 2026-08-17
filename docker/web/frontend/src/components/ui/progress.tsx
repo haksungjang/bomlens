@@ -15,6 +15,11 @@ export const Progress = forwardRef<
 >(({ className, indicatorClassName, value, ...props }, ref) => (
   <ProgressPrimitive.Root
     ref={ref}
+    // `value` is destructured out for the indicator's transform, so it has to
+    // be handed back to Root explicitly. Without it Radix sees no value, holds
+    // the bar in its indeterminate state and emits no aria-valuenow — the bar
+    // moves visually while telling a screen reader nothing.
+    value={value}
     className={cn(
       "relative h-2 w-full overflow-hidden rounded-full bg-muted",
       className,

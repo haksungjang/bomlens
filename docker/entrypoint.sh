@@ -25,6 +25,7 @@ set -e
 #   - SOURCE      : syft dir scan of a source tree (web UI source/zip/git path)
 #   - IMAGE/BINARY/ROOTFS : syft scan -> SBOM
 #   - FIRMWARE    : unpack firmware -> syft + cve-bin-tool -> SBOM (opt-in image)
+#   - MODELFILE   : read one AI model file's own header -> ML-BOM (offline)
 #   - ANALYZE     : validate + convert a supplier SBOM -> conformance + risk report
 #   - MERGE       : combine several CycloneDX SBOMs (layered server delivery)
 #   - POSTPROCESS : consume an already-generated SBOM
@@ -190,6 +191,16 @@ mark_sbom_degraded() {
 # shellcheck source=docker/lib/pipeline-step.sh
 . "$LIBDIR/pipeline-step.sh"
 
+# Modes whose SBOM describes an AI model rather than a software project: the
+# model-card path (AIBOM, from a HuggingFace id) and the model-file path
+# (MODELFILE, from the file itself). They share the AI post-processing — risk
+# assessment, G7 conformance, the AI profile — and skip the package-oriented
+# enrichments, which have no purl, no CPE and no release cycle to match on.
+case "$SCAN_MODE" in
+    AIBOM|MODELFILE) AI_MODEL_SCAN=true ;;
+    *) AI_MODEL_SCAN=false ;;
+esac
+
 echo "=========================================="
 echo " BomLens (post-process)"
 echo " Mode: $SCAN_MODE"
@@ -341,6 +352,33 @@ EOF
         run_optional_step enrich-aibom bash "$LIBDIR/enrich-aibom.sh" "$OUTPUT_FILE" "$MODEL_ID"
         ;;
 
+    MODELFILE)
+        # AI model SBOM built from a model FILE rather than a HuggingFace id: the
+        # file's own header is the only source. No network, no generator image —
+        # identify-model-file.py is stdlib-only and ships in the base image, so
+        # this path works air-gapped and on a model that was never published.
+        #
+        # What it can fill depends on the format (GGUF carries a name, a license
+        # and an architecture; safetensors usually carries only tensor shapes),
+        # and a field the file does not declare is left empty rather than
+        # guessed. A file it cannot identify is refused (exit 3) instead of
+        # becoming a model component nobody could read.
+        if [ -z "$TARGET_FILE" ] || [ ! -f "$TARGET_FILE" ]; then echo "[ERROR] TARGET_FILE not found: $TARGET_FILE"; exit 1; fi
+        echo "[1/2] modelfile: read $(basename "$TARGET_FILE")"
+        if ! python3 "$LIBDIR/identify-model-file.py" \
+                "$TARGET_FILE" "$OUTPUT_FILE" "$PROJECT_VERSION" "$PROJECT_NAME"; then
+            echo "[ERROR] could not identify the model file: $(basename "$TARGET_FILE")"
+            exit 1
+        fi
+        # Does loading this file run code? pickle weights do, and no Hub scan
+        # result exists for a file that was never published, so the answer has
+        # to be produced here. Best-effort: a failure leaves the property unset
+        # and the risk assessment then has no security axis at all, which reads
+        # as "not scanned" rather than as safe.
+        run_optional_step model-security python3 "$LIBDIR/scan-model-file-security.py" \
+            "$OUTPUT_FILE" "$TARGET_FILE"
+        ;;
+
     MERGE)
         # Combine several already-generated CycloneDX SBOMs into one (e.g. a
         # server's OS rootfs layer + application layer + static-link layer).
@@ -445,7 +483,7 @@ EOF
         ;;
 
     *)
-        echo "[ERROR] Unknown MODE: $SCAN_MODE (expected SOURCE/IMAGE/BINARY/ROOTFS/FIRMWARE/AIBOM/ANALYZE/MERGE/POSTPROCESS/UI)"
+        echo "[ERROR] Unknown MODE: $SCAN_MODE (expected SOURCE/IMAGE/BINARY/ROOTFS/FIRMWARE/AIBOM/MODELFILE/ANALYZE/MERGE/POSTPROCESS/UI)"
         exit 1
         ;;
 esac
@@ -601,10 +639,11 @@ esac
 # ========================================================
 #
 # The scanned artifact is passed where the target IS a file, so its hash lands on
-# the component the SBOM is about. BINARY and FIRMWARE are the two such modes; the
-# others scan a tree, an image or an existing document, none of which is one file.
+# the component the SBOM is about. BINARY, FIRMWARE and MODELFILE are the three
+# such modes; the others scan a tree, an image or an existing document, none of
+# which is one file.
 case "$SCAN_MODE" in
-    BINARY|FIRMWARE)
+    BINARY|FIRMWARE|MODELFILE)
         run_optional_step docmeta bash "$LIBDIR/stamp-document-metadata.sh" "$OUTPUT_FILE" "$SCAN_MODE" "$TARGET_FILE"
         ;;
     SOURCE|POSTPROCESS|ROOTFS|IMAGE|AIBOM|MERGE)
@@ -626,7 +665,7 @@ fi
 # (issue #458), so distro CVE matching comes from the OS component synthesized just
 # below and, for firmware, from the cve-bin-tool sidecar. Skipped for AI SBOMs and
 # disabled with ENRICH_CPE=false. Generic across modes; best-effort (|| true).
-if [ "${ENRICH_CPE:-true}" != "false" ] && [ "$SCAN_MODE" != "AIBOM" ]; then
+if [ "${ENRICH_CPE:-true}" != "false" ] && [ "$AI_MODEL_SCAN" != "true" ]; then
     run_optional_step enrich-cpe bash "$LIBDIR/enrich-cpe.sh" "$OUTPUT_FILE"
 fi
 
@@ -640,7 +679,7 @@ fi
 # SBOMs and with ENRICH_OS_CONTEXT=false; a no-op when the SBOM has no recognizable
 # distro packages (an unsupported distro like OpenWRT, or deb/apk PURLs with no
 # distro= version). Runs before the security scan; best-effort, never aborts.
-if [ "${ENRICH_OS_CONTEXT:-true}" != "false" ] && [ "$SCAN_MODE" != "AIBOM" ]; then
+if [ "${ENRICH_OS_CONTEXT:-true}" != "false" ] && [ "$AI_MODEL_SCAN" != "true" ]; then
     run_optional_step enrich-os-context python3 "$LIBDIR/enrich-os-context.py" "$OUTPUT_FILE"
 fi
 
@@ -652,7 +691,7 @@ fi
 # (spring, jackson, ...) plus a conservative org.apache.* rule; anything it cannot
 # map safely gets no CPE (no guessing). Skipped for AI SBOMs and with
 # ENRICH_MAVEN_CPE=false; a no-op when the SBOM has no maven components.
-if [ "${ENRICH_MAVEN_CPE:-true}" != "false" ] && [ "$SCAN_MODE" != "AIBOM" ]; then
+if [ "${ENRICH_MAVEN_CPE:-true}" != "false" ] && [ "$AI_MODEL_SCAN" != "true" ]; then
     run_optional_step enrich-maven-cpe python3 "$LIBDIR/enrich-maven-cpe.py" "$OUTPUT_FILE"
 fi
 
@@ -663,7 +702,7 @@ fi
 # unmapped components are left untouched (implicitly unknown), never guessed.
 # Skipped for AI SBOMs (no runtime/framework components) and with ENRICH_EOL=false
 # (e.g. an image built without the dataset). Best-effort; never aborts the scan.
-if [ "${ENRICH_EOL:-true}" != "false" ] && [ "$SCAN_MODE" != "AIBOM" ]; then
+if [ "${ENRICH_EOL:-true}" != "false" ] && [ "$AI_MODEL_SCAN" != "true" ]; then
     run_optional_step enrich-eol bash "$LIBDIR/enrich-eol.sh" "$OUTPUT_FILE"
 fi
 
@@ -684,7 +723,7 @@ fi
 # EOL this makes one network call per package, so it trades the scan's offline
 # determinism for freshness and is only run when STALENESS_ENRICH=true. Best-effort
 # and bounded (per-request timeout + wall-clock budget); never aborts the scan.
-if [ "${STALENESS_ENRICH:-false}" = "true" ] && [ "$SCAN_MODE" != "AIBOM" ]; then
+if [ "${STALENESS_ENRICH:-false}" = "true" ] && [ "$AI_MODEL_SCAN" != "true" ]; then
     run_optional_step enrich-staleness python3 "$LIBDIR/enrich-staleness.py" "$OUTPUT_FILE"
 fi
 
@@ -695,7 +734,7 @@ fi
 # to review, never to a guess, and the reports that print the verdict carry the
 # registry's not-legal-advice disclaimer. Self-gates on the presence of a
 # machine-learning-model component, so ANALYZE of a plain SBOM is a no-op.
-if [ "$SCAN_MODE" = "AIBOM" ] || [ "$SCAN_MODE" = "ANALYZE" ]; then
+if [ "$AI_MODEL_SCAN" = "true" ] || [ "$SCAN_MODE" = "ANALYZE" ]; then
     run_optional_step assess-ai-risk bash "$LIBDIR/assess-ai-risk.sh" "$OUTPUT_FILE"
 fi
 
@@ -704,8 +743,8 @@ fi
 # id/license/card/integrity, datasets, openness — all advisory). Best-effort
 # (exit 0); the resulting _conformance.* files are collected by the [ -f ] guard
 # in the risk-report block below.
-if [ "$SCAN_MODE" = "AIBOM" ]; then
-    echo "[2/2] aibom: G7 minimum-element conformance"
+if [ "$AI_MODEL_SCAN" = "true" ]; then
+    echo "[2/2] ai: G7 minimum-element conformance"
     run_optional_step conformance bash "$LIBDIR/validate-sbom.sh" "$OUTPUT_FILE" "$OUT_PREFIX" "$PROJECT_NAME"
 fi
 
@@ -872,8 +911,8 @@ fi
 # the G7 conformance status, the regulatory crosswalk and the license-review flags
 # — no new scan. generate-ai-profile.sh self-gates on the presence of G7 checks in
 # the conformance report, so it is a clean no-op for a plain (non-AI) SBOM; we wire
-# it only for the two modes that can carry a machine-learning-model component.
-if [ "$SCAN_MODE" = "AIBOM" ] || [ "$SCAN_MODE" = "ANALYZE" ]; then
+# it only for the modes that can carry a machine-learning-model component.
+if [ "$AI_MODEL_SCAN" = "true" ] || [ "$SCAN_MODE" = "ANALYZE" ]; then
     if bash "$LIBDIR/generate-ai-profile.sh" "$OUT_PREFIX" "$PROJECT_NAME"; then
         for ext in json md html; do
             [ -f "${OUT_PREFIX}_ai-profile.${ext}" ] && ARTIFACTS+=("${OUT_PREFIX}_ai-profile.${ext}")

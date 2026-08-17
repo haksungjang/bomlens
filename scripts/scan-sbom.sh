@@ -79,7 +79,7 @@ SIGN_SBOM="false"; BYTE_STABLE="false"; UI_MODE="false"; UI_PORT="${UI_PORT:-808
 # Report language for the conformance + AI-profile reports: en (default) or ko.
 # Only these two are honored; anything else is normalized to en further down.
 REPORT_LANG="${REPORT_LANG:-en}"
-FORCE_FIRMWARE="false"; ANALYZE_SBOM=""; MODEL=""
+FORCE_FIRMWARE="false"; ANALYZE_SBOM=""; MODEL=""; MODEL_FILE=""
 # Set when --target turned out to be a Yocto build directory: the folder the
 # user pointed at, while ANALYZE_SBOM holds the image SBOM found inside it.
 YOCTO_BUILD_DIR=""
@@ -110,6 +110,7 @@ while [[ "$#" -gt 0 ]]; do
         --target) TARGET="$2"; shift ;;
         --analyze|--sbom) ANALYZE_SBOM="$2"; shift ;;
         --model) MODEL="$2"; shift ;;
+        --model-file) MODEL_FILE="$2"; shift ;;
         --usage) USAGE_CONTEXT="$2"; shift ;;
         --merge)
             # Variadic: absorb every following token until the next option (a
@@ -194,6 +195,14 @@ Options:
                          HuggingFace model via the OWASP AIBOM Generator (opt-in
                          image; fetches model-card metadata over the network).
                          Mutually exclusive with --target/--analyze/--git/--merge.
+  --model-file <path>    Read one AI model FILE (GGUF, safetensors, PyTorch,
+                         pickle, npz, npy, ONNX) and describe it from its own
+                         header. Offline, no HuggingFace account, and it works
+                         on a model that was never published. What can be filled
+                         depends on the format: GGUF carries a name, a license
+                         and an architecture, while safetensors usually carries
+                         only tensor shapes. A .gguf/.safetensors/.pt/... path
+                         given to --target is read this way too.
   --usage <scenario>     Tailor the AI model risk assessment (--model) to how
                          the model will be used: internal | product |
                          redistribute | outputs-only. Only the license
@@ -467,6 +476,23 @@ cosign_run() {
 # Detect target type
 # ========================================================
 # Recognize a firmware blob by extension, or (if `file` is on the host) by magic.
+# ---------------------------------------------------------------------------
+# AI model weight files
+#
+# A model file is not an archive of packages: syft reads it as one opaque file
+# and finds nothing to list, so BINARY mode returns an empty SBOM. MODELFILE
+# mode reads the file's own header instead.
+#
+# Extensions only, and .bin is deliberately absent: it names both a PyTorch
+# checkpoint and a firmware image, and --target already routes it to firmware.
+# Pass such a file with --model-file to have it read as a model.
+is_model_file() {
+    case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+        *.gguf|*.safetensors|*.onnx|*.npz|*.npy|*.pt|*.pth|*.ckpt|*.pkl|*.pickle) return 0 ;;
+    esac
+    return 1
+}
+
 is_firmware() {
     local f="$1" lower magic
     lower=$(printf '%s' "$f" | tr '[:upper:]' '[:lower:]')
@@ -959,10 +985,29 @@ elif [ -n "$MODEL" ]; then
     esac
     # Default the project name to the model's last segment (owner/name -> name).
     [ -n "$PROJECT_NAME" ] || PROJECT_NAME="${MODEL##*/}"
+elif [ -n "$MODEL_FILE" ]; then
+    # AI model SBOM read from the file itself. Base image, no network: the whole
+    # step is one stdlib Python script inside the container.
+    [ -z "$TARGET" ]       || { echo "[ERROR] --model-file is mutually exclusive with --target."; exit 1; }
+    [ -z "$ANALYZE_SBOM" ] || { echo "[ERROR] --model-file is mutually exclusive with --analyze."; exit 1; }
+    [ -z "$GIT_URL" ]      || { echo "[ERROR] --model-file is mutually exclusive with --git."; exit 1; }
+    [ "$FORCE_FIRMWARE" != "true" ] || { echo "[ERROR] --model-file cannot be combined with --firmware."; exit 1; }
+    [ -f "$MODEL_FILE" ]   || { echo "[ERROR] --model-file not found: $MODEL_FILE"; exit 1; }
+    MODE="MODELFILE"
+    case "${USAGE_CONTEXT:-}" in
+        ""|internal|product|redistribute|outputs-only) : ;;
+        *) echo "[ERROR] --usage must be one of: internal, product, redistribute, outputs-only."; exit 1 ;;
+    esac
 elif [ -n "$TARGET" ]; then
     if [ -f "$TARGET" ]; then
         if [ "$FORCE_FIRMWARE" = "true" ] || is_firmware "$TARGET"; then
             MODE="FIRMWARE"
+        elif is_model_file "$TARGET"; then
+            # Reading a weight file with the binary scanner finds nothing, so
+            # route it to the model reader instead of returning an empty SBOM.
+            echo "[INFO] $(basename "$TARGET") is an AI model file; reading its header."
+            MODE="MODELFILE"
+            MODEL_FILE="$TARGET"
         elif needs_unpacking "$TARGET"; then
             # The unpacking path needs the opt-in firmware image. When it is here,
             # use it; when it is not, read the file as before and say what was and
@@ -1098,8 +1143,8 @@ elif [ "$FORCE_FIRMWARE" = "true" ]; then
     echo "[ERROR] --firmware requires '--target <firmware-file>'."; exit 1
 fi
 
-if [ -n "${USAGE_CONTEXT:-}" ] && [ "$MODE" != "AIBOM" ]; then
-    echo "[ERROR] --usage applies to AI model scans only (use it with --model)."; exit 1
+if [ -n "${USAGE_CONTEXT:-}" ] && [ "$MODE" != "AIBOM" ] && [ "$MODE" != "MODELFILE" ]; then
+    echo "[ERROR] --usage applies to AI model scans only (use it with --model or --model-file)."; exit 1
 fi
 
 if [ "$FORCE_FIRMWARE" = "true" ] && [ "$MODE" != "FIRMWARE" ]; then
@@ -1121,7 +1166,7 @@ fi
 # every mode; the risk report still renders from the notice, as it does in the
 # UI. Announce the skip only when the user actually asked (--security / --all),
 # so an ordinary --model run stays quiet instead of explaining a default.
-if [ "$MODE" = "AIBOM" ] && [ "$GENERATE_SECURITY" = "true" ]; then
+if { [ "$MODE" = "AIBOM" ] || [ "$MODE" = "MODELFILE" ]; } && [ "$GENERATE_SECURITY" = "true" ]; then
     [ "$SECURITY_REQUESTED" = "true" ] && \
         echo "[INFO] Skipping the security report: an AI model has no package dependencies to scan."
     GENERATE_SECURITY="false"
@@ -1143,6 +1188,7 @@ json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
 case "$MODE" in
     AIBOM)    META_SOURCE="ai-model";        META_TARGET="$MODEL";  META_LABEL="" ;;
+    MODELFILE) META_SOURCE="model-upload";   META_TARGET="";        META_LABEL="$(basename "$MODEL_FILE")" ;;
     ANALYZE)
         # Two inputs reach ANALYZE: an SBOM the user handed us, and a Yocto build
         # directory whose SBOM we found. Record which, so the result page says
@@ -1289,6 +1335,12 @@ else
         BINARY) FD="$(cd "$(dirname "$TARGET")" && pwd)"; FN="$(basename "$TARGET")"; VOL="-v \"$(hostpath "$FD")\":/target -v \"$(hostpath "$OUTPUT_HOST_DIR")\":/host-output"; ENVV="-e TARGET_FILE=\"/target/$FN\"" ;;
         ROOTFS) TD="$(cd "$TARGET" && pwd)"; VOL="-v \"$(hostpath "$TD")\":/target -v \"$(hostpath "$OUTPUT_HOST_DIR")\":/host-output"; ENVV="-e TARGET_DIR=/target" ;;
         FIRMWARE) FD="$(cd "$(dirname "$TARGET")" && pwd)"; FN="$(basename "$TARGET")"; VOL="-v \"$(hostpath "$FD")\":/target -v \"$(hostpath "$OUTPUT_HOST_DIR")\":/host-output"; ENVV="-e TARGET_FILE=\"/target/$FN\""; RUN_IMAGE="$FIRMWARE_IMAGE" ;;
+        MODELFILE)
+            # Read-only: the model file is only ever read, and a weight file the
+            # user handed us must come back untouched.
+            FD="$(cd "$(dirname "$MODEL_FILE")" && pwd)"; FN="$(basename "$MODEL_FILE")"
+            VOL="-v \"$(hostpath "$FD")\":/target:ro -v \"$(hostpath "$OUTPUT_HOST_DIR")\":/host-output"
+            ENVV="-e TARGET_FILE=\"/target/$FN\"" ;;
         AIBOM)  VOL="-v \"$(hostpath "$OUTPUT_HOST_DIR")\":/host-output"; ENVV="-e MODEL_ID=\"$MODEL\""
                 # Name only, no value: this line is built for `eval`, so an inline
                 # value would expose the token in `ps`. docker reads it from our

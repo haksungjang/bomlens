@@ -50,6 +50,7 @@ SBOM=/path/to/bomlens/scripts/scan-sbom.sh
 | Mobile app (`.apk`, `.ipa`) | FIRMWARE | `$SBOM --target app.apk --all --generate-only` | same |
 | Firmware `.bin` | FIRMWARE | `$SBOM --target dev.bin --firmware --all --generate-only` | same |
 | AI model (HuggingFace) | AIBOM | `$SBOM --model owner/name --generate-only` | notice, ML-BOM (1.7), risk report (no security) |
+| AI model file (GGUF, safetensors, …) | MODELFILE | `$SBOM --model-file ./model.gguf --generate-only` | notice, ML-BOM (1.7), risk report (no security) |
 
 > Every command also needs `--project <name> --version <version>` (see examples below).
 >
@@ -174,6 +175,21 @@ $SBOM --project bert-base --version 1.0.0 \
 - For the model card, datasets, and G7 details, see the [AI model guide](ai-model.md).
 
 **Deliverables**: notice, ML-BOM (CycloneDX 1.7), risk report, G7 conformance
+
+### When you have the model file, not the model id
+
+A supplier ships weights rather than a Hub link, or the model is internal and was never published. Point at the file itself:
+
+```bash
+$SBOM --project internal-llm --version 1.0.0 \
+  --model-file ./models/internal-llm-q4.gguf \
+  --generate-only
+```
+
+- Reads the file's own header. No network, no HuggingFace account, and the base image — there is no opt-in image to pull.
+- Recognized formats: GGUF, safetensors, PyTorch (`.pt`/`.pth`/`.ckpt`), pickle, npz, npy, ONNX. A file it cannot identify is refused rather than described.
+- What lands in the SBOM depends on the format. GGUF carries a name, a license and an architecture; safetensors usually carries only tensor shapes and dtypes. Every format contributes the file's SHA-256, which is what ties the document to the artifact you received. A field the file does not declare is left empty rather than guessed.
+- Deliverables are the same as above, minus what the model card would have supplied.
 
 ## Reading the three deliverables
 

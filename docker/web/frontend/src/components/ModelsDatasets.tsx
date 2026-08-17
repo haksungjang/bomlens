@@ -85,7 +85,11 @@ export function ModelsDatasets({
     );
   }
   if (data.models.length === 0) {
-    return <EmptyState icon={Boxes}>{t("models.empty")}</EmptyState>;
+    return (
+      <EmptyState icon={Boxes} hint={t("models.emptyHint")}>
+        {t("models.empty")}
+      </EmptyState>
+    );
   }
 
   // The assessment surface only exists when the pipeline stamped one (older
@@ -170,7 +174,7 @@ export function ModelsDatasets({
                     </td>
                     <td className="px-3 py-2 align-top">
                       {d.hasIntegrity ? (
-                        <CircleCheck className="h-4 w-4 text-emerald-600" aria-hidden />
+                        <CircleCheck className="h-4 w-4 text-success" aria-hidden />
                       ) : (
                         <CircleDashed className="h-4 w-4 text-muted-foreground" aria-hidden />
                       )}
@@ -342,6 +346,30 @@ function ModelCardView({ model: m }: { model: ModelCard }) {
         {m.purl && (
           <Field label={t("models.identifier")}>
             <span className="break-all font-mono text-xs">{m.purl}</span>
+          </Field>
+        )}
+
+        {m.localScan && (
+          <Field label={t("models.localScan")}>
+            <span
+              className={
+                m.localScan === "unsafe"
+                  ? "font-medium text-destructive"
+                  : m.localScan === "suspicious" || m.localScan === "error"
+                    ? "text-foreground"
+                    : "text-muted-foreground"
+              }
+            >
+              {t(`models.localScan_${m.localScan.replace("-", "_")}`)}
+            </span>
+            {m.localScanFindings && (
+              <span className="ml-1 break-all font-mono text-xs text-muted-foreground">
+                {m.localScanFindings}
+              </span>
+            )}
+            {m.localScanTool && (
+              <span className="ml-1 text-xs text-muted-foreground">({m.localScanTool})</span>
+            )}
           </Field>
         )}
 

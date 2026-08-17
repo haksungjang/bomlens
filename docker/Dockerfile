@@ -63,6 +63,8 @@ ARG SBOM_DEEP_LICENSE=false
 ARG SBOM_SCANOSS=true
 # renovate: datasource=pypi depName=scanoss
 ARG SCANOSS_VERSION=1.54.2
+# renovate: datasource=pypi depName=picklescan
+ARG PICKLESCAN_VERSION=1.0.5
 ARG TARGETARCH=amd64
 # docker CLI (client only) — lets the web UI source scan launch cdxgen language
 # images as sibling containers via the mounted host socket (transitive deps).
@@ -221,6 +223,24 @@ RUN if [ "$SBOM_SCANOSS" = "true" ]; then \
     else \
       echo "[build] scanoss skipped (SBOM_SCANOSS=false)"; \
     fi
+
+# picklescan (pickle-format model weights, always installed).
+#
+# Pickle executes code as it loads, so a weight file in that format is a
+# supply-chain risk of its own. HuggingFace runs this same tool over the files
+# it hosts and BomLens reads the verdict from the Hub — which leaves nothing at
+# all for a model file that was never published, the case MODE=MODELFILE exists
+# for. scan-model-file-security.py runs it locally so that path has a verdict
+# too.
+#
+# In the BASE image rather than an opt-in one: MIT, pure Python, 24 KB, no
+# required dependencies and no network. Nothing here resembles the reasons the
+# firmware, deep-CVE and AIBOM tools were isolated (GPL, gigabytes of database,
+# outbound calls). Verified at build time so a missing tool fails the build
+# instead of silently degrading every model-file scan to "not scanned".
+RUN pip3 install --no-cache-dir "picklescan==${PICKLESCAN_VERSION}" \
+    && picklescan --help > /dev/null \
+    && python3 -c "import picklescan.scanner"
 
 # Firmware unpack + binary identification (opt-in: --build-arg SBOM_FIRMWARE=true).
 #   unblob = MIT (primary unpacker); cve-bin-tool/ubi_reader = GPL (binary ID, UBI).
