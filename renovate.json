@@ -25,6 +25,14 @@
     },
     {
       "customType": "regex",
+      "description": "Tools pinned as a workflow env value and downloaded at run time (invisible to Dependabot).",
+      "fileMatch": ["^\\.github/workflows/[^/]+\\.yml$"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?(?: extractVersion=(?<extractVersion>\\S+))?\\n\\s+\\w+: (?<currentValue>\\S+)"
+      ]
+    },
+    {
+      "customType": "regex",
       "description": "cdxgen language-image tag and all-in-one image pinned as shell vars in source-detect.sh.",
       "fileMatch": ["(^|/)docker/lib/source-detect\\.sh$"],
       "matchStrings": [
