@@ -24,6 +24,11 @@ on:
         required: true
         type: boolean
         default: false
+      skip_scan:
+        description: 'Skip the pre-publish image scan (only for a scanner outage that is blocking a release)'
+        required: false
+        type: boolean
+        default: false
 
 env:
   REGISTRY: ghcr.io
@@ -76,6 +81,63 @@ jobs:
             type=semver,pattern={{major}}
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-,format=short
+
+      # --- Publish gate ---------------------------------------------------
+      # The registry copy is the one users pull, so the scan has to happen while
+      # the image is still local. buildx pushes multi-arch straight from the
+      # build, so amd64 is built and loaded first; the gha cache makes that half
+      # of the multi-arch build below a cache hit rather than a second build.
+      - name: Install Trivy (pinned release tarball)
+        run: |
+          # Single source of truth: the version pinned in docker/Dockerfile.
+          TRIVY_VERSION=$(grep -oP 'ARG TRIVY_VERSION=\K\S+' docker/Dockerfile)
+          ver="${TRIVY_VERSION#v}"
+          curl -sSfL "https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/trivy_${ver}_Linux-64bit.tar.gz" -o /tmp/trivy.tgz
+          sudo tar -C /usr/local/bin -xzf /tmp/trivy.tgz trivy
+          trivy --version
+
+      - name: Build amd64 image for the publish gate
+        if: inputs.skip_scan != true
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
+        with:
+          context: ./docker
+          platforms: linux/amd64
+          load: true
+          push: false
+          build-args: |
+            SBOM_SCANOSS=true
+            BOMLENS_VERSION=${{ steps.meta.outputs.version }}
+          tags: bomlens:publish-gate
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Scope, and why it is this narrow:
+      #   --pkg-types os   the distribution layer is what a rebuild can actually
+      #                    fix. Findings inside the third-party tool binaries the
+      #                    image bundles move when their pinned version moves,
+      #                    which Renovate proposes; holding a publish for them
+      #                    would put releases on someone else's cadence.
+      #   CRITICAL         the severity worth holding a publish for. The
+      #                    full-severity picture is uploaded below and swept
+      #                    nightly, so nothing is lost by not blocking on it.
+      #   --ignore-unfixed a finding with no fix available is not actionable here.
+      # A database download failure is infrastructure rather than a finding, so
+      # it gets one retry before it is allowed to stop a publish.
+      - name: Scan the image before publishing
+        if: inputs.skip_scan != true
+        run: |
+          set -euo pipefail
+          trivy image --download-db-only --quiet \
+            || { sleep 30; trivy image --download-db-only --quiet; }
+          trivy image --quiet --exit-code 1 --severity CRITICAL --ignore-unfixed \
+            --pkg-types os --scanners vuln --skip-db-update bomlens:publish-gate
+
+      # The same gate for the build definitions. .trivyignore records the one
+      # accepted misconfiguration and the reason for it.
+      - name: Scan the build definitions before publishing
+        if: inputs.skip_scan != true
+        run: trivy config --quiet --exit-code 1 --severity HIGH,CRITICAL --ignorefile .trivyignore ./docker
+
       - name: Build and push
         id: build
         uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
@@ -136,17 +198,8 @@ jobs:
           files: sbom.cdx.json
         continue-on-error: true
 
-      # Supply-chain note: use a pinned Trivy CLI (not the trivy-action that had
-      # a supply-chain incident). The version is read from docker/Dockerfile so
-      # there is a single source of truth.
-      - name: Install Trivy (pinned release tarball)
-        if: github.event_name != 'pull_request'
-        run: |
-          TRIVY_VERSION=$(grep -oP 'ARG TRIVY_VERSION=\K\S+' docker/Dockerfile)
-          ver="${TRIVY_VERSION#v}"
-          curl -sSfL "https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/trivy_${ver}_Linux-64bit.tar.gz" -o /tmp/trivy.tgz
-          sudo tar -C /usr/local/bin -xzf /tmp/trivy.tgz trivy
-          trivy --version
+      # The record for the Security tab, at full severity and covering both
+      # package types: wider than the publish gate above, and reporting only.
       - name: Scan Dockerfiles with Trivy
         if: github.event_name != 'pull_request'
         run: trivy config --quiet --format sarif --output trivy-config.sarif --exit-code 0 ./docker

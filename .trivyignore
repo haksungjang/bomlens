@@ -1,0 +1,9 @@
+# Findings this project has looked at and decided not to act on. Each entry
+# carries the reason; anything not listed here fails the publish gate in
+# .github/workflows/docker-publish.yml.
+
+# DS-0002 — the last USER in both images is root.
+# The scanner container drives the host engine socket to start sibling scan
+# containers, and it writes results into a bind mount that has to end up owned
+# by the user who started the scan. Both require root inside the container.
+DS-0002
