@@ -117,7 +117,9 @@ HELP="$(bash "$SCAN" --help 2>&1)"; hrc=$?
 [ "$hrc" -eq 0 ] && pass "--help exits 0" || fail "--help exits 0" "rc=$hrc"
 for flag in --project --version --target --git --branch --firmware --analyze \
             --generate-only --notice --security --all --no-report --deep-license \
-            --byte-stable --sign --output-dir --timestamp --ui; do
+            --byte-stable --sign --output-dir --timestamp --ui \
+            --license --sbom-author --model --model-file --usage --merge --merge-root \
+            --trusca --upload-target --deep-cve --identify-vendored --spdx --lang; do
   if printf '%s' "$HELP" | grep -q -- "$flag"; then pass "help documents $flag"
   else fail "help documents $flag"; fi
 done
@@ -269,6 +271,12 @@ guard "--analyze + --target rejected"  "mutually exclusive" --project p --versio
 guard "--firmware without --target"    "--firmware requires" --project p --version 1 --firmware
 guard "unsafe git URL (shell metachar)" "unsafe or unsupported" --project p --version 1 --git "https://github.com/x/y;rm -rf /"
 guard "unsafe git URL (path traversal)" "unsafe or unsupported" --project p --version 1 --git "https://github.com/../../etc"
+guard "--merge + --target rejected"     "mutually exclusive" --project p --version 1 --merge a.json b.json --target z
+guard "--merge needs >=2 files"         "needs at least 2" --project p --version 1 --merge one.json
+guard "--merge-root without --merge"    "only applies with --merge" --project p --version 1 --merge-root x.json
+guard "--merge-root not in --merge list" "must be one of the --merge input files" \
+  --project p --version 1 --merge a.json b.json --merge-root c.json
+guard "--usage without --model/--model-file" "AI model scans only" --project p --version 1 --target x --usage internal
 
 # --------------------------------------------------------
 section "Archive ingestion (auto-extract → source scan)"
@@ -326,6 +334,114 @@ else
     pass "git ingestion cleans up temp clone dir"
   fi
 fi
+
+# --------------------------------------------------------
+section "AI model modes (--model, --model-file, auto-detect)"
+# --------------------------------------------------------
+d="$(new_proj model)"
+scan_in "$d" --project M --version 1 --model owner/repo --generate-only
+in_out "Mode: AIBOM" && pass "--model <owner/name> -> AIBOM mode" || { fail "--model -> AIBOM"; show; }
+
+d="$(new_proj modelfile)"; printf 'not-a-real-gguf' > "$d/weights.gguf"
+scan_in "$d" --project MF --version 1 --model-file weights.gguf --generate-only
+in_out "Mode: MODELFILE" && pass "--model-file <path> -> MODELFILE mode" || { fail "--model-file -> MODELFILE"; show; }
+
+d="$(new_proj modelfile_missing)"
+scan_in "$d" --project MF --version 1 --model-file nope.gguf --generate-only
+{ [ "$RC" -ne 0 ] && in_out "not found"; } \
+  && pass "--model-file <missing path> fails with 'not found'" || { fail "--model-file missing"; show; }
+
+d="$(new_proj modelfile_autodetect)"; printf 'not-a-real-safetensor' > "$d/weights.safetensors"
+scan_in "$d" --project MFA --version 1 --target weights.safetensors --generate-only
+{ in_out "AI model file; reading its header" && in_out "Mode: MODELFILE"; } \
+  && pass "--target *.safetensors auto-routes to MODELFILE" || { fail "--target *.safetensors -> MODELFILE"; show; }
+
+d="$(new_proj usage_bad)"; printf 'x' > "$d/w.gguf"
+scan_in "$d" --project MU --version 1 --model-file w.gguf --usage bogus --generate-only
+{ [ "$RC" -ne 0 ] && in_out "internal, product, redistribute, outputs-only"; } \
+  && pass "--usage rejects an unknown scenario" || { fail "--usage rejects unknown scenario"; show; }
+
+# --------------------------------------------------------
+section "Merge mode (--merge)"
+# --------------------------------------------------------
+CDX='{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"metadata":{"component":{"type":"application","name":"a","version":"1"}},"components":[]}'
+d="$(new_proj merge)"
+printf '%s' "$CDX" > "$d/a.json"
+printf '%s' "$CDX" > "$d/b.json"
+scan_in "$d" --project Merged --version 1.0.0 --merge a.json b.json --generate-only
+{ in_out "Mode: MERGE" && [ "$RC" -eq 0 ] && in_out "Analysis Complete"; } \
+  && pass "--merge a.json b.json -> MERGE mode completes" || { fail "--merge -> MERGE mode"; show; }
+
+d="$(new_proj merge_root)"
+printf '%s' "$CDX" > "$d/a.json"
+printf '%s' "$CDX" > "$d/b.json"
+scan_in "$d" --project MergedR --version 1.0.0 --merge a.json b.json --merge-root a.json --generate-only
+{ in_out "Mode: MERGE" && [ "$RC" -eq 0 ]; } \
+  && pass "--merge-root naming one of the --merge inputs succeeds" || { fail "--merge-root valid input"; show; }
+
+# --------------------------------------------------------
+section "Yocto build directory detection"
+# --------------------------------------------------------
+d="$(new_proj yocto)"; mkdir -p "$d/conf" "$d/tmp/deploy/images/qemux86-64"
+: > "$d/conf/bblayers.conf"
+printf '{"spdxVersion":"SPDX-3.0","creationInfo":{"createdBy":["bitbake"]}}' \
+  > "$d/tmp/deploy/images/qemux86-64/core-image-minimal.rootfs.spdx.json"
+scan_in "$d" --project Yocto --version 1.0.0 --target "$d" --generate-only
+{ in_out "Yocto build directory" && in_out "Mode: ANALYZE" \
+    && in_out "Image SBOM:" && [ "$RC" -eq 0 ]; } \
+  && pass "Yocto build dir (bblayers.conf + image SPDX) -> ANALYZE mode" \
+  || { fail "Yocto build dir -> ANALYZE mode"; show; }
+
+d="$(new_proj yocto_empty)"; mkdir -p "$d/conf"
+: > "$d/conf/bblayers.conf"
+scan_in "$d" --project YoctoEmpty --version 1 --target "$d" --generate-only
+{ [ "$RC" -ne 0 ] && in_out "neither an SPDX SBOM" && in_out "image package manifest to read"; } \
+  && pass "Yocto build dir with no SPDX/manifest fails with guidance" \
+  || { fail "Yocto build dir with no SPDX/manifest"; show; }
+
+# --------------------------------------------------------
+section "Formats that need unpacking (installer / app package)"
+# --------------------------------------------------------
+if command -v zip >/dev/null 2>&1 && command -v file >/dev/null 2>&1; then
+  d="$(new_proj apk)"; printf 'x' > "$d/classes.dex"
+  ( cd "$d" && zip -q app.apk classes.dex ) >/dev/null 2>&1
+  scan_in "$d" --project Apk --version 1 --target app.apk --generate-only
+  { in_out "app package" && in_out "unpacking it to read what is inside" \
+      && in_out "Mode: FIRMWARE" && in_log "bomlens-firmware"; } \
+    && pass "--target *.apk (zip w/ firmware image available) -> FIRMWARE mode (unpacked)" \
+    || { fail "--target *.apk -> FIRMWARE (unpacking)"; show; }
+else
+  skip "unpacking-required format detection (zip/file unavailable)"
+fi
+
+# --------------------------------------------------------
+section "Container image archive (docker save tar)"
+# --------------------------------------------------------
+if command -v tar >/dev/null 2>&1; then
+  d="$(new_proj cimg)"; mkdir -p "$d/blobs/sha256"
+  printf '[{"Config":"cfg"}]' > "$d/manifest.json"
+  printf 'layer' > "$d/blobs/sha256/abc123"
+  ( cd "$d" && tar -cf image.tar manifest.json blobs ) >/dev/null 2>&1
+  scan_in "$d" --project Cimg --version 1 --target image.tar --generate-only
+  { in_out "Container image archive detected" && in_out "Mode: BINARY"; } \
+    && pass "--target <docker save tar> is recognized and not auto-extracted as source" \
+    || { fail "docker-save tar container-archive detection"; show; }
+else
+  skip "container image archive detection (tar unavailable)"
+fi
+
+# --------------------------------------------------------
+section "Pass-through flags reach the container"
+# --------------------------------------------------------
+d="$(new_proj passthrough)"; printf 'ELFish\n' > "$d/app.out"
+scan_in "$d" --project PT --version 1 --target app.out --generate-only \
+  --license Apache-2.0 --sbom-author "ACME Corp" --identify-vendored --deep-cve \
+  --trusca proj-123
+{ in_log "PROJECT_LICENSE=Apache-2.0" && in_log "SBOM_AUTHOR=ACME Corp" \
+    && in_log "IDENTIFY_VENDORED=true" && in_log "UPLOAD_TARGET=trusca" \
+    && in_log "TRUSCA_PROJECT_ID=proj-123" && in_log "bomlens-deep-cve"; } \
+  && pass "--license/--sbom-author/--identify-vendored/--trusca/--deep-cve reach the container" \
+  || { fail "pass-through flags reach the container"; show; }
 
 # --------------------------------------------------------
 section "Windows wrappers (static checks)"
