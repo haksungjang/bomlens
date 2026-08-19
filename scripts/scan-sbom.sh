@@ -548,11 +548,13 @@ needs_unpacking() {
         # compression rather than the container.
         *"bzip2 compressed"*|*"zlib compressed"*|*"Apple Disk Image"*) return 0 ;;
         # Mobile app packages are zip containers. `file` calls an app package a
-        # zip or, when it reads the manifest first, a Java archive. The extension
-        # is what says this zip is an app; the magic only confirms it is a zip and
-        # not something renamed to look like one. Measured on one Android app: 0
-        # components read as a single file, 54 once unpacked.
-        *"Zip archive"*|*"Java archive"*)
+        # zip, a Java archive, or — on a build whose magic database recognizes
+        # classes.dex (confirmed on file 5.46) — "Android package (APK)"
+        # directly. The extension is what says this zip is an app; the magic
+        # only confirms it is a zip and not something renamed to look like one.
+        # Measured on one Android app: 0 components read as a single file, 54
+        # once unpacked.
+        *"Zip archive"*|*"Java archive"*|*"Android package"*)
             case "$lower" in *.apk|*.ipa) return 0 ;; esac ;;
     esac
     return 1
