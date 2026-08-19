@@ -81,7 +81,7 @@ ARG UNBLOB_VERSION=26.3.30
 # renovate: datasource=pypi depName=cve-bin-tool
 ARG CVE_BIN_TOOL_VERSION=3.4
 # renovate: datasource=pypi depName=ubi_reader
-ARG UBI_READER_VERSION=0.8.14
+ARG UBI_READER_VERSION=0.8.15
 # The firmware SBOM names the tools that produced it, and a tool name without a
 # version tells a reader nothing about which build ran. Carry the pins forward as
 # ENV so scan-firmware.sh states them exactly instead of parsing --version output.
