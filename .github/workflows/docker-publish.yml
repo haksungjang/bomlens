@@ -163,6 +163,9 @@ jobs:
       - name: Install cosign
         if: steps.flags.outputs.push == 'true'
         uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+        with:
+          # renovate: datasource=github-releases depName=sigstore/cosign
+          cosign-release: v2.6.5
       - name: Install syft (pinned release tarball)
         if: steps.flags.outputs.push == 'true'
         run: |
@@ -306,6 +309,9 @@ jobs:
       - name: Install cosign
         if: steps.flags.outputs.push == 'true'
         uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+        with:
+          # renovate: datasource=github-releases depName=sigstore/cosign
+          cosign-release: v2.6.5
       - name: Sign firmware image
         if: steps.flags.outputs.push == 'true'
         env:
@@ -371,6 +377,9 @@ jobs:
       - name: Install cosign
         if: steps.flags.outputs.push == 'true'
         uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+        with:
+          # renovate: datasource=github-releases depName=sigstore/cosign
+          cosign-release: v2.6.5
       - name: Sign AIBOM image
         if: steps.flags.outputs.push == 'true'
         env:
@@ -435,6 +444,9 @@ jobs:
       - name: Install cosign
         if: steps.flags.outputs.push == 'true'
         uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+        with:
+          # renovate: datasource=github-releases depName=sigstore/cosign
+          cosign-release: v2.6.5
       - name: Sign deep-cve image
         if: steps.flags.outputs.push == 'true'
         env:

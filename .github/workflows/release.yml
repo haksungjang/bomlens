@@ -315,6 +315,9 @@ jobs:
       #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
       - name: Install cosign
         uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+        with:
+          # renovate: datasource=github-releases depName=sigstore/cosign
+          cosign-release: v2.6.5
 
       - name: Sign the checksum file
         env:
@@ -325,7 +328,11 @@ jobs:
           work="$(mktemp -d)"
           gh release download "$TAG" --repo "${{ github.repository }}" \
             --pattern 'SHA256SUMS.txt' --dir "$work" --clobber
-          cosign sign-blob --yes \
+          # --new-bundle-format=false names the artifact this release publishes:
+          # a detached .sig plus the .pem, which release-assets-verify.yml and the
+          # documented verify-blob command both read. cosign 3 makes the Sigstore
+          # bundle the default and refuses --output-signature without it.
+          cosign sign-blob --yes --new-bundle-format=false \
             --output-signature "$work/SHA256SUMS.txt.sig" \
             --output-certificate "$work/SHA256SUMS.txt.pem" \
             "$work/SHA256SUMS.txt"
