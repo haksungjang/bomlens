@@ -867,14 +867,23 @@ if [ "${SIGN_SBOM:-false}" = "true" ]; then
     if command -v cosign >/dev/null 2>&1 && [ -n "${COSIGN_KEY:-}" ]; then
         echo "[INFO] Signing SBOM with cosign..."
         SIGN_FAILED=0
-        if cosign sign-blob --yes --tlog-upload=false --key "$COSIGN_KEY" \
+        # COSIGN_SIGN_FLAGS keeps the detached `.sig` next to the SBOM and keeps
+        # the signature local. cosign 3 defaults to the Sigstore bundle format and
+        # to resolving a signing config, both of which reject --output-signature
+        # and --tlog-upload=false; the two opt-outs restore the documented
+        # artifact. They are accepted by cosign 2 as well, so the command works
+        # on either pinned version. cosign marks them deprecated, so the bundle
+        # format is where this has to move once a plain detached signature is no
+        # longer offered.
+        COSIGN_SIGN_FLAGS=(--yes --use-signing-config=false --tlog-upload=false --new-bundle-format=false)
+        if cosign sign-blob "${COSIGN_SIGN_FLAGS[@]}" --key "$COSIGN_KEY" \
                --output-signature "${OUTPUT_FILE}.sig" "$OUTPUT_FILE"; then
             ARTIFACTS+=("${OUTPUT_FILE}.sig")
         else
             echo "[ERROR] cosign could not sign the SBOM (check COSIGN_KEY / COSIGN_PASSWORD)."; SIGN_FAILED=1
         fi
         if [ -f "$SPDX_FILE" ]; then
-            if cosign sign-blob --yes --tlog-upload=false --key "$COSIGN_KEY" \
+            if cosign sign-blob "${COSIGN_SIGN_FLAGS[@]}" --key "$COSIGN_KEY" \
                    --output-signature "${SPDX_FILE}.sig" "$SPDX_FILE"; then
                 ARTIFACTS+=("${SPDX_FILE}.sig")
             else
