@@ -52,7 +52,7 @@ ARG SYFT_VERSION=v1.51.0
 # renovate: datasource=github-releases depName=aquasecurity/trivy
 ARG TRIVY_VERSION=v0.74.0
 # renovate: datasource=github-releases depName=sigstore/cosign
-ARG COSIGN_VERSION=v2.6.5
+ARG COSIGN_VERSION=v3.1.3
 # renovate: datasource=pypi depName=scancode-toolkit
 ARG SCANCODE_VERSION=32.5.0
 ARG SBOM_DEEP_LICENSE=false
