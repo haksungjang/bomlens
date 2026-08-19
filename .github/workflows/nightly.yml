@@ -189,13 +189,16 @@ jobs:
           sudo tar -C /usr/local/bin -xzf /tmp/trivy.tgz trivy
           trivy --version
 
-      # Full severity and both package types: wider than the publish gate on
-      # purpose, because nothing here holds up a release.
+      # All severities, wider than the publish gate on purpose, because nothing
+      # here holds up a release. --ignore-unfixed keeps the entries to the ones
+      # that can be acted on today: a finding with no upstream fix cannot be
+      # closed from here, and thousands of them bury the one that is new. When
+      # a fix does land, the entry appears then, which is the signal to act.
       - name: Scan the published image
         run: |
           set -euo pipefail
           trivy image --quiet --format sarif --output "trivy-${{ matrix.image }}.sarif" \
-            --exit-code 0 --scanners vuln \
+            --exit-code 0 --scanners vuln --ignore-unfixed \
             "ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:latest"
 
       - name: Upload results
