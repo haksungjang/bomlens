@@ -172,13 +172,13 @@ docker buildx imagetools inspect ghcr.io/sktelecom/bomlens:latest
 
 | 도구 | ARG | 고정 버전 |
 |------|-----|----------|
-| syft | `SYFT_VERSION` | v1.46.0 |
-| Trivy | `TRIVY_VERSION` | v0.72.0 |
-| cosign | `COSIGN_VERSION` | v2.4.1 |
+| syft | `SYFT_VERSION` | v1.51.0 |
+| Trivy | `TRIVY_VERSION` | v0.74.0 |
+| cosign | `COSIGN_VERSION` | v2.6.5 |
 | docker CLI | `DOCKER_CLI_VERSION` | 27.5.1 |
-| scanoss.py | `SCANOSS_VERSION` | 1.25.2 |
+| scanoss.py | `SCANOSS_VERSION` | 1.54.2 |
 | scancode-toolkit (opt-in) | `SCANCODE_VERSION` | 32.5.0 |
-| cdxgen (aibom opt-in) | `CDXGEN_VERSION` | 12.7.0 |
+| cdxgen (aibom opt-in) | `CDXGEN_VERSION` | 12.8.3 |
 
 ### 이미지 크기
 
