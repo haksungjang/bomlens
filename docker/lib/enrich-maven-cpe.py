@@ -27,9 +27,24 @@
 # Anything else gets NO CPE — a wrong vendor:product is worse than none, so we
 # never guess outside the map and the apache rule.
 #
-# A pre-existing cpe is never overwritten. Best-effort, idempotent, and a no-op
-# when the SBOM has no maven components. Toggle: ENRICH_MAVEN_CPE (default on);
-# the entrypoint skips it for AI SBOMs.
+# A pre-existing cpe is left alone UNLESS it is a mechanical copy of the maven
+# groupId/artifactId into vendor:product (some generators do this as a fallback
+# when they have no real CPE dictionary match, e.g. "org.apache.pdfbox:pdfbox" or
+# "com.zaxxer.HikariCP:HikariCP" -- the coordinate glued in verbatim, never a
+# looked-up vendor). That narrow, structurally-certain shape is replaced by
+# derive_cpe(); any other pre-existing cpe -- including one already set to a
+# MAVEN_CPE_MAP vendor, which never has this shape -- is never touched. See
+# _is_mechanical_maven_cpe(). Best-effort, idempotent, and a no-op when the SBOM
+# has no maven components. Toggle: ENRICH_MAVEN_CPE (default on); the entrypoint
+# skips it for AI SBOMs.
+#
+# A second mechanical shape covers multi-module projects (netty, istack, jna):
+# the artifactId is "<last groupId segment>-<submodule>" (io.netty / netty-buffer)
+# and some generators build vendor as "<groupId>.<submodule>" (io.netty.buffer) --
+# still nothing but the coordinate glued back together, this time per submodule.
+# Left as-is it defeats derive_cpe()'s umbrella cpe:2.3:a:netty:netty for every
+# submodule, so NVD-only Netty CVEs (which NVD files once under netty:netty, not
+# per submodule) never match. See _is_submodule_mechanical_cpe().
 #
 # NOTE: attaching the CPE is only half the path — a CPE-matching engine (grype
 # with GRYPE_MATCH_JAVA_USING_CPES) must run to turn it into findings, and its
@@ -56,6 +71,75 @@ MAVEN_CPE_MAP = {
 # Versions with a CPE-unsafe shape are left alone: a ':' (cpe field separator),
 # whitespace, or a wildcard would shift or break the 13-field cpe:2.3 grammar.
 _CPE_SAFE_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
+
+# Splits a cpe:2.3 string on unescaped ':' (a field may carry an escaped '\:').
+_CPE_FIELD_SPLIT = re.compile(r"(?<!\\):")
+_CPE_UNESCAPE = re.compile(r"\\(.)")
+
+
+def _cpe_vendor_product(cpe):
+    """Return (vendor, product) from a cpe:2.3:a:vendor:product:... string, or
+    None if it does not look like a well-formed cpe:2.3 URI."""
+    parts = _CPE_FIELD_SPLIT.split(cpe)
+    if len(parts) < 5 or parts[0] != "cpe" or parts[1] != "2.3":
+        return None
+    return parts[3], parts[4]
+
+
+def _cpe_norm(s):
+    """Undo cpe:2.3 backslash-escaping and lowercase, for text comparison."""
+    return _CPE_UNESCAPE.sub(r"\1", s).lower()
+
+
+def _is_mechanical_maven_cpe(cpe, group, artifact):
+    """True when a pre-existing cpe's vendor:product is nothing but the maven
+    groupId and/or artifactId copied in verbatim, e.g. vendor=<group> (the whole
+    dotted string), vendor=<artifact>, or vendor=<group>+<artifact> concatenated
+    -- always paired with product=<artifact>. That shape is a generator's
+    fallback when it has no real CPE dictionary match, not a vendor lookup, so
+    it carries no more information than an absent cpe and is safe to replace
+    with derive_cpe(). Anything else (a real vendor token, however unusual) is
+    left alone -- including any cpe already set to a MAVEN_CPE_MAP vendor, which
+    by construction never has this shape.
+    """
+    parsed = _cpe_vendor_product(cpe)
+    if not parsed:
+        return False
+    vendor, product = _cpe_norm(parsed[0]), _cpe_norm(parsed[1])
+    na = _cpe_norm(artifact)
+    if product != na:
+        return False
+    ng = _cpe_norm(group)
+    return vendor in (ng, na, ng + "." + na, ng + na)
+
+
+def _is_submodule_mechanical_cpe(cpe, group, artifact):
+    """True when a pre-existing cpe's vendor is "<groupId>.<submodule>" and the
+    artifactId is exactly "<last groupId segment>-<submodule>" -- e.g. group
+    io.netty / artifact netty-buffer / vendor io.netty.buffer. Requires an exact
+    reconstruction (last segment + "-" + submodule == artifactId), so a group
+    whose last segment does not prefix the artifactId this way never matches.
+    Distinct from _is_mechanical_maven_cpe(): that one is the whole
+    groupId/artifactId glued in; this one is the groupId with the shared project
+    prefix stripped from the artifactId's tail, applied per submodule. Left
+    unmatched: extra classifier segments (netty-transport-native-epoll ->
+    io.netty.transport-native-epoll.linux-x86_64) and dash-to-dot rewrites
+    (swagger-core-jakarta -> io.swagger.core.v3.swagger-core.jakarta) -- both
+    still mechanical, but not safe to reconstruct with one exact-match rule.
+    """
+    parsed = _cpe_vendor_product(cpe)
+    if not parsed:
+        return False
+    vendor, product = _cpe_norm(parsed[0]), _cpe_norm(parsed[1])
+    na = _cpe_norm(artifact)
+    if product != na:
+        return False
+    ng = _cpe_norm(group)
+    if not vendor.startswith(ng + "."):
+        return False
+    submodule = vendor[len(ng) + 1:]
+    last_segment = ng.rsplit(".", 1)[-1]
+    return na == last_segment + "-" + submodule
 
 
 def _parse_maven(purl):
@@ -121,10 +205,18 @@ def enrich(path):
     n = 0
     for c in components:
         purl = c.get("purl", "")
-        if not purl.startswith("pkg:maven/") or c.get("cpe"):
-            continue  # not maven, or a CPE is already present (never overwrite)
+        if not purl.startswith("pkg:maven/"):
+            continue  # not maven
+        existing = c.get("cpe")
+        if existing:
+            parsed = _parse_maven(purl)
+            if not parsed or not (
+                _is_mechanical_maven_cpe(existing, parsed[0], parsed[1])
+                or _is_submodule_mechanical_cpe(existing, parsed[0], parsed[1])
+            ):
+                continue  # a real cpe is already present; never overwrite it
         cpe = derive_cpe(purl)
-        if not cpe:
+        if not cpe or cpe == existing:
             continue
         c["cpe"] = cpe
         props = [p for p in (c.get("properties") or []) if p.get("name") != "bomlens:cpeSource"]
