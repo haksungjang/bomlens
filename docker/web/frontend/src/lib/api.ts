@@ -133,6 +133,9 @@ export interface SbomSummary {
   /** CycloneDX root component type (application/firmware/container/…) — drives
    *  the honest scan-kind subtitle, available on re-open (unlike the MODE). */
   componentType?: string | null;
+  /** Whether the scanned source pinned its versions ("pinned" | "unpinned").
+   *  Absent for a tree that could not be judged, and for every non-source scan. */
+  versionPinning?: string | null;
   /** Direct/transitive dependency counts across the whole SBOM (0 when the SBOM
    *  has no dependency graph). Drives the Overview dependency tile. */
   directCount?: number;
@@ -476,6 +479,9 @@ export interface DoneEvent {
   /** The settings this scan ran with, for the "Re-scan" action. Absent on
    *  older payloads / history that predate the field. */
   scanConfig?: ScanConfig;
+  /** Warning lines the scan emitted, deduplicated and capped. These decide how
+   *  far a reader should trust the numbers, and used to vanish with the log. */
+  scanWarnings?: string[];
 }
 
 /** Input types the UI offers; each maps to a backend MODE in server.py. */

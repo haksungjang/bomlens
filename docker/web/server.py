@@ -738,6 +738,9 @@ def scanmeta(run_id):
 # Row caps so a huge SBOM/scan can't bloat the SSE 'done' payload. The counts
 # (sbom.components, severity totals) stay exact; only the detail lists are capped.
 MAX_COMPONENT_ROWS = 2000
+# Warning lines kept per scan. More than this and the screen stops being a
+# summary; the full log is still streamed while the scan runs.
+MAX_SCAN_WARNINGS = 12
 MAX_VULN_ROWS = 2000
 MAX_VULN_REFS = 12  # reference links per CVE in the detail view
 MAX_VULN_DESC = 600  # description chars per CVE (keeps the SSE payload bounded)
@@ -1022,7 +1025,17 @@ def sbom_summary(run_id):
     # other scan the root is the scanned project itself, which is not one of its
     # own components and must stay out of the count.
     _root = _as_dict(_as_dict(data.get("metadata")).get("component"))
-    if _root.get("type") == "machine-learning-model":
+    # A dataset scan is the same shape one level over: the published item IS the
+    # document, components[] is empty, and without folding it in the scan reports
+    # nothing at all. It qualifies on the marker the dataset collectors stamp, so
+    # an ordinary SBOM that happens to carry a `data` root is not swept in.
+    _root_collected = any(
+        _as_dict(p).get("name") == "bomlens:dataset:collectedBy"
+        for p in _as_list(_root.get("properties"))
+    )
+    if _root.get("type") == "machine-learning-model" or (
+        _root.get("type") == "data" and _root_collected
+    ):
         comps = [_root] + comps
     risk_by_purl, risk_by_nv = _component_risk_index(run_id)
     scope_by_ref, has_deps = _scope_index(data)
@@ -1360,6 +1373,19 @@ def sbom_summary(run_id):
         # CycloneDX root component type — drives the honest scan-kind subtitle and
         # works on re-open too, where the scan MODE isn't stored.
         "componentType": meta_comp.get("type"),
+        # Whether the scanned tree pinned the versions this SBOM reports, from
+        # detect-version-pinning.sh. "unpinned" means the resolver picked what was
+        # newest at scan time, so the versions shown are a fresh install's answer
+        # rather than what is on the reader's machine — and the vulnerability
+        # count carries the same gap. Absent when the tree could not be judged.
+        "versionPinning": next(
+            (
+                p.get("value")
+                for p in _as_list(meta_comp.get("properties"))
+                if _as_dict(p).get("name") == "bomlens:source:versionPinning"
+            ),
+            None,
+        ),
         "directCount": direct_count,
         "transitiveCount": transitive_count,
         "eolCount": eol_count,
@@ -1868,6 +1894,9 @@ def scan_detail(run_id):
         # UI can offer "re-scan with the same settings". None for pre-feature
         # scans that have no sidecar.
         "scanConfig": scanmeta(run_id),
+        # Warnings the scan emitted, recovered from the same sidecar so a
+        # re-opened result says what a live one said.
+        "scanWarnings": (scanmeta(run_id) or {}).get("warnings") or [],
     }
 
 
@@ -3711,24 +3740,40 @@ class Handler(BaseHTTPRequestHandler):
                 env["TARGET_FILE"] = up
 
             elif source == "ai-model":
-                # Generate an AI SBOM (CycloneDX 1.7 ML-BOM) for a HuggingFace
-                # model via the OWASP AIBOM Generator (opt-in bomlens-aibom image).
+                # One field takes both AI inputs a person is handed a link to: a
+                # HuggingFace model id, or a published research dataset on
+                # Figshare. Which path runs is decided by the reference, the same
+                # rule scan-sbom.sh applies, so the CLI and the UI never disagree
+                # about what a given string means.
                 if not target:
-                    fail("HuggingFace model id required (owner/name)"); return
-                # owner/name (optional owner), HuggingFace charset only; no traversal.
-                if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?$", target):
-                    fail("Unsupported model id (expected owner/name)"); return
-                mode = "AIBOM"
-                env["MODE"] = "AIBOM"
-                env["MODEL_ID"] = target
-                if aibom_capable():
-                    pass  # in-process (UI launched from the aibom image)
-                elif docker_cli_present() and docker_capable():
-                    # Heavy aibom image runs as a sibling; needs only outbound net.
-                    sibling = {"image": AIBOM_IMAGE, "model_id": target}
+                    fail("HuggingFace model id (owner/name) or Figshare item required"); return
+                if "figshare" in target.lower():
+                    # A Figshare item is read by one stdlib script in THIS image
+                    # against a public endpoint, so unlike the model path it needs
+                    # neither Docker nor the generator image. The charset is wider
+                    # than a model id (it is a URL or a DOI) and still bounded: no
+                    # whitespace, no shell bytes, no leading dash.
+                    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._:/~-]{0,300}$", target):
+                        fail("Unsupported Figshare reference (give the item URL, its DOI, "
+                             "or the item number)"); return
+                    mode = "DATASET"
+                    env["MODE"] = "DATASET"
+                    env["DATASET_REF"] = target
                 else:
-                    fail("AI-model SBOM generation requires Docker (to run the AIBOM image) "
-                         "or relaunching the UI from the AIBOM image."); return
+                    # owner/name (optional owner), HuggingFace charset only; no traversal.
+                    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?$", target):
+                        fail("Unsupported model id (expected owner/name)"); return
+                    mode = "AIBOM"
+                    env["MODE"] = "AIBOM"
+                    env["MODEL_ID"] = target
+                    if aibom_capable():
+                        pass  # in-process (UI launched from the aibom image)
+                    elif docker_cli_present() and docker_capable():
+                        # Heavy aibom image runs as a sibling; needs only outbound net.
+                        sibling = {"image": AIBOM_IMAGE, "model_id": target}
+                    else:
+                        fail("AI-model SBOM generation requires Docker (to run the AIBOM image) "
+                             "or relaunching the UI from the AIBOM image."); return
 
             else:
                 fail("unknown input type: %s" % source); return
@@ -3781,6 +3826,21 @@ class Handler(BaseHTTPRequestHandler):
             # from any mode), so both callbacks are always wired, not chosen by mode.
             on_cvedb_progress = lambda p: sse("progress", json.dumps({"phase": "cvedb", "percent": p}))
             on_deepcve_progress = lambda p: sse("progress", json.dumps({"phase": "deepcve", "percent": p}))
+            # Warnings the scan emitted, kept for the result screen. The log
+            # itself is streamed and never stored, so a scan re-opened later had
+            # no way to say that it had warned about anything — and these are
+            # exactly the lines that decide how far to trust the numbers
+            # ("no package manifest detected", "0 components", a sparse-result
+            # notice for C/C++ or Swift). Deduplicated and capped: a repeated
+            # line says nothing more the second time.
+            scan_warnings = []
+
+            def note_log(ln):
+                if isinstance(ln, str) and ln.lstrip().startswith("[WARN]"):
+                    text = ln.strip()
+                    if text not in scan_warnings and len(scan_warnings) < MAX_SCAN_WARNINGS:
+                        scan_warnings.append(text)
+                sse("log", json.dumps(ln))
             if sibling is not None:
                 # Firmware / AI on the permissive-only base image: run the
                 # dedicated image as a sibling container (host socket). It does
@@ -3789,7 +3849,7 @@ class Handler(BaseHTTPRequestHandler):
                 # just like an in-process scan.
                 rc = run_sibling_scan(
                     sibling["image"], env["MODE"], run_out,
-                    lambda ln: sse("log", json.dumps(ln)),
+                    note_log,
                     upload_file=sibling.get("upload_file"),
                     model_id=sibling.get("model_id"),
                     source_root=sibling.get("source_root"),
@@ -3817,7 +3877,7 @@ class Handler(BaseHTTPRequestHandler):
                             if piece:
                                 _emit_or_log(
                                     piece,
-                                    lambda ln: sse("log", json.dumps(ln)),
+                                    note_log,
                                     on_cvedb_progress,
                                     on_deepcve_progress,
                                 )
@@ -3852,7 +3912,11 @@ class Handler(BaseHTTPRequestHandler):
                 # The inputs + toggles this scan ran with (no secrets); also saved
                 # as the run-folder sidecar so a re-opened scan carries it too.
                 "scanConfig": scan_config,
+                "scanWarnings": scan_warnings,
             }
+            if scan_warnings:
+                scan_config["warnings"] = scan_warnings
+                write_scanmeta(run_out, scan_config)
             sse("done", json.dumps(done))
         except Exception as exc:  # noqa: BLE001
             # The summary helpers are defended against malformed artifacts, so a
