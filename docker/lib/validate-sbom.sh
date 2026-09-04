@@ -62,6 +62,18 @@ SPDX_SPEC_VERSIONS="${SPDX_SPEC_VERSIONS:-SPDX-2.2 SPDX-2.3 SPDX-3.0}"
 # there.
 PURL_SYNTAX_REGEX='^pkg:[a-z][a-z0-9.+-]*(/[A-Za-z0-9._%~@+-]+)+(@[A-Za-z0-9._%~+:-]+)?(\?[A-Za-z0-9._%~+=&:,/-]+)?(#[A-Za-z0-9._%~+/-]+)?$'
 
+# OS package identifiers carry the distribution in the namespace slot
+# (pkg:rpm/rhel/bind@..., pkg:deb/debian/curl@...). purl-spec makes that
+# namespace required for these types, and vulnerability matching keys on it, so
+# an identifier without it is syntactically well formed and matches nothing: a
+# server SBOM measured this way reported 261 packages and resolved zero.
+# PURL_SYNTAX_REGEX cannot catch it because the namespace is optional there,
+# which is correct for npm and pypi. The second pattern asks whether a
+# segment ending in '/' follows the type; '@?#' are excluded from the segment so
+# a version, qualifier or subpath is never mistaken for a namespace.
+OS_PURL_TYPE_REGEX='^pkg:(rpm|deb|apk)/'
+OS_PURL_NS_REGEX='^pkg:(rpm|deb|apk)/[^/@?#]+/'
+
 if [ -z "$SBOM" ] || [ ! -f "$SBOM" ]; then
     echo "[validate] SBOM file not found: $SBOM" >&2
     exit 1
@@ -117,7 +129,9 @@ cdx_checks() {
        --argjson fieldmin "$FIELD_MIN_PCT" \
        --argjson cap "$MISSING_CAP" \
        --arg okvers "${1:-$CYCLONEDX_SPEC_VERSIONS}" \
-       --arg purlre "$PURL_SYNTAX_REGEX" "
+       --arg purlre "$PURL_SYNTAX_REGEX" \
+       --arg osre "$OS_PURL_TYPE_REGEX" \
+       --arg osnsre "$OS_PURL_NS_REGEX" "
     $PCT_DEF
     ([.components[]?]) as \$c
     | (\$c|length) as \$tot
@@ -157,6 +171,8 @@ cdx_checks() {
     | ([ \$file[] | select(((.hashes // []) | length) == 0) | (.name // \"(unnamed)\") ]) as \$miss_fid
     | ([ \$c[] | select((.purl // \"\") | startswith(\"pkg:generic\")) | (.name // .purl) ]) as \$generic
     | ([ \$c[] | (.purl // empty) | select(test(\$purlre) | not) ]) as \$badpurl
+    | ([ \$c[] | (.purl // empty) | select(test(\$osre)) ]) as \$os_purl
+    | ([ \$os_purl[] | select(test(\$osnsre) | not) ]) as \$os_nons
     | (\$okvers | split(\" \")) as \$vers
     | ((.specVersion // \"\") | tostring) as \$sv
     | ((\$c | map(select((.licenses // []) | length > 0)) | length)) as \$lic_ok
@@ -236,6 +252,13 @@ cdx_checks() {
        {id:\"purl-syntax\", label:\"PURL syntax (pkg:type/[namespace/]name)\", required:true,
         status:(if (\$badpurl|length)==0 then \"pass\" else \"fail\" end),
         detail:\"\(\$badpurl|length) malformed\", missing:(\$badpurl[0:\$cap])},
+       {id:\"os-purl-namespace\", label:\"OS package PURL distribution (pkg:rpm/<distro>/name)\", required:true,
+        source:(if (\$os_purl|length)==0 then \"na\" else \"auto\" end),
+        naKind:(if (\$os_purl|length)==0 then \"not-applicable\" else \"\" end),
+        status:(if (\$os_nons|length)==0 then \"pass\" else \"fail\" end),
+        detail:(if (\$os_purl|length)==0 then \"no OS package identifiers\"
+                else \"\(\$os_nons|length) without distribution\" end),
+        missing:(\$os_nons[0:\$cap])},
        {id:\"transitive\", label:\"Transitive dependencies (graph edges)\", required:true,
         source:(if \$tot==0 then \"na\" else \"auto\" end),
         naKind:(if \$tot==0 then \"not-applicable\" else \"\" end),
@@ -455,7 +478,9 @@ spdx_json_checks() {
        --argjson hashmin "$HASH_MIN_PCT" \
        --argjson cap "$MISSING_CAP" \
        --arg okvers "$SPDX_SPEC_VERSIONS" \
-       --arg purlre "$PURL_SYNTAX_REGEX" "
+       --arg purlre "$PURL_SYNTAX_REGEX" \
+       --arg osre "$OS_PURL_TYPE_REGEX" \
+       --arg osnsre "$OS_PURL_NS_REGEX" "
     $PCT_DEF
     ([.packages[]?]) as \$p
     | (\$p|length) as \$tot
@@ -469,6 +494,8 @@ spdx_json_checks() {
                        and (([.externalRefs[]? | select(.referenceType==\"cpe23Type\")]|length)>0)) ] | length) as \$cpe_only
     | ([ \$p[] | .externalRefs[]? | select((.referenceLocator // \"\")|startswith(\"pkg:generic\")) | .referenceLocator ]) as \$generic
     | ([ \$p[] | .externalRefs[]? | select(.referenceType==\"purl\") | (.referenceLocator // \"\") | select(test(\$purlre) | not) ]) as \$badpurl
+    | ([ \$p[] | .externalRefs[]? | select(.referenceType==\"purl\") | (.referenceLocator // \"\") | select(test(\$osre)) ]) as \$os_purl
+    | ([ \$os_purl[] | select(test(\$osnsre) | not) ]) as \$os_nons
     | (\$okvers | split(\" \")) as \$vers
     | (.spdxVersion // \"\") as \$sv
     | ((\$p | map(select(((.licenseConcluded // \"NOASSERTION\") != \"NOASSERTION\") or ((.licenseDeclared // \"NOASSERTION\") != \"NOASSERTION\"))) | length)) as \$lic_ok
@@ -513,6 +540,13 @@ spdx_json_checks() {
        {id:\"purl-syntax\", label:\"PURL syntax (pkg:type/[namespace/]name)\", required:true,
         status:(if (\$badpurl|length)==0 then \"pass\" else \"fail\" end),
         detail:\"\(\$badpurl|length) malformed\", missing:(\$badpurl[0:\$cap])},
+       {id:\"os-purl-namespace\", label:\"OS package PURL distribution (pkg:rpm/<distro>/name)\", required:true,
+        source:(if (\$os_purl|length)==0 then \"na\" else \"auto\" end),
+        naKind:(if (\$os_purl|length)==0 then \"not-applicable\" else \"\" end),
+        status:(if (\$os_nons|length)==0 then \"pass\" else \"fail\" end),
+        detail:(if (\$os_purl|length)==0 then \"no OS package identifiers\"
+                else \"\(\$os_nons|length) without distribution\" end),
+        missing:(\$os_nons[0:\$cap])},
        {id:\"transitive\", label:\"Transitive dependencies (DEPENDS_ON/DEPENDENCY_OF)\", required:true,
         source:(if \$tot==0 then \"na\" else \"auto\" end),
         naKind:(if \$tot==0 then \"not-applicable\" else \"\" end),
@@ -541,7 +575,7 @@ spdx_tv_checks() {
     # so a well-formed Tag-Value SBOM — where pkg:generic is always 0 — never got a
     # conformance report. Capture the count and emit exactly one integer.
     g() { local n; n=$(grep -cE "$1" "$SBOM" 2>/dev/null) || true; printf '%s' "${n:-0}"; }
-    local ts tools names vers purls generic deps lics hashes verpat specok purlok
+    local ts tools names vers purls generic deps lics hashes verpat specok purlok os_purls os_ns_ok
     ts=$(g '^Created:'); tools=$(g '^Creator: ?Tool:')
     names=$(g '^PackageName:'); vers=$(g '^PackageVersion:')
     purls=$(g 'ExternalRef: ?PACKAGE-MANAGER purl'); generic=$(g 'purl +pkg:generic')
@@ -549,11 +583,17 @@ spdx_tv_checks() {
     verpat=$(printf '%s' "$SPDX_SPEC_VERSIONS" | sed 's/\./\\./g; s/ /|/g')
     specok=$(g "^SPDXVersion: *($verpat) *\$")
     purlok=$(g 'ExternalRef: ?PACKAGE-MANAGER purl +pkg:[a-z][a-z0-9.+-]*/[^ ]+ *$')
+    # Same question on the Tag-Value side: how many OS identifiers carry a
+    # distribution, out of those that should. Counted, not listed, like every
+    # other row here.
+    os_purls=$(g 'ExternalRef: ?PACKAGE-MANAGER purl +pkg:(rpm|deb|apk)/')
+    os_ns_ok=$(g 'ExternalRef: ?PACKAGE-MANAGER purl +pkg:(rpm|deb|apk)/[^/@?#]+/')
     jq -cn \
        --argjson ts "$ts" --argjson tools "$tools" --argjson names "$names" \
        --argjson vers "$vers" --argjson purls "$purls" --argjson generic "$generic" \
        --argjson deps "$deps" --argjson lics "$lics" --argjson hashes "$hashes" \
-       --argjson specok "$specok" --argjson purlok "$purlok" --arg okvers "$SPDX_SPEC_VERSIONS" '
+       --argjson specok "$specok" --argjson purlok "$purlok" \
+       --argjson osp "$os_purls" --argjson osnsok "$os_ns_ok" --arg okvers "$SPDX_SPEC_VERSIONS" '
     [
       {id:"spec-version", label:"Spec version (\($okvers|split(" ")|join("/")))", required:true, status:(if $specok>0 then "pass" else "fail" end), detail:"\($specok) accepted SPDXVersion line(s)", missing:[]},
       {id:"timestamp", label:"Timestamp (Created:)", required:true, status:(if $ts>0 then "pass" else "fail" end), detail:"\($ts) found", missing:[]},
@@ -563,6 +603,7 @@ spdx_tv_checks() {
       {id:"purl", label:"PURL external refs present", required:true, status:(if $purls>0 and $purls>=$names then "pass" else "fail" end), detail:"\($purls) purl ref(s) for \($names) package(s)", missing:[]},
       {id:"no-generic", label:"Traceable PURL (no pkg:generic, advisory)", required:false, status:(if $generic==0 then "pass" else "warn" end), detail:"\($generic) untraceable", missing:[]},
       {id:"purl-syntax", label:"PURL syntax (pkg:type/[namespace/]name)", required:true, status:(if $purls<=$purlok then "pass" else "fail" end), detail:"\($purls - $purlok) malformed", missing:[]},
+      {id:"os-purl-namespace", label:"OS package PURL distribution (pkg:rpm/<distro>/name)", required:true, source:(if $osp==0 then "na" else "auto" end), naKind:(if $osp==0 then "not-applicable" else "" end), status:(if $osp<=$osnsok then "pass" else "fail" end), detail:(if $osp==0 then "no OS package identifiers" else "\($osp - $osnsok) without distribution" end), missing:[]},
       {id:"transitive", label:"Transitive dependencies (DEPENDS_ON/DEPENDENCY_OF)", required:true, status:(if $deps>0 or $names==0 then "pass" else "fail" end), detail:(if $deps==0 and $names==0 then "nothing to relate" else "\($deps) relationship(s)" end), missing:[]},
       {id:"license", label:"License present (recommended)", required:false, status:(if $lics>0 then "pass" else "warn" end), detail:"\($lics) license field(s)", missing:[]},
       {id:"hash", label:"Checksums present (recommended)", required:false, status:(if $hashes>0 then "pass" else "warn" end), detail:"\($hashes) checksum(s)", missing:[]}
@@ -746,6 +787,8 @@ if [ -f "$KO_CATALOG" ] && [ -f "$KO_REG" ]; then
           elif ($d|test("^[0-9]+ edge\\(s\\)$")) then ($C["conformance.detail.edge"]|gsub("%n%";($d|capture("(?<n>[0-9]+)").n)))
           elif ($d|test("^[0-9]+ untraceable$")) then ($C["conformance.detail.untraceable"]|gsub("%n%";($d|capture("(?<n>[0-9]+)").n)))
           elif ($d|test("^[0-9]+ malformed$")) then ($C["conformance.detail.malformed"]|gsub("%n%";($d|capture("(?<n>[0-9]+)").n)))
+          elif $d=="no OS package identifiers" then $C["conformance.detail.no_os_purls"]
+          elif ($d|test("^[0-9]+ without distribution$")) then ($C["conformance.detail.no_distro"]|gsub("%n%";($d|capture("(?<n>[0-9]+)").n)))
           elif ($d|test("^[0-9]+ found$")) then ($C["conformance.detail.found"]|gsub("%n%";($d|capture("(?<n>[0-9]+)").n)))
           elif ($d|test("^[0-9]+ accepted SPDXVersion line\\(s\\)$")) then ($C["conformance.detail.spdxver"]|gsub("%n%";($d|capture("(?<n>[0-9]+)").n)))
           elif ($d|test("^[0-9]+ package\\(s\\)$")) then ($C["conformance.detail.package"]|gsub("%n%";($d|capture("(?<n>[0-9]+)").n)))
