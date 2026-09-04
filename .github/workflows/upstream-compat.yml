@@ -1,6 +1,6 @@
-# Upstream compatibility early-warning. examples.yml runs with PINNED tool
-# versions, so it never tells us that the NEXT version will break. This job pulls
-# the latest cdxgen images at runtime, scans representative examples, and checks
+# Upstream compatibility early-warning. The bundled example scans run with PINNED
+# tool versions, so they never tell us that the NEXT version will break. This job
+# pulls the latest cdxgen images at runtime, scans representative examples, and checks
 # the output is still well-formed CycloneDX with resolvable components. If a
 # future cdxgen breaks generation, this fires BEFORE we attempt the bump and
 # opens a tracking issue.
@@ -13,7 +13,7 @@ name: Upstream compatibility
 
 on:
   schedule:
-    - cron: "0 6 * * 1" # weekly Monday 06:00 UTC, after Renovate / examples
+    - cron: "0 6 * * 1" # weekly Monday 06:00 UTC, after Renovate
   workflow_dispatch:
 
 permissions:
