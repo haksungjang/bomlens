@@ -189,6 +189,10 @@
         "title": "Conformance report",
         "desc": "Format validation of the submitted SBOM."
       },
+      "aiProfile": {
+        "title": "AI compliance profile",
+        "desc": "The G7 minimum elements, licenses needing review and regulatory crosswalk, gathered for this model."
+      },
       "security": {
         "title": "Security report",
         "desc": "Known vulnerabilities (CVE) found in the components."
@@ -312,7 +316,8 @@
     "csvCvss": "CVSS",
     "csvEpss": "EPSS",
     "csvKev": "Known exploited",
-    "csvTitle": "Title"
+    "csvTitle": "Title",
+    "artifactFiles": "({{count}} files)"
   },
   "deps": {
     "loading": "Loading dependencies…",
@@ -342,7 +347,8 @@
     "zoomIn": "Zoom in",
     "zoomOut": "Zoom out",
     "fit": "Fit to view",
-    "savePng": "Save as PNG"
+    "savePng": "Save as PNG",
+    "legendRoot": "Scanned component"
   },
   "sourceTree": {
     "loading": "Loading source tree…",
@@ -437,7 +443,8 @@
     "helpDocs": "Documentation",
     "helpDemo": "Live demo",
     "helpVersion": "Version {{version}}",
-    "helpVersionUnknown": "Version not stamped in this build"
+    "helpVersionUnknown": "Version not stamped in this build",
+    "conformanceSplitTitle": "Mandatory checks passed, out of the mandatory checks measured"
   },
   "shell": {
     "newScan": "New scan",
@@ -503,7 +510,10 @@
     "topRisk": "Highest risk components",
     "topRiskOf": "{{shown}} of {{total}} with vulnerabilities",
     "topRiskAll": "All components",
-    "attnMalicious": "{{count}} known-malicious package(s) — remove and rotate credentials"
+    "attnMalicious": "{{count}} known-malicious package(s) — remove and rotate credentials",
+    "attnModelRisk": "{{count}} model or dataset needs a licence or security review",
+    "attnConformanceGap": "{{count}} conformance element(s) can be filled in",
+    "depNone": "no relationships recorded"
   },
   "models": {
     "loading": "Loading model details…",
@@ -978,6 +988,7 @@
     "sevDown": "Better than the previous scan",
     "delete": "Delete",
     "deleted": "Scan deleted",
+    "scanNotFound": "Scan “{{id}}” was not found. It may have been deleted.",
     "confirmDeleteTitle": "Delete this scan?",
     "confirmDeleteBody": "The output files for {{scan}} are removed from this machine. Nothing is kept elsewhere, so this cannot be undone.",
     "typeAi": "AI model",
@@ -1036,5 +1047,19 @@
       "cisa-component": "Component data",
       "cisa-practices": "Practices and processes"
     }
+  },
+  "conf": {
+    "kind": {
+      "pass": "Met",
+      "actionable": "Can be fixed",
+      "review": "Needs a person",
+      "na": "Not applicable"
+    },
+    "searchPlaceholder": "Search requirements and references",
+    "showingAll": "Showing all {{count}} checks.",
+    "showingFiltered": "Showing {{count}} of {{total}} checks.",
+    "noMatch": "No check matches this filter.",
+    "report": "Report ({{ext}})",
+    "hiddenByFilter": "{{count}} more match this search under another filter."
   }
 }
