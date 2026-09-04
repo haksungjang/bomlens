@@ -5,8 +5,20 @@ name: Desktop App
 on:
   workflow_dispatch:
   # Callable from other workflows (nightly runs it daily so Electron/runner/OS
-  # drift surfaces within 24h even when electron/ itself has not changed).
+  # drift surfaces within 24h even when electron/ itself has not changed), and
+  # from another repository, which is why the attach step below can be pointed
+  # at a release that lives elsewhere.
   workflow_call:
+    inputs:
+      target_repository:
+        description: 'owner/name whose release the installers attach to (default: this repository)'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      PUBLISH_TOKEN:
+        description: 'Token with contents:write on the target repository (default: the run GITHUB_TOKEN)'
+        required: false
   pull_request:
     paths:
       - electron/**
@@ -191,6 +203,8 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
+          repository: ${{ inputs.target_repository || github.repository }}
+          token: ${{ secrets.PUBLISH_TOKEN || github.token }}
           tag_name: ${{ github.ref_name }}
           # Preserve the draft state set by release.yml's create-release: without
           # this, action-gh-release's default (draft: false) would publish the
