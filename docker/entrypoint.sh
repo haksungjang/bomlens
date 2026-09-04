@@ -598,6 +598,39 @@ if [ "$SOURCE_SCAN" = "true" ] && [ -d "$COCOA_SRC" ] \
 fi
 
 # ========================================================
+# Modelica (.mo) library dependencies — cdxgen has no Modelica cataloger, so a
+# Modelica project (OpenModelica/Dymola sources) scans to zero components even
+# though the file itself already states what it depends on: a package's
+# annotation(uses(...)) block names each external library with its version.
+# identify-modelica.py parses that structurally, the same way identify-
+# cocoapods.sh parses Podfile.lock, for the CLI source scan (/src) and the
+# web-UI source scan (SOURCE_ROOT). No-op when the main scan already carries
+# a pkg:layer=modelica component, so this never double-counts.
+# ========================================================
+MODELICA_SRC="${SOURCE_ROOT:-/src}"
+if [ "$SOURCE_SCAN" = "true" ] && [ -d "$MODELICA_SRC" ] \
+   && find "$MODELICA_SRC" -type f -name '*.mo' 2>/dev/null | grep -q .; then
+    HAS_MODELICA=$(jq '[.components[]? | select(.properties[]? | select(.name=="bomlens:layer" and .value=="modelica"))] | length' "$OUTPUT_FILE" 2>/dev/null || echo 0)
+    if [ "${HAS_MODELICA:-0}" -eq 0 ]; then
+        echo "[INFO] Identifying Modelica library dependencies (uses() annotation)..."
+        MODELICA_SBOM="${OUT_PREFIX}_modelica.cdx.json"
+        if command -v python3 >/dev/null 2>&1 \
+           && python3 "$LIBDIR/identify-modelica.py" "$MODELICA_SRC" "$MODELICA_SBOM" "$PROJECT_VERSION"; then
+            MODELICA_N=$(jq '[.components[]?] | length' "$MODELICA_SBOM" 2>/dev/null || echo 0)
+            if [ "${MODELICA_N:-0}" -gt 0 ]; then
+                echo "[INFO] Modelica library dependencies identified: $MODELICA_N — merging into SBOM."
+                if bash "$LIBDIR/merge-sbom.sh" "${OUTPUT_FILE}.merged" "$PROJECT_NAME" "$PROJECT_VERSION" "$OUTPUT_FILE" "$MODELICA_SBOM"; then
+                    mv "${OUTPUT_FILE}.merged" "$OUTPUT_FILE"
+                else
+                    echo "[WARN] merge of Modelica components failed; keeping the original SBOM." >&2
+                    rm -f "${OUTPUT_FILE}.merged"
+                fi
+            fi
+        fi
+    fi
+fi
+
+# ========================================================
 # Common pipeline: normalize / deep-license / notice / security / sign
 # ========================================================
 ARTIFACTS=("$OUTPUT_FILE")

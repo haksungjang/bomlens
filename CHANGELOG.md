@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Modelica (`.mo`) source projects now identify the libraries declared in a package's `annotation(uses(...))` block (e.g. `uses(Modelica(version="4.0.0"))`), since cdxgen has no Modelica cataloger and previously returned zero components. Direct declarations only — no lockfile, no transitive resolution.
 - The conformance report now fails an SBOM whose OS package identifiers carry no distribution (`pkg:rpm/bind@9.11.36-16.el8_10.6` instead of `pkg:rpm/rhel/bind@...`). purl-spec requires that namespace for `rpm`, `deb` and `apk`, and vulnerability matching keys on it, so such an identifier is well formed and still matches nothing: a supplier's server SBOM passed every check with 261 identified packages and resolved zero. The check runs on CycloneDX, SPDX JSON and SPDX Tag-Value, and reports not-applicable when the SBOM carries no OS packages.
 
 ### Fixed
