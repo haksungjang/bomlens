@@ -43,6 +43,9 @@ jobs:
     with:
       owner: sktelecom
       push: ${{ inputs.push_images }}
+      # Without this the images carry only latest and sha-: the semver tags come
+      # from the git ref, and this workflow is dispatched from a branch.
+      version: ${{ inputs.version }}
     secrets:
       PUBLISH_TOKEN: ${{ secrets.UPSTREAM_PUBLISH_TOKEN }}
 
