@@ -198,6 +198,15 @@ jobs:
   desktop-linux:
     name: Desktop boot tests (linux)
     runs-on: [self-hosted, linux, bomlens-wsl]
+    needs: [changes]
+    # Skipped on a pull request that touches none of this job's paths (see the
+    # changes job). Pushes to main and dispatch always run it. Compared against
+    # 'false' rather than 'true' so a classifier failure runs the job instead of
+    # skipping it unnoticed.
+    if: >-
+      !cancelled() && (
+        github.event_name != 'pull_request' ||
+        needs.changes.outputs.desktop != 'false')
     defaults:
       run:
         working-directory: electron
@@ -215,10 +224,10 @@ jobs:
       - name: Unit tests (boot/container/health/i18n/log/update/winstate)
         run: node --test test/*.test.mjs
 
-      # Runs on EVERY PR (not just electron/**): the boot-recovery spec's fake
-      # docker boots the real docker/web/server.py through the app's genuine
-      # startup path, so a server.py change that breaks the desktop boot
-      # contract is caught here — desktop.yml's path filter would miss it.
+      # docker/web/server.py is in the path filter above for this step: the
+      # boot-recovery spec's fake docker boots the real server through the
+      # app's genuine startup path, so a server change that breaks the desktop
+      # boot contract is caught here — desktop.yml's own filter would miss it.
       # Smoke + recovery are deterministic (no daemon, no image pull).
       - name: Boot smoke + recovery e2e (xvfb)
         run: xvfb-run --auto-servernum npm run test:smoke
@@ -322,6 +331,10 @@ jobs:
     if: github.event_name == 'pull_request'
     outputs:
       web: ${{ steps.filter.outputs.web }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      docs: ${{ steps.filter.outputs.docs }}
+      examples: ${{ steps.filter.outputs.examples }}
+      desktop: ${{ steps.filter.outputs.desktop }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -334,11 +347,23 @@ jobs:
           git fetch --no-tags --depth=1 origin "$BASE_SHA"
           changed="$(git diff --name-only "$BASE_SHA" HEAD)"
           echo "$changed"
-          if echo "$changed" | grep -qE '^(docker/web/|docker/Dockerfile|docker/entrypoint\.sh|scripts/scan-sbom\.sh|tests/test-web-e2e\.sh|\.github/workflows/heavy-e2e\.yml)'; then
-            echo "web=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "web=false" >> "$GITHUB_OUTPUT"
-          fi
+
+          # Every filter also matches this workflow file. A pull request that
+          # edits the gating rules runs the jobs those rules gate, so the rule
+          # change is exercised rather than skipped by itself.
+          emit() {
+            if echo "$changed" | grep -qE "$2|^\.github/workflows/ci\.yml$"; then
+              echo "$1=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "$1=false" >> "$GITHUB_OUTPUT"
+            fi
+          }
+
+          emit web      '^(docker/web/|docker/Dockerfile|docker/entrypoint\.sh|scripts/scan-sbom\.sh|tests/test-web-e2e\.sh|\.github/workflows/heavy-e2e\.yml)'
+          emit frontend '^docker/web/frontend/'
+          emit docs     '(\.md$|^docs/|^mkdocs\.yml$|^\.github/markdown-link-check-config\.json$)'
+          emit examples '^examples/'
+          emit desktop  '^(electron/|docker/web/server\.py$)'
 
   # The three heavy suites live in the reusable heavy-e2e.yml (shared with the
   # nightly full run, so the step definitions cannot drift). Gating:
@@ -399,7 +424,15 @@ jobs:
   validate-docs:
     name: Validate Documentation
     runs-on: [self-hosted, linux, bomlens-wsl]
-    
+    needs: [changes]
+    # Skipped on a pull request that touches none of this job's paths (see the
+    # changes job). Pushes to main and dispatch always run it. Compared against
+    # 'false' rather than 'true' so a classifier failure runs the job instead of
+    # skipping it unnoticed.
+    if: >-
+      !cancelled() && (
+        github.event_name != 'pull_request' ||
+        needs.changes.outputs.docs != 'false')
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -455,7 +488,15 @@ jobs:
   validate-examples:
     name: Validate Examples
     runs-on: [self-hosted, linux, bomlens-wsl]
-    
+    needs: [changes]
+    # Skipped on a pull request that touches none of this job's paths (see the
+    # changes job). Pushes to main and dispatch always run it. Compared against
+    # 'false' rather than 'true' so a classifier failure runs the job instead of
+    # skipping it unnoticed.
+    if: >-
+      !cancelled() && (
+        github.event_name != 'pull_request' ||
+        needs.changes.outputs.examples != 'false')
     strategy:
       matrix:
         example: [java-maven, java-gradle, nodejs, python, go, ruby, php, rust, dotnet, swift]
@@ -572,6 +613,15 @@ jobs:
   ui:
     name: UI Tests (Playwright)
     runs-on: [self-hosted, linux, bomlens-wsl]
+    needs: [changes]
+    # Skipped on a pull request that touches none of this job's paths (see the
+    # changes job). Pushes to main and dispatch always run it. Compared against
+    # 'false' rather than 'true' so a classifier failure runs the job instead of
+    # skipping it unnoticed.
+    if: >-
+      !cancelled() && (
+        github.event_name != 'pull_request' ||
+        needs.changes.outputs.frontend != 'false')
     defaults:
       run:
         working-directory: docker/web/frontend
@@ -617,6 +667,15 @@ jobs:
   visual:
     name: UI Visual Regression
     runs-on: [self-hosted, linux, bomlens-wsl]
+    needs: [changes]
+    # Skipped on a pull request that touches none of this job's paths (see the
+    # changes job). Pushes to main and dispatch always run it. Compared against
+    # 'false' rather than 'true' so a classifier failure runs the job instead of
+    # skipping it unnoticed.
+    if: >-
+      !cancelled() && (
+        github.event_name != 'pull_request' ||
+        needs.changes.outputs.frontend != 'false')
     # Write access only for the reseed path below, which commits the regenerated
     # baselines to the branch the dispatch came from. The strict-diff path (every
     # push and PR) writes nothing.
