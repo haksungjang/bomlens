@@ -3,12 +3,20 @@ name: Scorecard supply-chain security
 # OpenSSF Scorecard: scores this repo against supply-chain best practices
 # (branch protection, pinned dependencies, signed releases, etc.) and uploads
 # the result to the Security tab.
+#
+# On demand only. Every other workflow here runs on self-hosted runners, and
+# this one cannot follow: the results API verifies the workflow file itself and
+# accepts a single `ubuntu-latest`-class runner label with no plain `run:`
+# steps, so a self-hosted label makes it reject the upload. Restore the
+# automatic triggers below once GitHub-hosted runners are in use again:
+#
+#   branch_protection_rule:
+#   schedule:
+#     - cron: '41 5 * * 1'   # weekly, Monday 05:41 UTC
+#   push:
+#     branches: [main]
 on:
-  branch_protection_rule:
-  schedule:
-    - cron: '41 5 * * 1'   # weekly, Monday 05:41 UTC
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 permissions: read-all
 
