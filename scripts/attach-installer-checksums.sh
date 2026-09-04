@@ -20,12 +20,15 @@
 #
 # Usage: attach-installer-checksums.sh <tag>    e.g. attach-installer-checksums.sh v1.5.5
 # Env:   GH_TOKEN          token for `gh` (GITHUB_TOKEN in Actions)
-#        GITHUB_REPOSITORY owner/repo (default sktelecom/bomlens)
+#        PUBLISH_REPO      owner/repo the release lives in (default sktelecom/bomlens)
+#        GITHUB_REPOSITORY fallback for PUBLISH_REPO
 #        DRY_RUN=1         compute and print, but do not upload
 set -euo pipefail
 
 TAG="${1:?usage: attach-installer-checksums.sh <tag e.g. v1.5.5>}"
-REPO="${GITHUB_REPOSITORY:-sktelecom/bomlens}"
+# PUBLISH_REPO first: GITHUB_REPOSITORY is reserved and a workflow cannot
+# override it, so it always names the repository running the job.
+REPO="${PUBLISH_REPO:-${GITHUB_REPOSITORY:-sktelecom/bomlens}}"
 INSTALLERS=(BomLens-Setup.exe BomLens-Setup.dmg)
 
 work="$(mktemp -d)"

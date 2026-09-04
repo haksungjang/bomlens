@@ -28,12 +28,16 @@
 # Usage: verify-release.sh <tag>            e.g. verify-release.sh v1.5.1
 # Env:   GH_TOKEN          token for `gh` (GITHUB_TOKEN in Actions)
 #        VERIFY_TIMEOUT    seconds to wait for async artifacts (default 2100)
-#        GITHUB_REPOSITORY owner/repo (default sktelecom/bomlens)
+#        PUBLISH_REPO      owner/repo the release lives in (default sktelecom/bomlens)
+#        GITHUB_REPOSITORY fallback for PUBLISH_REPO
 set -uo pipefail
 
 TAG="${1:?usage: verify-release.sh <tag e.g. v1.5.1>}"
 IMAGE_VERSION="${TAG#v}"
-REPO="${GITHUB_REPOSITORY:-sktelecom/bomlens}"
+# PUBLISH_REPO first: GITHUB_REPOSITORY is a reserved Actions variable that a
+# workflow cannot override, so it always names the repository running the job.
+# That is the wrong answer when the release being verified lives elsewhere.
+REPO="${PUBLISH_REPO:-${GITHUB_REPOSITORY:-sktelecom/bomlens}}"
 OWNER="${REPO%%/*}"
 IMAGE="ghcr.io/${OWNER}/bomlens:${IMAGE_VERSION}"
 TIMEOUT="${VERIFY_TIMEOUT:-2100}"

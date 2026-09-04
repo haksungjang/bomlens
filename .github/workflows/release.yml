@@ -326,7 +326,9 @@ jobs:
       - name: Verify the release is ready for users
         env:
           GH_TOKEN: ${{ secrets.PUBLISH_TOKEN || github.token }}
-          GITHUB_REPOSITORY: ${{ env.PUBLISH_REPO }}
+          # Not GITHUB_REPOSITORY: that is reserved and a workflow cannot
+          # override it, so it always names the repository running the job.
+          PUBLISH_REPO: ${{ env.PUBLISH_REPO }}
         run: bash scripts/verify-release.sh "${{ needs.create-release.outputs.version }}"
 
       # The installers are attached by desktop.yml after upload-assets wrote
@@ -336,7 +338,9 @@ jobs:
       - name: Add installer checksums to SHA256SUMS.txt
         env:
           GH_TOKEN: ${{ secrets.PUBLISH_TOKEN || github.token }}
-          GITHUB_REPOSITORY: ${{ env.PUBLISH_REPO }}
+          # Not GITHUB_REPOSITORY: that is reserved and a workflow cannot
+          # override it, so it always names the repository running the job.
+          PUBLISH_REPO: ${{ env.PUBLISH_REPO }}
         run: bash scripts/attach-installer-checksums.sh "${{ needs.create-release.outputs.version }}"
 
       # Signed here rather than in upload-assets because the installer lines are

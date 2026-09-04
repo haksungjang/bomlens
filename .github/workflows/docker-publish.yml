@@ -52,6 +52,15 @@ on:
         required: false
         type: boolean
         default: false
+      version:
+        description: >-
+          Release version the semver tags come from, e.g. v1.11.7. A caller is
+          not on a tag of its own, and without this the images would be tagged
+          only latest and sha-, leaving no 1.11.7 for the desktop app to pull.
+          Empty keeps the ref as the source, which is what a tag push wants.
+        required: false
+        type: string
+        default: ''
     secrets:
       PUBLISH_TOKEN:
         description: 'Token with packages:write on the target namespace (default: the run GITHUB_TOKEN)'
@@ -104,9 +113,9 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.PUBLISH_OWNER }}/sbom-generator
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=semver,pattern={{version}},value=${{ inputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
+            type=semver,pattern={{major}},value=${{ inputs.version }}
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-,format=short
 
@@ -332,8 +341,8 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.PUBLISH_OWNER }}/bomlens-firmware
             ${{ env.REGISTRY }}/${{ env.PUBLISH_OWNER }}/sbom-scanner-firmware
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},value=${{ inputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-,format=short
       - name: Resolve BOMLENS_VERSION
@@ -407,8 +416,8 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.PUBLISH_OWNER }}/bomlens-aibom
             ${{ env.REGISTRY }}/${{ env.PUBLISH_OWNER }}/sbom-scanner-aibom
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},value=${{ inputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-,format=short
       - name: Resolve BOMLENS_VERSION
@@ -483,8 +492,8 @@ jobs:
           images: |
             ${{ env.REGISTRY }}/${{ env.PUBLISH_OWNER }}/bomlens-deep-cve
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},value=${{ inputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-,format=short
       - name: Resolve BOMLENS_VERSION
