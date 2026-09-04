@@ -1,0 +1,79 @@
+# Assembles a sktelecom/bomlens release on this repository's runners.
+#
+# Each job calls the definition that lives in sktelecom/bomlens rather than a
+# copy, so the two never drift and the artefacts keep that repository's signing
+# identity: Sigstore builds the certificate subject from the called workflow's
+# ref. The certificate separately records that the run happened here, which is
+# accurate and not hidden.
+#
+# Before running this, the release commit must already be on sktelecom's main:
+# the release is created at that branch's head, and the tag is created with it.
+#
+# Needs UPSTREAM_PUBLISH_TOKEN, a token with contents:write and packages:write
+# on sktelecom/bomlens.
+name: Release upstream
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version, with the leading v (e.g. v1.11.7)'
+        required: true
+        type: string
+      push_images:
+        description: 'Publish the container images (off = build and scan only)'
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  # The images first: release.yml's gate pulls the published image to verify the
+  # documented first-scan command, and the desktop app pins the image matching
+  # its own version, so a release without them is not usable.
+  images:
+    name: Images
+    uses: sktelecom/bomlens/.github/workflows/docker-publish.yml@ci/publish-from-caller
+    permissions:
+      contents: write
+      id-token: write
+      packages: write
+    with:
+      owner: sktelecom
+      push: ${{ inputs.push_images }}
+    secrets:
+      PUBLISH_TOKEN: ${{ secrets.UPSTREAM_PUBLISH_TOKEN }}
+
+  # Creates the release and the tag, uploads the CLI bundles, the examples, the
+  # source SBOM and the signed checksums, then holds it a draft until its gate
+  # has verified the published image and the attached installers.
+  release:
+    name: Release
+    uses: sktelecom/bomlens/.github/workflows/release.yml@ci/publish-from-caller
+    permissions:
+      contents: write
+      id-token: write
+    with:
+      version: ${{ inputs.version }}
+      target_repository: sktelecom/bomlens
+      owner: sktelecom
+    secrets:
+      PUBLISH_TOKEN: ${{ secrets.UPSTREAM_PUBLISH_TOKEN }}
+
+  # Attaches the installers. Deliberately not ordered after the release job:
+  # that job's gate waits for these installers, so making this wait for it in
+  # turn would deadlock. They run alongside each other exactly as they do when a
+  # tag push starts both, and the attach creates the release as a draft if it
+  # gets there first.
+  desktop:
+    name: Installers
+    uses: sktelecom/bomlens/.github/workflows/desktop.yml@ci/publish-from-caller
+    permissions:
+      contents: write
+    with:
+      target_repository: sktelecom/bomlens
+      tag: ${{ inputs.version }}
+    secrets:
+      PUBLISH_TOKEN: ${{ secrets.UPSTREAM_PUBLISH_TOKEN }}
