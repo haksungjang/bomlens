@@ -10,7 +10,7 @@ name: Renovate
 
 on:
   schedule:
-    - cron: "0 3 * * 1" # weekly Monday 03:00 UTC, ahead of examples.yml / upstream-compat.yml
+    - cron: "0 3 * * 1" # weekly Monday 03:00 UTC, ahead of upstream-compat.yml
   workflow_dispatch:
     inputs:
       dryRun:
