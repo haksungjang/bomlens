@@ -16,7 +16,7 @@ permissions:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
-    runs-on: [self-hosted, linux, bomlens-wsl]
+    runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
     permissions:
       security-events: write
       contents: read
