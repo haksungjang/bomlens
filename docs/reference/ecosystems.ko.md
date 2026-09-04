@@ -20,6 +20,7 @@ examples/
 ├── rust/            # Rust + Cargo
 ├── dotnet/          # .NET + NuGet
 ├── swift/           # Swift + SPM (Swift Package Manager)
+├── modelica/        # Modelica (.mo) uses() 선언
 └── docker/          # Docker 이미지 분석
 ```
 
@@ -163,6 +164,24 @@ jq '.components | length' NodeExample_1.0.0/NodeExample_1.0.0_bom.json
 - CocoaPods: `Podfile.lock` (`pod install`로 생성). BomLens가 이 파일을 직접 파싱하므로 스캔 장비에 macOS나 CocoaPods 설치가 필요 없습니다.
 
 > 주의: UIKit 등 Xcode가 관리하는 플랫폼 의존성은 macOS가 필요하며 Linux 스캐너에서는 해석되지 않습니다.
+
+---
+
+## Modelica
+
+```bash
+./scripts/scan-sbom.sh --project "ModelicaExample" --version "1.0.0" --target examples/modelica --generate-only
+```
+
+감지 파일: `*.mo`
+
+cdxgen에는 Modelica 카탈로거가 없어 일반적인 패키지 관리자 방식으로는 의존성을 읽지 못합니다. 대신 `.mo` 패키지 자신이 선언하는 `annotation(uses(...))` 블록을 직접 파싱해서, 그 안에 이름과 버전이 함께 적힌 라이브러리를 컴포넌트로 편입합니다.
+
+```modelica
+annotation(uses(Modelica(version="4.0.0"), Buildings(version="13.0.0")));
+```
+
+> 주의: `uses()`에 직접 선언된 라이브러리만 식별됩니다. Modelica 생태계에는 잠금 파일이 없어 전이 의존성은 해석하지 않으며, 파일 안에 정의된 모델 자체의 구조(컴포넌트, 파라미터, 연결)는 오픈소스 의존성이 아니므로 다루지 않습니다.
 
 ---
 

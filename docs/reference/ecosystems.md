@@ -20,6 +20,7 @@ examples/
 ├── rust/            # Rust + Cargo
 ├── dotnet/          # .NET + NuGet
 ├── swift/           # Swift + SPM (Swift Package Manager)
+├── modelica/        # Modelica (.mo) uses() declarations
 └── docker/          # Docker image analysis
 ```
 
@@ -163,6 +164,24 @@ Dependencies are read from the committed lockfiles, so include them in the scan:
 - CocoaPods: `Podfile.lock` (produced by `pod install`). BomLens parses it directly, so the scanning machine needs neither macOS nor a CocoaPods install.
 
 > Note: UIKit and other Xcode-driven platform dependencies require macOS and are not resolved in the Linux scanner.
+
+---
+
+## Modelica
+
+```bash
+./scripts/scan-sbom.sh --project "ModelicaExample" --version "1.0.0" --target examples/modelica --generate-only
+```
+
+Detected files: `*.mo`
+
+cdxgen has no Modelica cataloger, so the usual package-manager approach reads no dependencies. Instead, BomLens parses the `annotation(uses(...))` block a `.mo` package declares directly, picking up each library named there together with its version.
+
+```modelica
+annotation(uses(Modelica(version="4.0.0"), Buildings(version="13.0.0")));
+```
+
+> Note: only the libraries declared directly in `uses()` are identified. Modelica has no lockfile, so transitive dependencies are not resolved, and the model's own internal structure (its components, parameters, connections) is not open-source dependency data, so it is left out.
 
 ---
 

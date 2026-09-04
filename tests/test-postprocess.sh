@@ -4187,6 +4187,67 @@ else
     fail "generate-notice.sh produced no NOTICE for the unverified-name fixture"
 fi
 
+echo "== modelica: uses() annotation is read structurally, not summarized =="
+MODIR="$WORK/modelica"
+rm -rf "$MODIR"; mkdir -p "$MODIR"/{decl,plain,empty,multiline}
+
+cat > "$MODIR/decl/Example.mo" <<'MOEOF'
+within ;
+package Example
+  annotation(uses(Modelica(version="4.0.0"), Custom(version="0.1.0")));
+end Example;
+MOEOF
+python3 "$LIB/identify-modelica.py" "$MODIR/decl" "$MODIR/decl/out.json" "1.0.0" >/dev/null 2>&1
+if [ "$(jq '.components | length' "$MODIR/decl/out.json" 2>/dev/null)" = "2" ]; then
+    pass "two uses() entries become two components"
+else
+    fail "expected 2 components" "$(jq -c '.components' "$MODIR/decl/out.json" 2>/dev/null)"
+fi
+mapped_purl="$(jq -r '.components[] | select(.name=="Modelica") | .purl' "$MODIR/decl/out.json")"
+[ "$mapped_purl" = "pkg:github/modelica/ModelicaStandardLibrary@4.0.0" ] \
+    && pass "a mapped library name becomes a pkg:github purl" \
+    || fail "mapped purl=$mapped_purl"
+generic_purl="$(jq -r '.components[] | select(.name=="Custom") | .purl' "$MODIR/decl/out.json")"
+[ "$generic_purl" = "pkg:generic/Custom@0.1.0" ] \
+    && pass "an unmapped library name falls back to pkg:generic (no guessed repo)" \
+    || fail "generic purl=$generic_purl"
+[ "$(jq '[.components[].licenses] | flatten | length' "$MODIR/decl/out.json")" = "0" ] \
+    && pass "licenses are left empty rather than guessed" \
+    || fail "a license was invented for a declaration with none"
+
+cat > "$MODIR/plain/NoUses.mo" <<'MOEOF'
+within ;
+package NoUses
+end NoUses;
+MOEOF
+python3 "$LIB/identify-modelica.py" "$MODIR/plain" "$MODIR/plain/out.json" "1.0.0" >/dev/null 2>&1
+if jq -e 'type=="object" and (.components | length == 0)' "$MODIR/plain/out.json" >/dev/null 2>&1; then
+    pass "a .mo file with no uses() block yields a valid, empty SBOM"
+else
+    fail "a .mo file with no uses() block did not yield a valid empty SBOM"
+fi
+
+python3 "$LIB/identify-modelica.py" "$MODIR/empty" "$MODIR/empty/out.json" "1.0.0" >/dev/null 2>&1
+[ "$(jq '.components | length' "$MODIR/empty/out.json" 2>/dev/null)" = "0" ] \
+    && pass "a directory with no .mo files at all yields zero components" \
+    || fail "an empty source tree produced components"
+
+cat > "$MODIR/multiline/Multiline.mo" <<'MOEOF'
+within ;
+package Multiline
+  annotation(uses(
+    Modelica(version =
+      "4.0.0"),
+    Buildings(version="13.0.0")));
+end Multiline;
+MOEOF
+python3 "$LIB/identify-modelica.py" "$MODIR/multiline" "$MODIR/multiline/out.json" "1.0.0" >/dev/null 2>&1
+if [ "$(jq '.components | length' "$MODIR/multiline/out.json" 2>/dev/null)" = "2" ]; then
+    pass "a uses() block split across lines still parses"
+else
+    fail "multiline uses() was not parsed" "$(jq -c '.components' "$MODIR/multiline/out.json" 2>/dev/null)"
+fi
+
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

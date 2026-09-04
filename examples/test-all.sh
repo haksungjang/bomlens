@@ -37,6 +37,7 @@ examples=(
     "rust:Cargo.toml"
     "dotnet:*.csproj"
     "swift:Package.swift"
+    "modelica:*.mo"
     "docker:Dockerfile"
 )
 
