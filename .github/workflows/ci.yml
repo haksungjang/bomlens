@@ -35,6 +35,14 @@ on:
 permissions:
   contents: read
 
+# One CI run per ref. Pushing again to a branch supersedes the run still queued
+# behind it, which on a single runner would otherwise hold the queue for its
+# full length. Pushes to main are never cancelled: they carry the image publish
+# and the baseline commits.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   test:
     name: Integration Tests
