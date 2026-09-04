@@ -55,6 +55,10 @@ jobs:
     permissions:
       contents: write
       id-token: write
+      # The gate inside pulls the image it just published to run the documented
+      # first-scan command against it. A called workflow cannot ask for more
+      # than the caller grants, so the read has to be granted here.
+      packages: read
     with:
       version: ${{ inputs.version }}
       target_repository: sktelecom/bomlens
