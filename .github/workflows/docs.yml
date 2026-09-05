@@ -37,6 +37,19 @@ on:
       - .github/workflows/docs.yml
       - docker/web/frontend/**
   workflow_dispatch:
+  # Callable from another repository so the site can be built on that
+  # repository's runners and pushed to this one's gh-pages branch.
+  workflow_call:
+    inputs:
+      target_repository:
+        description: 'owner/name whose gh-pages branch receives the site (default: this repository)'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      PUBLISH_TOKEN:
+        description: 'Token with contents:write on the target repository (default: the run GITHUB_TOKEN)'
+        required: false
 
 permissions:
   contents: read
@@ -50,6 +63,9 @@ env:
   # 모두 그 하위를 가리켜야 한다. mkdocs.yml의 site_url과 함께 움직인다.
   DEMO_BASE_PATH: /bomlens/demo/
   DEMO_DATA_BASE: /bomlens/demo/data
+  # gh-pages 브랜치를 받을 저장소. GITHUB_REPOSITORY는 예약 변수라 워크플로가
+  # 덮어쓸 수 없고 언제나 잡이 도는 저장소를 가리키므로 그것을 쓰지 않는다.
+  PUBLISH_REPO: ${{ inputs.target_repository || github.repository }}
 
 jobs:
   # PR에서는 배포 없이 빌드만 검증한다. --strict라 깨진 링크·설정 오류가
@@ -113,6 +129,9 @@ jobs:
           touch .nojekyll
           git add -A
           git commit -q -m "docs: publish ${GITHUB_SHA}"
-          git push --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:gh-pages
+          git push --force "https://x-access-token:${PUSH_TOKEN}@github.com/${PUBLISH_REPO}.git" HEAD:gh-pages
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          PUSH_TOKEN: ${{ secrets.PUBLISH_TOKEN || github.token }}
+          # Not GITHUB_REPOSITORY: that is reserved and a workflow cannot
+          # override it, so it always names the repository running the job.
+          PUBLISH_REPO: ${{ env.PUBLISH_REPO }}
