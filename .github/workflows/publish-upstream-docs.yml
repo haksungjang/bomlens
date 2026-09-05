@@ -1,0 +1,23 @@
+# Builds the documentation site on this repository's runners and pushes it to
+# the gh-pages branch of sktelecom/bomlens, which is where that repository's
+# Pages site is served from. The build definition is the one in
+# sktelecom/bomlens, called rather than copied, so the two cannot drift.
+#
+# Needs UPSTREAM_PUBLISH_TOKEN, a token with contents:write on that repository.
+name: Publish docs upstream
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    uses: sktelecom/bomlens/.github/workflows/docs.yml@ci/publish-from-caller
+    permissions:
+      contents: write
+    with:
+      target_repository: sktelecom/bomlens
+    secrets:
+      PUBLISH_TOKEN: ${{ secrets.UPSTREAM_PUBLISH_TOKEN }}
