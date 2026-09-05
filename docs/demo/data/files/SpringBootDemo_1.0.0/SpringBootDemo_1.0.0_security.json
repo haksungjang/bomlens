@@ -3,8 +3,8 @@
   "Trivy": {
     "Version": "0.74.0"
   },
-  "ReportID": "01a05d67-6b05-7760-9a51-355763af6159",
-  "CreatedAt": "2026-09-01T14:37:33.829486722Z",
+  "ReportID": "01a06f98-685c-7a97-8bc0-4c8332718d2d",
+  "CreatedAt": "2026-09-05T03:24:14.300696112Z",
   "ArtifactName": "SpringBootDemo_1.0.0_bom.json",
   "ArtifactType": "cyclonedx",
   "Results": [
@@ -1440,7 +1440,10 @@
           "LastModifiedDate": "2026-08-03T20:30:41Z"
         },
         {
-          "VulnerabilityID": "GHSA-72hv-8253-57qq",
+          "VulnerabilityID": "CVE-2026-18401",
+          "VendorIDs": [
+            "GHSA-72hv-8253-57qq"
+          ],
           "PkgID": "com.fasterxml.jackson.core:jackson-core:2.16.0",
           "PkgName": "com.fasterxml.jackson.core:jackson-core",
           "PkgIdentifier": {
@@ -1452,33 +1455,45 @@
           "FixedVersion": "2.21.1, 2.18.6",
           "Status": "fixed",
           "SeveritySource": "ghsa",
-          "PrimaryURL": "https://github.com/advisories/GHSA-72hv-8253-57qq",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-18401",
           "DataSource": {
             "ID": "ghsa",
             "Name": "GitHub Security Advisory Maven",
             "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Amaven"
           },
-          "Fingerprint": "sha256:476a742b1c5a3d679f2ae2e5dee9475ae33c73a1dceb203595baf0513c888910",
-          "Title": "jackson-core: Number Length Constraint Bypass in Async Parser Leads to Potential DoS Condition",
-          "Description": "### Summary\nThe non-blocking (async) JSON parser in `jackson-core` bypasses the `maxNumberLength` constraint (default: 1000 characters) defined in `StreamReadConstraints`. This allows an attacker to send JSON with arbitrarily long numbers through the async parser API, leading to excessive memory allocation and potential CPU exhaustion, resulting in a Denial of Service (DoS).\n\nThe standard synchronous parser correctly enforces this limit, but the async parser fails to do so, creating an inconsistent enforcement policy.\n\n### Details\nThe root cause is that the async parsing path in `NonBlockingUtf8JsonParserBase` (and related classes) does not call the methods responsible for number length validation.\n\n- The number parsing methods (e.g., `_finishNumberIntegralPart`) accumulate digits into the `TextBuffer` without any length checks.\n- After parsing, they call `_valueComplete()`, which finalizes the token but does **not** call `resetInt()` or `resetFloat()`.\n- The `resetInt()`/`resetFloat()` methods in `ParserBase` are where the `validateIntegerLength()` and `validateFPLength()` checks are performed.\n- Because this validation step is skipped, the `maxNumberLength` constraint is never enforced in the async code path.\n\n### PoC\nThe following JUnit 5 test demonstrates the vulnerability. It shows that the async parser accepts a 5,000-digit number, whereas the limit should be 1,000.\n\n```java\npackage tools.jackson.core.unittest.dos;\n\nimport java.nio.charset.StandardCharsets;\n\nimport org.junit.jupiter.api.Test;\n\nimport tools.jackson.core.*;\nimport tools.jackson.core.exc.StreamConstraintsException;\nimport tools.jackson.core.json.JsonFactory;\nimport tools.jackson.core.json.async.NonBlockingByteArrayJsonParser;\n\nimport static org.junit.jupiter.api.Assertions.*;\n\n/**\n * POC: Number Length Constraint Bypass in Non-Blocking (Async) JSON Parsers\n *\n * Authors: sprabhav7, rohan-repos\n * \n * maxNumberLength default = 1000 characters (digits).\n * A number with more than 1000 digits should be rejected by any parser.\n *\n * BUG: The async parser never calls resetInt()/resetFloat() which is where\n * validateIntegerLength()/validateFPLength() lives. Instead it calls\n * _valueComplete() which skips all number length validation.\n *\n * CWE-770: Allocation of Resources Without Limits or Throttling\n */\nclass AsyncParserNumberLengthBypassTest {\n\n    private static final int MAX_NUMBER_LENGTH = 1000;\n    private static final int TEST_NUMBER_LENGTH = 5000;\n\n    private final JsonFactory factory = new JsonFactory();\n\n    // CONTROL: Sync parser correctly rejects a number exceeding maxNumberLength\n    @Test\n    void syncParserRejectsLongNumber() throws Exception {\n        byte[] payload = buildPayloadWithLongInteger(TEST_NUMBER_LENGTH);\n\t\t\n\t\t// Output to console\n        System.out.println(\"[SYNC] Parsing \" + TEST_NUMBER_LENGTH + \"-digit number (limit: \" + MAX_NUMBER_LENGTH + \")\");\n        try {\n            try (JsonParser p = factory.createParser(ObjectReadContext.empty(), payload)) {\n                while (p.nextToken() != null) {\n                    if (p.currentToken() == JsonToken.VALUE_NUMBER_INT) {\n                        System.out.println(\"[SYNC] Accepted number with \" + p.getText().length() + \" digits — UNEXPECTED\");\n                    }\n                }\n            }\n            fail(\"Sync parser must reject a \" + TEST_NUMBER_LENGTH + \"-digit number\");\n        } catch (StreamConstraintsException e) {\n            System.out.println(\"[SYNC] Rejected with StreamConstraintsException: \" + e.getMessage());\n        }\n    }\n\n    // VULNERABILITY: Async parser accepts the SAME number that sync rejects\n    @Test\n    void asyncParserAcceptsLongNumber() throws Exception {\n        byte[] payload = buildPayloadWithLongInteger(TEST_NUMBER_LENGTH);\n\n        NonBlockingByteArrayJsonParser p =\n            (NonBlockingByteArrayJsonParser) factory.createNonBlockingByteArrayParser(ObjectReadContext.empty());\n        p.feedInput(payload, 0, payload.length);\n        p.endOfInput();\n\n        boolean foundNumber = false;\n        try {\n            while (p.nextToken() != null) {\n                if (p.currentToken() == JsonToken.VALUE_NUMBER_INT) {\n                    foundNumber = true;\n                    String numberText = p.getText();\n                    assertEquals(TEST_NUMBER_LENGTH, numberText.length(),\n                        \"Async parser silently accepted all \" + TEST_NUMBER_LENGTH + \" digits\");\n                }\n            }\n            // Output to console\n            System.out.println(\"[ASYNC INT] Accepted number with \" + TEST_NUMBER_LENGTH + \" digits — BUG CONFIRMED\");\n            assertTrue(foundNumber, \"Parser should have produced a VALUE_NUMBER_INT token\");\n        } catch (StreamConstraintsException e) {\n            fail(\"Bug is fixed — async parser now correctly rejects long numbers: \" + e.getMessage());\n        }\n        p.close();\n    }\n\n    private byte[] buildPayloadWithLongInteger(int numDigits) {\n        StringBuilder sb = new StringBuilder(numDigits + 10);\n        sb.append(\"{\\\"v\\\":\");\n        for (int i = 0; i \u003c numDigits; i++) {\n            sb.append((char) ('1' + (i % 9)));\n        }\n        sb.append('}');\n        return sb.toString().getBytes(StandardCharsets.UTF_8);\n    }\n}\n\n```\n\n\n### Impact\nA malicious actor can send a JSON document with an arbitrarily long number to an application using the async parser (e.g., in a Spring WebFlux or other reactive application). This can cause:\n1.  **Memory Exhaustion:** Unbounded allocation of memory in the `TextBuffer` to store the number's digits, leading to an `OutOfMemoryError`.\n2.  **CPU Exhaustion:** If the application subsequently calls `getBigIntegerValue()` or `getDecimalValue()`, the JVM can be tied up in O(n^2) `BigInteger` parsing operations, leading to a CPU-based DoS.\n\n### Suggested Remediation\n\nThe async parsing path should be updated to respect the `maxNumberLength` constraint. The simplest fix appears to ensure that `_valueComplete()` or a similar method in the async path calls the appropriate validation methods (`resetInt()` or `resetFloat()`) already present in `ParserBase`, mirroring the behavior of the synchronous parsers.\n\n**NOTE:** This research was performed in collaboration with [rohan-repos](https://github.com/rohan-repos)",
+          "Fingerprint": "sha256:e3f2aea2ea944af2d631ab085c9b859328414d89c36f72750fc91e39d742265d",
+          "Title": "tools.jackson.core/jackson-core: com.fasterxml.jackson.core/jackson-core: jackson-core: Denial of Service due to number length bypass in asynchronous JSON parser",
+          "Description": "The non-blocking (asynchronous) JSON parser in jackson-core does not enforce the maxNumberLength constraint defined in StreamReadConstraints (default: 1000 characters). An attacker able to submit JSON to an application that uses the async parser API can supply a number token of arbitrary length, leading to excessive memory allocation and potential CPU exhaustion, resulting in a denial of service.\n\n\n\nThe synchronous parser enforces this limit correctly, so the constraint is applied inconsistently depending on which parsing API the application uses.\n\n\n\nRoot cause: the async parsing path in NonBlockingUtf8JsonParserBase and related classes never invokes the number length validation methods. Number parsing methods such as _finishNumberIntegralPart() accumulate digits into the TextBuffer without any length check, then call _valueComplete() to finalize the token. _valueComplete() does not call resetInt() or resetFloat(), which are the methods in ParserBase where validateIntegerLength() and validateFPLength() are performed. Because that validation step is skipped, maxNumberLength is never enforced on the async code path.\n\n\n\nImpact: an attacker sending a JSON document containing an arbitrarily long number to an application using the async parser (for example a Spring WebFlux or other reactive application) can cause unbounded allocation in the TextBuffer and an OutOfMemoryError. If the application subsequently calls getBigIntegerValue() or getDecimalValue(), the JVM may additionally be tied up in O(n^2) BigInteger parsing, causing CPU-based denial of service.\n\n\n\nNo privileges or user interaction beyond the ability to submit data for parsing are required.\n\n\n\nThis issue affects com.fasterxml.jackson.core:jackson-core from version 2.15.0 through 2.18.5 and from 2.19.0 through 2.21.0, and tools.jackson.core:jackson-core from 3.0.0 through 3.0.x.\n\n\n\nVersions prior to 2.15.0 are not affected, because StreamReadConstraints -- which defines the maxNumberLength setting -- was first introduced in jackson-core 2.15.0, so no such constraint exists to be bypassed in earlier releases. Note that GHSA-72hv-8253-57qq records the lower bound of the affected 2.x range as 2.0.0.",
           "Severity": "MEDIUM",
+          "CweIDs": [
+            "CWE-770"
+          ],
           "VendorSeverity": {
-            "ghsa": 2
+            "amazon": 3,
+            "ghsa": 2,
+            "redhat": 2
           },
           "CVSS": {
             "ghsa": {
               "V40Vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N",
               "V40Score": 6.9
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L",
+              "V3Score": 5.3
             }
           },
           "References": [
+            "https://access.redhat.com/security/cve/CVE-2026-18401",
             "https://github.com/FasterXML/jackson-core",
             "https://github.com/FasterXML/jackson-core/commit/b0c428e6f993e1b5ece5c1c3cb2523e887cd52cf",
             "https://github.com/FasterXML/jackson-core/pull/1555",
-            "https://github.com/FasterXML/jackson-core/security/advisories/GHSA-72hv-8253-57qq"
+            "https://github.com/FasterXML/jackson-core/security/advisories/GHSA-72hv-8253-57qq",
+            "https://nvd.nist.gov/vuln/detail/CVE-2026-18401",
+            "https://www.cve.org/CVERecord?id=CVE-2026-18401"
           ],
-          "PublishedDate": "2026-02-28T02:01:05Z",
-          "LastModifiedDate": "2026-08-03T20:32:01Z"
+          "PublishedDate": "2026-08-04T15:16:29.9Z",
+          "LastModifiedDate": "2026-08-04T19:16:43.657Z"
         },
         {
           "VulnerabilityID": "CVE-2026-54512",
@@ -1529,6 +1544,7 @@
             }
           },
           "References": [
+            "https://access.redhat.com/errata/RHSA-2026:40895",
             "https://access.redhat.com/errata/RHSA-2026:43400",
             "https://access.redhat.com/security/cve/CVE-2026-54512",
             "https://bugzilla.redhat.com/2492010",
@@ -1538,7 +1554,7 @@
             "https://creativecommons.org/licenses/by/4.0/",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2026-54512",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2026-54513",
-            "https://errata.almalinux.org/10/ALSA-2026-43400.html",
+            "https://errata.almalinux.org/9/ALSA-2026-40895.html",
             "https://errata.rockylinux.org/RLSA-2026:43400",
             "https://github.com/FasterXML/jackson-databind",
             "https://github.com/FasterXML/jackson-databind/commit/434d6c511de7fdd9872f29157aafb6162d12d8d5",
@@ -1620,16 +1636,15 @@
             "https://access.redhat.com/errata/RHSA-2026:50849",
             "https://access.redhat.com/errata/RHSA-2026:54435",
             "https://access.redhat.com/errata/RHSA-2026:54622",
+            "https://access.redhat.com/errata/RHSA-2026:62260",
             "https://access.redhat.com/security/cve/CVE-2026-54513",
             "https://bugzilla.redhat.com/2492010",
             "https://bugzilla.redhat.com/2492015",
             "https://bugzilla.redhat.com/show_bug.cgi?id=2492010",
-            "https://bugzilla.redhat.com/show_bug.cgi?id=2492015",
             "https://creativecommons.org/licenses/by/4.0/",
-            "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2026-54512",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2026-54513",
-            "https://errata.almalinux.org/10/ALSA-2026-43400.html",
-            "https://errata.rockylinux.org/RLSA-2026:43400",
+            "https://errata.almalinux.org/9/ALSA-2026-40895.html",
+            "https://errata.rockylinux.org/RLSA-2026:43218",
             "https://github.com/FasterXML/jackson-databind",
             "https://github.com/FasterXML/jackson-databind/commit/01d1692c8d0ed03e51a0e3c4f8a9e6908e4931e5",
             "https://github.com/FasterXML/jackson-databind/commit/24529da29fdf46ff94ca38de9ebf31cd188f5e8e",
@@ -1644,7 +1659,7 @@
             "https://www.cve.org/CVERecord?id=CVE-2026-54513"
           ],
           "PublishedDate": "2026-06-23T21:17:02.333Z",
-          "LastModifiedDate": "2026-08-26T13:19:15.917Z"
+          "LastModifiedDate": "2026-09-02T13:18:02.49Z"
         },
         {
           "VulnerabilityID": "CVE-2026-54514",
@@ -2013,19 +2028,17 @@
           "References": [
             "http://www.openwall.com/lists/oss-security/2025/03/10/5",
             "https://access.redhat.com/errata/RHSA-2025:3645",
-            "https://access.redhat.com/errata/RHSA-2025:7497",
+            "https://access.redhat.com/errata/RHSA-2025:3683",
             "https://access.redhat.com/security/cve/CVE-2025-24813",
             "https://bugzilla.redhat.com/2332817",
             "https://bugzilla.redhat.com/2351129",
-            "https://bugzilla.redhat.com/show_bug.cgi?id=2326972",
-            "https://bugzilla.redhat.com/show_bug.cgi?id=2332815",
+            "https://bugzilla.redhat.com/show_bug.cgi?id=2332817",
             "https://bugzilla.redhat.com/show_bug.cgi?id=2351129",
             "https://creativecommons.org/licenses/by/4.0/",
-            "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2024-52316",
-            "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2024-54677",
+            "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2024-50379",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-24813",
             "https://errata.almalinux.org/9/ALSA-2025-3645.html",
-            "https://errata.rockylinux.org/RLSA-2025:7497",
+            "https://errata.rockylinux.org/RLSA-2025:3683",
             "https://github.com/absholi7ly/POC-CVE-2025-24813/blob/main/README.md",
             "https://github.com/apache/tomcat",
             "https://github.com/apache/tomcat/commit/0a668e0c27f2b7ca0cc7c6eea32253b9b5ecb29c",
@@ -2266,6 +2279,195 @@
           "LastModifiedDate": "2026-06-17T10:49:51.027Z"
         },
         {
+          "VulnerabilityID": "CVE-2026-65182",
+          "VendorIDs": [
+            "GHSA-gcx9-497g-6cp6"
+          ],
+          "PkgID": "org.apache.tomcat.embed:tomcat-embed-core:10.1.16",
+          "PkgName": "org.apache.tomcat.embed:tomcat-embed-core",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@10.1.16?type=jar",
+            "UID": "a2ae8a336f9a6e9c",
+            "BOMRef": "pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@10.1.16?type=jar"
+          },
+          "InstalledVersion": "10.1.16",
+          "FixedVersion": "11.0.25, 10.1.58, 9.0.121",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-65182",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory Maven",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Amaven"
+          },
+          "Fingerprint": "sha256:5ba31c74c984e17fd0431e89546ad96fb73e7183a1aeba37deb0e3f4fbddd70c",
+          "Title": "Apache Tomcat: Apache Tomcat: Security constraint bypass due to improper access control",
+          "Description": "Improper Access Control, Incorrect Authorization vulnerability in Apache Tomcat leads to security constraint bypass if a constraint for a longer path is specified before a more restrictive constraint for a shorter sub-path.\n\n\n\nThis issue affects Apache Tomcat: from 11.0.0-M1 through 11.0.24, from 10.1.0-M1 through 10.1.57, from 9.0.0.M1 through 9.0.120, from 8.5.0 through 8.5.100, from 7.0.0 through 7.0.109.\n\n\n\nUsers are recommended to upgrade to version 11.0.25, 10.1.58, 9.0.121, which fixes the issue.",
+          "Severity": "CRITICAL",
+          "CweIDs": [
+            "CWE-284",
+            "CWE-863"
+          ],
+          "VendorSeverity": {
+            "bitnami": 4,
+            "ghsa": 4,
+            "redhat": 3
+          },
+          "CVSS": {
+            "bitnami": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
+              "V3Score": 9.1
+            },
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
+              "V3Score": 9.1
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:N",
+              "V3Score": 8.2
+            }
+          },
+          "References": [
+            "http://www.openwall.com/lists/oss-security/2026/08/26/1",
+            "https://access.redhat.com/security/cve/CVE-2026-65182",
+            "https://github.com/apache/tomcat/commit/8bafd79a3b54684e80e9cb1bafd4746aede7d3f5",
+            "https://github.com/apache/tomcat/commit/b2c56ec8f20c66773a1a813034ffcdb60841f1cf",
+            "https://github.com/apache/tomcat/commit/b79752d2a8578d94743e2a95c50af297f780c0df",
+            "https://lists.apache.org/thread/joosxvzc9b49ttj8lj0jw9mqt0ml767m",
+            "https://nvd.nist.gov/vuln/detail/CVE-2026-65182",
+            "https://tomcat.apache.org/security-10.html",
+            "https://tomcat.apache.org/security-11.html",
+            "https://tomcat.apache.org/security-9.html",
+            "https://www.cve.org/CVERecord?id=CVE-2026-65182"
+          ],
+          "PublishedDate": "2026-08-25T22:17:04.9Z",
+          "LastModifiedDate": "2026-08-27T15:27:26.04Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-65905",
+          "VendorIDs": [
+            "GHSA-9xv2-5v5q-p794"
+          ],
+          "PkgID": "org.apache.tomcat.embed:tomcat-embed-core:10.1.16",
+          "PkgName": "org.apache.tomcat.embed:tomcat-embed-core",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@10.1.16?type=jar",
+            "UID": "a2ae8a336f9a6e9c",
+            "BOMRef": "pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@10.1.16?type=jar"
+          },
+          "InstalledVersion": "10.1.16",
+          "FixedVersion": "11.0.25, 10.1.58, 9.0.121",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-65905",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory Maven",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Amaven"
+          },
+          "Fingerprint": "sha256:7e9a4e65fed9be134711cc1fab9ef4d82a7cde4ca4f5eef4063f523d5c54d11e",
+          "Title": "tomcat: Apache Tomcat: Authentication bypass via limited replay attack in DIGEST authenticator",
+          "Description": "Authentication Bypass by Capture-replay vulnerability in Apache Tomcat's DIGEST authenticator. If, before windowSize requests have been made, a client makes a DIGEST \nauthenticated request with a nonceCount on the upper boundary of the \nreplay window then that request is replayable once only while the \nassociated nonceCount remains within the replay window.\n\n\n\n \n\nThis issue affects Apache Tomcat: from 11.0.0-M1 through 11.0.24, from 10.1.0-M1 through 10.1.57, from 9.0.0.M1 through 9.0.120.\n\n\n\nThe following versions were EOL at the time the CVE was created but are \nknown to be affected: from 8.5.0 through 8.5.100, from 7.0.30 through 7.0.109. Other unsupported versions may also be affected.\n\n\n\nUsers are recommended to upgrade to version 11.0.25, 10.1.58 or 9.0.121, which fix the issue.",
+          "Severity": "CRITICAL",
+          "CweIDs": [
+            "CWE-294"
+          ],
+          "VendorSeverity": {
+            "bitnami": 4,
+            "ghsa": 4,
+            "redhat": 2
+          },
+          "CVSS": {
+            "bitnami": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+              "V3Score": 9.8
+            },
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+              "V3Score": 9.8
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N",
+              "V3Score": 4.8
+            }
+          },
+          "References": [
+            "http://www.openwall.com/lists/oss-security/2026/08/26/4",
+            "https://access.redhat.com/security/cve/CVE-2026-65905",
+            "https://github.com/apache/tomcat",
+            "https://lists.apache.org/thread/9v114xlpgbzrrbzz5vf9f6r2q4wnxwwj",
+            "https://nvd.nist.gov/vuln/detail/CVE-2026-65905",
+            "https://www.cve.org/CVERecord?id=CVE-2026-65905"
+          ],
+          "PublishedDate": "2026-08-25T22:17:05.303Z",
+          "LastModifiedDate": "2026-08-27T15:17:49.277Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-68525",
+          "VendorIDs": [
+            "GHSA-h3x4-894j-xpx5"
+          ],
+          "PkgID": "org.apache.tomcat.embed:tomcat-embed-core:10.1.16",
+          "PkgName": "org.apache.tomcat.embed:tomcat-embed-core",
+          "PkgIdentifier": {
+            "PURL": "pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@10.1.16?type=jar",
+            "UID": "a2ae8a336f9a6e9c",
+            "BOMRef": "pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@10.1.16?type=jar"
+          },
+          "InstalledVersion": "10.1.16",
+          "FixedVersion": "11.0.25, 10.1.58, 9.0.121",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-68525",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory Maven",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Amaven"
+          },
+          "Fingerprint": "sha256:33489e7373272d8702237f77376d6072886842c9792e671717e122fd747118aa",
+          "Title": "org.apache.tomcat/tomcat: Apache Tomcat: Unauthorized resource access via FORM authentication bypass",
+          "Description": "Incorrect Authorization vulnerability in Apache Tomcat's FORM authentication process allows the bypassing of a security constraint that limits user has access to a resource POST but not GET.\n\n\n\n\n\n\n\nThis issue affects Apache Tomcat: from 11.0.0-M1 through 11.0.24, from 10.1.0-M1 through 10.1.57, from 9.0.0.M1 through 9.0.120.\n\n\n\n\n\n\n\nThe following versions were EOL at the time the CVE was created but are \nknown to be affected: from 8.5.0 through 8.5.100, from 7.0.0 through 7.0.109. Other unsupported versions may also be affected.\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\nUsers are recommended to upgrade to version 11.0.25, 10.1.58 or 9.0.121, which fixes the issue.",
+          "Severity": "CRITICAL",
+          "CweIDs": [
+            "CWE-863"
+          ],
+          "VendorSeverity": {
+            "bitnami": 4,
+            "ghsa": 4,
+            "redhat": 2
+          },
+          "CVSS": {
+            "bitnami": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
+              "V3Score": 9.1
+            },
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
+              "V3Score": 9.1
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N",
+              "V3Score": 6.5
+            }
+          },
+          "References": [
+            "http://www.openwall.com/lists/oss-security/2026/08/26/7",
+            "https://access.redhat.com/security/cve/CVE-2026-68525",
+            "https://github.com/apache/tomcat",
+            "https://github.com/apache/tomcat/commit/10d048e16034ddf12055e0cede0da05b15c823b8",
+            "https://github.com/apache/tomcat/commit/32f0c38526b4e655ff0c17cd97afedefc624fe43",
+            "https://github.com/apache/tomcat/commit/58123aa468a20e2a079b7e0c68a4009e2475c098",
+            "https://lists.apache.org/thread/x1y2lfsgzxwzc456f8954vbvgn03zhd7",
+            "https://nvd.nist.gov/vuln/detail/CVE-2026-68525",
+            "https://tomcat.apache.org/security-10.html",
+            "https://tomcat.apache.org/security-11.html",
+            "https://tomcat.apache.org/security-9.html",
+            "https://www.cve.org/CVERecord?id=CVE-2026-68525"
+          ],
+          "PublishedDate": "2026-08-25T22:17:05.7Z",
+          "LastModifiedDate": "2026-08-27T15:15:02.453Z"
+        },
+        {
           "VulnerabilityID": "CVE-2024-34750",
           "VendorIDs": [
             "GHSA-wm9w-rjj3-j356"
@@ -2324,13 +2526,14 @@
           },
           "References": [
             "https://access.redhat.com/errata/RHSA-2024:5693",
+            "https://access.redhat.com/errata/RHSA-2024:5694",
             "https://access.redhat.com/security/cve/CVE-2024-34750",
             "https://bugzilla.redhat.com/2295651",
             "https://bugzilla.redhat.com/show_bug.cgi?id=2295651",
             "https://creativecommons.org/licenses/by/4.0/",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2024-34750",
             "https://errata.almalinux.org/9/ALSA-2024-5693.html",
-            "https://errata.rockylinux.org/RLSA-2024:5693",
+            "https://errata.rockylinux.org/RLSA-2024:5694",
             "https://github.com/apache/tomcat",
             "https://github.com/apache/tomcat/commit/2344a4c0d03e307ba6b8ab6dc8b894cc8bac63f2",
             "https://github.com/apache/tomcat/commit/2afae300c9ac9c0e516e2e9de580847d925365c3",
@@ -2487,6 +2690,7 @@
             "http://www.openwall.com/lists/oss-security/2024/12/17/4",
             "http://www.openwall.com/lists/oss-security/2024/12/18/2",
             "https://access.redhat.com/errata/RHSA-2025:3645",
+            "https://access.redhat.com/errata/RHSA-2025:3683",
             "https://access.redhat.com/security/cve/CVE-2024-50379",
             "https://bugzilla.redhat.com/2332817",
             "https://bugzilla.redhat.com/2351129",
@@ -2496,7 +2700,7 @@
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2024-50379",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-24813",
             "https://errata.almalinux.org/9/ALSA-2025-3645.html",
-            "https://errata.rockylinux.org/RLSA-2025:3645",
+            "https://errata.rockylinux.org/RLSA-2025:3683",
             "https://github.com/apache/tomcat",
             "https://github.com/apache/tomcat/commit/05ddeeaa54df1e2dc427d0164bedd6b79f78d81f",
             "https://github.com/apache/tomcat/commit/05ddeeaa54df1e2dc427d0164bedd6b79f78d81f%20%2810.1.34%29",
@@ -2579,7 +2783,8 @@
             }
           },
           "References": [
-            "https://access.redhat.com/errata/RHSA-2025:11332",
+            "https://access.redhat.com/errata/RHSA-2025:11333",
+            "https://access.redhat.com/errata/RHSA-2025:11335",
             "https://access.redhat.com/security/cve/CVE-2024-56337",
             "https://bugzilla.redhat.com/2333521",
             "https://bugzilla.redhat.com/2362783",
@@ -2588,8 +2793,8 @@
             "https://creativecommons.org/licenses/by/4.0/",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2024-56337",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-31650",
-            "https://errata.almalinux.org/10/ALSA-2025-11332.html",
-            "https://errata.rockylinux.org/RLSA-2025:11332",
+            "https://errata.almalinux.org/9/ALSA-2025-11335.html",
+            "https://errata.rockylinux.org/RLSA-2025:11333",
             "https://github.com/apache/tomcat",
             "https://linux.oracle.com/cve/CVE-2024-56337.html",
             "https://linux.oracle.com/errata/ELSA-2025-11335.html",
@@ -2665,8 +2870,8 @@
           },
           "References": [
             "http://www.openwall.com/lists/oss-security/2025/06/16/1",
-            "https://access.redhat.com/errata/RHSA-2025:14178",
-            "https://access.redhat.com/errata/RHSA-2025:14179",
+            "https://access.redhat.com/errata/RHSA-2025:14177",
+            "https://access.redhat.com/errata/RHSA-2025:14181",
             "https://access.redhat.com/security/cve/CVE-2025-48988",
             "https://bugzilla.redhat.com/2373015",
             "https://bugzilla.redhat.com/2373018",
@@ -2680,16 +2885,18 @@
             "https://bugzilla.redhat.com/show_bug.cgi?id=2373020",
             "https://bugzilla.redhat.com/show_bug.cgi?id=2373309",
             "https://bugzilla.redhat.com/show_bug.cgi?id=2379374",
+            "https://bugzilla.redhat.com/show_bug.cgi?id=2379382",
             "https://bugzilla.redhat.com/show_bug.cgi?id=2379386",
             "https://creativecommons.org/licenses/by/4.0/",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-48976",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-48988",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-48989",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-49125",
+            "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-52434",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-52520",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-53506",
-            "https://errata.almalinux.org/10/ALSA-2025-14178.html",
-            "https://errata.rockylinux.org/RLSA-2025:14179",
+            "https://errata.almalinux.org/9/ALSA-2025-14181.html",
+            "https://errata.rockylinux.org/RLSA-2025:14177",
             "https://github.com/apache/tomcat",
             "https://github.com/apache/tomcat/commit/2b0ab14fb55d4edc896e5f1817f2ab76f714ae5e",
             "https://github.com/apache/tomcat/commit/2b0ab14fb55d4edc896e5f1817f2ab76f714ae5e%20%2811.0.8%29",
@@ -2765,8 +2972,8 @@
           },
           "References": [
             "http://www.openwall.com/lists/oss-security/2025/08/13/2",
-            "https://access.redhat.com/errata/RHSA-2025:14178",
-            "https://access.redhat.com/errata/RHSA-2025:14179",
+            "https://access.redhat.com/errata/RHSA-2025:14177",
+            "https://access.redhat.com/errata/RHSA-2025:14181",
             "https://access.redhat.com/security/cve/CVE-2025-48989",
             "https://bugzilla.redhat.com/2373015",
             "https://bugzilla.redhat.com/2373018",
@@ -2780,6 +2987,7 @@
             "https://bugzilla.redhat.com/show_bug.cgi?id=2373020",
             "https://bugzilla.redhat.com/show_bug.cgi?id=2373309",
             "https://bugzilla.redhat.com/show_bug.cgi?id=2379374",
+            "https://bugzilla.redhat.com/show_bug.cgi?id=2379382",
             "https://bugzilla.redhat.com/show_bug.cgi?id=2379386",
             "https://cert-portal.siemens.com/productcert/html/ssa-032379.html",
             "https://creativecommons.org/licenses/by/4.0/",
@@ -2787,10 +2995,11 @@
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-48988",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-48989",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-49125",
+            "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-52434",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-52520",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-53506",
-            "https://errata.almalinux.org/10/ALSA-2025-14178.html",
-            "https://errata.rockylinux.org/RLSA-2025:14179",
+            "https://errata.almalinux.org/9/ALSA-2025-14181.html",
+            "https://errata.rockylinux.org/RLSA-2025:14177",
             "https://github.com/apache/tomcat",
             "https://github.com/apache/tomcat/commit/73c04a10395774bda71a0b37802cf983662ce255",
             "https://github.com/apache/tomcat/commit/73c04a10395774bda71a0b37802cf983662ce255%20%2810.1.44%29",
@@ -2869,8 +3078,8 @@
           },
           "References": [
             "http://www.openwall.com/lists/oss-security/2025/07/10/12",
-            "https://access.redhat.com/errata/RHSA-2025:14178",
-            "https://access.redhat.com/errata/RHSA-2025:14179",
+            "https://access.redhat.com/errata/RHSA-2025:14177",
+            "https://access.redhat.com/errata/RHSA-2025:14181",
             "https://access.redhat.com/security/cve/CVE-2025-52520",
             "https://bugzilla.redhat.com/2373015",
             "https://bugzilla.redhat.com/2373018",
@@ -2884,16 +3093,18 @@
             "https://bugzilla.redhat.com/show_bug.cgi?id=2373020",
             "https://bugzilla.redhat.com/show_bug.cgi?id=2373309",
             "https://bugzilla.redhat.com/show_bug.cgi?id=2379374",
+            "https://bugzilla.redhat.com/show_bug.cgi?id=2379382",
             "https://bugzilla.redhat.com/show_bug.cgi?id=2379386",
             "https://creativecommons.org/licenses/by/4.0/",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-48976",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-48988",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-48989",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-49125",
+            "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-52434",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-52520",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-53506",
-            "https://errata.almalinux.org/10/ALSA-2025-14178.html",
-            "https://errata.rockylinux.org/RLSA-2025:14179",
+            "https://errata.almalinux.org/9/ALSA-2025-14181.html",
+            "https://errata.rockylinux.org/RLSA-2025:14177",
             "https://github.com/apache/tomcat",
             "https://github.com/apache/tomcat/commit/927d66fbc294cb65242102b817a45fd80834e040",
             "https://github.com/apache/tomcat/commit/927d66fbc294cb65242102b817a45fd80834e040%20%289.0.107%29",
@@ -2967,8 +3178,8 @@
           },
           "References": [
             "http://www.openwall.com/lists/oss-security/2025/07/10/13",
-            "https://access.redhat.com/errata/RHSA-2025:14178",
-            "https://access.redhat.com/errata/RHSA-2025:14179",
+            "https://access.redhat.com/errata/RHSA-2025:14177",
+            "https://access.redhat.com/errata/RHSA-2025:14181",
             "https://access.redhat.com/security/cve/CVE-2025-53506",
             "https://bugzilla.redhat.com/2373015",
             "https://bugzilla.redhat.com/2373018",
@@ -2982,16 +3193,18 @@
             "https://bugzilla.redhat.com/show_bug.cgi?id=2373020",
             "https://bugzilla.redhat.com/show_bug.cgi?id=2373309",
             "https://bugzilla.redhat.com/show_bug.cgi?id=2379374",
+            "https://bugzilla.redhat.com/show_bug.cgi?id=2379382",
             "https://bugzilla.redhat.com/show_bug.cgi?id=2379386",
             "https://creativecommons.org/licenses/by/4.0/",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-48976",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-48988",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-48989",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-49125",
+            "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-52434",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-52520",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-53506",
-            "https://errata.almalinux.org/10/ALSA-2025-14178.html",
-            "https://errata.rockylinux.org/RLSA-2025:14179",
+            "https://errata.almalinux.org/9/ALSA-2025-14181.html",
+            "https://errata.rockylinux.org/RLSA-2025:14177",
             "https://github.com/apache/tomcat",
             "https://github.com/apache/tomcat/commit/2aa6261276ebe50b99276953591e3a2be7898bdb",
             "https://github.com/apache/tomcat/commit/2aa6261276ebe50b99276953591e3a2be7898bdb%20%2810.1.43%29",
@@ -3066,7 +3279,8 @@
           },
           "References": [
             "http://www.openwall.com/lists/oss-security/2025/10/27/4",
-            "https://access.redhat.com/errata/RHSA-2025:23052",
+            "https://access.redhat.com/errata/RHSA-2025:23048",
+            "https://access.redhat.com/errata/RHSA-2025:23049",
             "https://access.redhat.com/security/cve/CVE-2025-55752",
             "https://bugzilla.redhat.com/2362782",
             "https://bugzilla.redhat.com/2406591",
@@ -3076,8 +3290,8 @@
             "https://creativecommons.org/licenses/by/4.0/",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-31651",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-55752",
-            "https://errata.almalinux.org/10/ALSA-2025-23052.html",
-            "https://errata.rockylinux.org/RLSA-2025:23052",
+            "https://errata.almalinux.org/9/ALSA-2025-23049.html",
+            "https://errata.rockylinux.org/RLSA-2025:23048",
             "https://github.com/apache/tomcat",
             "https://github.com/apache/tomcat/commit/130d36d8492ef9e4eb22952c17c92423cb35fd06",
             "https://github.com/apache/tomcat/commit/130d36d8492ef9e4eb22952c17c92423cb35fd06%20%2810.1.45%29",
@@ -3168,8 +3382,7 @@
             "https://access.redhat.com/errata/RHSA-2026:6569",
             "https://access.redhat.com/errata/RHSA-2026:8334",
             "https://access.redhat.com/security/cve/CVE-2026-24734",
-            "https://bugzilla.redhat.com/2457020",
-            "https://bugzilla.redhat.com/2457027",
+            "https://bugzilla.redhat.com/2440426",
             "https://bugzilla.redhat.com/show_bug.cgi?id=2440426",
             "https://bugzilla.redhat.com/show_bug.cgi?id=2440430",
             "https://bugzilla.redhat.com/show_bug.cgi?id=2440437",
@@ -3197,7 +3410,7 @@
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2026-34486",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2026-34487",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2026-34500",
-            "https://errata.almalinux.org/10/ALSA-2026-36790.html",
+            "https://errata.almalinux.org/9/ALSA-2026-26323.html",
             "https://errata.rockylinux.org/RLSA-2026:36790",
             "https://github.com/apache/tomcat",
             "https://linux.oracle.com/cve/CVE-2026-24734.html",
@@ -3776,6 +3989,7 @@
           "References": [
             "http://www.openwall.com/lists/oss-security/2024/03/13/3",
             "https://access.redhat.com/errata/RHSA-2024:3307",
+            "https://access.redhat.com/errata/RHSA-2024:3666",
             "https://access.redhat.com/security/cve/CVE-2024-24549",
             "https://bugzilla.redhat.com/2269607",
             "https://bugzilla.redhat.com/2269608",
@@ -3785,7 +3999,7 @@
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2024-23672",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2024-24549",
             "https://errata.almalinux.org/9/ALSA-2024-3307.html",
-            "https://errata.rockylinux.org/RLSA-2024:3307",
+            "https://errata.rockylinux.org/RLSA-2024:3666",
             "https://github.com/apache/tomcat",
             "https://github.com/apache/tomcat/commit/0cac540a882220231ba7a82330483cbd5f6b1f96",
             "https://github.com/apache/tomcat/commit/810f49d5ff6d64b704af85d5b8d0aab9ec3c83f5",
@@ -3871,7 +4085,8 @@
           },
           "References": [
             "http://www.openwall.com/lists/oss-security/2025/04/28/2",
-            "https://access.redhat.com/errata/RHSA-2025:11332",
+            "https://access.redhat.com/errata/RHSA-2025:11333",
+            "https://access.redhat.com/errata/RHSA-2025:11335",
             "https://access.redhat.com/security/cve/CVE-2025-31650",
             "https://bugzilla.redhat.com/2333521",
             "https://bugzilla.redhat.com/2362783",
@@ -3880,8 +4095,8 @@
             "https://creativecommons.org/licenses/by/4.0/",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2024-56337",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-31650",
-            "https://errata.almalinux.org/10/ALSA-2025-11332.html",
-            "https://errata.rockylinux.org/RLSA-2025:11332",
+            "https://errata.almalinux.org/9/ALSA-2025-11335.html",
+            "https://errata.rockylinux.org/RLSA-2025:11333",
             "https://github.com/apache/tomcat",
             "https://github.com/apache/tomcat/commit/1eef1dc459c45f1e421d8bd25ef340fc1cc34edc",
             "https://github.com/apache/tomcat/commit/40ae788c2e64d018b4e58cd4210bb96434d0100d",
@@ -4021,8 +4236,8 @@
           },
           "References": [
             "http://www.openwall.com/lists/oss-security/2025/06/16/2",
-            "https://access.redhat.com/errata/RHSA-2025:14178",
-            "https://access.redhat.com/errata/RHSA-2025:14179",
+            "https://access.redhat.com/errata/RHSA-2025:14177",
+            "https://access.redhat.com/errata/RHSA-2025:14181",
             "https://access.redhat.com/security/cve/CVE-2025-49125",
             "https://bugzilla.redhat.com/2373015",
             "https://bugzilla.redhat.com/2373018",
@@ -4036,16 +4251,18 @@
             "https://bugzilla.redhat.com/show_bug.cgi?id=2373020",
             "https://bugzilla.redhat.com/show_bug.cgi?id=2373309",
             "https://bugzilla.redhat.com/show_bug.cgi?id=2379374",
+            "https://bugzilla.redhat.com/show_bug.cgi?id=2379382",
             "https://bugzilla.redhat.com/show_bug.cgi?id=2379386",
             "https://creativecommons.org/licenses/by/4.0/",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-48976",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-48988",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-48989",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-49125",
+            "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-52434",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-52520",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-53506",
-            "https://errata.almalinux.org/10/ALSA-2025-14178.html",
-            "https://errata.rockylinux.org/RLSA-2025:14179",
+            "https://errata.almalinux.org/9/ALSA-2025-14181.html",
+            "https://errata.rockylinux.org/RLSA-2025:14177",
             "https://github.com/apache/tomcat",
             "https://github.com/apache/tomcat/commit/7617b9c247bc77ed0444dd69adcd8aa48777886c",
             "https://github.com/apache/tomcat/commit/7617b9c247bc77ed0444dd69adcd8aa48777886c%20%2810.1.42%29",
@@ -4418,7 +4635,8 @@
           },
           "References": [
             "http://www.openwall.com/lists/oss-security/2025/04/28/3",
-            "https://access.redhat.com/errata/RHSA-2025:23052",
+            "https://access.redhat.com/errata/RHSA-2025:23048",
+            "https://access.redhat.com/errata/RHSA-2025:23049",
             "https://access.redhat.com/security/cve/CVE-2025-31651",
             "https://bugzilla.redhat.com/2362782",
             "https://bugzilla.redhat.com/2406591",
@@ -4427,8 +4645,8 @@
             "https://creativecommons.org/licenses/by/4.0/",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-31651",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2025-55752",
-            "https://errata.almalinux.org/10/ALSA-2025-23052.html",
-            "https://errata.rockylinux.org/RLSA-2025:23052",
+            "https://errata.almalinux.org/9/ALSA-2025-23049.html",
+            "https://errata.rockylinux.org/RLSA-2025:23048",
             "https://github.com/apache/tomcat",
             "https://github.com/apache/tomcat/commit/066bf6b6a15a4e7e0941d4acf096841165b97098",
             "https://github.com/apache/tomcat/commit/175dc75fc428930034a6c93fb52f830d955d8e64",
@@ -4840,6 +5058,7 @@
           "References": [
             "http://www.openwall.com/lists/oss-security/2024/03/13/4",
             "https://access.redhat.com/errata/RHSA-2024:3307",
+            "https://access.redhat.com/errata/RHSA-2024:3666",
             "https://access.redhat.com/security/cve/CVE-2024-23672",
             "https://bugzilla.redhat.com/2269607",
             "https://bugzilla.redhat.com/2269608",
@@ -4849,7 +5068,7 @@
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2024-23672",
             "https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2024-24549",
             "https://errata.almalinux.org/9/ALSA-2024-3307.html",
-            "https://errata.rockylinux.org/RLSA-2024:3307",
+            "https://errata.rockylinux.org/RLSA-2024:3666",
             "https://github.com/apache/tomcat",
             "https://github.com/apache/tomcat/commit/0052b374684b613b0c849899b325ebe334ac6501",
             "https://github.com/apache/tomcat/commit/0052b374684b613b0c849899b325ebe334ac6501%20%2810.1.19%29",
