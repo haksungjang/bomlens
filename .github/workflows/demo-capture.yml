@@ -52,7 +52,7 @@ env:
 
 jobs:
   capture:
-    runs-on: [self-hosted, linux, bomlens-wsl]
+    runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
     timeout-minutes: 180
     permissions:
       contents: write
