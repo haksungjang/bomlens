@@ -25,6 +25,16 @@ on:
         required: true
         type: boolean
         default: true
+      run_images:
+        description: 'Build the images at all. Turn off to re-run only the release when they are already published.'
+        required: false
+        type: boolean
+        default: true
+      run_installers:
+        description: 'Build the installers. Turn off when they are already attached to the release.'
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -35,6 +45,7 @@ jobs:
   # its own version, so a release without them is not usable.
   images:
     name: Images
+    if: inputs.run_images
     uses: sktelecom/bomlens/.github/workflows/docker-publish.yml@ci/publish-from-caller
     permissions:
       contents: write
@@ -76,6 +87,7 @@ jobs:
   # gets there first.
   desktop:
     name: Installers
+    if: inputs.run_installers
     uses: sktelecom/bomlens/.github/workflows/desktop.yml@ci/publish-from-caller
     permissions:
       contents: write
