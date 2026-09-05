@@ -10,16 +10,46 @@ on:
         description: 'Release version (e.g., v1.0.0)'
         required: true
         type: string
+  # Callable from another repository so the release can be assembled on that
+  # repository's runners while the artefacts land here and keep this
+  # repository's signing identity: Sigstore builds the certificate subject from
+  # the called workflow's ref, not the caller's. Leaving the inputs empty keeps
+  # the current behaviour, so a fork that calls this without them releases to
+  # itself.
+  workflow_call:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+        type: string
+      target_repository:
+        description: 'owner/name to publish the release to (default: this repository)'
+        required: false
+        type: string
+        default: ''
+      owner:
+        description: 'Registry namespace the images were published under (default: this repository owner)'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      PUBLISH_TOKEN:
+        description: 'Token with contents:write on the target repository (default: the run GITHUB_TOKEN)'
+        required: false
 
 # Default to read-only; jobs that create or edit the release elevate to
 # contents: write themselves. Nothing in this workflow pushes packages.
 permissions:
   contents: read
 
+env:
+  PUBLISH_REPO: ${{ inputs.target_repository || github.repository }}
+  PUBLISH_OWNER: ${{ inputs.owner || github.repository_owner }}
+
 jobs:
   create-release:
     name: Create Release
-    runs-on: [self-hosted, linux, bomlens-wsl]
+    runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
     permissions:
       contents: write
 
@@ -36,9 +66,10 @@ jobs:
       - name: Extract version
         id: version
         run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            VERSION="${{ inputs.version }}"
-          else
+          # Both the manual dispatch and a cross-repository call name the
+          # version outright; a tag push does not, so it falls back to the ref.
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ]; then
             VERSION=${GITHUB_REF#refs/tags/}
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
@@ -63,6 +94,8 @@ jobs:
         id: create_release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
+          repository: ${{ env.PUBLISH_REPO }}
+          token: ${{ secrets.PUBLISH_TOKEN || github.token }}
           tag_name: ${{ steps.version.outputs.version }}
           name: Release ${{ steps.version.outputs.version }}
           body: |
@@ -88,7 +121,7 @@ jobs:
             
             #### Docker Image
             ```bash
-            docker pull ghcr.io/${{ github.repository_owner }}/sbom-generator:${{ steps.version.outputs.image_version }}   # legacy alias: sbom-scanner
+            docker pull ghcr.io/${{ env.PUBLISH_OWNER }}/sbom-generator:${{ steps.version.outputs.image_version }}   # legacy alias: sbom-scanner
             ```
             
             ### Documentation
@@ -107,7 +140,7 @@ jobs:
   upload-assets:
     name: Upload Release Assets
     needs: create-release
-    runs-on: [self-hosted, linux, bomlens-wsl]
+    runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
     permissions:
       contents: write
 
@@ -244,6 +277,8 @@ jobs:
       - name: Upload release assets
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
+          repository: ${{ env.PUBLISH_REPO }}
+          token: ${{ secrets.PUBLISH_TOKEN || github.token }}
           tag_name: ${{ needs.create-release.outputs.version }}
           # Keep the release a draft — action-gh-release defaults draft to false,
           # which would otherwise publish it here, before the release-gate has
@@ -271,7 +306,7 @@ jobs:
   release-gate:
     name: Release Gate (verify entry points, then publish)
     needs: [create-release, upload-assets, docs-walkthrough]
-    runs-on: [self-hosted, linux, bomlens-wsl]
+    runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
     permissions:
       contents: write
       packages: read
@@ -290,8 +325,10 @@ jobs:
       # are polled until ready, then exercised; failure leaves the release a draft.
       - name: Verify the release is ready for users
         env:
-          GH_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.PUBLISH_TOKEN || github.token }}
+          # Not GITHUB_REPOSITORY: that is reserved and a workflow cannot
+          # override it, so it always names the repository running the job.
+          PUBLISH_REPO: ${{ env.PUBLISH_REPO }}
         run: bash scripts/verify-release.sh "${{ needs.create-release.outputs.version }}"
 
       # The installers are attached by desktop.yml after upload-assets wrote
@@ -300,8 +337,10 @@ jobs:
       # finished by then) and before the release goes public.
       - name: Add installer checksums to SHA256SUMS.txt
         env:
-          GH_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.PUBLISH_TOKEN || github.token }}
+          # Not GITHUB_REPOSITORY: that is reserved and a workflow cannot
+          # override it, so it always names the repository running the job.
+          PUBLISH_REPO: ${{ env.PUBLISH_REPO }}
         run: bash scripts/attach-installer-checksums.sh "${{ needs.create-release.outputs.version }}"
 
       # Signed here rather than in upload-assets because the installer lines are
@@ -321,12 +360,12 @@ jobs:
 
       - name: Sign the checksum file
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.PUBLISH_TOKEN || github.token }}
           TAG: ${{ needs.create-release.outputs.version }}
         run: |
           set -euo pipefail
           work="$(mktemp -d)"
-          gh release download "$TAG" --repo "${{ github.repository }}" \
+          gh release download "$TAG" --repo "${{ env.PUBLISH_REPO }}" \
             --pattern 'SHA256SUMS.txt' --dir "$work" --clobber
           # --new-bundle-format=false names the artifact this release publishes:
           # a detached .sig plus the .pem, which release-assets-verify.yml and the
@@ -336,21 +375,21 @@ jobs:
             --output-signature "$work/SHA256SUMS.txt.sig" \
             --output-certificate "$work/SHA256SUMS.txt.pem" \
             "$work/SHA256SUMS.txt"
-          gh release upload "$TAG" --repo "${{ github.repository }}" --clobber \
+          gh release upload "$TAG" --repo "${{ env.PUBLISH_REPO }}" --clobber \
             "$work/SHA256SUMS.txt.sig" "$work/SHA256SUMS.txt.pem"
 
       # Only now make it the public, latest release.
       - name: Publish the release
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.PUBLISH_TOKEN || github.token }}
         run: |
           gh release edit "${{ needs.create-release.outputs.version }}" \
-            --repo "${{ github.repository }}" --draft=false --latest
+            --repo "${{ env.PUBLISH_REPO }}" --draft=false --latest
 
   summary:
     name: Release Summary
     needs: [create-release, upload-assets, docs-walkthrough, release-gate]
-    runs-on: [self-hosted, linux, bomlens-wsl]
+    runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
     
     steps:
       - name: Generate summary
@@ -358,11 +397,11 @@ jobs:
           echo "## 🎉 Release ${{ needs.create-release.outputs.version }} Complete!" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Downloads" >> $GITHUB_STEP_SUMMARY
-          echo "- [Linux/macOS Script](https://github.com/${{ github.repository }}/releases/download/${{ needs.create-release.outputs.version }}/bomlens-cli-linux.tar.gz)" >> $GITHUB_STEP_SUMMARY
-          echo "- [Windows Script](https://github.com/${{ github.repository }}/releases/download/${{ needs.create-release.outputs.version }}/bomlens-cli-windows.zip)" >> $GITHUB_STEP_SUMMARY
-          echo "- [Examples](https://github.com/${{ github.repository }}/releases/download/${{ needs.create-release.outputs.version }}/bomlens-examples-${{ needs.create-release.outputs.version }}.tar.gz)" >> $GITHUB_STEP_SUMMARY
+          echo "- [Linux/macOS Script](https://github.com/${{ env.PUBLISH_REPO }}/releases/download/${{ needs.create-release.outputs.version }}/bomlens-cli-linux.tar.gz)" >> $GITHUB_STEP_SUMMARY
+          echo "- [Windows Script](https://github.com/${{ env.PUBLISH_REPO }}/releases/download/${{ needs.create-release.outputs.version }}/bomlens-cli-windows.zip)" >> $GITHUB_STEP_SUMMARY
+          echo "- [Examples](https://github.com/${{ env.PUBLISH_REPO }}/releases/download/${{ needs.create-release.outputs.version }}/bomlens-examples-${{ needs.create-release.outputs.version }}.tar.gz)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Docker Image" >> $GITHUB_STEP_SUMMARY
           echo '```bash' >> $GITHUB_STEP_SUMMARY
-          echo "docker pull ghcr.io/${{ github.repository_owner }}/sbom-generator:${{ needs.create-release.outputs.version }}   # legacy alias: sbom-scanner" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ghcr.io/${{ env.PUBLISH_OWNER }}/sbom-generator:${{ needs.create-release.outputs.version }}   # legacy alias: sbom-scanner" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY

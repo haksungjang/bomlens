@@ -29,10 +29,47 @@ on:
         required: false
         type: boolean
         default: false
+  # Callable from another repository so the build can run on that repository's
+  # runners while the images keep this one's name and signing identity: the
+  # Sigstore certificate subject is built from the called workflow's ref, not
+  # the caller's. `owner` retargets the image names; leaving it empty keeps the
+  # current behaviour, so a fork that calls this without it still publishes
+  # under its own account.
+  workflow_call:
+    inputs:
+      owner:
+        description: 'Registry namespace to publish under (default: this repository owner)'
+        required: false
+        type: string
+        default: ''
+      push:
+        description: 'Push images to the registry'
+        required: false
+        type: boolean
+        default: false
+      skip_scan:
+        description: 'Skip the pre-publish image scan'
+        required: false
+        type: boolean
+        default: false
+      version:
+        description: >-
+          Release version the semver tags come from, e.g. v1.11.7. A caller is
+          not on a tag of its own, and without this the images would be tagged
+          only latest and sha-, leaving no 1.11.7 for the desktop app to pull.
+          Empty keeps the ref as the source, which is what a tag push wants.
+        required: false
+        type: string
+        default: ''
+    secrets:
+      PUBLISH_TOKEN:
+        description: 'Token with packages:write on the target namespace (default: the run GITHUB_TOKEN)'
+        required: false
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/sbom-scanner
+  PUBLISH_OWNER: ${{ inputs.owner || github.repository_owner }}
+  IMAGE_NAME: ${{ inputs.owner || github.repository_owner }}/sbom-scanner
 
 # Least-privilege default; jobs that publish images opt into packages: write below.
 permissions:
@@ -44,7 +81,7 @@ jobs:
   # ---------------------------------------------------------------
   build-postprocess:
     name: Build post-process image
-    runs-on: [self-hosted, linux, bomlens-wsl]
+    runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
     permissions:
       contents: write   # attach the image SBOM to the release
       id-token: write   # keyless cosign signing (Sigstore OIDC)
@@ -62,7 +99,7 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.PUBLISH_TOKEN || secrets.GITHUB_TOKEN }}
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
@@ -72,13 +109,13 @@ jobs:
           #   sbom-generator   — alias, kept for the prior featured name
           #   sbom-scanner     — legacy name, kept so existing supplier pulls never break
           images: |
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/bomlens
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/sbom-generator
+            ${{ env.REGISTRY }}/${{ env.PUBLISH_OWNER }}/bomlens
+            ${{ env.REGISTRY }}/${{ env.PUBLISH_OWNER }}/sbom-generator
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=semver,pattern={{version}},value=${{ inputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
+            type=semver,pattern={{major}},value=${{ inputs.version }}
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-,format=short
 
@@ -196,7 +233,7 @@ jobs:
         if: steps.flags.outputs.push == 'true'
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-          OWNER: ${{ github.repository_owner }}
+          OWNER: ${{ env.PUBLISH_OWNER }}
         run: |
           set -euo pipefail
           bl="${REGISTRY}/${OWNER}/bomlens@${DIGEST}"
@@ -235,7 +272,7 @@ jobs:
         if: steps.flags.outputs.push == 'true'
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-          OWNER: ${{ github.repository_owner }}
+          OWNER: ${{ env.PUBLISH_OWNER }}
         run: trivy image --quiet --format sarif --output trivy-image.sarif --exit-code 0 "${REGISTRY}/${OWNER}/bomlens@${DIGEST}"
       - name: Upload image scan results
         if: steps.flags.outputs.push == 'true'
@@ -276,7 +313,7 @@ jobs:
     # needed a self-hosted runner because NVD throttled the api2 fetch into
     # multi-hour stalls from cloud IPs — that constraint no longer applies,
     # so being back on self-hosted here is incidental, not required.)
-    runs-on: [self-hosted, linux, bomlens-wsl]
+    runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
     # The NVD-feed clone + distill is the long pole (~a few minutes).
     timeout-minutes: 45
     permissions:
@@ -295,17 +332,17 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.PUBLISH_TOKEN || secrets.GITHUB_TOKEN }}
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: |
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/bomlens-firmware
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/sbom-scanner-firmware
+            ${{ env.REGISTRY }}/${{ env.PUBLISH_OWNER }}/bomlens-firmware
+            ${{ env.REGISTRY }}/${{ env.PUBLISH_OWNER }}/sbom-scanner-firmware
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},value=${{ inputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-,format=short
       - name: Resolve BOMLENS_VERSION
@@ -341,7 +378,7 @@ jobs:
         if: steps.flags.outputs.push == 'true'
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-          OWNER: ${{ github.repository_owner }}
+          OWNER: ${{ env.PUBLISH_OWNER }}
         run: |
           set -euo pipefail
           cosign sign --yes "${REGISTRY}/${OWNER}/bomlens-firmware@${DIGEST}"
@@ -353,7 +390,7 @@ jobs:
   # ---------------------------------------------------------------
   build-aibom:
     name: Build AIBOM image
-    runs-on: [self-hosted, linux, bomlens-wsl]
+    runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
     permissions:
       contents: read
       packages: write
@@ -370,17 +407,17 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.PUBLISH_TOKEN || secrets.GITHUB_TOKEN }}
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: |
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/bomlens-aibom
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/sbom-scanner-aibom
+            ${{ env.REGISTRY }}/${{ env.PUBLISH_OWNER }}/bomlens-aibom
+            ${{ env.REGISTRY }}/${{ env.PUBLISH_OWNER }}/sbom-scanner-aibom
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},value=${{ inputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-,format=short
       - name: Resolve BOMLENS_VERSION
@@ -417,7 +454,7 @@ jobs:
         if: steps.flags.outputs.push == 'true'
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-          OWNER: ${{ github.repository_owner }}
+          OWNER: ${{ env.PUBLISH_OWNER }}
         run: |
           set -euo pipefail
           cosign sign --yes "${REGISTRY}/${OWNER}/bomlens-aibom@${DIGEST}"
@@ -428,7 +465,7 @@ jobs:
   #     lean; the DB is ~1.8 GB.
   build-deep-cve:
     name: Build deep-cve image
-    runs-on: [self-hosted, linux, bomlens-wsl]
+    runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
     # `grype db update` downloads a ~1.8 GB DB at build time; give it headroom.
     timeout-minutes: 45
     permissions:
@@ -447,16 +484,16 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.PUBLISH_TOKEN || secrets.GITHUB_TOKEN }}
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: |
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/bomlens-deep-cve
+            ${{ env.REGISTRY }}/${{ env.PUBLISH_OWNER }}/bomlens-deep-cve
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},value=${{ inputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-,format=short
       - name: Resolve BOMLENS_VERSION
@@ -492,25 +529,25 @@ jobs:
         if: steps.flags.outputs.push == 'true'
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-          OWNER: ${{ github.repository_owner }}
+          OWNER: ${{ env.PUBLISH_OWNER }}
         run: |
           set -euo pipefail
           cosign sign --yes "${REGISTRY}/${OWNER}/bomlens-deep-cve@${DIGEST}"
 
   summary:
     name: Build summary
-    runs-on: [self-hosted, linux, bomlens-wsl]
+    runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
     needs: [ build-postprocess, build-firmware, build-aibom, build-deep-cve ]
     # always(): the opt-in images are skipped on plain main pushes — still summarize.
     if: ${{ always() && github.event_name != 'pull_request' && needs.build-postprocess.result == 'success' }}
     steps:
       - run: |
           echo "## 🐳 Images built" >> $GITHUB_STEP_SUMMARY
-          echo "- \`${{ env.REGISTRY }}/${{ github.repository_owner }}/bomlens\` (post-process, featured)" >> $GITHUB_STEP_SUMMARY
-          echo "- \`${{ env.REGISTRY }}/${{ github.repository_owner }}/sbom-generator\` (post-process, alias)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.REGISTRY }}/${{ env.PUBLISH_OWNER }}/bomlens\` (post-process, featured)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.REGISTRY }}/${{ env.PUBLISH_OWNER }}/sbom-generator\` (post-process, alias)" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}\` (post-process, legacy alias)" >> $GITHUB_STEP_SUMMARY
-          echo "- \`${{ env.REGISTRY }}/${{ github.repository_owner }}/bomlens-firmware\` (firmware unpack/ID, GPL tools; legacy alias: sbom-scanner-firmware)" >> $GITHUB_STEP_SUMMARY
-          echo "- \`${{ env.REGISTRY }}/${{ github.repository_owner }}/bomlens-aibom\` (AI-model SBOM, OWASP AIBOM Generator; legacy alias: sbom-scanner-aibom)" >> $GITHUB_STEP_SUMMARY
-          echo "- \`${{ env.REGISTRY }}/${{ github.repository_owner }}/bomlens-deep-cve\` (maven CPE matching against NVD via grype; ~1.8 GB DB)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.REGISTRY }}/${{ env.PUBLISH_OWNER }}/bomlens-firmware\` (firmware unpack/ID, GPL tools; legacy alias: sbom-scanner-firmware)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.REGISTRY }}/${{ env.PUBLISH_OWNER }}/bomlens-aibom\` (AI-model SBOM, OWASP AIBOM Generator; legacy alias: sbom-scanner-aibom)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.REGISTRY }}/${{ env.PUBLISH_OWNER }}/bomlens-deep-cve\` (maven CPE matching against NVD via grype; ~1.8 GB DB)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Language SBOM generation uses cdxgen official images (pulled on-demand by scan-sbom.sh)." >> $GITHUB_STEP_SUMMARY
