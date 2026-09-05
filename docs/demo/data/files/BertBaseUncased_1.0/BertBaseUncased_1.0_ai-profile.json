@@ -1,12 +1,12 @@
 {
   "project": "BertBaseUncased",
-  "generatedAt": "2026-09-01T14:38:22Z",
+  "generatedAt": "2026-09-05T03:24:43Z",
   "conformanceResult": "pass",
   "g7": {
     "total": 51,
     "auto": 41,
-    "present": 31,
-    "gap": 10,
+    "present": 30,
+    "gap": 11,
     "review": 10,
     "notApplicable": 0,
     "clusters": [
@@ -45,8 +45,8 @@
       {
         "cluster": "models",
         "total": 14,
-        "present": 13,
-        "gap": 1,
+        "present": 12,
+        "gap": 2,
         "review": 0,
         "notApplicable": 0
       },
@@ -151,6 +151,12 @@
         "docUrl": ""
       },
       {
+        "id": "g7-model-description",
+        "label": "Model description",
+        "cluster": "models",
+        "docUrl": "https://huggingface.co/docs/hub/model-cards"
+      },
+      {
         "id": "g7-model-io",
         "label": "Model input-output properties",
         "cluster": "models",
@@ -190,8 +196,8 @@
         "title": "EU AI Act — Annex IV technical documentation",
         "source": "Regulation (EU) 2024/1689, Article 11(1) and Annex IV",
         "total": 23,
-        "present": 8,
-        "gap": 6,
+        "present": 7,
+        "gap": 7,
         "review": 9,
         "failed": 0,
         "elements": [
@@ -248,9 +254,9 @@
           {
             "id": "g7-model-description",
             "label": "Model description",
-            "status": "pass",
+            "status": "warn",
             "source": "auto",
-            "detail": "1/1 model component(s)",
+            "detail": "0/1 model component(s)",
             "refs": [
               "Annex IV(1)"
             ]
@@ -564,7 +570,7 @@
             "label": "Timestamp (metadata.timestamp)",
             "status": "pass",
             "source": null,
-            "detail": "2026-09-01T14:38:16+00:00",
+            "detail": "2026-09-05T03:24:39+00:00",
             "refs": [
               "Section 5.2.1"
             ]

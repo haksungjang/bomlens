@@ -2,7 +2,7 @@
   "project": "BertBaseUncased",
   "format": "CycloneDX",
   "result": "pass",
-  "generatedAt": "2026-09-01T14:38:21Z",
+  "generatedAt": "2026-09-05T03:24:42Z",
   "untraceableComponents": 0,
   "checks": [
     {
@@ -20,14 +20,16 @@
           "short": "BSI TR-03183-2",
           "short_ko": "BSI TR-03183-2"
         }
-      ]
+      ],
+      "label_ko": "사양 버전 (CycloneDX 1.3/1.4/1.5/1.6/1.7)",
+      "detail_ko": "CycloneDX 1.7"
     },
     {
       "id": "timestamp",
       "label": "Timestamp (metadata.timestamp)",
       "required": true,
       "status": "pass",
-      "detail": "2026-09-01T14:38:16+00:00",
+      "detail": "2026-09-05T03:24:39+00:00",
       "missing": [],
       "regulations": [
         {
@@ -37,7 +39,9 @@
           "short": "BSI TR-03183-2",
           "short_ko": "BSI TR-03183-2"
         }
-      ]
+      ],
+      "label_ko": "타임스탬프 (metadata.timestamp)",
+      "detail_ko": "2026-09-05T03:24:39+00:00"
     },
     {
       "id": "tools",
@@ -54,7 +58,9 @@
           "short": "BSI TR-03183-2",
           "short_ko": "BSI TR-03183-2"
         }
-      ]
+      ],
+      "label_ko": "도구 정보 (metadata.tools)",
+      "detail_ko": "도구 2개"
     },
     {
       "id": "top-component",
@@ -71,7 +77,9 @@
           "short": "BSI TR-03183-2",
           "short_ko": "BSI TR-03183-2"
         }
-      ]
+      ],
+      "label_ko": "최상위 구성요소 이름+버전",
+      "detail_ko": "bert-base-uncased@86b5e093"
     },
     {
       "id": "name-version",
@@ -90,7 +98,9 @@
           "short": "BSI TR-03183-2",
           "short_ko": "BSI TR-03183-2"
         }
-      ]
+      ],
+      "label_ko": "구성요소 이름+버전 포함률 (100%)",
+      "detail_ko": "측정할 패키지 없음"
     },
     {
       "id": "purl",
@@ -109,7 +119,9 @@
           "short": "BSI TR-03183-2",
           "short_ko": "BSI TR-03183-2"
         }
-      ]
+      ],
+      "label_ko": "PURL 포함률 (90% 이상)",
+      "detail_ko": "측정할 패키지 없음"
     },
     {
       "id": "file-identifier",
@@ -120,7 +132,9 @@
       "status": "warn",
       "detail": "no file components",
       "missing": [],
-      "regulations": []
+      "regulations": [],
+      "label_ko": "파일 구성요소 식별자 포함률 (해시, 80% 이상, 권장)",
+      "detail_ko": "파일 구성요소 없음"
     },
     {
       "id": "no-generic",
@@ -129,7 +143,9 @@
       "status": "pass",
       "detail": "0 untraceable",
       "missing": [],
-      "regulations": []
+      "regulations": [],
+      "label_ko": "추적 가능한 PURL (pkg:generic 없음, 권고)",
+      "detail_ko": "추적 불가 0개"
     },
     {
       "id": "purl-syntax",
@@ -138,7 +154,22 @@
       "status": "pass",
       "detail": "0 malformed",
       "missing": [],
-      "regulations": []
+      "regulations": [],
+      "label_ko": "PURL 형식 (pkg:type/[namespace/]name)",
+      "detail_ko": "형식 오류 0개"
+    },
+    {
+      "id": "os-purl-namespace",
+      "label": "OS package PURL distribution (pkg:rpm/<distro>/name)",
+      "required": true,
+      "source": "na",
+      "naKind": "not-applicable",
+      "status": "pass",
+      "detail": "no OS package identifiers",
+      "missing": [],
+      "regulations": [],
+      "label_ko": "OS 패키지 PURL 배포판 (pkg:rpm/<배포판>/이름)",
+      "detail_ko": "OS 패키지 식별자 없음"
     },
     {
       "id": "transitive",
@@ -157,7 +188,9 @@
           "short": "BSI TR-03183-2",
           "short_ko": "BSI TR-03183-2"
         }
-      ]
+      ],
+      "label_ko": "전이 의존성 (의존 그래프)",
+      "detail_ko": "의존 관계 2개"
     },
     {
       "id": "license",
@@ -176,7 +209,9 @@
           "short": "BSI TR-03183-2",
           "short_ko": "BSI TR-03183-2"
         }
-      ]
+      ],
+      "label_ko": "라이선스 포함률 (80% 이상, 권장)",
+      "detail_ko": "100% (2/2)"
     },
     {
       "id": "hash",
@@ -195,7 +230,9 @@
           "short": "BSI TR-03183-2",
           "short_ko": "BSI TR-03183-2"
         }
-      ]
+      ],
+      "label_ko": "해시 포함률 (50% 이상, 권장)",
+      "detail_ko": "50% (1/2)"
     },
     {
       "id": "hash-algorithm",
@@ -214,7 +251,9 @@
           "short": "BSI TR-03183-2",
           "short_ko": "BSI TR-03183-2"
         }
-      ]
+      ],
+      "label_ko": "SHA-512 체크섬 포함률 (80% 이상, 권장)",
+      "detail_ko": "0% (0/2)"
     },
     {
       "id": "component-creator",
@@ -233,7 +272,9 @@
           "short": "BSI TR-03183-2",
           "short_ko": "BSI TR-03183-2"
         }
-      ]
+      ],
+      "label_ko": "구성요소 작성자 포함률 (80% 이상, 권장)",
+      "detail_ko": "측정할 패키지 없음"
     },
     {
       "id": "component-filename",
@@ -252,7 +293,9 @@
           "short": "BSI TR-03183-2",
           "short_ko": "BSI TR-03183-2"
         }
-      ]
+      ],
+      "label_ko": "구성요소 파일명 포함률 (80% 이상, 권장)",
+      "detail_ko": "측정할 패키지 없음"
     },
     {
       "id": "artifact-uri",
@@ -271,7 +314,9 @@
           "short": "BSI TR-03183-2",
           "short_ko": "BSI TR-03183-2"
         }
-      ]
+      ],
+      "label_ko": "소스 또는 배포 URI 포함률 (80% 이상, 권장)",
+      "detail_ko": "측정할 패키지 없음"
     },
     {
       "id": "file-properties",
@@ -290,7 +335,9 @@
           "short": "BSI TR-03183-2",
           "short_ko": "BSI TR-03183-2"
         }
-      ]
+      ],
+      "label_ko": "배포 파일 속성 (실행 파일/압축 파일/구조화 파일)",
+      "detail_ko": "측정할 패키지 없음"
     },
     {
       "id": "g7-meta-author",
@@ -304,7 +351,8 @@
       "cluster": "metadata",
       "source": "auto",
       "role": "sbom-author",
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "SBOM에 없음"
     },
     {
       "id": "g7-meta-version",
@@ -318,7 +366,8 @@
       "cluster": "metadata",
       "source": "auto",
       "role": "sbom-author",
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "있음"
     },
     {
       "id": "g7-meta-format-name",
@@ -332,7 +381,8 @@
       "cluster": "metadata",
       "source": "auto",
       "role": "sbom-author",
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "있음"
     },
     {
       "id": "g7-meta-format-version",
@@ -346,7 +396,8 @@
       "cluster": "metadata",
       "source": "auto",
       "role": "sbom-author",
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "있음"
     },
     {
       "id": "g7-meta-signature",
@@ -364,7 +415,8 @@
         "snippet": "\"signature\": {\n  \"algorithm\": \"ES256\",\n  \"value\": \"MEUCIQD…\"\n}",
         "docUrl": "https://cyclonedx.org/docs/1.7/json/#signature"
       },
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "SBOM에 없음"
     },
     {
       "id": "g7-meta-tool-name",
@@ -378,7 +430,8 @@
       "cluster": "metadata",
       "source": "auto",
       "role": "sbom-author",
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "있음"
     },
     {
       "id": "g7-meta-tool-version",
@@ -392,7 +445,8 @@
       "cluster": "metadata",
       "source": "auto",
       "role": "sbom-author",
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "있음"
     },
     {
       "id": "g7-meta-gen-context",
@@ -406,7 +460,8 @@
       "cluster": "metadata",
       "source": "inferred",
       "role": "sbom-author",
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "SBOM에 없음"
     },
     {
       "id": "g7-meta-timestamp",
@@ -420,7 +475,8 @@
       "cluster": "metadata",
       "source": "auto",
       "role": "sbom-author",
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "있음"
     },
     {
       "id": "g7-meta-dependency",
@@ -434,7 +490,8 @@
       "cluster": "metadata",
       "source": "auto",
       "role": "sbom-author",
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "있음"
     },
     {
       "id": "g7-slp-name",
@@ -463,7 +520,8 @@
           "short": "AI Framework Act",
           "short_ko": "AI 기본법"
         }
-      ]
+      ],
+      "detail_ko": "SBOM에 없음"
     },
     {
       "id": "g7-slp-components",
@@ -477,7 +535,8 @@
       "cluster": "slp",
       "source": "inferred",
       "role": "system-producer",
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "있음"
     },
     {
       "id": "g7-slp-producer",
@@ -491,7 +550,8 @@
       "cluster": "slp",
       "source": "declared",
       "role": "system-producer",
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "SBOM에 없음"
     },
     {
       "id": "g7-slp-version",
@@ -505,7 +565,8 @@
       "cluster": "slp",
       "source": "inferred",
       "role": "system-producer",
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "있음"
     },
     {
       "id": "g7-slp-timestamp",
@@ -519,7 +580,8 @@
       "cluster": "slp",
       "source": "inferred",
       "role": "system-producer",
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "있음"
     },
     {
       "id": "g7-slp-data-flow",
@@ -553,7 +615,8 @@
           "short": "AI Framework Act",
           "short_ko": "AI 기본법"
         }
-      ]
+      ],
+      "detail_ko": "사람 검토 필요 (자동 확인 불가)"
     },
     {
       "id": "g7-slp-data-usage",
@@ -587,7 +650,8 @@
           "short": "AI Framework Act",
           "short_ko": "AI 기본법"
         }
-      ]
+      ],
+      "detail_ko": "사람 검토 필요 (자동 확인 불가)"
     },
     {
       "id": "g7-slp-io",
@@ -614,7 +678,8 @@
           "short": "EU AI Act",
           "short_ko": "EU 인공지능법"
         }
-      ]
+      ],
+      "detail_ko": "사람 검토 필요 (자동 확인 불가)"
     },
     {
       "id": "g7-slp-app-area",
@@ -648,7 +713,8 @@
           "short": "AI Framework Act",
           "short_ko": "AI 기본법"
         }
-      ]
+      ],
+      "detail_ko": "사람 검토 필요 (자동 확인 불가)"
     },
     {
       "id": "g7-model-name",
@@ -666,7 +732,8 @@
         "snippet": "{\n  \"type\": \"machine-learning-model\",\n  \"name\": \"Qwen2.5-0.5B\"\n}",
         "docUrl": "https://cyclonedx.org/capabilities/mlbom/"
       },
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "모델 구성요소 1/1개"
     },
     {
       "id": "g7-model-id",
@@ -686,7 +753,8 @@
         "snippet": "{\n  \"type\": \"machine-learning-model\",\n  \"name\": \"Qwen2.5-0.5B\",\n  \"purl\": \"pkg:huggingface/Qwen/Qwen2.5-0.5B\"\n}",
         "docUrl": "https://github.com/package-url/purl-spec"
       },
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "모델 구성요소 1/1개"
     },
     {
       "id": "g7-model-version",
@@ -704,7 +772,8 @@
         "snippet": "{\n  \"type\": \"machine-learning-model\",\n  \"name\": \"Qwen2.5-0.5B\",\n  \"version\": \"0.5B\"\n}",
         "docUrl": "https://cyclonedx.org/capabilities/mlbom/"
       },
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "모델 구성요소 1/1개"
     },
     {
       "id": "g7-model-timestamp",
@@ -718,7 +787,8 @@
       "cluster": "models",
       "source": "inferred",
       "role": "model-producer",
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "모델 구성요소 1/1개"
     },
     {
       "id": "g7-model-producer",
@@ -732,16 +802,19 @@
       "cluster": "models",
       "source": "inferred",
       "role": "model-producer",
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "모델 구성요소 1/1개"
     },
     {
       "id": "g7-model-description",
       "label": "Model description",
       "label_ko": "모델 설명",
       "required": false,
-      "status": "pass",
-      "detail": "1/1 model component(s)",
-      "missing": [],
+      "status": "warn",
+      "detail": "0/1 model component(s)",
+      "missing": [
+        "bert-base-uncased"
+      ],
       "evidence": [],
       "cluster": "models",
       "source": "auto",
@@ -758,7 +831,8 @@
           "short": "EU AI Act",
           "short_ko": "EU 인공지능법"
         }
-      ]
+      ],
+      "detail_ko": "모델 구성요소 0/1개"
     },
     {
       "id": "g7-model-hash-value",
@@ -776,7 +850,8 @@
         "snippet": "\"hashes\": [\n  { \"alg\": \"SHA-256\", \"content\": \"9f86d081884c7d65…\" }\n]",
         "docUrl": "https://cyclonedx.org/capabilities/mlbom/"
       },
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "모델 구성요소 1/1개"
     },
     {
       "id": "g7-model-hash-alg",
@@ -796,7 +871,8 @@
         "snippet": "\"hashes\": [\n  { \"alg\": \"SHA-256\", \"content\": \"9f86d081884c7d65…\" }\n]",
         "docUrl": "https://cyclonedx.org/capabilities/mlbom/"
       },
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "모델 구성요소 1/1개"
     },
     {
       "id": "g7-model-card",
@@ -824,7 +900,8 @@
           "short": "EU AI Act",
           "short_ko": "EU 인공지능법"
         }
-      ]
+      ],
+      "detail_ko": "모델 구성요소 1/1개"
     },
     {
       "id": "g7-model-io",
@@ -852,7 +929,8 @@
           "short": "EU AI Act",
           "short_ko": "EU 인공지능법"
         }
-      ]
+      ],
+      "detail_ko": "모델 구성요소 0/1개"
     },
     {
       "id": "g7-model-training",
@@ -885,7 +963,8 @@
           "short": "AI Framework Act",
           "short_ko": "AI 기본법"
         }
-      ]
+      ],
+      "detail_ko": "모델 구성요소 1/1개"
     },
     {
       "id": "g7-model-license",
@@ -905,7 +984,8 @@
         "snippet": "\"licenses\": [\n  { \"license\": { \"id\": \"Apache-2.0\" } }\n]",
         "docUrl": "https://huggingface.co/docs/hub/repositories-licenses"
       },
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "모델 구성요소 1/1개"
     },
     {
       "id": "g7-model-openness",
@@ -931,7 +1011,8 @@
         "snippet": "\"properties\": [\n  { \"name\": \"openness:weights\", \"value\": \"open-weight\" },\n  { \"name\": \"openness:training-data\", \"value\": \"open-data\" }\n]",
         "docUrl": "https://isitopen.ai/"
       },
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "있음"
     },
     {
       "id": "g7-model-extref",
@@ -949,7 +1030,8 @@
         "snippet": "\"externalReferences\": [\n  { \"type\": \"distribution\", \"url\": \"https://huggingface.co/Qwen/Qwen2.5-0.5B\" }\n]",
         "docUrl": "https://cyclonedx.org/docs/1.7/json/#components_items_externalReferences"
       },
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "모델 구성요소 1/1개"
     },
     {
       "id": "g7-ds-name",
@@ -978,7 +1060,8 @@
           "short": "EU AI Act",
           "short_ko": "EU 인공지능법"
         }
-      ]
+      ],
+      "detail_ko": "있음"
     },
     {
       "id": "g7-ds-description",
@@ -1004,7 +1087,8 @@
           "short": "EU AI Act",
           "short_ko": "EU 인공지능법"
         }
-      ]
+      ],
+      "detail_ko": "있음"
     },
     {
       "id": "g7-ds-content",
@@ -1030,7 +1114,8 @@
           "short": "EU AI Act",
           "short_ko": "EU 인공지능법"
         }
-      ]
+      ],
+      "detail_ko": "있음"
     },
     {
       "id": "g7-ds-identifier",
@@ -1048,7 +1133,8 @@
         "snippet": "{\n  \"type\": \"data\",\n  \"bom-ref\": \"dataset:wikipedia\",\n  \"purl\": \"pkg:huggingface/datasets/wikipedia\"\n}",
         "docUrl": "https://github.com/package-url/purl-spec"
       },
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "있음"
     },
     {
       "id": "g7-ds-hash",
@@ -1066,7 +1152,8 @@
         "snippet": "{\n  \"type\": \"data\",\n  \"name\": \"wikipedia\",\n  \"hashes\": [ { \"alg\": \"SHA-256\", \"content\": \"3b7a…c19f\" } ]\n}",
         "docUrl": "https://cyclonedx.org/capabilities/mlbom/"
       },
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "있음"
     },
     {
       "id": "g7-ds-provenance",
@@ -1092,7 +1179,8 @@
           "short": "EU AI Act",
           "short_ko": "EU 인공지능법"
         }
-      ]
+      ],
+      "detail_ko": "있음"
     },
     {
       "id": "g7-ds-statistics",
@@ -1119,7 +1207,8 @@
           "short": "EU AI Act",
           "short_ko": "EU 인공지능법"
         }
-      ]
+      ],
+      "detail_ko": "사람 검토 필요 (자동 확인 불가)"
     },
     {
       "id": "g7-ds-sensitivity",
@@ -1153,7 +1242,8 @@
           "short": "AI Framework Act",
           "short_ko": "AI 기본법"
         }
-      ]
+      ],
+      "detail_ko": "사람 검토 필요 (자동 확인 불가)"
     },
     {
       "id": "g7-ds-dependency",
@@ -1171,7 +1261,8 @@
         "snippet": "\"dependencies\": [ {\n  \"ref\": \"pkg:huggingface/google-bert/bert-base-uncased\",\n  \"dependsOn\": [ \"dataset:huggingface/wikipedia\" ]\n} ]",
         "docUrl": "https://cyclonedx.org/capabilities/mlbom/"
       },
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "있음"
     },
     {
       "id": "g7-ds-license",
@@ -1197,7 +1288,8 @@
           "short": "EU AI Act",
           "short_ko": "EU 인공지능법"
         }
-      ]
+      ],
+      "detail_ko": "있음"
     },
     {
       "id": "g7-infra-software",
@@ -1219,7 +1311,8 @@
           "short": "EU AI Act",
           "short_ko": "EU 인공지능법"
         }
-      ]
+      ],
+      "detail_ko": "SBOM에 없음"
     },
     {
       "id": "g7-infra-hardware",
@@ -1245,7 +1338,8 @@
           "short": "EU AI Act",
           "short_ko": "EU 인공지능법"
         }
-      ]
+      ],
+      "detail_ko": "SBOM에 없음"
     },
     {
       "id": "g7-sec-controls",
@@ -1279,7 +1373,8 @@
           "short": "AI Framework Act",
           "short_ko": "AI 기본법"
         }
-      ]
+      ],
+      "detail_ko": "사람 검토 필요 (자동 확인 불가)"
     },
     {
       "id": "g7-sec-compliance",
@@ -1298,7 +1393,8 @@
         "how_ko": "이 모델이 어떤 보안 표준이나 사내 정책을 따라 만들어졌는지, 누가 승인했는지 밝힙니다. 내용을 옮겨 적기보다 점검 기록을 가리키는 편이 낫습니다.",
         "docUrl": "https://www.bsi.bund.de/SharedDocs/Downloads/EN/BSI/KI/SBOM-for-AI_minimum-elements.pdf?__blob=publicationFile&v=4"
       },
-      "regulations": []
+      "regulations": [],
+      "detail_ko": "사람 검토 필요 (자동 확인 불가)"
     },
     {
       "id": "g7-sec-policy",
@@ -1332,7 +1428,8 @@
           "short": "AI Framework Act",
           "short_ko": "AI 기본법"
         }
-      ]
+      ],
+      "detail_ko": "사람 검토 필요 (자동 확인 불가)"
     },
     {
       "id": "g7-sec-vulns",
@@ -1361,7 +1458,8 @@
           "short": "AI Framework Act",
           "short_ko": "AI 기본법"
         }
-      ]
+      ],
+      "detail_ko": "SBOM에 없음"
     },
     {
       "id": "g7-kpi-security",
@@ -1395,7 +1493,8 @@
           "short": "AI Framework Act",
           "short_ko": "AI 기본법"
         }
-      ]
+      ],
+      "detail_ko": "사람 검토 필요 (자동 확인 불가)"
     },
     {
       "id": "g7-kpi-operational",
@@ -1417,7 +1516,8 @@
           "short": "EU AI Act",
           "short_ko": "EU 인공지능법"
         }
-      ]
+      ],
+      "detail_ko": "SBOM에 없음"
     },
     {
       "id": "cisa-sbom-author",
@@ -1443,7 +1543,8 @@
           "short": "CISA 2026",
           "short_ko": "CISA 2026"
         }
-      ]
+      ],
+      "detail_ko": "SBOM에 없음"
     },
     {
       "id": "cisa-sbom-author-signature",
@@ -1470,7 +1571,8 @@
           "short": "CISA 2026",
           "short_ko": "CISA 2026"
         }
-      ]
+      ],
+      "detail_ko": "SBOM에 없음"
     },
     {
       "id": "cisa-sbom-format-name",
@@ -1492,7 +1594,8 @@
           "short": "CISA 2026",
           "short_ko": "CISA 2026"
         }
-      ]
+      ],
+      "detail_ko": "있음"
     },
     {
       "id": "cisa-sbom-format-version",
@@ -1514,7 +1617,8 @@
           "short": "CISA 2026",
           "short_ko": "CISA 2026"
         }
-      ]
+      ],
+      "detail_ko": "있음"
     },
     {
       "id": "cisa-sbom-generation-context",
@@ -1540,7 +1644,8 @@
           "short": "CISA 2026",
           "short_ko": "CISA 2026"
         }
-      ]
+      ],
+      "detail_ko": "있음"
     },
     {
       "id": "cisa-sbom-timestamp",
@@ -1562,7 +1667,8 @@
           "short": "CISA 2026",
           "short_ko": "CISA 2026"
         }
-      ]
+      ],
+      "detail_ko": "있음"
     },
     {
       "id": "cisa-sbom-tool-name",
@@ -1584,7 +1690,8 @@
           "short": "CISA 2026",
           "short_ko": "CISA 2026"
         }
-      ]
+      ],
+      "detail_ko": "있음"
     },
     {
       "id": "cisa-sbom-tool-version",
@@ -1610,7 +1717,8 @@
           "short": "CISA 2026",
           "short_ko": "CISA 2026"
         }
-      ]
+      ],
+      "detail_ko": "있음"
     },
     {
       "id": "cisa-sbom-version",
@@ -1632,7 +1740,8 @@
           "short": "CISA 2026",
           "short_ko": "CISA 2026"
         }
-      ]
+      ],
+      "detail_ko": "있음"
     },
     {
       "id": "cisa-component-name",
@@ -1654,7 +1763,8 @@
           "short": "CISA 2026",
           "short_ko": "CISA 2026"
         }
-      ]
+      ],
+      "detail_ko": "구성요소 3/3"
     },
     {
       "id": "cisa-component-version",
@@ -1676,7 +1786,8 @@
           "short": "CISA 2026",
           "short_ko": "CISA 2026"
         }
-      ]
+      ],
+      "detail_ko": "구성요소 3/3"
     },
     {
       "id": "cisa-component-producer",
@@ -1702,7 +1813,8 @@
           "short": "CISA 2026",
           "short_ko": "CISA 2026"
         }
-      ]
+      ],
+      "detail_ko": "구성요소 3/3"
     },
     {
       "id": "cisa-component-identifiers",
@@ -1728,7 +1840,8 @@
           "short": "CISA 2026",
           "short_ko": "CISA 2026"
         }
-      ]
+      ],
+      "detail_ko": "구성요소 2/3"
     },
     {
       "id": "cisa-component-license",
@@ -1750,7 +1863,8 @@
           "short": "CISA 2026",
           "short_ko": "CISA 2026"
         }
-      ]
+      ],
+      "detail_ko": "구성요소 3/3"
     },
     {
       "id": "cisa-component-hash-value",
@@ -1778,7 +1892,8 @@
           "short": "CISA 2026",
           "short_ko": "CISA 2026"
         }
-      ]
+      ],
+      "detail_ko": "구성요소 2/3"
     },
     {
       "id": "cisa-component-hash-algorithm",
@@ -1800,7 +1915,8 @@
           "short": "CISA 2026",
           "short_ko": "CISA 2026"
         }
-      ]
+      ],
+      "detail_ko": "구성요소 3/3"
     },
     {
       "id": "cisa-component-dependency-relationship",
@@ -1822,7 +1938,8 @@
           "short": "CISA 2026",
           "short_ko": "CISA 2026"
         }
-      ]
+      ],
+      "detail_ko": "있음"
     },
     {
       "id": "cisa-machine-processable-data",
@@ -1844,7 +1961,8 @@
           "short": "CISA 2026",
           "short_ko": "CISA 2026"
         }
-      ]
+      ],
+      "detail_ko": "있음"
     },
     {
       "id": "cisa-coverage",
@@ -1871,7 +1989,8 @@
           "short": "CISA 2026",
           "short_ko": "CISA 2026"
         }
-      ]
+      ],
+      "detail_ko": "사람 검토 필요 (자동 확인 불가)"
     },
     {
       "id": "cisa-accommodation-of-updates",
@@ -1898,7 +2017,8 @@
           "short": "CISA 2026",
           "short_ko": "CISA 2026"
         }
-      ]
+      ],
+      "detail_ko": "사람 검토 필요 (자동 확인 불가)"
     },
     {
       "id": "cisa-distribution-and-delivery",
@@ -1925,7 +2045,8 @@
           "short": "CISA 2026",
           "short_ko": "CISA 2026"
         }
-      ]
+      ],
+      "detail_ko": "사람 검토 필요 (자동 확인 불가)"
     },
     {
       "id": "cisa-explicit-unknowns",
@@ -1951,7 +2072,8 @@
           "short": "CISA 2026",
           "short_ko": "CISA 2026"
         }
-      ]
+      ],
+      "detail_ko": "있음"
     },
     {
       "id": "cisa-frequency",
@@ -1978,7 +2100,8 @@
           "short": "CISA 2026",
           "short_ko": "CISA 2026"
         }
-      ]
+      ],
+      "detail_ko": "사람 검토 필요 (자동 확인 불가)"
     }
   ],
   "regulatoryCrosswalk": {
@@ -1989,8 +2112,8 @@
         "title": "EU AI Act — Annex IV technical documentation",
         "source": "Regulation (EU) 2024/1689, Article 11(1) and Annex IV",
         "total": 23,
-        "present": 8,
-        "gap": 6,
+        "present": 7,
+        "gap": 7,
         "review": 9,
         "failed": 0,
         "elements": [
@@ -2047,9 +2170,9 @@
           {
             "id": "g7-model-description",
             "label": "Model description",
-            "status": "pass",
+            "status": "warn",
             "source": "auto",
-            "detail": "1/1 model component(s)",
+            "detail": "0/1 model component(s)",
             "refs": [
               "Annex IV(1)"
             ]
@@ -2363,7 +2486,7 @@
             "label": "Timestamp (metadata.timestamp)",
             "status": "pass",
             "source": null,
-            "detail": "2026-09-01T14:38:16+00:00",
+            "detail": "2026-09-05T03:24:39+00:00",
             "refs": [
               "Section 5.2.1"
             ]
