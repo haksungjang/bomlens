@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   docs:
-    uses: sktelecom/bomlens/.github/workflows/docs.yml@ci/publish-from-caller
+    uses: sktelecom/bomlens/.github/workflows/docs.yml@main
     permissions:
       contents: write
     with:

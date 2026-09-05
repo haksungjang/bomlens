@@ -46,7 +46,7 @@ jobs:
   images:
     name: Images
     if: inputs.run_images
-    uses: sktelecom/bomlens/.github/workflows/docker-publish.yml@ci/publish-from-caller
+    uses: sktelecom/bomlens/.github/workflows/docker-publish.yml@main
     permissions:
       contents: write
       id-token: write
@@ -65,7 +65,7 @@ jobs:
   # has verified the published image and the attached installers.
   release:
     name: Release
-    uses: sktelecom/bomlens/.github/workflows/release.yml@ci/publish-from-caller
+    uses: sktelecom/bomlens/.github/workflows/release.yml@main
     permissions:
       contents: write
       id-token: write
@@ -88,7 +88,7 @@ jobs:
   desktop:
     name: Installers
     if: inputs.run_installers
-    uses: sktelecom/bomlens/.github/workflows/desktop.yml@ci/publish-from-caller
+    uses: sktelecom/bomlens/.github/workflows/desktop.yml@main
     permissions:
       contents: write
     with:
