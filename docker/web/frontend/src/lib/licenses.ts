@@ -140,11 +140,56 @@ export function licenseRiskTier(license: string): LicenseRiskTier {
   return "uncategorized";
 }
 
+// ---------------------------------------------------------------------------
+// Generic-classifier redundancy, MIRRORED in license-flags.jq
+// (drop_redundant_generic_synonyms). A component can carry the same license
+// twice: a precise SPDX id (from a lockfile or wheel metadata) and a PyPI
+// trove-classifier string ("License :: OSI Approved :: BSD License") for the
+// same grant. The classifier alone is genuinely ambiguous (which BSD?) and
+// stays uncategorized on its own — that headline rule is unchanged. But
+// worst-of was treating the SAME license stated twice as if the second
+// statement were an unrelated, unidentified second license, which pulled real
+// python packages (babel, python-dateutil's own BSD entry, every Jupyter
+// package pinning "BSD License" alongside "BSD-3-Clause") down to
+// Uncategorized despite an exact, known-permissive id sitting right next to it
+// in the same array. Only drop the generic string when a specific id from its
+// OWN family is also present on the SAME component — a genuinely different
+// second license (nvidia-nvtx's Apache-2.0 + Other/Proprietary License,
+// python-dateutil's + Dual License) still pulls the class down, since neither
+// is this classifier's family.
+const GENERIC_LICENSE_SYNONYM_FAMILY: Record<string, string> = {
+  "BSD LICENSE": "BSD",
+  "APACHE SOFTWARE LICENSE": "APACHE",
+  "APACHE LICENSE 2.0": "APACHE",
+  "APACHE LICENSE, VERSION 2.0": "APACHE",
+  "MIT LICENSE": "MIT",
+  "PYTHON SOFTWARE FOUNDATION LICENSE": "PYTHON",
+};
+
+const LICENSE_FAMILY_IDS: Record<string, string[]> = {
+  BSD: ["BSD-2-CLAUSE", "BSD-3-CLAUSE"],
+  APACHE: ["APACHE-1.1", "APACHE-2.0"],
+  MIT: ["MIT", "MIT-0"],
+  PYTHON: ["PSF-2.0", "PYTHON-2.0"],
+};
+
+/** Drop a generic classifier string when the same list also carries a precise
+ *  id from its family; every other string (including a genuinely unidentified
+ *  one) passes through untouched. */
+function dropRedundantGenericSynonyms(licenses: string[]): string[] {
+  const upper = licenses.map((l) => l.toUpperCase());
+  return licenses.filter((l) => {
+    const family = GENERIC_LICENSE_SYNONYM_FAMILY[l.toUpperCase()];
+    if (!family) return true;
+    return !upper.some((u) => LICENSE_FAMILY_IDS[family].includes(u));
+  });
+}
+
 /** The most concerning tier across a component's (non-empty) license list. */
 function worstTier(licenses: string[]): LicenseRiskTier {
   let tier: LicenseRiskTier = "permissive";
   let rank = -1;
-  for (const l of licenses) {
+  for (const l of dropRedundantGenericSynonyms(licenses)) {
     const t = licenseRiskTier(l);
     if (TIER_RANK[t] > rank) {
       rank = TIER_RANK[t];
@@ -161,11 +206,15 @@ function worstTier(licenses: string[]): LicenseRiskTier {
  *
  * This is the set the "needs a licence decision" filter narrows to. Measured on
  * real trees: 3 of 39 components in a small example, 57 of 113 in a research
- * project — which is why finding them by eye is not the answer.
+ * project — which is why finding them by eye is not the answer. Redundant
+ * generic synonyms are dropped first (see dropRedundantGenericSynonyms) so this
+ * agrees with worstTier: a component the risk tier calls permissive never also
+ * shows up here as needing a decision.
  */
 export function licenseNeedsDecision(licenses: string[]): boolean {
-  if (licenses.length === 0) return true;
-  return licenses.some((l) => licenseRiskTier(l) === "uncategorized");
+  const kept = dropRedundantGenericSynonyms(licenses);
+  if (kept.length === 0) return true;
+  return kept.some((l) => licenseRiskTier(l) === "uncategorized");
 }
 
 /** True for copyleft/reciprocal license ids worth a closer look. */

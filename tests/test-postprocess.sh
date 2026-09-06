@@ -598,6 +598,28 @@ lclasscc() { jq -r --arg n "$1" '.components[] | select(.name==$n)
 [ "$(lclasscc cc-by-nc-sa-lib)" = "weak-copyleft" ] && pass "CC-BY-NC-SA -> weak-copyleft (SA still propagates alongside NC)" || fail "cc-by-nc-sa-lib class='$(lclasscc cc-by-nc-sa-lib)', expected weak-copyleft"
 [ "$(lclasscc cc0-lib)" = "permissive" ] && pass "CC0 -> permissive (allowlist match, unchanged)" || fail "cc0-lib class='$(lclasscc cc0-lib)', expected permissive"
 
+# Generic-classifier redundancy: a PyPI trove-classifier string ("BSD License")
+# and a precise SPDX id for the same grant on the SAME component must not pull
+# the class down to uncategorized just because worst-of saw two entries.
+# Real-world components, verified against examples/python/cellpose_1.0.0's SBOM.
+cat > "$WORK/lcsyn.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6","components":[
+ {"type":"library","name":"babel-like","version":"1.0","licenses":[{"license":{"id":"BSD-3-Clause"}},{"license":{"name":"BSD License"}}]},
+ {"type":"library","name":"lone-generic","version":"1.0","licenses":[{"license":{"name":"BSD License"}}]},
+ {"type":"library","name":"nvidia-nvtx-like","version":"1.0","licenses":[{"license":{"id":"Apache-2.0"}},{"license":{"name":"Other/Proprietary License"}}]},
+ {"type":"library","name":"python-dateutil-like","version":"1.0","licenses":[{"license":{"id":"Apache-2.0"}},{"license":{"name":"BSD License"}},{"license":{"name":"Dual License"}}]},
+ {"type":"library","name":"mit-like","version":"1.0","licenses":[{"license":{"id":"MIT"}},{"license":{"name":"MIT License"}}]}
+]}
+JSON
+bash "$LIB/normalize-sbom.sh" "$WORK/lcsyn.json" >/dev/null 2>&1
+lclasssyn() { jq -r --arg n "$1" '.components[] | select(.name==$n)
+    | [(.properties // [])[] | select(.name=="bomlens:licenseClass") | .value] | first // "ABSENT"' "$WORK/lcsyn.json"; }
+[ "$(lclasssyn babel-like)" = "permissive" ] && pass "BSD-3-Clause + its own generic classifier -> permissive, not dragged to uncategorized" || fail "babel-like class='$(lclasssyn babel-like)', expected permissive"
+[ "$(lclasssyn lone-generic)" = "uncategorized" ] && pass "the generic classifier alone (no precise sibling) stays uncategorized -- never assumed permissive" || fail "lone-generic class='$(lclasssyn lone-generic)', expected uncategorized"
+[ "$(lclasssyn nvidia-nvtx-like)" = "uncategorized" ] && pass "a genuinely different second license (not the classifier's family) still pulls the class down" || fail "nvidia-nvtx-like class='$(lclasssyn nvidia-nvtx-like)', expected uncategorized"
+[ "$(lclasssyn python-dateutil-like)" = "uncategorized" ] && pass "BSD License with no BSD sibling, plus a genuinely unidentified Dual License, stays uncategorized" || fail "python-dateutil-like class='$(lclasssyn python-dateutil-like)', expected uncategorized"
+[ "$(lclasssyn mit-like)" = "permissive" ] && pass "MIT + its own generic classifier -> permissive" || fail "mit-like class='$(lclasssyn mit-like)', expected permissive"
+
 # A licenseReview-flagged component still gets a class: the two properties coexist.
 lr=$(jq -r '.components[] | select(.name=="llama-model")
     | [(.properties // [])[] | select(.name=="bomlens:licenseReview") | .value] | first // "ABSENT"' "$WORK/lc.json")
