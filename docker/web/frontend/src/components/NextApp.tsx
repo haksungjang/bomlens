@@ -212,6 +212,19 @@ export function NextApp() {
     [recent],
   );
 
+  // Switch to one of the idle home views (Recent or New scan), resetting any
+  // loaded/running scan state first. Shared by the hash router (on a `#/` or
+  // `#/new` navigation) and by the "New scan" controls below, which must reset
+  // the same way even when the hash is already `#/new` and so fires no
+  // `hashchange` (see goToNewScan).
+  const enterHome = useCallback(
+    (kind: "recent" | "new") => {
+      setHomeView(kind);
+      if (loadedIdRef.current !== null || status !== "idle") resetToHome();
+    },
+    [status, resetToHome],
+  );
+
   // The hash router: parse on mount and on every hashchange. Skip while a live
   // scan is running — that view is owned by the run() state machine, not the URL
   // (there is no id yet), and run()'s done handler sets the URL when it finishes.
@@ -219,13 +232,26 @@ export function NextApp() {
     if (status === "running") return;
     const parsed = parseHash(window.location.hash);
     if (parsed.kind === "recent" || parsed.kind === "new") {
-      setHomeView(parsed.kind);
-      if (loadedIdRef.current !== null || status !== "idle") resetToHome();
+      enterHome(parsed.kind);
       return;
     }
     setSectionQuery(parsed.query ?? {});
     showScan(parsed.id, parsed.section);
-  }, [status, resetToHome, showScan]);
+  }, [status, enterHome, showScan]);
+
+  // Explicit "New scan" affordances (TopBar, Sidebar, the failed-scan error
+  // card) call this directly instead of relying solely on the `<a href="#/new">`
+  // they still carry. A scan started from `#/new` that then fails (no `done`
+  // event, so the URL never moved off `#/new`) leaves the hash unchanged when
+  // one of these is clicked, so the browser fires no `hashchange` and the
+  // router above never re-runs. Resetting state here first makes the click work
+  // either way; setting the hash afterwards is a no-op when it's already
+  // `#/new` and a normal navigation otherwise (harmless if it re-triggers the
+  // router — state is already reset, so that second pass does nothing further).
+  const goToNewScan = useCallback(() => {
+    enterHome("new");
+    if (window.location.hash !== newHash()) window.location.hash = newHash();
+  }, [enterHome]);
 
   // Run the router on mount and on real navigations (hashchange) only — never on
   // a bare status change. Re-running it on status change would, when a scan
@@ -409,6 +435,7 @@ export function NextApp() {
       showSections={Boolean(result)}
       homeHref={homeHash()}
       showHomeLink={!(isHome && homeView === "recent")}
+      onNewScan={goToNewScan}
       project={isHome ? undefined : projectInfo}
       search={
         result ? <GlobalSearch result={result} onPick={handleSearchPick} /> : undefined
@@ -449,6 +476,7 @@ export function NextApp() {
             }
             errorMessage={scanError}
             newScanHref={newHash()}
+            onNewScan={goToNewScan}
             deepCveEnabled={retryParams?.deepCve}
             onRetry={
               canRetry && retryParams ? () => run(retryParams) : undefined
