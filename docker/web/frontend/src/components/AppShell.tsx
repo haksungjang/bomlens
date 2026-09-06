@@ -40,6 +40,10 @@ interface AppShellProps {
   homeHref: string;
   /** Show the logo as a link home (hidden on the Recent home screen itself). */
   showHomeLink?: boolean;
+  /** Reset to a blank New scan form, in addition to the `#/new` navigation the
+   *  TopBar/Sidebar links already carry — needed when a scan started from
+   *  `#/new` fails, leaving the hash unchanged (see `NextApp.goToNewScan`). */
+  onNewScan?: () => void;
   /** The active section's content fills the canvas. */
   children: ReactNode;
 }
@@ -67,6 +71,7 @@ export function AppShell({
   onRescan,
   homeHref,
   showHomeLink,
+  onNewScan,
   children,
   version,
 }: AppShellProps) {
@@ -93,6 +98,7 @@ export function AppShell({
         homeHref={homeHref}
         showHomeLink={showHomeLink}
         newHref={newHash()}
+        onNewScan={onNewScan}
         recent={recent}
         onDeleteRecent={onDeleteRecent}
         version={version}
@@ -109,6 +115,7 @@ export function AppShell({
             onToggleCollapsed={() => setManualCollapsed(!collapsed)}
             homeHref={homeHref}
             newHref={newHash()}
+            onNewScan={onNewScan}
           />
         )}
         {/* tabIndex makes the scrollable region keyboard-accessible (axe
