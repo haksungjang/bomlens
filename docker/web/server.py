@@ -33,6 +33,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import urllib.parse
 import zipfile
 from datetime import datetime
@@ -2466,6 +2467,12 @@ def run_sibling_scan(image, mode, out_dir, on_log, *, upload_file=None, model_id
                     on_progress=(lambda snap: on_progress({"phase": "pull", **snap}))
                     if on_progress is not None else None,
                     cancel=cancel)
+    else:
+        # Already present is not the same as current: a stale `:latest` layer
+        # from before a fix would otherwise run forever once cached. Bounded by
+        # a stall timeout (see refresh_sibling_image_quietly), so this never
+        # delays a scan by more than a few seconds on a normal or offline host.
+        refresh_sibling_image_quietly(image, on_log)
 
     on_log("[ui] launching %s in a sibling container (%s)..." % (mode.lower(), image))
     # Pass the assembled env (os.environ + extra_env) to the docker-run process so
@@ -2522,6 +2529,11 @@ def convert_bom_to_spdx(bom_path, spdx_path, stable, on_log):
     if not _sibling_image_present(image):
         on_log("[ui] pulling %s (one-time download)..." % image)
         _pull_image(image, on_log)
+    else:
+        # Same staleness concern as run_sibling_scan's sibling, just far less
+        # frequent (only when this image itself lacks syft, see the capability
+        # note above).
+        refresh_sibling_image_quietly(image, on_log)
     return _stream_cmd([
         "docker", "run", "--rm",
         "--volumes-from", self_cid,
@@ -2756,6 +2768,91 @@ def _sibling_image_present(image):
         return r.returncode == 0
     except OSError:
         return False
+
+
+# refresh_sibling_image_quietly's stall/absolute timeouts, overridable only for
+# tests (a stalled fake `docker pull` must give up in well under a second, not
+# the real-world default). Never documented; not a user-facing switch — this
+# just re-times a pull the tool already performs, it does not add a new one.
+_SIBLING_REFRESH_STALL_SECS = float(os.environ.get("_SIBLING_REFRESH_STALL_SECS", "12"))
+_SIBLING_REFRESH_MAX_SECS = float(os.environ.get("_SIBLING_REFRESH_MAX_SECS", str(45 * 60)))
+
+
+def refresh_sibling_image_quietly(image, on_log, stall_secs=None, max_secs=None):
+    """Best-effort background refresh of a sibling image already present locally.
+
+    _sibling_image_present only means the tag was pulled at SOME point; a report
+    can update this app and still run a scan against a sibling image `docker
+    pull` never refreshed since (a stale `:latest` layer cached from before a
+    fix — see _sibling_image_version's docstring, which reports that mismatch
+    but never corrects it). This re-runs `docker pull` for the same reference
+    right before use, so the very next scan runs the currently published image
+    instead of whatever was cached on first use.
+
+    Mirrors the desktop app's refreshImageInBackground (electron/lib/container.mjs
+    pullImage + BACKGROUND_REFRESH_STALL_MS): bounded by STALL, not by elapsed
+    time. An up-to-date pull prints one line and exits well under a second; an
+    offline/blocked registry never prints anything and is killed after
+    `stall_secs`. A genuinely slow-but-progressing download (real new layers)
+    resets the stall timer on every output line, so this never cuts off a real
+    refresh — `max_secs` is only a runaway backstop.
+
+    Best-effort and silent either way: this never raises, has no return value,
+    and the caller never checks one — every outcome (up to date, offline, timed
+    out, a real refresh) ends with the caller proceeding on whatever image is on
+    disk. Only a single diagnostic line goes to on_log, so a report of "the scan
+    used an old image" can be traced without a return value to plumb through.
+    """
+    if stall_secs is None:
+        stall_secs = _SIBLING_REFRESH_STALL_SECS
+    if max_secs is None:
+        max_secs = _SIBLING_REFRESH_MAX_SECS
+    if not _valid_image_ref(image):
+        return
+    try:
+        proc = subprocess.Popen(
+            ["docker", "pull", image], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1,
+        )
+    except OSError:
+        return
+
+    prog = PullProgress()
+    last_activity = [time.monotonic()]
+    refreshing = [False]
+
+    def _reader():
+        try:
+            for raw in proc.stdout:
+                last_activity[0] = time.monotonic()
+                for piece in raw.rstrip("\n").split("\r"):
+                    if piece and prog.feed(piece) is not None:
+                        refreshing[0] = True
+        except (OSError, ValueError):
+            pass
+
+    reader = threading.Thread(target=_reader, daemon=True)
+    reader.start()
+
+    started = time.monotonic()
+    stalled = False
+    while proc.poll() is None:
+        now = time.monotonic()
+        if now - last_activity[0] > stall_secs or now - started > max_secs:
+            stalled = True
+            proc.kill()
+            break
+        time.sleep(0.2)
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+    reader.join(timeout=2)
+
+    if stalled or proc.returncode != 0:
+        on_log("[ui] background refresh of %s skipped (offline or no update)" % image)
+    elif refreshing[0]:
+        on_log("[ui] refreshed %s to the latest published layers" % image)
 
 
 # Reads the version baked into a LOCALLY PRESENT sibling image, the same way
