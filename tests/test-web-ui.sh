@@ -57,8 +57,8 @@ done
 
 echo "== capabilities + results contract =="
 caps=$(curl -fsS "$BASE/capabilities" 2>/dev/null)
-if echo "$caps" | python3 -c "import sys,json;d=json.load(sys.stdin);assert all(k in d for k in('firmware','docker','scanoss','aibom','firmwareSibling','aibomSibling','deepCve','deepCveSibling','version','externalLookup'))" 2>/dev/null; then
-    pass "/capabilities reports firmware, docker, scanoss, aibom, deepCve (+ sibling), externalLookup flags and the image version"
+if echo "$caps" | python3 -c "import sys,json;d=json.load(sys.stdin);assert all(k in d for k in('firmware','docker','scanoss','aibom','firmwareSibling','aibomSibling','deepCve','deepCveSibling','version'))" 2>/dev/null; then
+    pass "/capabilities reports firmware, docker, scanoss, aibom, deepCve (+ sibling) flags and the image version"
 else
     fail "/capabilities missing expected keys" "$caps"
 fi
@@ -138,6 +138,10 @@ def fake_stream(args, on_log, on_progress=None, cancel=None, container=None, env
     return 0
 server._stream_cmd = fake_stream
 server._sibling_image_present = lambda image: True
+# This section tests dispatch/allowlisting, not the background refresh (that has
+# its own section below with a fake docker on PATH) — stub it to a no-op so an
+# "already present" image never shells out to a real `docker pull` here.
+server.refresh_sibling_image_quietly = lambda *a, **k: None
 
 rc = server.run_sibling_scan(
     "ghcr.io/sktelecom/bomlens-aibom:1.5.0", "AIBOM", run_out,
@@ -735,6 +739,10 @@ server._self_container_id = lambda: "selfcid000000"
 server.docker_cli_present = lambda: True
 server.docker_capable = lambda: True
 server.spdx_convert_capable = lambda: False
+# Same no-op as the run_sibling_scan dispatch tests above: this section is not
+# about the background refresh, so an "already present" scanner image must not
+# shell out to a real `docker pull` here.
+server.refresh_sibling_image_quietly = lambda *a, **k: None
 
 bom = server.OUTPUT_DIR + "/run_1/run_1_bom.json"
 spdx = server.OUTPUT_DIR + "/run_1/run_1_bom.spdx.json"
@@ -2946,6 +2954,213 @@ if [ "$n_add" = "1" ] && [ "$n_del" -ge "2" ]; then
     pass "the claim is released on the early-return path and in the finally"
 else
     fail "claim/release are unbalanced (add=$n_add, discard=$n_del)"
+fi
+
+echo "== sibling image refresh: an already-present image is re-pulled quietly =="
+# _sibling_image_present only means the tag was pulled at SOME point; the sibling
+# firmware/aibom/deep-cve image (and the base scanner image, for on-demand SPDX)
+# can otherwise sit on a stale `:latest` layer forever. run_sibling_scan /
+# convert_bom_to_spdx now call refresh_sibling_image_quietly(image, on_log) in
+# that case, real `docker pull`, bounded by a STALL timeout (not elapsed time) so
+# it never meaningfully delays a scan. A fake `docker` on PATH stands in for the
+# daemon; _SIBLING_REFRESH_STALL_SECS shortens the stall bound so a simulated
+# stalled pull gives up in ~1s instead of the real-world 12s default.
+FAKEDOCKER="$WORK/fakedockerbin"; mkdir -p "$FAKEDOCKER"
+FAKE_DOCKER_LOG="$WORK/fakedocker.log"
+cat > "$FAKEDOCKER/docker" <<'STUB'
+#!/usr/bin/env bash
+echo "docker $*" >> "${FAKE_DOCKER_LOG:-/dev/null}"
+case "${1:-}" in
+  pull)
+    case "${FAKE_DOCKER_PULL_MODE:-uptodate}" in
+      uptodate)
+        echo "Status: Image is up to date for ${2:-image}"
+        exit 0 ;;
+      fail)
+        echo "Error response from daemon: pull access denied" >&2
+        exit 1 ;;
+      stall)
+        sleep 30
+        exit 0 ;;
+      partial)
+        # One real layer-status line (matches server.PullProgress's format), then
+        # nothing — a download that started but stopped making progress.
+        echo "17a39c0ba978: Downloading"
+        sleep 30
+        exit 0 ;;
+    esac
+    ;;
+  run) exit 0 ;;
+  *) exit 0 ;;
+esac
+STUB
+chmod +x "$FAKEDOCKER/docker"
+
+# Case 1: the fake pull reports up to date immediately -> refresh finishes in a
+# fraction of a second, and the scan proceeds all the way to the sibling `docker
+# run`. _sibling_image_present is stubbed (this is not a test of the presence
+# check itself), but refresh_sibling_image_quietly runs FOR REAL against the
+# fake docker on PATH.
+if SBOM_OUTPUT_DIR="$OUT" PATH="$FAKEDOCKER:$PATH" FAKE_DOCKER_LOG="$FAKE_DOCKER_LOG" \
+   FAKE_DOCKER_PULL_MODE=uptodate python3 - "$ROOT_DIR" <<'PY'
+import os, sys, time
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+
+server._self_container_id = lambda: "selfcid000000"
+server._sibling_image_present = lambda image: True
+
+run_out = server.OUTPUT_DIR + "/run_1"
+logs = []
+started = time.monotonic()
+rc = server.run_sibling_scan(
+    "ghcr.io/sktelecom/bomlens-aibom:1.5.0", "AIBOM", run_out,
+    logs.append, model_id="openai/clip",
+)
+elapsed = time.monotonic() - started
+assert rc == 0, (rc, logs)
+assert elapsed < 5, "an up-to-date refresh must not meaningfully delay the scan (%.1fs)" % elapsed
+assert any("launching" in ln for ln in logs), logs
+STUB_LOG = os.environ["FAKE_DOCKER_LOG"]
+with open(STUB_LOG) as fh:
+    calls = fh.read()
+assert "docker pull ghcr.io/sktelecom/bomlens-aibom:1.5.0" in calls, calls
+assert "docker run" in calls, "the scan must still reach the sibling docker run"
+PY
+then
+    pass "an up-to-date fake pull finishes fast and the scan reaches the sibling docker run"
+else
+    fail "up-to-date refresh case failed (see assertion above)"
+fi
+
+# Case 2: the fake pull hangs with NO output at all (offline / blocked network).
+# With the stall bound shortened to ~1s, refresh_sibling_image_quietly must give
+# up quickly and the scan must still proceed — the refresh is best-effort and
+# must never be the thing that fails a scan.
+: > "$FAKE_DOCKER_LOG"
+if SBOM_OUTPUT_DIR="$OUT" PATH="$FAKEDOCKER:$PATH" FAKE_DOCKER_LOG="$FAKE_DOCKER_LOG" \
+   FAKE_DOCKER_PULL_MODE=stall _SIBLING_REFRESH_STALL_SECS=1 python3 - "$ROOT_DIR" <<'PY'
+import os, sys, time
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+assert server._SIBLING_REFRESH_STALL_SECS == 1.0, server._SIBLING_REFRESH_STALL_SECS
+
+server._self_container_id = lambda: "selfcid000000"
+server._sibling_image_present = lambda image: True
+
+run_out = server.OUTPUT_DIR + "/run_1"
+logs = []
+started = time.monotonic()
+rc = server.run_sibling_scan(
+    "ghcr.io/sktelecom/bomlens-aibom:1.5.0", "AIBOM", run_out,
+    logs.append, model_id="openai/clip",
+)
+elapsed = time.monotonic() - started
+assert rc == 0, (rc, logs)
+assert elapsed < 10, "a fully stalled refresh must give up quickly, not hang (%.1fs)" % elapsed
+assert any("skipped" in ln for ln in logs), logs
+assert any("launching" in ln for ln in logs), logs
+PY
+then
+    pass "a fully stalled fake pull is given up on quickly and the scan still proceeds"
+else
+    fail "stalled refresh case failed (see assertion above)"
+fi
+
+# Case 3: the fake pull prints one real layer line (a download actually started)
+# and then stalls — same outcome as case 2 (the scan must proceed), and this
+# also exercises the PullProgress reader path inside the refresh.
+: > "$FAKE_DOCKER_LOG"
+if SBOM_OUTPUT_DIR="$OUT" PATH="$FAKEDOCKER:$PATH" FAKE_DOCKER_LOG="$FAKE_DOCKER_LOG" \
+   FAKE_DOCKER_PULL_MODE=partial _SIBLING_REFRESH_STALL_SECS=1 python3 - "$ROOT_DIR" <<'PY'
+import os, sys, time
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+
+server._self_container_id = lambda: "selfcid000000"
+server._sibling_image_present = lambda image: True
+
+run_out = server.OUTPUT_DIR + "/run_1"
+logs = []
+started = time.monotonic()
+rc = server.run_sibling_scan(
+    "ghcr.io/sktelecom/bomlens-deep-cve:1.5.0", "IMAGE", run_out,
+    logs.append, target_image="ghcr.io/library/nginx:1.25",
+)
+elapsed = time.monotonic() - started
+assert rc == 0, (rc, logs)
+assert elapsed < 10, "a stalled-after-progress refresh must give up quickly too (%.1fs)" % elapsed
+assert any("launching" in ln for ln in logs), logs
+PY
+then
+    pass "a fake pull that starts and then stalls still lets the scan proceed"
+else
+    fail "partial-progress refresh case failed (see assertion above)"
+fi
+
+# Case 4: the fake pull exits immediately with a non-zero code (a rejected pull,
+# not a stall) — also best-effort, also must not block the scan.
+: > "$FAKE_DOCKER_LOG"
+if SBOM_OUTPUT_DIR="$OUT" PATH="$FAKEDOCKER:$PATH" FAKE_DOCKER_LOG="$FAKE_DOCKER_LOG" \
+   FAKE_DOCKER_PULL_MODE=fail python3 - "$ROOT_DIR" <<'PY'
+import os, sys, time
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+
+server._self_container_id = lambda: "selfcid000000"
+server._sibling_image_present = lambda image: True
+
+run_out = server.OUTPUT_DIR + "/run_1"
+logs = []
+started = time.monotonic()
+rc = server.run_sibling_scan(
+    "ghcr.io/sktelecom/bomlens-firmware:1.5.0", "FIRMWARE", run_out,
+    logs.append, upload_file=server.UPLOAD_DIR + "/tok/fw.bin",
+)
+elapsed = time.monotonic() - started
+assert rc == 0, (rc, logs)
+assert elapsed < 5, "an immediately-failing pull must not delay the scan (%.1fs)" % elapsed
+assert any("skipped" in ln for ln in logs), logs
+PY
+then
+    pass "a fake pull that exits with an error is skipped without blocking the scan"
+else
+    fail "failing-pull refresh case failed (see assertion above)"
+fi
+
+# convert_bom_to_spdx's sibling scanner-image path takes the same refresh branch;
+# confirm it also runs to completion with a real (fake) docker pull on PATH.
+: > "$FAKE_DOCKER_LOG"
+if SBOM_OUTPUT_DIR="$OUT" PATH="$FAKEDOCKER:$PATH" FAKE_DOCKER_LOG="$FAKE_DOCKER_LOG" \
+   FAKE_DOCKER_PULL_MODE=uptodate python3 - "$ROOT_DIR" <<'PY'
+import os, sys, time
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+
+captured = {}
+def fake_stream(args, on_log, **kw):
+    captured["args"] = args
+    return 0
+server._stream_cmd = fake_stream
+server._sibling_image_present = lambda image: True
+server._self_container_id = lambda: "selfcid000000"
+server.docker_cli_present = lambda: True
+server.docker_capable = lambda: True
+server.spdx_convert_capable = lambda: False
+
+bom = server.OUTPUT_DIR + "/run_1/run_1_bom.json"
+spdx = server.OUTPUT_DIR + "/run_1/run_1_bom.spdx.json"
+started = time.monotonic()
+rc = server.convert_bom_to_spdx(bom, spdx, False, lambda ln: None)
+elapsed = time.monotonic() - started
+assert rc == 0, rc
+assert elapsed < 5, "an up-to-date refresh must not meaningfully delay SPDX export (%.1fs)" % elapsed
+assert "--entrypoint" in captured["args"], captured["args"]
+PY
+then
+    pass "the on-demand SPDX sibling also refreshes an already-present scanner image"
+else
+    fail "SPDX sibling refresh case failed (see assertion above)"
 fi
 
 echo "== external vulnerability lookup (GET /advisory, GET /package-advisories) =="
