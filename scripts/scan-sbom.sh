@@ -315,6 +315,9 @@ Environment:
   TRUSCA_PROJECT_ID      Target TRUSCA project id (UUID, required for trusca)
   TRUSCA_REF             Ingest ref label (default: main)
   TRUSCA_RELEASE         Ingest release label (default: --version value)
+  EXTERNAL_LOOKUP        With --ui: enable the web UI's CVE/package lookup
+                         against OSV.dev (default: true; set false for
+                         air-gapped runs)
 
 Architecture: source SBOM generation uses cdxgen's per-language images
 (on-demand); this tool orchestrates + post-processes.
@@ -380,7 +383,8 @@ if [ "$UI_MODE" = "true" ]; then
         "${MOUNT_FLAGS[@]}" "${HF_FLAGS[@]}" \
         -v /var/run/docker.sock:/var/run/docker.sock \
         -e MODE=UI -e UI_PORT=8080 -e SBOM_UI_HOST_DIR="$(hostpath "$UI_BASE")" \
-        -e SBOM_UI_SCAN_ROOTS="$SCAN_ROOTS" "$POSTPROCESS_IMAGE"
+        -e SBOM_UI_SCAN_ROOTS="$SCAN_ROOTS" -e EXTERNAL_LOOKUP="$EXTERNAL_LOOKUP" \
+        "$POSTPROCESS_IMAGE"
 fi
 [ "${#UI_MOUNTS[@]}" -eq 0 ] || { echo "[ERROR] --mount requires --ui."; exit 1; }
 
@@ -441,6 +445,11 @@ FETCH_LICENSE="${FETCH_LICENSE:-true}"
 # EPSS + CISA KEV enrichment defaults on, but the host setting must reach the
 # post-process container so SECURITY_ENRICH=false works for air-gapped runs.
 SECURITY_ENRICH="${SECURITY_ENRICH:-true}"
+# Web UI's CVE/package lookup (GET /advisory, /package-advisories) talks to
+# OSV.dev on demand; same default-on, host-setting-must-reach-the-container
+# story as SECURITY_ENRICH, but read directly by server.py rather than by
+# entrypoint.sh (see docker/web/server.py's external_lookup_capable()).
+EXTERNAL_LOOKUP="${EXTERNAL_LOOKUP:-true}"
 
 # Normalize the report language: only en (default) or ko reach the container. An
 # unknown value is a user typo, so warn and fall back to English rather than

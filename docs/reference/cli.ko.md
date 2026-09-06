@@ -90,6 +90,7 @@ BomLens의 전체 옵션과 분석 모드, CI/CD 통합 방법, 트러블슈팅�
 | `TRUSCA_PROJECT_ID` | — | TRUSCA 프로젝트 id(UUID). `trusca`일 때 필수 |
 | `TRUSCA_REF` | `main` | ingest ref 라벨 |
 | `TRUSCA_RELEASE` | `--version` 값 | ingest release 라벨 |
+| `EXTERNAL_LOOKUP` | `true` | `--ui`와 함께: 웹 UI의 CVE·패키지 조회 기능을 켠다. 필요할 때 osv.dev로 조회한다. 폐쇄망에서는 `false`로 끈다 |
 
 Windows에서는 명령 프롬프트에서 설정한 환경변수가 더블클릭 실행에는 적용되지 않습니다.
 그래서 런처는 `UI_PORT`, `SBOM_LANG`, `SBOM_PULL`, `SBOM_IMAGE_TAR`, `SBOM_SCANNER_IMAGE`,
