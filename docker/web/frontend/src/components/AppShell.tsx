@@ -43,6 +43,10 @@ interface AppShellProps {
   /** Hash for the External lookup screen; absent hides the top-bar entry
    *  point (`capabilities.externalLookup` off, or the static demo). */
   lookupHref?: string;
+  /** Reset to a blank New scan form, in addition to the `#/new` navigation the
+   *  TopBar/Sidebar links already carry — needed when a scan started from
+   *  `#/new` fails, leaving the hash unchanged (see `NextApp.goToNewScan`). */
+  onNewScan?: () => void;
   /** The active section's content fills the canvas. */
   children: ReactNode;
 }
@@ -71,6 +75,7 @@ export function AppShell({
   homeHref,
   showHomeLink,
   lookupHref,
+  onNewScan,
   children,
   version,
 }: AppShellProps) {
@@ -97,6 +102,7 @@ export function AppShell({
         homeHref={homeHref}
         showHomeLink={showHomeLink}
         newHref={newHash()}
+        onNewScan={onNewScan}
         recent={recent}
         onDeleteRecent={onDeleteRecent}
         version={version}
@@ -114,6 +120,7 @@ export function AppShell({
             onToggleCollapsed={() => setManualCollapsed(!collapsed)}
             homeHref={homeHref}
             newHref={newHash()}
+            onNewScan={onNewScan}
           />
         )}
         {/* tabIndex makes the scrollable region keyboard-accessible (axe

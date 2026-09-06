@@ -45,6 +45,10 @@ interface TopBarProps {
   showHomeLink?: boolean;
   /** Hash for the New scan screen — the primary global action. */
   newHref: string;
+  /** Reset to a blank New scan form, in addition to the `#/new` navigation
+   *  `newHref` already carries — needed when a scan started from `#/new`
+   *  fails, leaving the hash unchanged so the anchor's navigation is a no-op. */
+  onNewScan?: () => void;
   /** Past scans for the Recent menu (newest first). */
   recent?: RecentScanLink[];
   /** Delete a past scan from the Recent list (removes its artifacts). */
@@ -80,6 +84,7 @@ export function TopBar({
   homeHref,
   showHomeLink,
   newHref,
+  onNewScan,
   recent = [],
   onDeleteRecent,
   version,
@@ -155,6 +160,7 @@ export function TopBar({
         )}
         <a
           href={newHref}
+          onClick={onNewScan}
           aria-label={t("shell.newScan")}
           className={cn(buttonVariants({ size: "sm" }), "shrink-0")}
         >
