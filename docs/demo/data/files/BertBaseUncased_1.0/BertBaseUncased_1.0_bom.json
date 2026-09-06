@@ -477,15 +477,15 @@
         },
         {
           "name": "bomlens:licenseClass",
-          "value": "uncategorized"
+          "value": "weak-copyleft"
         },
         {
           "name": "bomlens:licenseConflict",
-          "value": "unknown"
+          "value": "conditional"
         },
         {
           "name": "bomlens:licenseConflict:why",
-          "value": "The dependency's license was not recognised."
+          "value": "File- or library-level reciprocity: changes to the dependency stay under its license, and static linking adds obligations. Distributing your own code under the permissive license is still fine."
         },
         {
           "name": "bomlens:assessment:axes",
@@ -715,15 +715,15 @@
         },
         {
           "name": "cdx:huggingface:downloads",
-          "value": "58675189"
+          "value": "52338347"
         },
         {
           "name": "cdx:huggingface:downloadsAllTime",
-          "value": "3211798095"
+          "value": "3214530744"
         },
         {
           "name": "cdx:huggingface:likes",
-          "value": "2951"
+          "value": "2989"
         },
         {
           "name": "cdx:huggingface:gated",
@@ -812,7 +812,7 @@
         "value": "unknown-to-author"
       }
     ],
-    "timestamp": "2026-09-05T03:24:39+00:00",
+    "timestamp": "2026-09-06T21:59:34+00:00",
     "tools": {
       "components": [
         {
@@ -828,12 +828,12 @@
           "name": "BomLens",
           "publisher": "SK Telecom",
           "type": "application",
-          "version": "1.11.7"
+          "version": "1.11.8"
         }
       ]
     }
   },
-  "serialNumber": "urn:uuid:4787424d-f05d-432b-898b-585f8adbc606",
+  "serialNumber": "urn:uuid:656f232e-ae7e-4c7a-8a59-64d644f9849b",
   "specVersion": "1.7",
   "version": 1
 }
