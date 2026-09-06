@@ -40,6 +40,9 @@ interface AppShellProps {
   homeHref: string;
   /** Show the logo as a link home (hidden on the Recent home screen itself). */
   showHomeLink?: boolean;
+  /** Hash for the External lookup screen; absent hides the top-bar entry
+   *  point (`capabilities.externalLookup` off, or the static demo). */
+  lookupHref?: string;
   /** The active section's content fills the canvas. */
   children: ReactNode;
 }
@@ -67,6 +70,7 @@ export function AppShell({
   onRescan,
   homeHref,
   showHomeLink,
+  lookupHref,
   children,
   version,
 }: AppShellProps) {
@@ -96,6 +100,7 @@ export function AppShell({
         recent={recent}
         onDeleteRecent={onDeleteRecent}
         version={version}
+        lookupHref={lookupHref}
       />
       {IS_STATIC_DEMO && <DemoBanner />}
       <div className="flex min-h-0 flex-1">
