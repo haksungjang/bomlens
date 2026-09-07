@@ -308,6 +308,111 @@ try {
         elseif ($diff) { Failed "$name 의 ko/en 키가 다릅니다: $(($diff | ForEach-Object { $_.InputObject }) -join ', ')" }
         else { Pass "$name : ko/en 키 $($en.Count) 개가 일치하고 '!' 도 없습니다." }
     }
+    # -----------------------------------------------------------------------
+    # 8) PowerShell 5.1 vs 7 셸 문법 차이 — 문서의 Windows 예제가 두 쪽 모두에서
+    #    되는지. `&&`는 cmd/pwsh7에서 명령 체이닝이지만 Windows PowerShell 5.1
+    #    에서는 파싱 에러다(별도 프로세스가 아니라 같은 줄의 토큰으로 봄).
+    #    이 저장소 문서(docs/guides 등)가 `cd X && scripts\scan-sbom.bat ...`
+    #    형태를 쓰면 PS5.1 사용자에게는 그대로 깨진다.
+    # -----------------------------------------------------------------------
+    Section '8. PowerShell 5.1 vs 7 — `&&` 체이닝 차이'
+    $pwsh7 = Get-Command pwsh -ErrorAction SilentlyContinue
+    $chainScript = "cd '$script:RepoRoot'; & '.\scripts\scan-sbom.bat' --help"
+    # PS5.1: `&&`를 그대로 쓰면 파싱 에러가 나야 한다(문서가 이 형태를 쓰면 안 됨을
+    # 확인하는 회귀 가드). 세미콜론/개별 문 형태는 양쪽 다 되어야 한다.
+    $ps51BadChain = & powershell.exe -NoProfile -Command `
+        "cd '$script:RepoRoot' && & '.\scripts\scan-sbom.bat' --help" 2>&1
+    $ps51BadRc = $LASTEXITCODE
+    if ($ps51BadRc -ne 0 -and "$ps51BadChain" -match "is not a valid statement separator") {
+        Pass "Windows PowerShell 5.1: 문서에 있는 `cd X && ...` 형태는 실제로 파싱 에러다(문서가 이 형태를 쓰면 안 됨을 확인)."
+    } else {
+        Failed "PS5.1 && 체이닝이 예상과 다르게 동작했습니다 (rc=$ps51BadRc):`n$ps51BadChain"
+    }
+    $ps51Good = & powershell.exe -NoProfile -Command $chainScript 2>&1
+    $ps51GoodRc = $LASTEXITCODE
+    if ($ps51GoodRc -eq 0 -and "$ps51Good" -match '--project') {
+        Pass 'Windows PowerShell 5.1: 세미콜론으로 이은 형태(문서가 실제로 써야 할 형태)는 정상 동작.'
+    } else {
+        Failed "PS5.1 세미콜론 체이닝 실패 (rc=$ps51GoodRc):`n$ps51Good"
+    }
+    if ($pwsh7) {
+        $ps7Chain = & pwsh -NoProfile -Command `
+            "cd '$script:RepoRoot'; & '.\scripts\scan-sbom.bat' --help" 2>&1
+        $ps7Rc = $LASTEXITCODE
+        if ($ps7Rc -eq 0 -and "$ps7Chain" -match '--project') {
+            Pass 'PowerShell 7: 동일 스크립트 정상 동작(참고용 — 7은 && 도 됨).'
+        } else {
+            Failed "PowerShell 7 실행 실패 (rc=$ps7Rc):`n$ps7Chain"
+        }
+    } else {
+        Skip 'pwsh(PowerShell 7)을 찾지 못해 7 쪽 비교는 건너뜁니다.'
+    }
+
+    # -----------------------------------------------------------------------
+    # 9) 프로젝트 이름에 '!' — regression guard for a real, confirmed bug.
+    #    EnableDelayedExpansion (스크립트 전체, Git Bash 탐색에 필요) 아래에서
+    #    최종 "%BASH_EXE%" "%SCRIPT_SH%" %* 줄은 %* 로 전개된 사용자 값까지
+    #    delayed-expansion 의 "!...!" 스캔 대상이 된다. --project "Weird!Name"
+    #    처럼 '!' 가 한 개뿐이면 짝이 없어 cmd 가 그 '!' 를 통째로 삼켰다 —
+    #    scan-sbom.sh 자신의 새니타이저(`sed 's/[^a-zA-Z0-9._-]/_/g'`,
+    #    scan-sbom.sh:493)가 '!' 를 '_' 로 바꾸는 것과 달리, cmd 경로로 들어오면
+    #    '!' 가 바뀌지도 않고 그냥 사라져 "WeirdName" 이 됐다(직접 bash 로 같은
+    #    인자를 주면 "Weird_Name"). Fixed by dropping into a DisableDelayedExpansion
+    #    scope just for the forwarding line (scan-sbom.bat).
+    #
+    #    이 케이스는 cmd->bash 로 넘어간 원래 인자값 자체(스캔 배너가 그대로
+    #    되찍는 "Weird!Name")만 확인한다 — 이 스텁 docker.exe 의 host-output
+    #    경로 역산 로직(:0 번 섹션)은 $env:TEMP 밑에서 Git Bash 가 어떨 때는
+    #    /tmp/... 별칭을, 어떨 때는 /c/... 드라이브 형태를 내놓는지에 따라
+    #    갈리는 별개의(실제 제품과 무관한) 스텁 한계라, 전체 파이프라인 완주
+    #    여부에 기대면 이 회귀 가드가 그 스텁 한계 때문에 흔들린다. 실제 Docker
+    #    로 같은 인자를 직접 돌려 Weird_Name_1.0.0 산출물까지 나오는 것은 이
+    #    수정 세션에서 별도로 확인했다.
+    # -----------------------------------------------------------------------
+    Section "9. 프로젝트 이름에 '!' 포함 (cmd->bash 로 그대로 전달되는지)"
+    $bangProj = Join-Path $script:Work 'bangproj'
+    New-Item -ItemType Directory -Path $bangProj -Force | Out-Null
+    Set-Content -Path (Join-Path $bangProj 'package.json') `
+        -Value '{"name":"a","version":"1.0.0"}' -Encoding ASCII
+    $r = Invoke-Bat -Bat (Join-Path $script:RepoRoot 'scripts\scan-sbom.bat') `
+        -BatArgs '--project "Weird!Name" --version 1.0.0 --generate-only' -Cwd $bangProj
+    if ($r.TimedOut) {
+        Failed "'!' 포함 프로젝트 이름이 시간 안에 끝나지 않았습니다."
+    } elseif ($r.Output -match 'Weird!Name \(1\.0\.0\)') {
+        Pass "'!' 가 포함된 프로젝트 이름이 cmd->bash 로 그대로 전달됩니다(스캔 배너에 'Weird!Name' 온전히 보임)."
+    } elseif ($r.Output -match 'WeirdName \(1\.0\.0\)') {
+        Failed "REGRESSION: cmd 의 지연 확장이 다시 '!' 를 삼켰습니다(배너에 'WeirdName', '!' 없이 보임)."
+    } else {
+        Failed "예상한 배너 문구를 찾지 못했습니다 (exit=$($r.ExitCode)):`n$($r.Output)"
+    }
+
+    # -----------------------------------------------------------------------
+    # 10) 종료 코드 전파: scan-sbom.bat 실패 -> cmd %ERRORLEVEL% -> PowerShell
+    #     $LASTEXITCODE. 필수 인자 누락으로 확실히 실패시켜 0이 아닌 값이
+    #     양쪽 셸에서 똑같이 보이는지 확인한다.
+    # -----------------------------------------------------------------------
+    Section '10. 종료 코드 전파 (cmd -> PowerShell)'
+    # cmd.exe's own process exit code IS the last command's exit code when
+    # /c runs a single command (no chained "& exit /b" dance needed, which
+    # would itself need delayed expansion just to read %errorlevel% mid-line).
+    $cmdRc = & cmd.exe /d /s /c "`"$script:RepoRoot\scripts\scan-sbom.bat`" --generate-only < NUL > NUL 2>&1" 2>&1
+    $cmdExit = $LASTEXITCODE
+    if ($cmdExit -ne 0) {
+        Pass "필수 인자 누락 시 cmd 에서 본 종료 코드가 0이 아닙니다 (=$cmdExit)."
+    } else {
+        Failed "필수 인자 누락인데 cmd 종료 코드가 0입니다."
+    }
+    # PowerShell has no native "<" input-redirection operator (reserved,
+    # unlike ">"), and scan-sbom.bat itself never blocks on stdin (only
+    # check-setup.bat/sbom-ui.bat's trailing `pause` do, guarded elsewhere),
+    # so no stdin redirection is needed for this specific invocation.
+    & "$script:RepoRoot\scripts\scan-sbom.bat" --generate-only > $null 2>&1
+    $psExit = $LASTEXITCODE
+    if ($psExit -ne 0 -and $psExit -eq $cmdExit) {
+        Pass "PowerShell `$LASTEXITCODE 도 동일하게 0이 아닌 값을 봅니다 (=$psExit, cmd와 일치)."
+    } else {
+        Failed "PowerShell 에서 본 종료 코드($psExit)가 cmd($cmdExit)와 다르거나 0입니다."
+    }
 } finally {
     Remove-Item -Path $script:Work -Recurse -Force -ErrorAction SilentlyContinue
 }
@@ -323,3 +428,4 @@ if ($script:Fail -eq 0) {
     Write-Host "$($script:Fail)개 항목이 실패했습니다. 위 로그를 확인하세요." -ForegroundColor Red
     exit 1
 }
+
