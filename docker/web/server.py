@@ -322,6 +322,48 @@ EXTRA_SCAN_ROOTS = _parse_scan_roots(os.environ.get("SBOM_UI_SCAN_ROOTS", ""))
 # check below applies to every root alike.
 ALLOWED_SCAN_ROOTS = [SRC_DIR] + [r["path"] for r in EXTRA_SCAN_ROOTS]
 
+# Hostnames this server expects to be reached as. The Electron app addresses it
+# as 127.0.0.1 literally; `scan-sbom.sh --ui` binds the published port to
+# 127.0.0.1 but prints and opens http://localhost — both are legitimate. Loopback
+# binding alone does not stop DNS rebinding (a page at a domain that resolves to
+# 127.0.0.1 still reaches this port with an attacker-controlled Host), so every
+# request's Host header is checked against this set. SBOM_UI_EXTRA_HOSTS adds
+# hostnames for a deployment this default doesn't cover (reverse proxy, a
+# non-default --ui bind address) — comma-separated, empty by default.
+_ALLOWED_HOSTS = {"127.0.0.1", "localhost", "::1"} | {
+    h.strip().lower() for h in os.environ.get("SBOM_UI_EXTRA_HOSTS", "").split(",") if h.strip()
+}
+
+
+def _host_allowed(host_header):
+    """True when a Host header names this server, not a domain a browser was
+    tricked into resolving to our loopback address. Only the hostname is
+    checked; the port is whatever the UI happened to bind to and carries no
+    trust signal."""
+    if not host_header:
+        return False
+    try:
+        hostname = urllib.parse.urlparse("//" + host_header).hostname
+    except ValueError:
+        return False
+    return hostname is not None and hostname.lower() in _ALLOWED_HOSTS
+
+
+def _origin_allowed(origin_header):
+    """True for a state-changing request with no Origin (a same-origin
+    top-level load, or a non-browser client like curl) or an Origin whose host
+    is one this server would also accept as a Host header. Host alone does not
+    catch classic cross-site requests — only DNS rebinding — because a
+    cross-site browser POST still carries this server's own address as Host;
+    Origin is the header that names where the request actually came from."""
+    if not origin_header:
+        return True
+    try:
+        hostname = urllib.parse.urlparse(origin_header).hostname
+    except ValueError:
+        return False
+    return hostname is not None and hostname.lower() in _ALLOWED_HOSTS
+
 
 def safe_scan_dir(rel):
     """Resolve a user-supplied directory path strictly inside an allowed scan
@@ -3215,6 +3257,9 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- GET ----
     def do_GET(self):
+        if not _host_allowed(self.headers.get("Host")):
+            self._send(403, json.dumps({"error": "bad host"}))
+            return
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         if path == "/results":
@@ -3278,6 +3323,14 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/scan":
             self._serve_scan(urllib.parse.parse_qs(parsed.query))
         elif path == "/scan-stream":
+            # A scan is a side-effecting action reachable only over GET (an
+            # EventSource cannot issue POST), so it needs the CSRF check GET
+            # requests otherwise skip. Host was already checked above; Origin
+            # catches a cross-site page whose browser still sends this
+            # server's own address as Host.
+            if not _origin_allowed(self.headers.get("Origin")):
+                self._send(403, json.dumps({"error": "bad origin"}))
+                return
             self._scan_stream(urllib.parse.parse_qs(parsed.query))
         elif path == "/image-status":
             self._image_status(urllib.parse.parse_qs(parsed.query))
@@ -3292,6 +3345,12 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- POST ----
     def do_POST(self):
+        if not _host_allowed(self.headers.get("Host")):
+            self._send(403, json.dumps({"error": "bad host"}))
+            return
+        if not _origin_allowed(self.headers.get("Origin")):
+            self._send(403, json.dumps({"error": "bad origin"}))
+            return
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path == "/upload":
             self._upload(urllib.parse.parse_qs(parsed.query))

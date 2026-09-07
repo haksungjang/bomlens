@@ -2063,6 +2063,28 @@ if [ ! -f "$OUT/demo_1.0_bom.json" ] && [ ! -f "$OUT/demo_1.0_security_epss.json
 else
     fail "demo_1.0 artifacts still present after delete" "$(ls "$OUT"/demo_1.0_* 2>/dev/null)"
 fi
+
+echo "== Host/Origin: a DNS-rebound or cross-site browser request is rejected =="
+# Loopback binding alone does not stop DNS rebinding — a page at a domain that
+# resolves to 127.0.0.1 still reaches this port, with the browser sending that
+# domain as Host. Host is checked on every request; Origin additionally covers
+# a classic cross-site POST, where Host is correctly this server but Origin
+# names the page that issued the request.
+h_code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: evil.example" "$BASE/capabilities")
+[ "$h_code" = "403" ] && pass "a forged Host header is rejected (403)" || fail "forged Host returned $h_code (expected 403)"
+
+cat > "$OUT/hostcheck_1.0_bom.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6","components":[]}
+JSON
+o_code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Origin: http://evil.example" "$BASE/scan-delete?id=hostcheck_1.0")
+[ "$o_code" = "403" ] && pass "a cross-site Origin on /scan-delete is rejected (403)" || fail "cross-site Origin returned $o_code (expected 403)"
+[ -f "$OUT/hostcheck_1.0_bom.json" ] && pass "the rejected /scan-delete did not actually delete anything" || fail "scan-delete ran despite the rejected Origin"
+
+del_ok=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/scan-delete?id=hostcheck_1.0")
+[ "$del_ok" = "200" ] && pass "the same request with no Origin (an ordinary browser/curl call) still succeeds" || fail "legitimate scan-delete (no Origin) returned $del_ok (expected 200)"
+
+es_code=$(curl -s -o /dev/null -w '%{http_code}' -N -H "Origin: http://evil.example" "$BASE/scan-stream?project=hostcheck2&version=1.0&source=current-dir")
+[ "$es_code" = "403" ] && pass "a cross-site Origin on /scan-stream is rejected (403) before any scan starts" || fail "cross-site Origin on /scan-stream returned $es_code (expected 403)"
 del_gone=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/scan?id=demo_1.0")
 [ "$del_gone" = "404" ] && pass "deleted scan is gone (404)" || fail "deleted scan returned $del_gone (expected 404)"
 rm -f "$OUT"/demo_1.0_*
