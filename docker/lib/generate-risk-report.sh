@@ -482,7 +482,7 @@ META_FORMAT=""; [ "$HAS_CONF" = "true" ] && META_FORMAT=" &middot; ${P_META_FORM
 <html lang="${REPORT_LANG}"><head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
-<title>${P_H1} — ${PROJECT}</title>
+<title>${P_H1} — $(esc "$PROJECT")</title>
 <style>
  :root{
   --bg:#fafafa;--surface:#ffffff;--text:#18181b;--muted:#6c6c75;--border:#e5e5ea;
