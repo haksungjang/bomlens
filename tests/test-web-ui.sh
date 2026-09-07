@@ -574,6 +574,66 @@ else
     fail "sibling dispatch guard failed (see assertion above)"
 fi
 
+echo "== safe_extract_zip rejects members that are unsafe once bind-mounted onto Windows =="
+# safe_extract_zip already rejected zip-slip (absolute/../ paths). It did NOT
+# reject a member name containing a character Windows forbids in a path
+# (backslash, colon, ...) -- on Linux those are just odd-looking literal
+# filename characters, not separators, so "..\\evil.txt" extracted harmlessly
+# INSIDE the destination directory. Verified end to end in this session on a
+# real Windows host with Docker Desktop file sharing: those characters get
+# silently DROPPED once the tree reaches the Windows side, so two differently
+# -named members can collide onto the same Windows filename -- and instead of
+# a clean overwrite, the host-visible file ends up holding both members'
+# content appended together, silently, with no error anywhere. Must now fail
+# closed at extraction time instead.
+if SBOM_OUTPUT_DIR="$OUT" python3 - "$ROOT_DIR" <<'PY'
+import sys, os, zipfile, tempfile
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+
+def build_zip(path, members):
+    with zipfile.ZipFile(path, "w") as z:
+        for name, content in members.items():
+            zi = zipfile.ZipInfo(name)  # bypasses writestr's own os.sep-based rewrite
+            z.writestr(zi, content)
+
+with tempfile.TemporaryDirectory() as tmp:
+    # Windows-illegal characters embedded in an otherwise-plausible member name.
+    hostile = os.path.join(tmp, "hostile.zip")
+    build_zip(hostile, {
+        "normal.txt": "ok",
+        "..\\..\\evil-backslash.txt": "x",
+    })
+    dest = os.path.join(tmp, "dest1"); os.makedirs(dest)
+    try:
+        server.safe_extract_zip(hostile, dest)
+        raise AssertionError("expected ValueError for a backslash-containing member name")
+    except ValueError as e:
+        assert "not Windows-safe" in str(e), e
+
+    colon = os.path.join(tmp, "colon.zip")
+    build_zip(colon, {"a:b.txt": "x"})
+    dest2 = os.path.join(tmp, "dest2"); os.makedirs(dest2)
+    try:
+        server.safe_extract_zip(colon, dest2)
+        raise AssertionError("expected ValueError for a colon-containing member name")
+    except ValueError as e:
+        assert "not Windows-safe" in str(e), e
+
+    # A normal archive must still extract without complaint (no regression).
+    clean = os.path.join(tmp, "clean.zip")
+    build_zip(clean, {"package.json": "{}", "src/index.js": "1"})
+    dest3 = os.path.join(tmp, "dest3"); os.makedirs(dest3)
+    server.safe_extract_zip(clean, dest3)  # raises on failure
+    assert os.path.isfile(os.path.join(dest3, "package.json"))
+    assert os.path.isfile(os.path.join(dest3, "src", "index.js"))
+PY
+then
+    pass "safe_extract_zip rejects Windows-illegal member names, still extracts clean archives"
+else
+    fail "safe_extract_zip Windows-safety check failed (see assertion above)"
+fi
+
 echo "== a per-feature image can be pulled ahead of time, with progress =="
 
 # Firmware/AI/deep-CVE each live in their own image, pulled on the feature's first
