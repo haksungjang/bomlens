@@ -239,6 +239,17 @@ bash "$LIB/stamp-document-metadata.sh" "$WORK/doc-merge.json" MERGE >/dev/null 2
 dm=$(jq -rc '"\(.metadata|has("lifecycles"))|\([.metadata.tools.components[]|.name]|join(","))"' "$WORK/doc-merge.json")
 [ "$dm" = 'false|cdxgen,BomLens' ] \
     && pass "a merged SBOM claims no lifecycle phase but still names the tool" || fail "merge document metadata: $dm"
+# DATASET describes a published research dataset, not software moving through a
+# build, so it must be routed the same as MERGE: no phase claimed, and no WARN
+# (a DATASET scan is not missing a classification, it genuinely has none).
+printf '%s' "$DOC" | jq 'del(.metadata.lifecycles)' > "$WORK/doc-dataset.json"
+dataset_err=$(bash "$LIB/stamp-document-metadata.sh" "$WORK/doc-dataset.json" DATASET 2>&1 1>/dev/null)
+dd=$(jq -rc '.metadata|has("lifecycles")' "$WORK/doc-dataset.json")
+[ "$dd" = "false" ] && pass "a DATASET SBOM claims no lifecycle phase" || fail "dataset document metadata: has(lifecycles)=$dd"
+case "$dataset_err" in
+    *"no lifecycle phase defined"*) fail "DATASET still logs the missing-lifecycle WARN" "$dataset_err" ;;
+    *) pass "DATASET logs no missing-lifecycle WARN" ;;
+esac
 # Invalid input is a defect, not a condition to tolerate: fail closed like stamp-metadata.
 printf 'not json{' > "$WORK/doc-bad.json"
 if bash "$LIB/stamp-document-metadata.sh" "$WORK/doc-bad.json" SOURCE >/dev/null 2>&1; then
