@@ -39,7 +39,7 @@ If cdxgen cannot resolve transitive dependencies in the ecosystem without a lock
 Add an example project under the `examples/` directory.
 
 ```
-examples/kotlin/
+examples/<language>/
 ├── README.md              # Example description
 ├── build.gradle.kts       # Build file
 ├── gradle.lockfile        # Lock file (required!)
@@ -51,40 +51,9 @@ examples/kotlin/
 
 ### 4. Add a test
 
-Create a `tests/cases/test-{언어}.sh` file. See the [testing guide](testing.md#writing-tests) for details on how to write it.
+There is no per-language test file to create. Add a new numbered block to `tests/test-scan.sh`, following an existing one (the Java Maven block, Test 3, is a good template): create the fixture project, run the scan with `run_scan_with_logs`, locate the BOM with `find_bom_file`, and assert on it with `jq` or with `assert_bom_sane` / `assert_spdx_sane` / `assert_root_has_direct_deps`. Each block's `print_test` label is hand-numbered ("Test N/15"), so renumber the labels after inserting one and update the total in the `--help` text and summary banner.
 
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-source "$(dirname "$0")/../helpers/assert.sh"
-source "$(dirname "$0")/../helpers/setup.sh"
-
-TEST_NAME="Kotlin Gradle 소스 코드 분석"
-EXAMPLE_DIR="examples/kotlin"
-
-setup_test "$TEST_NAME"
-
-run_scan \
-  --project "KotlinExample" \
-  --version "1.0.0" \
-  --target "$EXAMPLE_DIR" \
-  --generate-only
-
-assert_file_exists "KotlinExample_1.0.0_bom.json"
-assert_json_field ".bomFormat" "CycloneDX"
-assert_json_field ".specVersion" "1.6"
-assert_components_count_gte 1
-assert_purl_prefix "pkg:maven/"
-
-teardown_test
-```
-
-Then register the new test in `tests/test-scan.sh`.
-
-```bash
-source "$(dirname "$0")/cases/test-kotlin.sh"
-```
+If the case doesn't fit the source-scan pattern, add a standalone `tests/test-<name>.sh` script instead and wire it into `ci.yml` (per-PR) or `nightly.yml` (slow/network-dependent). See the [testing guide](testing.md#writing-tests) for the full explanation and examples of both paths.
 
 ### 5. Update the documentation
 
@@ -113,7 +82,7 @@ Kotlin uses the Gradle build system and runs on the JVM, so it reuses the `java`
 ### How to generate a Gradle lock file
 
 ```bash
-cd examples/kotlin
+cd examples/<language>
 
 # Add dependency locking to build.gradle.kts
 cat >> build.gradle.kts << 'EOF'
@@ -151,8 +120,7 @@ Confirm every item before submitting a PR that adds a new language.
 - [ ] If transitive dependency preparation is needed, it is reflected in `docker/lib/build-prep.sh`.
 - [ ] An example project exists under `examples/{언어}/`.
 - [ ] The example project includes a lock file.
-- [ ] A `tests/cases/test-{언어}.sh` test is written.
-- [ ] The test is registered in `tests/test-scan.sh`.
+- [ ] A test block is added to `tests/test-scan.sh` (or a standalone `tests/test-<name>.sh` if the case doesn't fit the source-scan pattern).
 - [ ] The full `./tests/test-scan.sh` run passes.
 - [ ] The supported language list in `README.md` is updated.
 - [ ] An example section is added to the examples guide.
