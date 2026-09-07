@@ -17,6 +17,10 @@ on:
         type: string
         required: false
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
   packages: read
@@ -25,6 +29,7 @@ jobs:
   verify-downloads:
     name: Verify desktop download URLs
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Check latest-release installers resolve
         run: |
@@ -95,9 +100,14 @@ jobs:
     name: Full release-gate dry-run
     if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
     runs-on: ubuntu-latest
+    # verify-release.sh polls the published image for up to 2100s (35 min)
+    # before giving up, so this needs headroom well above that.
+    timeout-minutes: 60
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3

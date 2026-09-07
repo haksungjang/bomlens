@@ -39,11 +39,14 @@ jobs:
   test:
     # container.mjs 순수 로직 단위 테스트(electron 불필요, 빠름).
     runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: electron
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
@@ -69,16 +72,19 @@ jobs:
     runs-on: ${{ matrix.os == 'windows-latest'
       && fromJSON(vars.CI_WINDOWS_RUNNER || '["self-hosted","windows","bomlens-win"]')
       || fromJSON(vars.CI_MACOS_RUNNER || '["self-hosted","macos","bomlens-macos-desktop"]') }}
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: electron
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
       - name: Install dependencies
-        run: npm install
+        run: npm ci
       # 부팅 스모크: 인스톨러 빌드 전에 앱이 이 OS에서 실제로 켜지고 첫 화면(en/ko)을
       # 렌더하는지 확인한다. SBOM_SMOKE로 Docker/컨테이너 기동은 건너뛰어 결정론적이다.
       - name: Boot smoke (app launches and renders)

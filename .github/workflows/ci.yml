@@ -53,10 +53,13 @@ jobs:
   test:
     name: Integration Tests
     runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
+    timeout-minutes: 45
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -92,10 +95,13 @@ jobs:
   lint:
     name: Lint Scripts
     runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
+    timeout-minutes: 15
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       
       - name: Install ShellCheck
         run: |
@@ -138,11 +144,13 @@ jobs:
   secrets:
     name: Secret Scan
     runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
+    timeout-minutes: 10
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           # gitleaks walks a commit range, so both ends of it have to be here.
           fetch-depth: 0
 
@@ -189,10 +197,13 @@ jobs:
     runs-on: ${{ matrix.os == 'windows-latest'
       && fromJSON(vars.CI_WINDOWS_RUNNER || '["self-hosted","windows","bomlens-win"]')
       || fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       # Exercises scan-sbom.sh orchestration (arg parsing, language detection,
       # image selection, mode routing, zip/git ingestion) with a stub docker —
@@ -214,6 +225,7 @@ jobs:
   desktop-linux:
     name: Desktop boot tests (linux)
     runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
+    timeout-minutes: 20
     needs: [changes]
     # Skipped on a pull request that touches none of this job's paths (see the
     # changes job). Pushes to main and dispatch always run it. Compared against
@@ -229,13 +241,15 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Unit tests (boot/container/health/i18n/log/update/winstate)
         run: node --test test/*.test.mjs
@@ -251,10 +265,13 @@ jobs:
   postprocess:
     name: Post-process Unit and Sync Tests
     runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       # No Docker: drives the jq/bash post-processing scripts against regression
       # fixtures (byte-stable venv pinning, null components, metadata stamping,
@@ -350,6 +367,7 @@ jobs:
   changes:
     name: Detect changed paths
     runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
+    timeout-minutes: 10
     if: github.event_name == 'pull_request'
     outputs:
       web: ${{ steps.filter.outputs.web }}
@@ -360,6 +378,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Classify changed paths
         id: filter
@@ -446,6 +466,7 @@ jobs:
   validate-docs:
     name: Validate Documentation
     runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
+    timeout-minutes: 15
     needs: [changes]
     # Skipped on a pull request that touches none of this job's paths (see the
     # changes job). Pushes to main and dispatch always run it. Compared against
@@ -458,6 +479,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       
       - name: Check required documentation
         run: |
@@ -510,6 +533,7 @@ jobs:
   validate-examples:
     name: Validate Examples
     runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
+    timeout-minutes: 45
     needs: [changes]
     # Skipped on a pull request that touches none of this job's paths (see the
     # changes job). Pushes to main and dispatch always run it. Compared against
@@ -527,6 +551,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       
       - name: Validate ${{ matrix.example }} structure
         run: |
@@ -635,6 +661,7 @@ jobs:
   ui:
     name: UI Tests (Playwright)
     runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
+    timeout-minutes: 30
     needs: [changes]
     # Skipped on a pull request that touches none of this job's paths (see the
     # changes job). Pushes to main and dispatch always run it. Compared against
@@ -650,6 +677,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Set up Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -689,6 +718,7 @@ jobs:
   visual:
     name: UI Visual Regression
     runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
+    timeout-minutes: 30
     needs: [changes]
     # Skipped on a pull request that touches none of this job's paths (see the
     # changes job). Pushes to main and dispatch always run it. Compared against
@@ -768,6 +798,7 @@ jobs:
     name: Regenerate guide screenshots
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.reseed_guide_shots == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     container:
       image: mcr.microsoft.com/playwright:v1.61.1-jammy
     defaults:
@@ -776,6 +807,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Install dependencies
         run: npm ci
       - name: Capture guide screenshots
@@ -790,12 +823,15 @@ jobs:
   doc-coverage:
     name: Doc Coverage
     runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
+    timeout-minutes: 10
     # Reads the scan-mode list from docker/entrypoint.sh and checks every
     # user-facing input form is documented across by-input, ui, cli, architecture,
     # pipeline-by-input and README. A new mode missing from a page fails here.
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Check input-form documentation coverage
         run: bash scripts/check-doc-coverage.sh
 
@@ -833,7 +869,8 @@ jobs:
   summary:
     name: CI Summary
     runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
-    needs: [test, secrets, contract, postprocess, web-e2e, full-e2e, docs-walkthrough, lint, validate-docs, validate-examples, ui, visual, doc-coverage]
+    timeout-minutes: 15
+    needs: [test, secrets, contract, postprocess, web-e2e, full-e2e, docs-walkthrough, lint, validate-docs, validate-examples, ui, visual, doc-coverage, desktop-linux]
     if: always()
 
     steps:
@@ -901,6 +938,7 @@ jobs:
           echo "| UI (Playwright) | ${{ needs.ui.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| UI Visual Regression | ${{ needs.visual.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Doc Coverage | ${{ needs.doc-coverage.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Desktop boot tests (linux) | ${{ needs.desktop-linux.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           # Only fail if critical tests failed
@@ -939,6 +977,9 @@ jobs:
             exit 1
           elif [ "${{ needs.lint.result }}" == "failure" ]; then
             echo "❌ Script linting failed (ShellCheck at warning severity, or hadolint at error)" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          elif [ "${{ needs.desktop-linux.result }}" == "failure" ]; then
+            echo "❌ Desktop boot tests (linux) failed" >> $GITHUB_STEP_SUMMARY
             exit 1
           else
             echo "✅ Critical checks passed" >> $GITHUB_STEP_SUMMARY
