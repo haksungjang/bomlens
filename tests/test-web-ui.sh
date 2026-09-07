@@ -936,6 +936,27 @@ c_kind=$(curl -s -o /dev/null -w '%{http_code}' -F "file=@$WORK/sample.zip" "$BA
 c_ext=$(curl -s -o /dev/null -w '%{http_code}' -F "kind=zip" -F "file=@$WORK/payload.txt" "$BASE/upload?kind=zip")
 [ "$c_ext" = "415" ] && pass "wrong extension rejected (415)" || fail ".txt as zip returned $c_ext (expected 415)"
 
+# Regression: the filename sanitizer used to be an ASCII-only allowlist
+# (re.sub(r"[^A-Za-z0-9._-]", "_", ...)), so a Korean filename — the common
+# case for this product's users, not an edge case — came back as a run of
+# underscores. It must now only strip what is genuinely unsafe (Windows-
+# illegal characters, since this upload can be bind-mounted back onto a
+# Windows host) while preserving non-ASCII scripts.
+ko_resp=$(curl -fsS -F "kind=zip" -F "file=@$WORK/sample.zip;filename=사내프로젝트.zip" "$BASE/upload?kind=zip" 2>/dev/null)
+ko_fn=$(echo "$ko_resp" | python3 -c "import sys,json;print(json.load(sys.stdin).get('filename',''))" 2>/dev/null)
+[ "$ko_fn" = "사내프로젝트.zip" ] && pass "Korean upload filename survives sanitization intact" \
+    || fail "Korean upload filename was mangled" "got '$ko_fn' from $ko_resp"
+
+# Windows-illegal characters must still be neutralized (this filename can end
+# up as a real path on a Windows host via Docker Desktop's file sharing).
+win_resp=$(curl -fsS -F "kind=zip" -F 'file=@'"$WORK"'/sample.zip;filename=a<b>c:d.zip' "$BASE/upload?kind=zip" 2>/dev/null)
+win_fn=$(echo "$win_resp" | python3 -c "import sys,json;print(json.load(sys.stdin).get('filename',''))" 2>/dev/null)
+if printf '%s' "$win_fn" | grep -qE '[<>:]'; then
+    fail "Windows-illegal characters survived sanitization" "got '$win_fn' from $win_resp"
+else
+    pass "Windows-illegal characters (<>:) are still neutralized"
+fi
+
 # Most vendors ship a firmware download as a zip, and the CLI has always taken
 # one. The upload form used to refuse the same file because the extension was
 # missing from the firmware list, so a scan the CLI could run had no path

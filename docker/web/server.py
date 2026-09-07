@@ -3400,7 +3400,15 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         safe_fn = os.path.basename(filename) or "upload.bin"
-        safe_fn = re.sub(r"[^A-Za-z0-9._-]", "_", safe_fn)
+        # Strip only what is genuinely unsafe: characters Windows forbids in a
+        # filename (this upload can be bind-mounted back onto a Windows host
+        # via Docker Desktop) and C0 control characters, plus trailing dots/
+        # spaces (Windows silently strips those, so keeping them invites a
+        # mismatch between what this server wrote and what a Windows-side
+        # tool sees). An ASCII-only allowlist used to sit here and collapsed
+        # any non-ASCII name (a Korean filename, the common case for this
+        # product's users, not an edge case) to a run of underscores.
+        safe_fn = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", safe_fn).strip(". ") or "upload.bin"
         lower = safe_fn.lower()
         if not lower.endswith(UPLOAD_EXTS[kind]):
             shutil.rmtree(dest_dir, ignore_errors=True)
