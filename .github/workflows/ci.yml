@@ -249,7 +249,7 @@ jobs:
           node-version: 20
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
       - name: Unit tests (boot/container/health/i18n/log/update/winstate)
         run: node --test test/*.test.mjs

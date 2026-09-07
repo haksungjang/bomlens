@@ -84,7 +84,7 @@ jobs:
         with:
           node-version: 20
       - name: Install dependencies
-        run: npm ci
+        run: npm install
       # 부팅 스모크: 인스톨러 빌드 전에 앱이 이 OS에서 실제로 켜지고 첫 화면(en/ko)을
       # 렌더하는지 확인한다. SBOM_SMOKE로 Docker/컨테이너 기동은 건너뛰어 결정론적이다.
       - name: Boot smoke (app launches and renders)
