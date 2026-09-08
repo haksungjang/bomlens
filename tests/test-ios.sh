@@ -81,6 +81,7 @@ elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
     if docker run --rm --network none \
         -v "$LIB/identify-cocoapods.sh":/usr/local/lib/sbom/identify-cocoapods.sh:ro \
         -v "$LIB/parse-podfile-lock.py":/usr/local/lib/sbom/parse-podfile-lock.py:ro \
+        -v "$LIB/cdx-version.sh":/usr/local/lib/sbom/cdx-version.sh:ro \
         -v "$FIX/ios-cocoapods":/src:ro \
         --entrypoint bash "$IMG" \
         -c '/usr/local/lib/sbom/identify-cocoapods.sh /src /tmp/coco.json 1.0 >/dev/null 2>&1; cat /tmp/coco.json' \
