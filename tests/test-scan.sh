@@ -349,21 +349,21 @@ if run_scan_with_logs "test-nodejs" "TestNodeApp" "1.0.0"; then
         COMP_COUNT=$(cat "$FOUND" | jq '.components | length' 2>/dev/null || echo "0")
         if [ "$COMP_COUNT" -gt 0 ]; then
             print_success "Node.js project ($COMP_COUNT components)"
-            ((PASSED++))
+            PASSED=$((PASSED + 1))
         else
             print_error "Node.js project (SBOM is empty)"
             show_failure_log "test-nodejs"
-            ((FAILED++))
+            FAILED=$((FAILED + 1))
         fi
     else
         print_error "Node.js project (SBOM file not generated)"
         show_failure_log "test-nodejs"
-        ((FAILED++))
+        FAILED=$((FAILED + 1))
     fi
 else
     print_error "Node.js project (Scan failed)"
     show_failure_log "test-nodejs"
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 
@@ -392,7 +392,7 @@ if run_scan_with_logs "test-python" "TestPythonApp" "1.0.0"; then
         COMP_COUNT=$(cat "$FOUND" | jq '.components | length' 2>/dev/null || echo "0")
         if [ "$COMP_COUNT" -gt 0 ]; then
             print_success "Python project ($COMP_COUNT components)"
-            ((PASSED++))
+            PASSED=$((PASSED + 1))
             # pandas ships its own BSD-3-Clause text with the notices of the
             # libraries it bundles appended, so reading that file whole matches
             # several licenses at once, which is how the wrong one used to end
@@ -405,26 +405,26 @@ if run_scan_with_logs "test-python" "TestPythonApp" "1.0.0"; then
                 "$FOUND" 2>/dev/null || echo "ABSENT")
             if [ "$PANDAS_LIC" = "BSD-3-Clause" ]; then
                 print_success "Python project (pandas license settled on BSD-3-Clause)"
-                ((PASSED++))
+                PASSED=$((PASSED + 1))
             else
                 print_error "Python project (pandas license is '$PANDAS_LIC', expected BSD-3-Clause)"
                 show_failure_log "test-python"
-                ((FAILED++))
+                FAILED=$((FAILED + 1))
             fi
         else
             print_error "Python project (SBOM is empty)"
             show_failure_log "test-python"
-            ((FAILED++))
+            FAILED=$((FAILED + 1))
         fi
     else
         print_error "Python project (SBOM file not generated)"
         show_failure_log "test-python"
-        ((FAILED++))
+        FAILED=$((FAILED + 1))
     fi
 else
     print_error "Python project (Scan failed)"
     show_failure_log "test-python"
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 cd "$TEST_DIR" || true
@@ -473,32 +473,32 @@ if run_scan_with_logs "test-java-maven" "TestJavaMaven" "1.0.0"; then
         if [ "$COMP_COUNT" -le 0 ]; then
             print_error "Java Maven project (SBOM is empty)"
             show_failure_log "test-java-maven"
-            ((FAILED++))
+            FAILED=$((FAILED + 1))
         elif ! assert_root_has_direct_deps "$FOUND"; then
             print_error "Java Maven project (root metadata.component has no direct dependsOn — direct deps orphaned)"
             show_failure_log "test-java-maven"
-            ((FAILED++))
+            FAILED=$((FAILED + 1))
         elif jq -e '[.components[]? | select((.purl // "") | test("pkg:maven/(org.junit|org.projectlombok)"))] | length > 0' "$FOUND" >/dev/null 2>&1; then
             print_error "Java Maven project (test/provided deps not filtered — junit/lombok present in SBOM)"
             show_failure_log "test-java-maven"
-            ((FAILED++))
+            FAILED=$((FAILED + 1))
         elif ! jq -e '[.components[]? | select(.name == "spring-web")] | length > 0' "$FOUND" >/dev/null 2>&1; then
             print_error "Java Maven project (deployable transitive dropped — spring-web missing after scope filter)"
             show_failure_log "test-java-maven"
-            ((FAILED++))
+            FAILED=$((FAILED + 1))
         else
             print_success "Java Maven project ($COMP_COUNT components, test/provided filtered, runtime closure kept)"
-            ((PASSED++))
+            PASSED=$((PASSED + 1))
         fi
     else
         print_error "Java Maven project (SBOM file not generated)"
         show_failure_log "test-java-maven"
-        ((FAILED++))
+        FAILED=$((FAILED + 1))
     fi
 else
     print_error "Java Maven project (Scan failed)"
     show_failure_log "test-java-maven"
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 cd "$TEST_DIR" || true
@@ -523,21 +523,21 @@ if run_scan_with_logs "test-ruby" "TestRubyApp" "1.0.0"; then
         COMP_COUNT=$(cat "$FOUND" | jq '.components | length' 2>/dev/null || echo "0")
         if [ "$COMP_COUNT" -gt 0 ]; then
             print_success "Ruby project ($COMP_COUNT components)"
-            ((PASSED++))
+            PASSED=$((PASSED + 1))
         else
             print_error "Ruby project (SBOM is empty)"
             show_failure_log "test-ruby"
-            ((FAILED++))
+            FAILED=$((FAILED + 1))
         fi
     else
         print_error "Ruby project (SBOM file not generated)"
         show_failure_log "test-ruby"
-        ((FAILED++))
+        FAILED=$((FAILED + 1))
     fi
 else
     print_error "Ruby project (Scan failed)"
     show_failure_log "test-ruby"
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 cd "$TEST_DIR" || true
@@ -565,21 +565,21 @@ if run_scan_with_logs "test-php" "TestPHPApp" "1.0.0"; then
         COMP_COUNT=$(cat "$FOUND" | jq '.components | length' 2>/dev/null || echo "0")
         if [ "$COMP_COUNT" -gt 0 ]; then
             print_success "PHP project ($COMP_COUNT components)"
-            ((PASSED++))
+            PASSED=$((PASSED + 1))
         else
             print_error "PHP project (SBOM is empty)"
             show_failure_log "test-php"
-            ((FAILED++))
+            FAILED=$((FAILED + 1))
         fi
     else
         print_error "PHP project (SBOM file not generated)"
         show_failure_log "test-php"
-        ((FAILED++))
+        FAILED=$((FAILED + 1))
     fi
 else
     print_error "PHP project (Scan failed)"
     show_failure_log "test-php"
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 cd "$TEST_DIR" || true
@@ -608,21 +608,21 @@ if run_scan_with_logs "test-rust" "TestRustApp" "1.0.0"; then
         COMP_COUNT=$(cat "$FOUND" | jq '.components | length' 2>/dev/null || echo "0")
         if [ "$COMP_COUNT" -gt 0 ]; then
             print_success "Rust project ($COMP_COUNT components)"
-            ((PASSED++))
+            PASSED=$((PASSED + 1))
         else
             print_error "Rust project (SBOM is empty)"
             show_failure_log "test-rust"
-            ((FAILED++))
+            FAILED=$((FAILED + 1))
         fi
     else
         print_error "Rust project (SBOM file not generated)"
         show_failure_log "test-rust"
-        ((FAILED++))
+        FAILED=$((FAILED + 1))
     fi
 else
     print_error "Rust project (Scan failed)"
     show_failure_log "test-rust"
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 cd "$TEST_DIR" || true
@@ -645,29 +645,29 @@ if docker pull alpine:latest > /dev/null 2>&1; then
             SPEC_V=$(cat "$FOUND" | jq -r '.specVersion' 2>/dev/null || echo "?")
             if [ "$COMP_COUNT" -gt 0 ] && [ "$SPEC_V" = "1.6" ]; then
                 print_success "Docker Image ($COMP_COUNT components, CycloneDX $SPEC_V)"
-                ((PASSED++))
+                PASSED=$((PASSED + 1))
             elif [ "$COMP_COUNT" -le 0 ]; then
                 print_error "Docker Image (SBOM is empty)"
                 show_failure_log "test-docker-image"
-                ((FAILED++))
+                FAILED=$((FAILED + 1))
             else
                 print_error "Docker Image (specVersion=$SPEC_V, expected 1.6 — syft spec pin drifted)"
                 show_failure_log "test-docker-image"
-                ((FAILED++))
+                FAILED=$((FAILED + 1))
             fi
         else
             print_error "Docker Image (SBOM file not generated)"
             show_failure_log "test-docker-image"
-            ((FAILED++))
+            FAILED=$((FAILED + 1))
         fi
     else
         print_error "Docker Image (Scan failed)"
         show_failure_log "test-docker-image"
-        ((FAILED++))
+        FAILED=$((FAILED + 1))
     fi
 else
     print_error "Docker Image (Cannot pull alpine:latest - network issue)"
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 cd "$TEST_DIR" || true
@@ -688,16 +688,16 @@ chmod +x test-binary
 if run_scan_with_logs "test-binary" "TestBinary" "1.0.0" "--target test-binary"; then
     if FOUND=$(find_bom_file "TestBinary" "1.0.0"); then
         print_success "Binary File"
-        ((PASSED++))
+        PASSED=$((PASSED + 1))
     else
         print_error "Binary File (SBOM file not generated)"
         show_failure_log "test-binary"
-        ((FAILED++))
+        FAILED=$((FAILED + 1))
     fi
 else
     print_error "Binary File (Scan failed)"
     show_failure_log "test-binary"
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 cd "$TEST_DIR" || true
@@ -716,16 +716,16 @@ echo "test" > usr/bin/test-file
 if run_scan_with_logs "test-rootfs" "TestRootFS" "1.0.0" "--target ."; then
     if FOUND=$(find_bom_file "TestRootFS" "1.0.0"); then
         print_success "RootFS Directory"
-        ((PASSED++))
+        PASSED=$((PASSED + 1))
     else
         print_error "RootFS Directory (SBOM file not generated)"
         show_failure_log "test-rootfs"
-        ((FAILED++))
+        FAILED=$((FAILED + 1))
     fi
 else
     print_error "RootFS Directory (Scan failed)"
     show_failure_log "test-rootfs"
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 cd "$TEST_DIR" || true
@@ -740,13 +740,13 @@ EXAMPLE_TOTAL=0
 
 for example in "$EXAMPLES_DIR"/*; do
     if [ -d "$example" ]; then
-        ((EXAMPLE_TOTAL++))
+        EXAMPLE_TOTAL=$((EXAMPLE_TOTAL + 1))
         
         cd "$example"
         
         # Check if README exists
         if [ -f "README.md" ]; then
-            ((EXAMPLE_PASSED++))
+            EXAMPLE_PASSED=$((EXAMPLE_PASSED + 1))
         fi
         
         cd "$TEST_DIR"
@@ -755,10 +755,10 @@ done
 
 if [ $EXAMPLE_TOTAL -eq $EXAMPLE_PASSED ]; then
     print_success "Example Project ($EXAMPLE_PASSED/$EXAMPLE_TOTAL complete)"
-    ((PASSED++))
+    PASSED=$((PASSED + 1))
 else
     print_error "Example Project ($EXAMPLE_PASSED/$EXAMPLE_TOTAL complete)"
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 cd "$TEST_DIR" || true
@@ -771,7 +771,7 @@ print_test "Test 11/15: ZIP archive ingestion"
 
 if ! command -v zip > /dev/null 2>&1; then
     print_error "ZIP ingestion (zip command unavailable)"
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 else
     mkdir -p zip-src/app
     cat > zip-src/app/package.json <<'EOF'
@@ -783,19 +783,19 @@ EOF
         # --all also turns on the SPDX export, which lands next to the CycloneDX BOM.
         ZIP_BOM=$(find_bom_file "TestZipApp" "1.0.0" || true)
         if [ -n "$ZIP_BOM" ] \
-           && [ -f "TestZipApp_1.0.0_risk-report.md" ] \
+           && [ -f "$(dirname "$ZIP_BOM")/TestZipApp_1.0.0_risk-report.md" ] \
            && assert_spdx_sane "$(dirname "$ZIP_BOM")/TestZipApp_1.0.0_bom.spdx.json"; then
             print_success "ZIP ingestion (SBOM + risk-report + SPDX export)"
-            ((PASSED++))
+            PASSED=$((PASSED + 1))
         else
             print_error "ZIP ingestion (SBOM, risk-report or SPDX export missing)"
             show_failure_log "test-zip"
-            ((FAILED++))
+            FAILED=$((FAILED + 1))
         fi
     else
         print_error "ZIP ingestion (Scan failed)"
         show_failure_log "test-zip"
-        ((FAILED++))
+        FAILED=$((FAILED + 1))
     fi
     cd "$TEST_DIR" || true
 fi
@@ -832,11 +832,11 @@ if [ "$bs_ok" = true ] \
    && diff -q "$TEST_DIR/bs1.json" "$TEST_DIR/bs2.json" >/dev/null 2>&1 \
    && assert_bom_sane "$TEST_DIR/bs2.json" "ByteStable"; then
     print_success "Python --byte-stable (two scans byte-identical, metadata sane)"
-    ((PASSED++))
+    PASSED=$((PASSED + 1))
 else
     print_error "Python --byte-stable (non-reproducible or metadata/components invalid)"
     show_failure_log "test-bytestable-2"
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 cd "$TEST_DIR" || true
@@ -866,11 +866,11 @@ fi
 
 if [ "$iso_ok" = true ]; then
     print_success "Source scan keeps the tree clean (bundle in Isolation_1.0.0/)"
-    ((PASSED++))
+    PASSED=$((PASSED + 1))
 else
     print_error "Source scan leaked artifacts into the scanned tree"
     show_failure_log "test-isolation"
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 cd "$TEST_DIR" || true
@@ -896,11 +896,11 @@ fi
 
 if [ "$od_ok" = true ]; then
     print_success "--output-dir honored ($CUSTOM_OUT/OutDir_1.0.0/)"
-    ((PASSED++))
+    PASSED=$((PASSED + 1))
 else
     print_error "--output-dir not honored"
     show_failure_log "test-outdir"
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 cd "$TEST_DIR" || true
@@ -926,11 +926,11 @@ fi
 
 if [ "$ts_ok" = true ]; then
     print_success "--timestamp run folder created ($tsdir)"
-    ((PASSED++))
+    PASSED=$((PASSED + 1))
 else
     print_error "--timestamp did not create a timestamped folder"
     show_failure_log "test-timestamp"
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 cd "$TEST_DIR" || true
