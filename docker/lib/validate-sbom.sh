@@ -27,6 +27,10 @@
 #               data source.
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=docker/lib/cdx-version.sh
+. "$SCRIPT_DIR/cdx-version.sh"
+
 SBOM="$1"
 OUT_PREFIX="$2"
 PROJECT="${3:-project}"
@@ -688,7 +692,7 @@ case "$FORMAT" in
             rm -f "$SPDX3_CDX"
             echo "[validate] SPDX 3.0 (Yocto) measured on the installed package set"
         elif command -v syft >/dev/null 2>&1 \
-           && syft convert "$SBOM" -o cyclonedx-json@1.6="$SPDX3_CDX" >/dev/null 2>&1 \
+           && syft convert "$SBOM" -o "cyclonedx-json@$CDX_SPEC_VERSION=$SPDX3_CDX" >/dev/null 2>&1 \
            && [ -s "$SPDX3_CDX" ]; then
             SBOM="$SPDX3_CDX"
             CHECKS=$(cdx_checks "$CYCLONEDX_SPEC_VERSIONS")

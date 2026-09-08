@@ -24,6 +24,8 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_PREP="$REPO_DIR/docker/lib/build-prep.sh"
+# shellcheck source=docker/lib/cdx-version.sh
+. "$REPO_DIR/docker/lib/cdx-version.sh"
 
 # Windows / Git-for-Windows (MSYS) docker-mount compatibility.
 # Under MSYS bash, arguments to a native docker.exe get path-mangled two ways
@@ -1437,7 +1439,7 @@ if [ "$MODE" = "SOURCE" ]; then
         -e PROJECT_VERSION="\"$PROJECT_VERSION\"" \
         -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
         --entrypoint sh "\"$CDX_IMG\"" \
-        -c "'sh /tmp/build-prep.sh /app \"/out/$OUTPUT_FILE\" 1.6'" \
+        -c "'sh /tmp/build-prep.sh /app \"/out/$OUTPUT_FILE\" $CDX_SPEC_VERSION'" \
         || { echo "[ERROR] SBOM generation failed (stage 1)"; exit 1; }
 
     echo "[2/2] Post-processing..."

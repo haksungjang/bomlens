@@ -1339,6 +1339,19 @@ def sbom_summary(run_id):
         ),
         None,
     )
+    # sbom-oversized: set by entrypoint.sh when the finished document is over
+    # the same 100 MB budget this server's own upload path enforces (MAX_BYTES
+    # above) — a scan run against --target never goes through that upload
+    # check at all. Exposed here so a client reading a large document can warn
+    # before it fetches + parses the whole thing; no banner reads it yet.
+    oversized_bytes = next(
+        (
+            p.get("value")
+            for p in meta_props
+            if p.get("name") == "bomlens:sbom-oversized"
+        ),
+        None,
+    )
     # Direct/transitive split across ALL components (not just the capped rows),
     # so the Overview dependency tile is accurate on large SBOMs too. Zero when
     # the SBOM has no dependency graph (flat firmware/image SBOMs).
@@ -1403,6 +1416,7 @@ def sbom_summary(run_id):
         "truncated": len(comps) > MAX_COMPONENT_ROWS,
         "suggestIdentifyVendored": suggest,
         "sbomToolDegraded": degraded,
+        "sbomOversizedBytes": oversized_bytes,
         # CycloneDX root component type — drives the honest scan-kind subtitle and
         # works on re-open too, where the scan MODE isn't stored.
         "componentType": meta_comp.get("type"),

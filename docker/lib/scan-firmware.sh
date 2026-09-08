@@ -26,6 +26,10 @@
 # so the common post-processing pipeline always receives a valid SBOM.
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=docker/lib/cdx-version.sh
+. "$SCRIPT_DIR/cdx-version.sh"
+
 FW="$1"
 OUTPUT="$2"
 VERSION="${3:-unknown}"
@@ -409,7 +413,7 @@ fi
 # --------------------------------------------------------
 PKG_SBOM="$WORK/pkg.cdx.json"
 echo "[firmware] syft: cataloging packages under rootfs..."
-if ! syft "dir:$ROOTFS" -o cyclonedx-json@1.6 > "$PKG_SBOM" 2>/dev/null; then
+if ! syft "dir:$ROOTFS" -o "cyclonedx-json@$CDX_SPEC_VERSION" > "$PKG_SBOM" 2>/dev/null; then
     echo "[firmware] WARN: syft directory scan failed; continuing without package components." >&2
     echo '{"components":[]}' > "$PKG_SBOM"
 fi
@@ -459,7 +463,7 @@ if [ "${FW_EXTRA_ROOTS:-true}" != "false" ]; then
         esac
         echo "[firmware] syft: cataloging $extra_what beside the rootfs:" \
              "${extra_root#"$EXTRACT"/}"
-        if ! syft "dir:$extra_root" -o cyclonedx-json@1.6 \
+        if ! syft "dir:$extra_root" -o "cyclonedx-json@$CDX_SPEC_VERSION" \
                 > "$WORK/extra/$extra_scanned.cdx.json" 2>/dev/null; then
             echo "[firmware] WARN: syft failed on ${extra_root#"$EXTRACT"/};" \
                  "its contents are not in the SBOM." >&2
@@ -915,10 +919,11 @@ jq -n \
     --arg ts "$GEN_AT" \
     --arg unblobv "${BOMLENS_UNBLOB_VERSION:-unknown}" \
     --arg syftv "${BOMLENS_SYFT_VERSION:-unknown}" \
-    --arg cvebtv "${BOMLENS_CVE_BIN_TOOL_VERSION:-unknown}" '
+    --arg cvebtv "${BOMLENS_CVE_BIN_TOOL_VERSION:-unknown}" \
+    --arg spec "$CDX_SPEC_VERSION" '
 {
   bomFormat: "CycloneDX",
-  specVersion: "1.6",
+  specVersion: $spec,
   version: 1,
   metadata: {
     timestamp: $ts,
