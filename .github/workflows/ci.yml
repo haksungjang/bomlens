@@ -810,6 +810,12 @@ jobs:
       - name: Check CLI flag documentation coverage
         run: bash scripts/check-doc-cli-coverage.sh
 
+      # entrypoint.sh / server.py's ARTIFACT_SUFFIXES / .gitignore / artifacts.md
+      # all know about scan-output filenames independently; this catches one
+      # falling out of sync with the others.
+      - name: Check artifact registry sync
+        run: bash scripts/check-artifact-registry-sync.sh
+
       # Korean prose gate: translation-ese and terminology rules over the
       # public docs surface (scripts/ko-style; decisions recorded in
       # docs/korean-style-guide.md). S1/S2 findings fail the job. The

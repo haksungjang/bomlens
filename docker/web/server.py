@@ -178,6 +178,12 @@ ARTIFACT_SUFFIXES = (
     # format, spec version, producing tool and authorship of the document as it
     # arrived, read before the conversion to CycloneDX rewrites all of it.
     "_input.json",
+    # Yocto VEX judgement counts (parse-yocto-spdx.py): how many CVEs the build
+    # already patched or judged not applicable, numbers not recoverable from
+    # the CycloneDX or the security report (which list only what is still
+    # unresolved). entrypoint.sh already treats it as a real deliverable
+    # (ARTIFACTS+=), so it belongs here too.
+    "_yocto_vex.json",
     # EPSS/KEV priority sidecar (scan-security.sh) and the SCANOSS vendored-OSS
     # SBOM (identify-vendored). Both back result views, so include them in the
     # download bundle and the per-scan results listing.
