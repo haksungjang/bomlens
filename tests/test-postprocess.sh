@@ -3041,6 +3041,65 @@ else
     fail "mark_pipeline_warning errored on a missing file"
 fi
 
+echo "== sbom-size-cap: an oversized SBOM body is stamped, not truncated or rejected =="
+# Extracted verbatim from docker/entrypoint.sh (between its literal anchor
+# comments), so this test tracks the shipped logic rather than a hand-copied
+# duplicate that could silently drift from it.
+sed -n '/^# SBOM body size cap:/,/^# SPDX export (opt-in):/p' "$ROOT_DIR/docker/entrypoint.sh" \
+    | sed '$d' > "$WORK/size-cap-snippet.sh"
+# sed's range address prints through EOF when the end anchor is not found (a
+# renamed or reworded "# SPDX export (opt-in):" comment), which would source
+# the rest of entrypoint.sh -- including its `exit` calls and the cosign
+# signing block -- into THIS test process. A short, exit-free snippet is the
+# only shape this extraction should ever produce, so both are checked before
+# anything is sourced.
+SNIPPET_LINES="$(wc -l < "$WORK/size-cap-snippet.sh" | tr -d '[:space:]')"
+if [ ! -s "$WORK/size-cap-snippet.sh" ]; then
+    fail "could not extract the size-cap snippet from entrypoint.sh (did its anchor comments move?)"
+elif [ -z "$SNIPPET_LINES" ] || [ "$SNIPPET_LINES" -gt 50 ]; then
+    fail "size-cap snippet is $SNIPPET_LINES lines (expected well under 50) -- the end anchor likely did not match, and sourcing it would run the rest of entrypoint.sh" \
+        "did the '# SPDX export (opt-in):' comment in docker/entrypoint.sh change?"
+elif grep -q '^[[:space:]]*exit\b' "$WORK/size-cap-snippet.sh"; then
+    fail "size-cap snippet contains an exit statement -- refusing to source it into this test process" \
+        "$(cat "$WORK/size-cap-snippet.sh")"
+else
+    printf '{"bomFormat":"CycloneDX","specVersion":"1.6","metadata":{},"components":[]}' > "$WORK/small.json"
+    # shellcheck disable=SC2034  # read by the sourced snippet
+    OUTPUT_FILE="$WORK/small.json"
+    # shellcheck disable=SC2034  # read by the sourced snippet in place of its 100 MB default
+    SBOM_SIZE_CAP_BYTES=1000
+    . "$WORK/size-cap-snippet.sh"
+    if jq -e '.metadata.properties[]? | select(.name=="bomlens:sbom-oversized")' "$WORK/small.json" >/dev/null 2>&1; then
+        fail "a SBOM under the cap was wrongly stamped bomlens:sbom-oversized"
+    else
+        pass "a SBOM under the cap is left unstamped"
+    fi
+
+    # Pad well past the same 1000-byte test cap with a property whose value is
+    # inert filler, so the file is realistically large without needing an
+    # actual 100 MB fixture on disk.
+    jq -c --arg filler "$(head -c 2000 /dev/zero | tr '\0' 'x')" \
+        '.metadata.properties = [{name:"filler", value:$filler}]' "$WORK/small.json" > "$WORK/big.json"
+    # shellcheck disable=SC2034  # read by the sourced snippet
+    OUTPUT_FILE="$WORK/big.json"
+    # shellcheck disable=SC2034  # read by the sourced snippet
+    SBOM_SIZE_CAP_BYTES=1000
+    . "$WORK/size-cap-snippet.sh"
+    if jq -e '.metadata.properties[]? | select(.name=="bomlens:sbom-oversized" and (.value | endswith(" bytes")))' "$WORK/big.json" >/dev/null 2>&1; then
+        pass "a SBOM over the cap is stamped bomlens:sbom-oversized with its byte count"
+    else
+        fail "an over-cap SBOM was not stamped"
+    fi
+    if jq -e '.components' "$WORK/big.json" >/dev/null 2>&1; then
+        pass "the oversized SBOM's own content is left intact (stamped, not truncated)"
+    else
+        fail "the oversized SBOM was corrupted rather than merely stamped"
+    fi
+fi
+# These are read by the sourced snippet only; leaving them set would silently
+# apply a 1000-byte cap (instead of the real 100 MB default) to any later
+# entrypoint.sh fragment this file goes on to source.
+unset OUTPUT_FILE SBOM_SIZE_CAP_BYTES
 echo "== node-scope: production filter drops the devDependencies tree =="
 # Guards docker/lib/build-prep.sh's node production-scope filter: cdxgen pulls a
 # deployed app's devDependencies (jest/eslint/@babel/...) into the SBOM, and the
@@ -4412,6 +4471,68 @@ elif grep -qF "$XSS_ESCAPED" "$XSS_DIR/conf_conformance.html" 2>/dev/null; then
     pass "validate-sbom.sh escapes \$PROJECT in conformance.html"
 else
     fail "validate-sbom.sh: escaped project name not found in conformance.html"
+fi
+
+echo "== real-upstream-sample: cdxgen field shapes have not drifted =="
+# Every fixture above is hand-written to match what our own code already
+# expects, so a real cdxgen field rename (e.g. licenses[].license.id becoming
+# licenses[].license.spdxId) would pass every one of them silently. This
+# fixture is UNMODIFIED real output, captured by actually running cdxgen
+# against a real package-lock.json for a pinned, pre-verified set of
+# dependencies (express/cors/helmet/morgan/dotenv/axios/lodash/moment/
+# winston/compression), so it carries whatever shape cdxgen actually emitted
+# on capture, not what we assume it emits -- but a STATIC fixture cannot
+# detect a shape change in a NEWER cdxgen than the one that captured it,
+# which is exactly why the version check below exists: it is the freshness
+# signal that tells a maintainer to recapture, not proof of current drift.
+RUS="$FIX/cdxgen-real-nodejs-sample.json"
+if [ "$(jq -r '.bomFormat' "$RUS" 2>/dev/null)" = "CycloneDX" ] \
+    && [ "$(jq -r '.components | length > 0' "$RUS" 2>/dev/null)" = "true" ]; then
+    pass "fixture is a real, non-empty CycloneDX document"
+else
+    fail "cdxgen-real-nodejs-sample.json fixture is missing or malformed"
+fi
+FIXTURE_CDXGEN_VER="$(jq -r '.metadata.tools.components[0].version // empty' "$RUS" 2>/dev/null)"
+DOCKERFILE_CDXGEN_VER="$(grep -oE '^ARG CDXGEN_VERSION=[0-9.]+' "$ROOT_DIR/docker/Dockerfile" 2>/dev/null | grep -oE '[0-9.]+$')"
+if [ -z "$FIXTURE_CDXGEN_VER" ] || [ -z "$DOCKERFILE_CDXGEN_VER" ]; then
+    fail "could not read the cdxgen version from the fixture or docker/Dockerfile's ARG CDXGEN_VERSION"
+elif [ "$FIXTURE_CDXGEN_VER" = "$DOCKERFILE_CDXGEN_VER" ]; then
+    pass "fixture was captured with the same cdxgen version the image pins ($DOCKERFILE_CDXGEN_VER)"
+else
+    fail "fixture was captured with cdxgen $FIXTURE_CDXGEN_VER, but docker/Dockerfile now pins $DOCKERFILE_CDXGEN_VER -- recapture tests/fixtures/cdxgen-real-nodejs-sample.json"
+fi
+# The exact shapes normalize-sbom.sh's LICENSE_REVIEW_FIX/LICENSE_CLASS_FIX
+# and license-flags.jq read: licenses[].license.id, purl, type, properties[].
+if jq -e '[.components[] | select(.name=="express")][0]
+        | (.licenses[0].license.id == "MIT") and (.purl | startswith("pkg:npm/express@"))
+          and (.type == "framework")
+          and ([.properties[]?.name] | index("SrcFile") != null)' \
+    "$RUS" >/dev/null 2>&1; then
+    pass "the fields our jq depends on (licenses[].license.id, purl, type, properties[]) are shaped as expected"
+else
+    fail "cdxgen's real output no longer matches the shape our jq scripts read" \
+        "$(jq -c '[.components[] | select(.name=="express")][0]' "$RUS" 2>/dev/null)"
+fi
+
+# Round-trip: run our OWN normalize-sbom.sh against this real document, not a
+# hand-written proxy of it, and confirm the license classifier it applies
+# (license-flags.jq, shared with the NOTICE/risk-report/web UI) reaches the
+# right verdict from cdxgen's real license shape.
+cp "$RUS" "$WORK/real-sample.json"
+bash "$LIB/normalize-sbom.sh" "$WORK/real-sample.json" >/dev/null 2>&1
+EXPRESS_CLASS="$(jq -r '[.components[] | select(.name=="express")][0]
+    | [.properties[]? | select(.name=="bomlens:licenseClass") | .value][0] // "MISSING"' \
+    "$WORK/real-sample.json" 2>/dev/null)"
+if [ "$EXPRESS_CLASS" = "permissive" ]; then
+    pass "normalize-sbom.sh classifies real cdxgen output's MIT-licensed express as permissive"
+else
+    fail "normalize-sbom.sh did not classify express correctly from real cdxgen output" \
+        "got bomlens:licenseClass=$EXPRESS_CLASS"
+fi
+if [ "$(jq '.components | length' "$WORK/real-sample.json" 2>/dev/null)" = "$(jq '.components | length' "$RUS" 2>/dev/null)" ]; then
+    pass "normalize-sbom.sh preserves every component of the real document"
+else
+    fail "normalize-sbom.sh dropped or added components on a real document"
 fi
 
 echo ""
