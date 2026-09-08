@@ -284,6 +284,12 @@ jobs:
       - name: Image freshness unit tests
         run: bash tests/test-image-refresh.sh
 
+      # No Docker (docker itself is stubbed): guards
+      # verify-release.sh's check_secondary_image(), the release-gate step
+      # that confirms the firmware/aibom/deep-cve images are pullable.
+      - name: Release verification unit tests
+        run: bash tests/test-verify-release.sh
+
       - name: Output regression snapshots
         run: bash tests/test-snapshot.sh
 
