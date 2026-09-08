@@ -430,6 +430,34 @@ for f in "${PATHDOCS[@]}"; do
     done < <(doc_path_tokens "$f")
 done
 
+# --- Check 12: en/ko heading-structure parity (warning) ---------------------
+# A translated page that quietly drops, adds or reorders a whole section is
+# invisible to every check above — none of them look at anything but code
+# blocks and paths. This diffs just the heading *shape* (how many "#" each
+# heading line opens with, in order) so translated wording never trips it,
+# but a missing/extra/reordered/re-leveled section does. Code-fence content
+# is skipped so a "#" shell comment inside an example never counts as a
+# heading. A warning, not a hard failure: unlike a runnable command (Check
+# 10), a translator restructuring for readability is a legitimate reason for
+# the shape to differ, not necessarily drift.
+heading_levels() {
+    awk '
+        /^```/ { infence = !infence; next }
+        infence { next }
+        /^#{1,6}[[:space:]]/ { match($0, /^#+/); print RLENGTH }
+    ' "$1"
+}
+for f in "${DOCS[@]}"; do
+    case "$f" in *.ko.md) continue ;; esac
+    ko="${f%.md}.ko.md"
+    [ -f "$ko" ] || continue
+    if [ "$(heading_levels "$f")" != "$(heading_levels "$ko")" ]; then
+        echo "  WARN[i18n-structure]: $f and ${ko##*/} have different heading structure"
+        diff <(heading_levels "$f") <(heading_levels "$ko") | sed 's/^/      /' | head -8
+        WARN=$((WARN + 1))
+    fi
+done
+
 echo ""
 [ "$WARN" -gt 0 ] && echo "${WARN} i18n warning(s) (non-fatal)"
 if [ "$FAIL" -eq 0 ]; then
