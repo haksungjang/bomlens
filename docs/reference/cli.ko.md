@@ -91,6 +91,7 @@ BomLens의 전체 옵션과 분석 모드, CI/CD 통합 방법, 트러블슈팅�
 | `TRUSCA_REF` | `main` | ingest ref 라벨 |
 | `TRUSCA_RELEASE` | `--version` 값 | ingest release 라벨 |
 | `EXTERNAL_LOOKUP` | `true` | `--ui`와 함께: 웹 UI의 CVE·패키지 조회 기능을 켠다. 필요할 때 osv.dev로 조회한다. 폐쇄망에서는 `false`로 끈다 |
+| `SBOM_UPLOAD_TTL_HOURS` | `24` | `--ui`와 함께: 스캔을 시작하지 않은 업로드 파일(선택만 하고 방치된 업로드)을 보관하는 시간. 최소 1로 제한된다 |
 
 Windows에서는 명령 프롬프트에서 설정한 환경변수가 더블클릭 실행에는 적용되지 않습니다.
 그래서 런처는 `UI_PORT`, `SBOM_LANG`, `SBOM_PULL`, `SBOM_IMAGE_TAR`, `SBOM_SCANNER_IMAGE`,
