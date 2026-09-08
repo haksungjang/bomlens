@@ -118,7 +118,7 @@ Windows에서는 명령 프롬프트에서 설정한 환경변수가 더블클�
 스캐너 이미지는 `SBOM_SCANNER_IMAGE` 환경변수로 재정의합니다.
 
 ```bash
-SBOM_SCANNER_IMAGE="ghcr.io/sktelecom/bomlens:1.8.0" \
+SBOM_SCANNER_IMAGE="ghcr.io/sktelecom/bomlens:1.11.8" \
   ./scripts/scan-sbom.sh --project "MyApp" --version "1.0.0" --generate-only
 ```
 
