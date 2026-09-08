@@ -321,7 +321,7 @@ done
 PATHDOCS=()
 while IFS= read -r f; do PATHDOCS+=("$f"); done \
     < <(find docs examples docker electron -name '*.md' \
-        ! -path 'docker/lib/notices/*' 2>/dev/null | sort)
+        ! -path 'docker/lib/notices/*' ! -path '*/node_modules/*' 2>/dev/null | sort)
 for f in README.md CONTRIBUTING.md CONTRIBUTING.ko.md SECURITY.md SECURITY.ko.md \
          CODE_OF_CONDUCT.md CODE_OF_CONDUCT.ko.md SUPPORT.md; do
     [ -f "$f" ] && PATHDOCS+=("$f")
