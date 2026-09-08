@@ -762,14 +762,28 @@ if jq -e '[.components[] | select(.name=="evil-all")
 else
     fail "malicious id/source properties missing" "$(jq -c '.components[0].properties' "$WORK/mal.json")"
 fi
-# No bundled snapshot: the step is skipped and the SBOM comes back untouched.
-# Stamping nothing is the point — an absent property means "not assessed".
+# No bundled snapshot: per-component the step is still skipped (an absent
+# bomlens:malicious property means "not assessed", never a guess), but the
+# document now records that the check could not run at all — otherwise a
+# reader can't tell "not assessed" from "assessed, none found".
 cp "$WORK/mal.json" "$WORK/mal-before.json"
 MALICIOUS_DATA_FILE="$WORK/does-not-exist.json" bash "$LIB/enrich-malicious.sh" "$WORK/mal.json" >/dev/null 2>&1
-if diff -q "$WORK/mal-before.json" "$WORK/mal.json" >/dev/null 2>&1; then
-    pass "no bundled snapshot -> SBOM untouched, scan still succeeds"
+if diff <(jq '.components' "$WORK/mal-before.json") <(jq '.components' "$WORK/mal.json") >/dev/null 2>&1; then
+    pass "no bundled snapshot -> components untouched, scan still succeeds"
 else
-    fail "missing snapshot changed the SBOM"
+    fail "missing snapshot changed a component" "$(jq -c '.components' "$WORK/mal.json")"
+fi
+if [ "$(jq -r '[.metadata.properties[]? | select(.name=="bomlens:malicious-check-unavailable")] | .[0].value // "ABSENT"' "$WORK/mal.json")" = "OSV malicious-package index not built into this image" ]; then
+    pass "no bundled snapshot -> document records the check was unavailable, with its reason"
+else
+    fail "missing-snapshot marker not stamped (or wrong reason)" "$(jq -c '.metadata.properties' "$WORK/mal.json")"
+fi
+# Re-running the missing-index path itself must not accumulate the marker.
+MALICIOUS_DATA_FILE="$WORK/does-not-exist.json" bash "$LIB/enrich-malicious.sh" "$WORK/mal.json" >/dev/null 2>&1
+if [ "$(jq '[.metadata.properties[]? | select(.name=="bomlens:malicious-check-unavailable")] | length' "$WORK/mal.json")" = "1" ]; then
+    pass "re-running the missing-snapshot path does not duplicate the marker"
+else
+    fail "malicious-check-unavailable duplicated on re-run" "$(jq -c '.metadata.properties' "$WORK/mal.json")"
 fi
 # Re-running must not accumulate duplicate properties (byte-stability).
 MALICIOUS_DATA_FILE="$WORK/mal-index.json" bash "$LIB/enrich-malicious.sh" "$WORK/mal.json" >/dev/null 2>&1
@@ -3193,14 +3207,44 @@ eolprop() { jq -r --arg n "$1" --arg p "$2" '.components[] | select(.name==$n)
 cp "$WORK/eol.json" "$WORK/eol2.json"
 EOL_DATA_FILE="$FIX/eol-data.json" bash "$LIB/enrich-eol.sh" "$WORK/eol2.json" >/dev/null 2>&1
 if diff -q "$WORK/eol.json" "$WORK/eol2.json" >/dev/null 2>&1; then pass "enrich-eol.sh is idempotent"; else fail "second enrich-eol run changed the SBOM"; fi
-# No bundled dataset -> clean skip (SBOM unchanged), never an abort.
+# No bundled dataset -> per-component clean skip, never an abort, but the
+# document now records that the check was unavailable (see the malicious-index
+# case above for why: an empty EOL section otherwise reads as "checked, all
+# current" rather than "never checked").
 cp "$FIX/eol-components.json" "$WORK/eol3.json"
 EOL_DATA_FILE="$WORK/does-not-exist.json" bash "$LIB/enrich-eol.sh" "$WORK/eol3.json" >/dev/null 2>&1
 rc=$?
-if [ "$rc" = "0" ] && diff -q "$FIX/eol-components.json" "$WORK/eol3.json" >/dev/null 2>&1; then
-    pass "missing dataset -> clean skip, SBOM untouched (air-gap safe)"
+if [ "$rc" = "0" ] && diff <(jq '.components' "$FIX/eol-components.json") <(jq '.components' "$WORK/eol3.json") >/dev/null 2>&1; then
+    pass "missing dataset -> clean skip, components untouched (air-gap safe)"
 else
-    fail "missing-dataset path changed the SBOM or failed (rc=$rc)"
+    fail "missing-dataset path changed a component or failed (rc=$rc)"
+fi
+if [ "$(jq -r '[.metadata.properties[]? | select(.name=="bomlens:eol-check-unavailable")] | .[0].value // "ABSENT"' "$WORK/eol3.json")" = "endoflife.date dataset not built into this image" ]; then
+    pass "missing dataset -> document records the check was unavailable, with its own reason"
+else
+    fail "missing-dataset marker not stamped (or wrong reason)" "$(jq -c '.metadata.properties' "$WORK/eol3.json")"
+fi
+# Re-running (e.g. re-scanning an SBOM that already carries this scanner's own
+# stamp, or a plain retry) must replace rather than accumulate the property.
+EOL_DATA_FILE="$WORK/does-not-exist.json" bash "$LIB/enrich-eol.sh" "$WORK/eol3.json" >/dev/null 2>&1
+if [ "$(jq '[.metadata.properties[]? | select(.name=="bomlens:eol-check-unavailable")] | length' "$WORK/eol3.json")" = "1" ]; then
+    pass "re-running the missing-dataset path does not duplicate the marker"
+else
+    fail "eol-check-unavailable duplicated on re-run" "$(jq -c '.metadata.properties' "$WORK/eol3.json")"
+fi
+# The other missing-file path (eol-purl-map.json itself, not just the dataset)
+# must stamp the same way with its own reason. MAP_FILE is derived from the
+# script's own directory rather than an env var, so run a copy of just the
+# script (plus the pipeline-step.sh it now sources) from an otherwise-empty
+# directory to make that file absent.
+cp "$FIX/eol-components.json" "$WORK/eol4.json"
+mkdir -p "$WORK/eol-no-map"
+cp "$LIB/enrich-eol.sh" "$LIB/pipeline-step.sh" "$WORK/eol-no-map/"
+bash "$WORK/eol-no-map/enrich-eol.sh" "$WORK/eol4.json" >/dev/null 2>&1
+if [ "$(jq -r '[.metadata.properties[]? | select(.name=="bomlens:eol-check-unavailable")] | .[0].value // "ABSENT"' "$WORK/eol4.json")" = "eol-purl-map.json missing from the image" ]; then
+    pass "missing purl map -> document records the check was unavailable, with its own reason"
+else
+    fail "missing-purl-map marker not stamped (or wrong reason)" "$(jq -c '.metadata.properties' "$WORK/eol4.json")"
 fi
 
 echo "== staleness: opt-in deps.dev version currency (enrich-staleness.py, offline fixture) =="

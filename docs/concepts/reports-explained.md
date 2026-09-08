@@ -47,6 +47,7 @@ A vulnerability says an honest package has a flaw. A malicious package is a diff
 - The data is a bundled snapshot of the malicious-package advisories OSV publishes (the ones carrying a `MAL-` id), so the check runs offline like the EOL flag. Set `ENRICH_MALICIOUS=false` to skip it.
 - Most advisories name no versions, which means every published version of that package is malicious. When an advisory does name versions, only those are flagged.
 - Each flagged component carries the advisory id and the snapshot date (`bomlens:malicious:id`, `bomlens:malicious:source`). The date matters: this is a fast-moving area, so a clean result means "not in this snapshot", not "safe today".
+- A third state exists beyond "flagged" and "not in this snapshot": the snapshot itself was missing from the scanner image (an opt-out build), in which case the check did not run at all and the SBOM's `metadata.properties` carries `bomlens:malicious-check-unavailable` with the reason, rather than a clean-looking result with no explanation.
 
 ## Component end-of-life (EOL)
 
@@ -54,6 +55,7 @@ BomLens also flags whether each component's release cycle has reached its upstre
 
 - The dates come from a snapshot of endoflife.date bundled into the scanner image, so the check runs offline with no network call and works air-gapped. The source and snapshot date are recorded on each flagged component (`bomlens:eol:source`).
 - Coverage follows endoflife.date, which tracks runtimes, major frameworks, operating systems and databases (spring-boot, express, django, nodejs, python, php, nginx, openssl, ubuntu, debian, and so on). Most smaller libraries are not tracked, and a component with no mapping is left unknown rather than guessed.
+- Same third state as the malicious-package check above: if the bundled dataset itself is missing from the image, the SBOM's `metadata.properties` carries `bomlens:eol-check-unavailable` with the reason, so an empty EOL section reads as "never checked" rather than "checked, all current".
 - In the web UI, the Overview shows an "End of life" count tile, with the components that are also vulnerable highlighted in the risk colour — an EOL component gets no upstream patch for its CVEs, so that is the set to act on. The Components table adds an "End of life" badge, with the EOL date where known, and an "End of life" filter.
 - It is on by default and adds no delay because it is offline. To turn it off, set `ENRICH_EOL=false`. AI/ML model scans skip it, since they have no runtime or framework components.
 
