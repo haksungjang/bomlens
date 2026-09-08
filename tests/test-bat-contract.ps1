@@ -278,6 +278,23 @@ try {
         } else {
             Failed "환경변수 우선순위가 깨졌습니다:`n$($r.StubLog)"
         }
+
+        # UI_PORT 는 나중에 따옴표 없는 %UI_PORT% 로 다시 쓰인다(포트 점검, 브라우저
+        # 실행, docker run 플래그). "&" 를 거르지 않으면 그 값이 확장되는 순간 뒤에
+        # 붙은 명령이 그대로 실행된다 — 실제로 재현해 확인한 뒤 :cfg_set 에 문자
+        # 검사를 추가했다. 이 값은 통째로 거부되어 기본 포트(8080)로 대체돼야 한다.
+        Remove-Item Env:UI_PORT -ErrorAction SilentlyContinue
+        Set-Content -Path $cfg -Encoding UTF8 -Value @(
+            'UI_PORT=1234 & echo INJECTED'
+        )
+        $r = Invoke-Bat -Bat (Join-Path $script:RepoRoot 'scripts\sbom-ui.bat')
+        if ($r.Output -match 'INJECTED' -or $r.StubLog -match 'INJECTED') {
+            Failed "settings.txt 의 '&' 뒤 명령이 실행되었습니다:`n$($r.Output)`n$($r.StubLog)"
+        } elseif ($r.StubLog -match '-p 127\.0\.0\.1:8080:8080') {
+            Pass "'&' 가 섞인 값이 통째로 거부되고 기본 포트로 대체되었습니다."
+        } else {
+            Failed "예상과 다르게 동작했습니다:`n$($r.StubLog)"
+        }
     } finally {
         Remove-Item $cfg -Force -ErrorAction SilentlyContinue
         Remove-Item Env:UI_PORT, Env:SBOM_SCANNER_IMAGE -ErrorAction SilentlyContinue

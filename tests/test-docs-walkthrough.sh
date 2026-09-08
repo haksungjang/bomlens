@@ -124,11 +124,20 @@ prep_page() {
     case "$1" in
         by-input)
             export SBOM="$ROOT/scripts/scan-sbom.sh"
-            # Scenario 2: "a team handed you the source as a ZIP".
+            # Scenario 2: "a team handed you the source as a ZIP". Three
+            # fallbacks in order: zip, python3's zipfile module, and — for a
+            # Windows dev box with neither on PATH (Git Bash ships no zip, and
+            # `python3`/`python` may resolve to the App Execution Alias stub
+            # instead of a real interpreter) — the bsdtar bundled with Windows
+            # since 1809, invoked by absolute path since Git Bash's own `tar`
+            # is GNU tar and silently writes a non-zip file for `-a`+`.zip`.
             if command -v zip >/dev/null 2>&1; then
                 (cd "$ROOT/examples" && zip -qr "$2/team2-app.zip" nodejs -x 'nodejs/node_modules/*')
-            else
+            elif python3 -c '' >/dev/null 2>&1; then
                 (cd "$ROOT/examples" && python3 -m zipfile -c "$2/team2-app.zip" nodejs)
+            else
+                (cd "$ROOT/examples" && "$SYSTEMROOT\System32\tar.exe" \
+                    --exclude='nodejs/node_modules/*' -a -cf "$2/team2-app.zip" nodejs)
             fi
             # Scenario 4: "a team handed you an SBOM (JSON)". An SPDX document,
             # so the page's "converted to CycloneDX internally" claim (and the

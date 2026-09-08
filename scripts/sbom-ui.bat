@@ -314,6 +314,21 @@ if not defined OK goto :eof
 REM A real environment variable always wins over the file.
 if defined %K% goto :eof
 call :cfg_rtrim
+REM Reject a value carrying a shell metacharacter. A whitelisted setting is
+REM read back later as a bare %VAR% (UI_PORT in the port check, the browser
+REM launcher, the docker run flags) — this is the one place every value
+REM passes through before that happens, so it is where the check belongs.
+REM Without it, a settings.txt line like "UI_PORT=1234 & <anything>" runs
+REM <anything> the moment the value is expanded unquoted (verified: the
+REM injected command ran twice, at the port check and the summary line).
+set "BAD="
+if not "%V:!=%"=="%V%" set "BAD=1"
+if not "%V:&=%"=="%V%" set "BAD=1"
+if not "%V:|=%"=="%V%" set "BAD=1"
+if not "%V:<=%"=="%V%" set "BAD=1"
+if not "%V:>=%"=="%V%" set "BAD=1"
+if not "%V:^=%"=="%V%" set "BAD=1"
+if defined BAD goto :eof
 set "%K%=%V%"
 goto :eof
 

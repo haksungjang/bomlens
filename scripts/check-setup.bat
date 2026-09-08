@@ -164,6 +164,17 @@ for %%w in (SBOM_LANG UI_PORT UI_BIND_ADDRESS SBOM_SCANNER_IMAGE SBOM_OUTPUT_DIR
 if not defined OK goto :eof
 if defined %K% goto :eof
 call :cfg_rtrim
+REM Reject a value carrying a shell metacharacter — see sbom-ui.bat's :cfg_set
+REM for why (a whitelisted setting is read back later as a bare %VAR%, so an
+REM unfiltered "UI_PORT=1234 & <anything>" runs <anything> on expansion).
+set "BAD="
+if not "%V:!=%"=="%V%" set "BAD=1"
+if not "%V:&=%"=="%V%" set "BAD=1"
+if not "%V:|=%"=="%V%" set "BAD=1"
+if not "%V:<=%"=="%V%" set "BAD=1"
+if not "%V:>=%"=="%V%" set "BAD=1"
+if not "%V:^=%"=="%V%" set "BAD=1"
+if defined BAD goto :eof
 set "%K%=%V%"
 goto :eof
 
