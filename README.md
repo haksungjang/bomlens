@@ -15,7 +15,7 @@
 Try it without installing anything: the [live demo](https://sktelecom.github.io/bomlens/demo/) holds one finished scan of each kind — a Spring Boot project from source, a container image (1,393 components), a Raspberry Pi OS device image as firmware, an AI model as a CycloneDX ML-BOM checked against the G7 minimum elements, and a supplier SBOM checked against the format requirements. Read-only, nothing to install, nothing uploaded. To run your own scans, download the installer for [Windows](https://github.com/sktelecom/bomlens/releases/latest/download/BomLens-Setup.exe) or [macOS](https://github.com/sktelecom/bomlens/releases/latest/download/BomLens-Setup.dmg), or go straight to the [CLI](#cli-advanced).
 
 <p align="center">
-  <img src="docs/images/web-ui-demo.gif" alt="BomLens web UI showing a scan result: the Overview with counts and a severity/license summary, the Components table with filters, the Vulnerabilities list, the Dependencies as a graph and tree, and the Licenses section" width="860" />
+  <img src="docs/images/web-ui-demo.png" alt="BomLens web UI Overview screen for a finished scan: component/vulnerability/dependency/artifact counts, a needs-attention banner, and the severity and license classification distributions" width="860" />
 </p>
 
 ## What it does
