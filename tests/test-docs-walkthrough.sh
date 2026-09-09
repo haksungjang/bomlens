@@ -147,10 +147,17 @@ prep_page() {
             ;;
         merge)
             export SBOM="$ROOT/scripts/scan-sbom.sh"
-            # The three per-layer SBOMs the server guide's earlier steps produce.
-            cp "$ROOT/tests/fixtures/good-cyclonedx.json"      "$2/mms-relay-os_6.10_bom.json"
-            cp "$ROOT/tests/fixtures/cdxgen-node-managed.json" "$2/mms-relay-app_2.0.0_bom.json"
-            cp "$ROOT/tests/fixtures/good-cyclonedx.json"      "$2/mms-relay-bin_2.0.0_bom.json"
+            # The page's Common setup block (not itself <!-- runnable -->, so the
+            # harness never sees its `OUT=...` line) declares OUT as the shared
+            # output directory every layer's --output-dir points at; inject it
+            # here the same way SBOM is injected above.
+            export OUT="$2"
+            # The three per-layer SBOMs the server guide's earlier steps produce,
+            # each in its own {project}_{version}/ subfolder like a real scan.
+            mkdir -p "$2/mms-relay-os_6.10" "$2/mms-relay-app_2.0.0" "$2/mms-relay-bin_2.0.0"
+            cp "$ROOT/tests/fixtures/good-cyclonedx.json"      "$2/mms-relay-os_6.10/mms-relay-os_6.10_bom.json"
+            cp "$ROOT/tests/fixtures/cdxgen-node-managed.json" "$2/mms-relay-app_2.0.0/mms-relay-app_2.0.0_bom.json"
+            cp "$ROOT/tests/fixtures/good-cyclonedx.json"      "$2/mms-relay-bin_2.0.0/mms-relay-bin_2.0.0_bom.json"
             ;;
         dockerimg)
             # "Analyze a source directory" mounts $(pwd) as /src.
