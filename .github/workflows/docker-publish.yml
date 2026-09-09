@@ -75,6 +75,31 @@ env:
 permissions:
   contents: read
 
+# A concurrency GROUP is scoped per repository, so this can never collide
+# across a fork's own workflow_call and the org repository's own direct tag
+# push -- those are different repositories' Actions namespaces entirely.
+# Keyed by the actual publish OWNER (not just version/ref): a rehearsal tag
+# push on the fork and a release-upstream.yml dispatch are both runs of this
+# workflow on the fork's runners, but they publish to different namespaces
+# (the rehearsal defaults to the fork's own owner; the dispatch explicitly
+# sets `owner: sktelecom`) -- keying on version/ref alone would serialize two
+# builds that push nowhere near each other, and that exact rehearsal-then-
+# dispatch sequence is this project's own documented release procedure. What
+# this DOES still catch: two dispatches to the same owner and version
+# overlapping, which would otherwise both try to build and push the same
+# images at once. No cancel-in-progress -- the second one queues behind the
+# first rather than cancelling a signing step partway through.
+#
+# Side effect on the plain `push: branches: [main]` trigger (no version
+# input there, so the group is docker-publish-<owner>-main): consecutive
+# pushes to main now queue on this same group instead of running in
+# parallel, and if a third push arrives while one run is already queued
+# behind another, GitHub replaces that still-pending run rather than queuing
+# a second one. :latest ends up built from whichever push actually ran last
+# either way, so the outcome is correct, just serialized.
+concurrency:
+  group: docker-publish-${{ inputs.owner || github.repository_owner }}-${{ inputs.version || github.ref_name }}
+
 jobs:
   # ---------------------------------------------------------------
   # (1) Post-process image: syft + Trivy + cosign + notice + UI
@@ -82,12 +107,24 @@ jobs:
   build-postprocess:
     name: Build post-process image
     runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
+    # No timeout existed here before (360-minute platform default). Measured
+    # on a real successful run: "Build and push" alone took 24 minutes, on
+    # top of the separate amd64 gate build, Trivy DB download + image scan +
+    # config scan, syft install + multi-arch attest, the SBOM attached to the
+    # release, the Dockerfile SARIF scan, a re-pull for the published-image
+    # scan, and two SARIF uploads -- all in this one job. 45 minutes is
+    # tight against a cache-cold run; 90 gives real margin.
+    timeout-minutes: 90
     permissions:
       contents: write   # attach the image SBOM to the release
       id-token: write   # keyless cosign signing (Sigstore OIDC)
       packages: write
+      security-events: write   # upload-sarif below needs this, or it fails
+                                # silently under continue-on-error: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       # Resolve the publish flag once and reuse it for push, signing, and attest.
       - name: Resolve publish flag
@@ -314,14 +351,22 @@ jobs:
     # multi-hour stalls from cloud IPs — that constraint no longer applies,
     # so being back on self-hosted here is incidental, not required.)
     runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
-    # The NVD-feed clone + distill is the long pole (~a few minutes).
+    # Measured on a real successful run: build ~11 min. This job also re-pulls
+    # the pushed image twice (syft attest, then Trivy scan) and downloads a
+    # Trivy DB, all against a small (~0.4 GB) image, so the pre-existing 45
+    # min headroom for the NVD-feed clone + distill still covers the newer
+    # steps too rather than needing its own separate accounting.
     timeout-minutes: 45
     permissions:
       contents: read
       packages: write
       id-token: write   # keyless cosign signing
+      security-events: write   # upload-sarif below needs this, or it fails
+                                # silently under continue-on-error: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Resolve publish flag
         id: flags
@@ -383,6 +428,64 @@ jobs:
           set -euo pipefail
           cosign sign --yes "${REGISTRY}/${OWNER}/bomlens-firmware@${DIGEST}"
           cosign sign --yes "${REGISTRY}/${OWNER}/sbom-scanner-firmware@${DIGEST}"
+      # Same supply-chain treatment as the post-process image above: an
+      # attached, signed SBOM attestation, not just a bare signature.
+      - name: Install syft (pinned release tarball)
+        if: steps.flags.outputs.push == 'true'
+        run: |
+          SYFT_VERSION=$(grep -oP 'ARG SYFT_VERSION=\K\S+' docker/Dockerfile)
+          ver="${SYFT_VERSION#v}"
+          curl -sSfL "https://github.com/anchore/syft/releases/download/${SYFT_VERSION}/syft_${ver}_linux_amd64.tar.gz" -o /tmp/syft.tgz
+          sudo tar -C /usr/local/bin -xzf /tmp/syft.tgz syft
+          syft version
+      - name: Attest firmware image SBOM
+        if: steps.flags.outputs.push == 'true'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          OWNER: ${{ env.PUBLISH_OWNER }}
+        run: |
+          set -euo pipefail
+          bl="${REGISTRY}/${OWNER}/bomlens-firmware@${DIGEST}"
+          leg="${REGISTRY}/${OWNER}/sbom-scanner-firmware@${DIGEST}"
+          syft "$bl" -o cyclonedx-json=sbom-firmware.cdx.json
+          cosign attest --yes --predicate sbom-firmware.cdx.json --type cyclonedx "$bl"
+          cosign attest --yes --predicate sbom-firmware.cdx.json --type cyclonedx "$leg"
+      - name: Install Trivy (pinned release tarball)
+        if: steps.flags.outputs.push == 'true'
+        run: |
+          TRIVY_VERSION=$(grep -oP 'ARG TRIVY_VERSION=\K\S+' docker/Dockerfile)
+          ver="${TRIVY_VERSION#v}"
+          curl -sSfL "https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/trivy_${ver}_Linux-64bit.tar.gz" -o /tmp/trivy.tgz
+          sudo tar -C /usr/local/bin -xzf /tmp/trivy.tgz trivy
+          trivy --version
+      # Report-only for now (exit-code 0): the base image's own publish gate
+      # above already holds the release for a CRITICAL finding in the shared
+      # layers. This image adds unblob/cve-bin-tool/ubi_reader on top, whose
+      # own CVE posture has not been observed here yet; a first pass with no
+      # gate is deliberate so the Security tab shows real numbers before this
+      # is (or is not) turned into a second publish gate in a follow-up.
+      # --scanners vuln --ignore-unfixed matches nightly.yml's convention for
+      # these same four images (see that workflow's own comment), not the
+      # older "Scan published image with Trivy" step above for the base
+      # image, which predates that convention and is left as-is here.
+      - name: Scan published firmware image with Trivy
+        if: steps.flags.outputs.push == 'true'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          OWNER: ${{ env.PUBLISH_OWNER }}
+        # continue-on-error: this is report-only by design (see above), so a
+        # transient failure (DB download, registry re-pull) must not fail a
+        # job that already pushed, signed and attested successfully -- least
+        # of all this one, whose rebuild is the most expensive of the three.
+        continue-on-error: true
+        run: trivy image --quiet --scanners vuln --ignore-unfixed --format sarif --output trivy-image-firmware.sarif --exit-code 0 "${REGISTRY}/${OWNER}/bomlens-firmware@${DIGEST}"
+      - name: Upload firmware image scan results
+        if: steps.flags.outputs.push == 'true'
+        uses: github/codeql-action/upload-sarif@6f5948dfacef28e207b48d0905cf90c03365536d # v3
+        with:
+          sarif_file: 'trivy-image-firmware.sarif'
+          category: trivy-image-firmware
+        continue-on-error: true
 
   # (4) AIBOM image — base + OWASP AIBOM Generator for AI-model SBOMs (opt-in
   #     build). Separate image so the base stays lean; the web UI's AI-model
@@ -391,12 +494,28 @@ jobs:
   build-aibom:
     name: Build AIBOM image
     runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
+    # This job had no timeout at all before (the 360-minute platform default).
+    # Measured on a real successful run: the "Build and push" step alone took
+    # 86 minutes (cache export ~41min + arm64 QEMU emulation ~26min + push
+    # ~12min + amd64 setup ~7min) -- this is the largest of the four published
+    # images by a wide margin (measured compressed: ~3.8 GB, bigger than the
+    # main image and both other opt-in images combined), and the only
+    # multi-arch one besides the main image. The syft/Trivy steps below each
+    # pull it again from the registry on top of that (push does not load it
+    # locally), so the realistic total is well over 100 minutes. 180 minutes
+    # is a real cap against a genuine hang, not a number picked to look safe
+    # against a measurement nobody had yet.
+    timeout-minutes: 180
     permissions:
       contents: read
       packages: write
       id-token: write   # keyless cosign signing
+      security-events: write   # upload-sarif below needs this, or it fails
+                                # silently under continue-on-error: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Resolve publish flag
         id: flags
@@ -459,6 +578,55 @@ jobs:
           set -euo pipefail
           cosign sign --yes "${REGISTRY}/${OWNER}/bomlens-aibom@${DIGEST}"
           cosign sign --yes "${REGISTRY}/${OWNER}/sbom-scanner-aibom@${DIGEST}"
+      - name: Install syft (pinned release tarball)
+        if: steps.flags.outputs.push == 'true'
+        run: |
+          SYFT_VERSION=$(grep -oP 'ARG SYFT_VERSION=\K\S+' docker/Dockerfile)
+          ver="${SYFT_VERSION#v}"
+          curl -sSfL "https://github.com/anchore/syft/releases/download/${SYFT_VERSION}/syft_${ver}_linux_amd64.tar.gz" -o /tmp/syft.tgz
+          sudo tar -C /usr/local/bin -xzf /tmp/syft.tgz syft
+          syft version
+      - name: Attest AIBOM image SBOM
+        if: steps.flags.outputs.push == 'true'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          OWNER: ${{ env.PUBLISH_OWNER }}
+        run: |
+          set -euo pipefail
+          bl="${REGISTRY}/${OWNER}/bomlens-aibom@${DIGEST}"
+          leg="${REGISTRY}/${OWNER}/sbom-scanner-aibom@${DIGEST}"
+          syft "$bl" -o cyclonedx-json=sbom-aibom.cdx.json
+          cosign attest --yes --predicate sbom-aibom.cdx.json --type cyclonedx "$bl"
+          cosign attest --yes --predicate sbom-aibom.cdx.json --type cyclonedx "$leg"
+      - name: Install Trivy (pinned release tarball)
+        if: steps.flags.outputs.push == 'true'
+        run: |
+          TRIVY_VERSION=$(grep -oP 'ARG TRIVY_VERSION=\K\S+' docker/Dockerfile)
+          ver="${TRIVY_VERSION#v}"
+          curl -sSfL "https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/trivy_${ver}_Linux-64bit.tar.gz" -o /tmp/trivy.tgz
+          sudo tar -C /usr/local/bin -xzf /tmp/trivy.tgz trivy
+          trivy --version
+      # Report-only for now (exit-code 0), same reasoning as the firmware
+      # image: the base publish gate already covers the shared layers, and
+      # this image's own added surface (the OWASP AIBOM Generator + its
+      # Python deps) has not been observed here yet.
+      - name: Scan published AIBOM image with Trivy
+        if: steps.flags.outputs.push == 'true'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          OWNER: ${{ env.PUBLISH_OWNER }}
+        # continue-on-error: report-only by design (see above); a transient
+        # failure here must not fail this job over a re-pull of the biggest
+        # of the four images (~3.8 GB), a ~2-hour rebuild if it has to redo.
+        continue-on-error: true
+        run: trivy image --quiet --scanners vuln --ignore-unfixed --format sarif --output trivy-image-aibom.sarif --exit-code 0 "${REGISTRY}/${OWNER}/bomlens-aibom@${DIGEST}"
+      - name: Upload AIBOM image scan results
+        if: steps.flags.outputs.push == 'true'
+        uses: github/codeql-action/upload-sarif@6f5948dfacef28e207b48d0905cf90c03365536d # v3
+        with:
+          sarif_file: 'trivy-image-aibom.sarif'
+          category: trivy-image-aibom
+        continue-on-error: true
 
   # (5) Deep-CVE image — base + grype and its bundled vulnerability DB for maven
   #     CPE matching against NVD (opt-in build). Separate image so the base stays
@@ -467,13 +635,22 @@ jobs:
     name: Build deep-cve image
     runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
     # `grype db update` downloads a ~1.8 GB DB at build time; give it headroom.
+    # Measured on a real successful run: build ~9 min. This job also re-pulls
+    # the pushed image twice (syft attest, then Trivy scan) and downloads a
+    # separate, smaller Trivy DB, against a ~0.7 GB compressed image (the 1.8
+    # GB grype DB is already baked in, not re-fetched here) -- the existing 45
+    # min headroom still covers the newer steps too.
     timeout-minutes: 45
     permissions:
       contents: read
       packages: write
       id-token: write   # keyless cosign signing
+      security-events: write   # upload-sarif below needs this, or it fails
+                                # silently under continue-on-error: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Resolve publish flag
         id: flags
@@ -533,6 +710,52 @@ jobs:
         run: |
           set -euo pipefail
           cosign sign --yes "${REGISTRY}/${OWNER}/bomlens-deep-cve@${DIGEST}"
+      - name: Install syft (pinned release tarball)
+        if: steps.flags.outputs.push == 'true'
+        run: |
+          SYFT_VERSION=$(grep -oP 'ARG SYFT_VERSION=\K\S+' docker/Dockerfile)
+          ver="${SYFT_VERSION#v}"
+          curl -sSfL "https://github.com/anchore/syft/releases/download/${SYFT_VERSION}/syft_${ver}_linux_amd64.tar.gz" -o /tmp/syft.tgz
+          sudo tar -C /usr/local/bin -xzf /tmp/syft.tgz syft
+          syft version
+      - name: Attest deep-cve image SBOM
+        if: steps.flags.outputs.push == 'true'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          OWNER: ${{ env.PUBLISH_OWNER }}
+        run: |
+          set -euo pipefail
+          bl="${REGISTRY}/${OWNER}/bomlens-deep-cve@${DIGEST}"
+          syft "$bl" -o cyclonedx-json=sbom-deep-cve.cdx.json
+          cosign attest --yes --predicate sbom-deep-cve.cdx.json --type cyclonedx "$bl"
+      - name: Install Trivy (pinned release tarball)
+        if: steps.flags.outputs.push == 'true'
+        run: |
+          TRIVY_VERSION=$(grep -oP 'ARG TRIVY_VERSION=\K\S+' docker/Dockerfile)
+          ver="${TRIVY_VERSION#v}"
+          curl -sSfL "https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/trivy_${ver}_Linux-64bit.tar.gz" -o /tmp/trivy.tgz
+          sudo tar -C /usr/local/bin -xzf /tmp/trivy.tgz trivy
+          trivy --version
+      # Report-only for now (exit-code 0), same reasoning as the firmware
+      # image: the base publish gate already covers the shared layers, and
+      # this image's own added surface (grype + its ~1.8 GB vulnerability DB)
+      # has not been observed here yet.
+      - name: Scan published deep-cve image with Trivy
+        if: steps.flags.outputs.push == 'true'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          OWNER: ${{ env.PUBLISH_OWNER }}
+        # continue-on-error: report-only by design (see above); a transient
+        # failure here must not fail this job over a re-pull.
+        continue-on-error: true
+        run: trivy image --quiet --scanners vuln --ignore-unfixed --format sarif --output trivy-image-deep-cve.sarif --exit-code 0 "${REGISTRY}/${OWNER}/bomlens-deep-cve@${DIGEST}"
+      - name: Upload deep-cve image scan results
+        if: steps.flags.outputs.push == 'true'
+        uses: github/codeql-action/upload-sarif@6f5948dfacef28e207b48d0905cf90c03365536d # v3
+        with:
+          sarif_file: 'trivy-image-deep-cve.sarif'
+          category: trivy-image-deep-cve
+        continue-on-error: true
 
   summary:
     name: Build summary
@@ -540,6 +763,7 @@ jobs:
     needs: [ build-postprocess, build-firmware, build-aibom, build-deep-cve ]
     # always(): the opt-in images are skipped on plain main pushes — still summarize.
     if: ${{ always() && github.event_name != 'pull_request' && needs.build-postprocess.result == 'success' }}
+    timeout-minutes: 5
     steps:
       - run: |
           echo "## 🐳 Images built" >> $GITHUB_STEP_SUMMARY

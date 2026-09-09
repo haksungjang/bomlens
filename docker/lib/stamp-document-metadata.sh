@@ -54,11 +54,16 @@ fi
 #
 # MERGE gets no phase. It combines SBOMs that were generated at whatever phase
 # each input was, and the merged document cannot honestly claim a single one.
+#
+# DATASET gets no phase either, for a different reason: it describes a published
+# research dataset read from Figshare, not software moving through a build. Neither
+# pre-build nor post-build is true of it, so leaving the field absent is the honest
+# answer rather than a gap to warn about.
 LIFECYCLE=""
 case "$MODE" in
     SOURCE|POSTPROCESS)                 LIFECYCLE="pre-build" ;;
     ROOTFS|IMAGE|BINARY|FIRMWARE|AIBOM|MODELFILE) LIFECYCLE="post-build" ;;
-    MERGE)                              LIFECYCLE="" ;;
+    MERGE|DATASET)                      LIFECYCLE="" ;;
     *)
         echo "[docmeta] WARN: no lifecycle phase defined for MODE=$MODE; leaving it unset." >&2
         ;;

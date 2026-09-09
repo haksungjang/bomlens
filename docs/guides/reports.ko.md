@@ -30,7 +30,7 @@ cd /path/to/your-project
 
 Windows에서는 `scripts\scan-sbom.bat`(Git Bash)를 쓰거나 WSL2에서 그대로 실행합니다. 설치는 [시작하기](../start/first-scan.ko.md)를 참고하세요.
 
-끝나면 같은 폴더에 생긴 `MyApp_1.0.0_NOTICE.html`과 `MyApp_1.0.0_security.html`을 브라우저로 열어 결과를 바로 확인하세요. 더 자세한 옵션은 아래를 참고하세요.
+끝나면 `MyApp_1.0.0/MyApp_1.0.0_NOTICE.html`과 `MyApp_1.0.0/MyApp_1.0.0_security.html`을 브라우저로 열어 결과를 바로 확인하세요. 실행 한 번의 산출물은 `MyApp_1.0.0/` 하위 폴더에 함께 생깁니다. 더 자세한 옵션은 아래를 참고하세요.
 
 ---
 
@@ -57,7 +57,7 @@ Windows에서는 `scripts\scan-sbom.bat`(Git Bash)를 쓰거나 WSL2에서 그�
 ./scripts/scan-sbom.sh --project "MyApp" --version "1.0.0" --all --generate-only
 ```
 
-생성 파일:
+생성 파일, 명령을 실행한 위치 아래 `MyApp_1.0.0/` 하위 폴더에 함께 생깁니다([산출물 위치](../reference/cli.ko.md#산출물-위치) 참고):
 ```
 MyApp_1.0.0_bom.json            # SBOM (CycloneDX 1.6)
 MyApp_1.0.0_NOTICE.txt          # 고지문 (텍스트)
@@ -69,7 +69,7 @@ MyApp_1.0.0_risk-report.md      # 오픈소스위험분석보고서 (요약)
 MyApp_1.0.0_risk-report.html    # 오픈소스위험분석보고서 (시각화)
 ```
 
-> 오픈소스위험분석보고서(`_risk-report`)는 모든 분석 모드에서 기본 생성됩니다(라이선스+취약점 집계, 대응 기한 포함). 생략하려면 `--no-report`를 쓰세요. 6가지 입력 형태별 처리는 [시나리오별 가이드](by-input.ko.md)를 참고하세요.
+> 오픈소스위험분석보고서(`_risk-report`)는 모든 분석 모드에서 기본 생성됩니다(라이선스+취약점 집계, 대응 기한 포함). 생략하려면 `--no-report`를 쓰세요. 7가지 입력 형태별 처리는 [시나리오별 가이드](by-input.ko.md)를 참고하세요.
 
 산출물 종류 전체 목록은 [산출물 레퍼런스](../reference/artifacts.ko.md)를, 웹 UI로 만들려면 [웹 UI](../reference/ui.ko.md)를 참고하세요.
 

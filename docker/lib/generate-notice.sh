@@ -306,6 +306,8 @@ done)
 } > "$TXT"
 
 # ---------- HTML (all dynamic fields escaped to prevent XSS from package metadata) ----------
+esc() { printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'; }
+PROJECT_ESC="$(esc "$PROJECT")"
 {
     cat <<HTMLHEAD
 <!DOCTYPE html>
@@ -313,7 +315,7 @@ done)
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
-<title>Open Source Notice — ${PROJECT}</title>
+<title>Open Source Notice — ${PROJECT_ESC}</title>
 <style>
  :root{
   --bg:#fafafa;--surface:#ffffff;--text:#18181b;--muted:#6c6c75;--border:#e5e5ea;
@@ -378,7 +380,7 @@ done)
  <div class="report-kind">Open Source Notice</div>
 </header>
 <h1>Third-party Open Source Notice</h1>
-<p class="meta">Project: ${PROJECT} &middot; Generated: ${GEN_AT} &middot; Components: ${TOTAL_COMP} &middot; Licenses: ${TOTAL_LIC}</p>
+<p class="meta">Project: ${PROJECT_ESC} &middot; Generated: ${GEN_AT} &middot; Components: ${TOTAL_COMP} &middot; Licenses: ${TOTAL_LIC}</p>
 HTMLHEAD
 
     # License review banner (AI behavioral-use / non-commercial). Escaped via @html.

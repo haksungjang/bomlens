@@ -27,8 +27,11 @@ One tool, BomLens, produces both layers; only the input changes. The requirement
 # Docker 20.10+ required. Pull the scanner image once.
 docker pull ghcr.io/sktelecom/bomlens:latest
 
-# Keep the script path in a variable.
+# Keep the script path in a variable, and send every layer's output to one
+# shared directory (each still lands in its own {project}_{version}/ subfolder
+# under it — see "Where outputs go" in the CLI reference).
 SBOM=/path/to/bomlens/scripts/scan-sbom.sh
+OUT=/path/to/server-sboms
 ```
 
 ## Layer 1 — OS packages
@@ -39,11 +42,13 @@ Scan the server's rootfs (the extracted root filesystem) or a container image of
 # A rootfs directory:
 $SBOM --project mms-relay-os --version 6.10 \
   --target /path/to/server-rootfs \
+  --output-dir "$OUT" \
   --all --generate-only
 
 # Or, if the server is packaged as a container image:
 $SBOM --project mms-relay-os --version 6.10 \
   --target mms-relay:6.10 \
+  --output-dir "$OUT" \
   --all --generate-only
 ```
 
@@ -55,7 +60,7 @@ Scan the application source after the build. With a package manager (Maven, npm,
 
 ```bash
 cd /path/to/app-source
-$SBOM --project mms-relay-app --version 2.0.0 --all --generate-only
+$SBOM --project mms-relay-app --version 2.0.0 --output-dir "$OUT" --all --generate-only
 ```
 
 Build first. Scanning before the build or install leaves transitive dependencies unresolved. For a pure CMake/Make application with no manifest, the component list is sparse; add `--deep-license` to record the first-party source licenses.
@@ -69,6 +74,7 @@ Analyze the build-output binary or firmware image to catch what tooling can find
 ```bash
 $SBOM --project mms-relay-bin --version 2.0.0 \
   --target /path/to/delivered-binary \
+  --output-dir "$OUT" \
   --all --generate-only
 ```
 
@@ -79,7 +85,10 @@ For what the scan still misses, record the source and version by hand from the b
 Keep the per-layer SBOMs (and the static-link SBOM) as they are. Check each one — not a combined file — so a gap is caught where it belongs. Confirm it is well formed and that its components carry real purls.
 
 ```bash
-for bom in mms-relay-os_6.10_bom.json mms-relay-app_2.0.0_bom.json mms-relay-bin_2.0.0_bom.json; do
+cd "$OUT"
+for bom in mms-relay-os_6.10/mms-relay-os_6.10_bom.json \
+           mms-relay-app_2.0.0/mms-relay-app_2.0.0_bom.json \
+           mms-relay-bin_2.0.0/mms-relay-bin_2.0.0_bom.json; do
   echo "$bom: $(jq '.components | length' "$bom") components, \
 $(jq '[.components[] | select(.purl)] | length' "$bom") with purl"
 done
@@ -95,14 +104,15 @@ Merge only when an external system expects a single product BOM (Dependency-Trac
 
 <!-- runnable -->
 ```bash
+cd "$OUT"
 $SBOM --project mms-relay-server --version 1.0.0 \
-  --merge mms-relay-os_6.10_bom.json \
-          mms-relay-app_2.0.0_bom.json \
-          mms-relay-bin_2.0.0_bom.json \
+  --merge mms-relay-os_6.10/mms-relay-os_6.10_bom.json \
+          mms-relay-app_2.0.0/mms-relay-app_2.0.0_bom.json \
+          mms-relay-bin_2.0.0/mms-relay-bin_2.0.0_bom.json \
   --generate-only
 ```
 
-This writes `mms-relay-server_1.0.0_bom.json` with `metadata.component` set to the server product, plus the notice and risk report over the merged set. Each component keeps a `bomlens:layer` property, so you can still filter by layer (`jq '.components[] | select(.properties[]?.value == "centos")'`).
+This writes `mms-relay-server_1.0.0/mms-relay-server_1.0.0_bom.json` with `metadata.component` set to the server product, plus the notice and risk report over the merged set. Each component keeps a `bomlens:layer` property set to the `--project` of the layer it came from, so you can still filter by layer (`jq '.components[] | select(.properties[]?.value == "mms-relay-os")'`).
 
 The merge preserves each layer's `dependencies` graph (edges unioned by ref), so the merged BOM keeps its transitive-dependency information and passes the conformance check's transitive-dependency item. Cross-ecosystem `bom-ref` collisions are rare; identical refs have their dependsOn lists unioned.
 

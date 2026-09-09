@@ -358,13 +358,15 @@ KEV_COUNT=$(echo "$FINDINGS" | jq '[.[] | select(.kev)] | length')
 } > "$MD"
 
 # ---------- HTML ----------
+esc() { printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'; }
+PROJECT_ESC="$(esc "$PROJECT")"
 {
     cat <<HTMLHEAD
 <!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
-<title>Security Report — ${PROJECT}</title>
+<title>Security Report — ${PROJECT_ESC}</title>
 <style>
  :root{
   --bg:#fafafa;--surface:#ffffff;--text:#18181b;--muted:#6c6c75;--border:#e5e5ea;
@@ -439,7 +441,7 @@ KEV_COUNT=$(echo "$FINDINGS" | jq '[.[] | select(.kev)] | length')
  <div class="report-kind">Security Report</div>
 </header>
 <h1>Security Report</h1>
-<p class="meta">Project: ${PROJECT} &middot; Generated: ${GEN_AT} &middot; Engine: Trivy</p>
+<p class="meta">Project: ${PROJECT_ESC} &middot; Generated: ${GEN_AT} &middot; Engine: Trivy</p>
 <div class="cards">
  <span class="pill pill-crit">Critical <span class="count">${C}</span></span>
  <span class="pill pill-high">High <span class="count">${H}</span></span>

@@ -28,6 +28,10 @@
 # components array rather than aborting — the caller always gets a valid SBOM.
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=docker/lib/cdx-version.sh
+. "$SCRIPT_DIR/cdx-version.sh"
+
 SRC="$1"
 OUTPUT="$2"
 VERSION="${3:-unknown}"
@@ -50,9 +54,9 @@ GEN_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # nothing". Defaults to unavailable since this is only called on failure paths.
 write_empty() {
     local status="${1:-unavailable}"
-    jq -n --arg version "$VERSION" --arg ts "$GEN_AT" --arg status "$status" '
+    jq -n --arg version "$VERSION" --arg ts "$GEN_AT" --arg status "$status" --arg spec "$CDX_SPEC_VERSION" '
     {
-      bomFormat: "CycloneDX", specVersion: "1.6", version: 1,
+      bomFormat: "CycloneDX", specVersion: $spec, version: 1,
       metadata: {
         timestamp: $ts,
         tools: { components: [ { type: "application", name: "scanoss" } ] },
@@ -209,10 +213,11 @@ jq -n \
     --slurpfile comps "$COMPS_FILE" \
     --arg version "$VERSION" \
     --arg ts "$GEN_AT" \
-    --arg status "$SCANOSS_STATUS" '
+    --arg status "$SCANOSS_STATUS" \
+    --arg spec "$CDX_SPEC_VERSION" '
 {
   bomFormat: "CycloneDX",
-  specVersion: "1.6",
+  specVersion: $spec,
   version: 1,
   metadata: {
     timestamp: $ts,

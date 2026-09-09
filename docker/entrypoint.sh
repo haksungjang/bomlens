@@ -143,7 +143,7 @@ generate_sbom_cdxgen() {
         -e PROJECT_NAME="$PROJECT_NAME" \
         -e PROJECT_VERSION="$PROJECT_VERSION" \
         --entrypoint sh "$img" \
-        -c "$prep" _ "$src" "$bom_path" 1.6 2>&1 | tee "$logf"
+        -c "$prep" _ "$src" "$bom_path" "$CDX_SPEC_VERSION" 2>&1 | tee "$logf"
     rc=${PIPESTATUS[0]}
     if [ "$rc" -ne 0 ]; then
         if grep -qi "no space left on device" "$logf"; then
@@ -190,6 +190,8 @@ mark_sbom_degraded() {
 # logged and recorded on the SBOM instead of being swallowed by `... || true`.
 # shellcheck source=docker/lib/pipeline-step.sh
 . "$LIBDIR/pipeline-step.sh"
+# shellcheck source=docker/lib/cdx-version.sh
+. "$LIBDIR/cdx-version.sh"
 
 # Modes whose SBOM describes an AI asset rather than a software project: the
 # model-card path (AIBOM, from a HuggingFace id), the model-file path
@@ -211,12 +213,13 @@ echo "=========================================="
 # ========================================================
 # Produce / locate the SBOM
 # ========================================================
-# Every syft invocation below pins its CycloneDX output to @1.6. syft >= 1.28
-# defaults to emitting CycloneDX 1.7, but the rest of this pipeline standardizes
-# on 1.6 (cdxgen is run with --spec-version 1.6; convert-to-cdx.sh writes 1.6;
-# the docs promise 1.6) and the bundled Trivy 0.70 cannot decode 1.7 ("invalid
-# specification version"), which would silently empty the security report. The
-# @1.6 selector keeps syft output aligned with cdxgen and readable by Trivy.
+# Every syft invocation below pins its CycloneDX output to @$CDX_SPEC_VERSION.
+# syft >= 1.28 defaults to emitting CycloneDX 1.7, but the rest of this
+# pipeline standardizes on the version cdx-version.sh names (cdxgen is run
+# with --spec-version "$CDX_SPEC_VERSION"; convert-to-cdx.sh writes it; the
+# docs promise it) and the bundled Trivy 0.70 cannot decode 1.7 ("invalid
+# specification version"), which would silently empty the security report.
+# The selector keeps syft output aligned with cdxgen and readable by Trivy.
 case "$SCAN_MODE" in
     SOURCE)
         # Local web UI source scan (current dir / extracted ZIP / cloned git repo).
@@ -244,13 +247,13 @@ case "$SCAN_MODE" in
             echo "[1/2] cdxgen: source dir $SRC_ROOT (transitive resolution)"
             if ! generate_sbom_cdxgen "$SRC_ROOT" "$OUTPUT_FILE"; then
                 echo "[WARN] cdxgen path failed; falling back to syft (direct deps only)."
-                syft "dir:$SRC_ROOT" -o cyclonedx-json@1.6 > "$OUTPUT_FILE" 2>/dev/null \
+                syft "dir:$SRC_ROOT" -o "cyclonedx-json@$CDX_SPEC_VERSION" > "$OUTPUT_FILE" 2>/dev/null \
                     || { echo "[ERROR] syft source scan failed."; exit 1; }
                 mark_sbom_degraded "$OUTPUT_FILE" "${CDXGEN_FAIL_REASON:-cdxgen-unavailable}"
             fi
         else
             echo "[1/2] syft: source dir $SRC_ROOT (manifest-only; docker.sock/CLI/host-path unavailable)"
-            syft "dir:$SRC_ROOT" -o cyclonedx-json@1.6 > "$OUTPUT_FILE" 2>/dev/null \
+            syft "dir:$SRC_ROOT" -o "cyclonedx-json@$CDX_SPEC_VERSION" > "$OUTPUT_FILE" 2>/dev/null \
                 || { echo "[ERROR] syft source scan failed."; exit 1; }
             mark_sbom_degraded "$OUTPUT_FILE" "cdxgen-unavailable"
         fi
@@ -280,7 +283,7 @@ case "$SCAN_MODE" in
             echo "[ERROR] Docker socket not mounted: -v /var/run/docker.sock:/var/run/docker.sock"; exit 1
         fi
         echo "[1/2] syft: Docker image $TARGET_IMAGE"
-        if ! syft "$TARGET_IMAGE" -o cyclonedx-json@1.6 > "$OUTPUT_FILE" 2>/dev/null; then
+        if ! syft "$TARGET_IMAGE" -o "cyclonedx-json@$CDX_SPEC_VERSION" > "$OUTPUT_FILE" 2>/dev/null; then
             echo "[ERROR] syft failed (image missing or inaccessible)."; exit 1
         fi
         ;;
@@ -288,13 +291,13 @@ case "$SCAN_MODE" in
     BINARY)
         if [ -z "$TARGET_FILE" ] || [ ! -f "$TARGET_FILE" ]; then echo "[ERROR] TARGET_FILE not found: $TARGET_FILE"; exit 1; fi
         echo "[1/2] syft: binary $TARGET_FILE"
-        if ! syft "file:$TARGET_FILE" -o cyclonedx-json@1.6 > "$OUTPUT_FILE" 2>&1; then
+        if ! syft "file:$TARGET_FILE" -o "cyclonedx-json@$CDX_SPEC_VERSION" > "$OUTPUT_FILE" 2>&1; then
             echo "[WARN] syft binary scan failed; emitting minimal SBOM."
             FILE_INFO=$(file "$TARGET_FILE")
             cat > "$OUTPUT_FILE" <<EOF
 {
   "bomFormat": "CycloneDX",
-  "specVersion": "1.6",
+  "specVersion": "$CDX_SPEC_VERSION",
   "version": 1,
   "metadata": { "component": { "type": "file", "name": "$(basename "$TARGET_FILE")", "version": "$PROJECT_VERSION", "description": "$FILE_INFO" } },
   "components": []
@@ -311,7 +314,7 @@ EOF
         # into submounts), and walking them is slow and can error out. They
         # never hold packages, so excluding them is safe for extracted
         # rootfs trees too.
-        if ! syft "dir:$TARGET_DIR" -o cyclonedx-json@1.6 \
+        if ! syft "dir:$TARGET_DIR" -o "cyclonedx-json@$CDX_SPEC_VERSION" \
                 --exclude './proc/**' --exclude './sys/**' \
                 --exclude './dev/**' --exclude './run/**' \
                 > "$OUTPUT_FILE" 2>/dev/null; then
@@ -903,7 +906,7 @@ esac
 # that one wins (it carries licenses), so we skip this fallback. Best-effort:
 # never aborts.
 if [ ! -f "${OUT_PREFIX}_scancode.json" ] && [ -n "$SRC_TREE_DIR" ]; then
-    bash "$LIBDIR/source-file-tree.sh" "$SRC_TREE_DIR" "${OUT_PREFIX}_files.json" || true
+    run_optional_step source-file-tree bash "$LIBDIR/source-file-tree.sh" "$SRC_TREE_DIR" "${OUT_PREFIX}_files.json"
 fi
 
 # Whether the tree pinned the versions its SBOM reports. Source scans only: an
@@ -955,19 +958,66 @@ fi
 sync_artifacts
 
 if [ "${GENERATE_NOTICE:-false}" = "true" ]; then
-    if bash "$LIBDIR/generate-notice.sh" "$OUTPUT_FILE" "$OUT_PREFIX" "$PROJECT_NAME"; then
-        ARTIFACTS+=("${OUT_PREFIX}_NOTICE.txt" "${OUT_PREFIX}_NOTICE.html")
-        # PDF is produced only when a renderer is in the image (SBOM_PDF=true).
-        [ -f "${OUT_PREFIX}_NOTICE.pdf" ] && ARTIFACTS+=("${OUT_PREFIX}_NOTICE.pdf")
-    fi
+    run_optional_step generate-notice bash "$LIBDIR/generate-notice.sh" "$OUTPUT_FILE" "$OUT_PREFIX" "$PROJECT_NAME"
+    [ -f "${OUT_PREFIX}_NOTICE.txt" ] && ARTIFACTS+=("${OUT_PREFIX}_NOTICE.txt")
+    [ -f "${OUT_PREFIX}_NOTICE.html" ] && ARTIFACTS+=("${OUT_PREFIX}_NOTICE.html")
+    # PDF is produced only when a renderer is in the image (SBOM_PDF=true).
+    [ -f "${OUT_PREFIX}_NOTICE.pdf" ] && ARTIFACTS+=("${OUT_PREFIX}_NOTICE.pdf")
     sync_artifacts
 fi
 
 if [ "${GENERATE_SECURITY:-false}" = "true" ]; then
-    if bash "$LIBDIR/scan-security.sh" "$OUTPUT_FILE" "$OUT_PREFIX" "$PROJECT_NAME"; then
-        ARTIFACTS+=("${OUT_PREFIX}_security.json" "${OUT_PREFIX}_security.md" "${OUT_PREFIX}_security.html")
-    fi
+    run_optional_step scan-security bash "$LIBDIR/scan-security.sh" "$OUTPUT_FILE" "$OUT_PREFIX" "$PROJECT_NAME"
+    [ -f "${OUT_PREFIX}_security.json" ] && ARTIFACTS+=("${OUT_PREFIX}_security.json")
+    [ -f "${OUT_PREFIX}_security.md" ] && ARTIFACTS+=("${OUT_PREFIX}_security.md")
+    [ -f "${OUT_PREFIX}_security.html" ] && ARTIFACTS+=("${OUT_PREFIX}_security.html")
     sync_artifacts
+fi
+
+# Risk report (오픈소스위험분석보고서): always for ANALYZE, and for every other
+# mode when GENERATE_REPORT=true (the CLI/UI default, opt-out via --no-report).
+# It re-aggregates the notice + security artifacts already produced above.
+# Conformance artifacts exist in ANALYZE and AIBOM; the [ -f ] guard skips them
+# in other modes, and generate-risk-report.sh drops the 포맷 검증 section accordingly.
+# Placed before SPDX export/signing below: on failure, run_optional_step stamps
+# $OUTPUT_FILE, and a stamp written after cosign has already signed it would
+# invalidate that signature (the .sig would no longer verify against the
+# now-different file).
+if [ "$SCAN_MODE" = "ANALYZE" ] || [ "${GENERATE_REPORT:-false}" = "true" ]; then
+    for ext in json md html; do
+        [ -f "${OUT_PREFIX}_conformance.${ext}" ] && ARTIFACTS+=("${OUT_PREFIX}_conformance.${ext}")
+    done
+    run_optional_step generate-risk-report bash "$LIBDIR/generate-risk-report.sh" "$OUT_PREFIX" "$PROJECT_NAME"
+    [ -f "${OUT_PREFIX}_risk-report.md" ] && ARTIFACTS+=("${OUT_PREFIX}_risk-report.md")
+    [ -f "${OUT_PREFIX}_risk-report.html" ] && ARTIFACTS+=("${OUT_PREFIX}_risk-report.html")
+fi
+
+# SBOM body size cap: a scan run against --target (not through the web UI's
+# upload) never passes through docker/web/server.py's MAX_BYTES["sbom"] check,
+# and the UI's own /results and download paths read a generated SBOM off disk
+# with no size gate of their own -- so nothing has ever refused an oversized
+# document produced this way, and a browser tab fetching + parsing one in full
+# is a real memory/hang risk. This reuses MAX_BYTES["sbom"]'s already-measured
+# 100 MB figure as a consistent budget for one document rather than inventing
+# a second number; the two are not wired together, so a legitimate change to
+# one is not expected to move the other in lockstep. Placed after every
+# enrichment step and before SPDX export/signing below, for the same reason
+# generate-risk-report is: a stamp written after cosign has already signed
+# would invalidate that signature. Oversized is stamped, not truncated or
+# rejected -- a cut CycloneDX component list is a worse blind spot than a
+# large file, and the scan already succeeded.
+SBOM_SIZE_CAP="${SBOM_SIZE_CAP_BYTES:-$((100 * 1024 * 1024))}"   # 100 MB default; override for testing
+# The `| tr` here is deliberate, not incidental: under `set -e`, a bare
+# `wc -c < "$OUTPUT_FILE"` failing would abort the whole scan at its last
+# step, so the pipeline's exit status is `tr`'s (always 0) instead -- an
+# unreadable/missing OUTPUT_FILE just yields an empty $SBOM_BYTES, guarded
+# below. SBOM_SIZE_CAP_BYTES is a test-only override (never documented for
+# end users); a non-numeric value here would make the -gt comparison print
+# "integer expression expected" and skip the cap rather than fail the scan.
+SBOM_BYTES="$(wc -c < "$OUTPUT_FILE" 2>/dev/null | tr -d '[:space:]')"
+if [ -n "$SBOM_BYTES" ] && [ "$SBOM_BYTES" -gt "$SBOM_SIZE_CAP" ]; then
+    echo "[WARN] SBOM is $SBOM_BYTES bytes, over the $SBOM_SIZE_CAP-byte budget the web UI expects."
+    mark_document_status "$OUTPUT_FILE" "bomlens:sbom-oversized" "${SBOM_BYTES} bytes"
 fi
 
 # SPDX export (opt-in): convert the FINISHED CycloneDX BOM to SPDX 2.3 JSON as an
@@ -1021,20 +1071,6 @@ if [ "${SIGN_SBOM:-false}" = "true" ]; then
         fi
     else
         echo "[WARN] --sign requested but cosign/COSIGN_KEY unavailable; skipping."
-    fi
-fi
-
-# Risk report (오픈소스위험분석보고서): always for ANALYZE, and for every other
-# mode when GENERATE_REPORT=true (the CLI/UI default, opt-out via --no-report).
-# It re-aggregates the notice + security artifacts already produced above.
-# Conformance artifacts exist in ANALYZE and AIBOM; the [ -f ] guard skips them
-# in other modes, and generate-risk-report.sh drops the 포맷 검증 section accordingly.
-if [ "$SCAN_MODE" = "ANALYZE" ] || [ "${GENERATE_REPORT:-false}" = "true" ]; then
-    for ext in json md html; do
-        [ -f "${OUT_PREFIX}_conformance.${ext}" ] && ARTIFACTS+=("${OUT_PREFIX}_conformance.${ext}")
-    done
-    if bash "$LIBDIR/generate-risk-report.sh" "$OUT_PREFIX" "$PROJECT_NAME"; then
-        ARTIFACTS+=("${OUT_PREFIX}_risk-report.md" "${OUT_PREFIX}_risk-report.html")
     fi
 fi
 

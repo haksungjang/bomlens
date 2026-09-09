@@ -10,7 +10,7 @@ SBOM은 의존성의 특정 시점 스냅샷이므로, 의존성이 바뀔 때�
 
 부하를 줄이려면 트리거에 따라 깊이를 나눕니다. PR에서는 SBOM만 빠르게 생성하고(`--generate-only --no-report`), `main`과 릴리스에서는 보안 보고서까지 전체 생성한 뒤(`--all --generate-only`) 게이트를 적용합니다.
 
-### GitHub Actions
+## GitHub Actions
 
 `ubuntu-latest` 러너에는 `jq`가 기본 설치되어 있습니다.
 
@@ -31,17 +31,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: git clone --depth 1 https://github.com/sktelecom/bomlens.git /tmp/bomlens
       - run: docker pull ghcr.io/sktelecom/bomlens:latest
       - name: Generate SBOM (lightweight)
         run: |
-          ./scripts/scan-sbom.sh \
+          /tmp/bomlens/scripts/scan-sbom.sh \
             --project "${{ github.event.repository.name }}" \
             --version "${{ github.sha }}" \
             --generate-only --no-report
       - uses: actions/upload-artifact@v4
         with:
           name: sbom-pr
-          path: "*_bom.json"
+          path: "*/*_bom.json"
 
   # main/release: 전체 생성 + 취약점 게이트
   sbom-full:
@@ -49,18 +50,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: git clone --depth 1 https://github.com/sktelecom/bomlens.git /tmp/bomlens
       - run: docker pull ghcr.io/sktelecom/bomlens:latest
       - name: Generate SBOM + reports
         run: |
-          ./scripts/scan-sbom.sh \
+          /tmp/bomlens/scripts/scan-sbom.sh \
             --project "${{ github.event.repository.name }}" \
             --version "${{ github.sha }}" \
             --all --generate-only
 
       # 스캐너는 report-only라 항상 성공한다. Critical이 있으면 여기서 빌드를 실패시킨다.
+      # 산출물은 {project}_{version}/ 하위 폴더에 생기므로(CLI 레퍼런스 참고) */ 글롭을 쓴다.
       - name: Fail on Critical vulnerabilities
         run: |
-          CRIT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' *_security.json)
+          CRIT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' */*_security.json)
           echo "Critical vulnerabilities: $CRIT"
           if [ "$CRIT" -gt 0 ]; then
             echo "::error::$CRIT critical vulnerability(ies) found"
@@ -72,12 +75,12 @@ jobs:
         with:
           name: sbom
           path: |
-            *_bom.json
-            *_security.*
-            *_risk-report.*
+            */*_bom.json
+            */*_security.*
+            */*_risk-report.*
 ```
 
-### GitLab CI
+## GitLab CI
 
 `docker:latest` 이미지에는 `jq`가 없으므로 게이트 전에 설치합니다.
 
@@ -88,20 +91,26 @@ generate-sbom:
   services:
     - docker:dind
   before_script:
-    - apk add --no-cache jq
+    - apk add --no-cache jq git
+    - git clone --depth 1 https://github.com/sktelecom/bomlens.git /tmp/bomlens
   script:
     - docker pull ghcr.io/sktelecom/bomlens:latest
-    - ./scripts/scan-sbom.sh
+    - /tmp/bomlens/scripts/scan-sbom.sh
         --project "$CI_PROJECT_NAME"
         --version "$CI_COMMIT_SHA"
         --all --generate-only
-    # report-only 스캐너를 빌드 게이트로 사용: Critical이 있으면 실패
+    # report-only 스캐너를 빌드 게이트로 사용: Critical이 있으면 실패.
+    # 산출물은 {project}_{version}/ 하위 폴더에 생기므로(CLI 레퍼런스 참고) */ 글롭을 쓴다.
     - |
-      CRIT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' *_security.json)
+      CRIT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' */*_security.json)
       [ "$CRIT" -eq 0 ] || { echo "$CRIT critical vulnerability(ies) found"; exit 1; }
   artifacts:
     when: always
     paths:
-      - "*_bom.json"
-      - "*_security.*"
+      - "*/*_bom.json"
+      - "*/*_security.*"
 ```
+
+---
+
+> **관련 문서**: [CLI 레퍼런스](../reference/cli.ko.md) | [고지문·보안·위험 보고서 생성](reports.ko.md) | [보고서 읽는 법](../concepts/reports-explained.ko.md)

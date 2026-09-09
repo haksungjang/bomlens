@@ -239,6 +239,17 @@ bash "$LIB/stamp-document-metadata.sh" "$WORK/doc-merge.json" MERGE >/dev/null 2
 dm=$(jq -rc '"\(.metadata|has("lifecycles"))|\([.metadata.tools.components[]|.name]|join(","))"' "$WORK/doc-merge.json")
 [ "$dm" = 'false|cdxgen,BomLens' ] \
     && pass "a merged SBOM claims no lifecycle phase but still names the tool" || fail "merge document metadata: $dm"
+# DATASET describes a published research dataset, not software moving through a
+# build, so it must be routed the same as MERGE: no phase claimed, and no WARN
+# (a DATASET scan is not missing a classification, it genuinely has none).
+printf '%s' "$DOC" | jq 'del(.metadata.lifecycles)' > "$WORK/doc-dataset.json"
+dataset_err=$(bash "$LIB/stamp-document-metadata.sh" "$WORK/doc-dataset.json" DATASET 2>&1 1>/dev/null)
+dd=$(jq -rc '.metadata|has("lifecycles")' "$WORK/doc-dataset.json")
+[ "$dd" = "false" ] && pass "a DATASET SBOM claims no lifecycle phase" || fail "dataset document metadata: has(lifecycles)=$dd"
+case "$dataset_err" in
+    *"no lifecycle phase defined"*) fail "DATASET still logs the missing-lifecycle WARN" "$dataset_err" ;;
+    *) pass "DATASET logs no missing-lifecycle WARN" ;;
+esac
 # Invalid input is a defect, not a condition to tolerate: fail closed like stamp-metadata.
 printf 'not json{' > "$WORK/doc-bad.json"
 if bash "$LIB/stamp-document-metadata.sh" "$WORK/doc-bad.json" SOURCE >/dev/null 2>&1; then
@@ -598,6 +609,28 @@ lclasscc() { jq -r --arg n "$1" '.components[] | select(.name==$n)
 [ "$(lclasscc cc-by-nc-sa-lib)" = "weak-copyleft" ] && pass "CC-BY-NC-SA -> weak-copyleft (SA still propagates alongside NC)" || fail "cc-by-nc-sa-lib class='$(lclasscc cc-by-nc-sa-lib)', expected weak-copyleft"
 [ "$(lclasscc cc0-lib)" = "permissive" ] && pass "CC0 -> permissive (allowlist match, unchanged)" || fail "cc0-lib class='$(lclasscc cc0-lib)', expected permissive"
 
+# Generic-classifier redundancy: a PyPI trove-classifier string ("BSD License")
+# and a precise SPDX id for the same grant on the SAME component must not pull
+# the class down to uncategorized just because worst-of saw two entries.
+# Real-world components, verified against examples/python/cellpose_1.0.0's SBOM.
+cat > "$WORK/lcsyn.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6","components":[
+ {"type":"library","name":"babel-like","version":"1.0","licenses":[{"license":{"id":"BSD-3-Clause"}},{"license":{"name":"BSD License"}}]},
+ {"type":"library","name":"lone-generic","version":"1.0","licenses":[{"license":{"name":"BSD License"}}]},
+ {"type":"library","name":"nvidia-nvtx-like","version":"1.0","licenses":[{"license":{"id":"Apache-2.0"}},{"license":{"name":"Other/Proprietary License"}}]},
+ {"type":"library","name":"python-dateutil-like","version":"1.0","licenses":[{"license":{"id":"Apache-2.0"}},{"license":{"name":"BSD License"}},{"license":{"name":"Dual License"}}]},
+ {"type":"library","name":"mit-like","version":"1.0","licenses":[{"license":{"id":"MIT"}},{"license":{"name":"MIT License"}}]}
+]}
+JSON
+bash "$LIB/normalize-sbom.sh" "$WORK/lcsyn.json" >/dev/null 2>&1
+lclasssyn() { jq -r --arg n "$1" '.components[] | select(.name==$n)
+    | [(.properties // [])[] | select(.name=="bomlens:licenseClass") | .value] | first // "ABSENT"' "$WORK/lcsyn.json"; }
+[ "$(lclasssyn babel-like)" = "permissive" ] && pass "BSD-3-Clause + its own generic classifier -> permissive, not dragged to uncategorized" || fail "babel-like class='$(lclasssyn babel-like)', expected permissive"
+[ "$(lclasssyn lone-generic)" = "uncategorized" ] && pass "the generic classifier alone (no precise sibling) stays uncategorized -- never assumed permissive" || fail "lone-generic class='$(lclasssyn lone-generic)', expected uncategorized"
+[ "$(lclasssyn nvidia-nvtx-like)" = "uncategorized" ] && pass "a genuinely different second license (not the classifier's family) still pulls the class down" || fail "nvidia-nvtx-like class='$(lclasssyn nvidia-nvtx-like)', expected uncategorized"
+[ "$(lclasssyn python-dateutil-like)" = "uncategorized" ] && pass "BSD License with no BSD sibling, plus a genuinely unidentified Dual License, stays uncategorized" || fail "python-dateutil-like class='$(lclasssyn python-dateutil-like)', expected uncategorized"
+[ "$(lclasssyn mit-like)" = "permissive" ] && pass "MIT + its own generic classifier -> permissive" || fail "mit-like class='$(lclasssyn mit-like)', expected permissive"
+
 # A licenseReview-flagged component still gets a class: the two properties coexist.
 lr=$(jq -r '.components[] | select(.name=="llama-model")
     | [(.properties // [])[] | select(.name=="bomlens:licenseReview") | .value] | first // "ABSENT"' "$WORK/lc.json")
@@ -729,14 +762,28 @@ if jq -e '[.components[] | select(.name=="evil-all")
 else
     fail "malicious id/source properties missing" "$(jq -c '.components[0].properties' "$WORK/mal.json")"
 fi
-# No bundled snapshot: the step is skipped and the SBOM comes back untouched.
-# Stamping nothing is the point — an absent property means "not assessed".
+# No bundled snapshot: per-component the step is still skipped (an absent
+# bomlens:malicious property means "not assessed", never a guess), but the
+# document now records that the check could not run at all — otherwise a
+# reader can't tell "not assessed" from "assessed, none found".
 cp "$WORK/mal.json" "$WORK/mal-before.json"
 MALICIOUS_DATA_FILE="$WORK/does-not-exist.json" bash "$LIB/enrich-malicious.sh" "$WORK/mal.json" >/dev/null 2>&1
-if diff -q "$WORK/mal-before.json" "$WORK/mal.json" >/dev/null 2>&1; then
-    pass "no bundled snapshot -> SBOM untouched, scan still succeeds"
+if diff <(jq '.components' "$WORK/mal-before.json") <(jq '.components' "$WORK/mal.json") >/dev/null 2>&1; then
+    pass "no bundled snapshot -> components untouched, scan still succeeds"
 else
-    fail "missing snapshot changed the SBOM"
+    fail "missing snapshot changed a component" "$(jq -c '.components' "$WORK/mal.json")"
+fi
+if [ "$(jq -r '[.metadata.properties[]? | select(.name=="bomlens:malicious-check-unavailable")] | .[0].value // "ABSENT"' "$WORK/mal.json")" = "OSV malicious-package index not built into this image" ]; then
+    pass "no bundled snapshot -> document records the check was unavailable, with its reason"
+else
+    fail "missing-snapshot marker not stamped (or wrong reason)" "$(jq -c '.metadata.properties' "$WORK/mal.json")"
+fi
+# Re-running the missing-index path itself must not accumulate the marker.
+MALICIOUS_DATA_FILE="$WORK/does-not-exist.json" bash "$LIB/enrich-malicious.sh" "$WORK/mal.json" >/dev/null 2>&1
+if [ "$(jq '[.metadata.properties[]? | select(.name=="bomlens:malicious-check-unavailable")] | length' "$WORK/mal.json")" = "1" ]; then
+    pass "re-running the missing-snapshot path does not duplicate the marker"
+else
+    fail "malicious-check-unavailable duplicated on re-run" "$(jq -c '.metadata.properties' "$WORK/mal.json")"
 fi
 # Re-running must not accumulate duplicate properties (byte-stability).
 MALICIOUS_DATA_FILE="$WORK/mal-index.json" bash "$LIB/enrich-malicious.sh" "$WORK/mal.json" >/dev/null 2>&1
@@ -2994,6 +3041,65 @@ else
     fail "mark_pipeline_warning errored on a missing file"
 fi
 
+echo "== sbom-size-cap: an oversized SBOM body is stamped, not truncated or rejected =="
+# Extracted verbatim from docker/entrypoint.sh (between its literal anchor
+# comments), so this test tracks the shipped logic rather than a hand-copied
+# duplicate that could silently drift from it.
+sed -n '/^# SBOM body size cap:/,/^# SPDX export (opt-in):/p' "$ROOT_DIR/docker/entrypoint.sh" \
+    | sed '$d' > "$WORK/size-cap-snippet.sh"
+# sed's range address prints through EOF when the end anchor is not found (a
+# renamed or reworded "# SPDX export (opt-in):" comment), which would source
+# the rest of entrypoint.sh -- including its `exit` calls and the cosign
+# signing block -- into THIS test process. A short, exit-free snippet is the
+# only shape this extraction should ever produce, so both are checked before
+# anything is sourced.
+SNIPPET_LINES="$(wc -l < "$WORK/size-cap-snippet.sh" | tr -d '[:space:]')"
+if [ ! -s "$WORK/size-cap-snippet.sh" ]; then
+    fail "could not extract the size-cap snippet from entrypoint.sh (did its anchor comments move?)"
+elif [ -z "$SNIPPET_LINES" ] || [ "$SNIPPET_LINES" -gt 50 ]; then
+    fail "size-cap snippet is $SNIPPET_LINES lines (expected well under 50) -- the end anchor likely did not match, and sourcing it would run the rest of entrypoint.sh" \
+        "did the '# SPDX export (opt-in):' comment in docker/entrypoint.sh change?"
+elif grep -q '^[[:space:]]*exit\b' "$WORK/size-cap-snippet.sh"; then
+    fail "size-cap snippet contains an exit statement -- refusing to source it into this test process" \
+        "$(cat "$WORK/size-cap-snippet.sh")"
+else
+    printf '{"bomFormat":"CycloneDX","specVersion":"1.6","metadata":{},"components":[]}' > "$WORK/small.json"
+    # shellcheck disable=SC2034  # read by the sourced snippet
+    OUTPUT_FILE="$WORK/small.json"
+    # shellcheck disable=SC2034  # read by the sourced snippet in place of its 100 MB default
+    SBOM_SIZE_CAP_BYTES=1000
+    . "$WORK/size-cap-snippet.sh"
+    if jq -e '.metadata.properties[]? | select(.name=="bomlens:sbom-oversized")' "$WORK/small.json" >/dev/null 2>&1; then
+        fail "a SBOM under the cap was wrongly stamped bomlens:sbom-oversized"
+    else
+        pass "a SBOM under the cap is left unstamped"
+    fi
+
+    # Pad well past the same 1000-byte test cap with a property whose value is
+    # inert filler, so the file is realistically large without needing an
+    # actual 100 MB fixture on disk.
+    jq -c --arg filler "$(head -c 2000 /dev/zero | tr '\0' 'x')" \
+        '.metadata.properties = [{name:"filler", value:$filler}]' "$WORK/small.json" > "$WORK/big.json"
+    # shellcheck disable=SC2034  # read by the sourced snippet
+    OUTPUT_FILE="$WORK/big.json"
+    # shellcheck disable=SC2034  # read by the sourced snippet
+    SBOM_SIZE_CAP_BYTES=1000
+    . "$WORK/size-cap-snippet.sh"
+    if jq -e '.metadata.properties[]? | select(.name=="bomlens:sbom-oversized" and (.value | endswith(" bytes")))' "$WORK/big.json" >/dev/null 2>&1; then
+        pass "a SBOM over the cap is stamped bomlens:sbom-oversized with its byte count"
+    else
+        fail "an over-cap SBOM was not stamped"
+    fi
+    if jq -e '.components' "$WORK/big.json" >/dev/null 2>&1; then
+        pass "the oversized SBOM's own content is left intact (stamped, not truncated)"
+    else
+        fail "the oversized SBOM was corrupted rather than merely stamped"
+    fi
+fi
+# These are read by the sourced snippet only; leaving them set would silently
+# apply a 1000-byte cap (instead of the real 100 MB default) to any later
+# entrypoint.sh fragment this file goes on to source.
+unset OUTPUT_FILE SBOM_SIZE_CAP_BYTES
 echo "== node-scope: production filter drops the devDependencies tree =="
 # Guards docker/lib/build-prep.sh's node production-scope filter: cdxgen pulls a
 # deployed app's devDependencies (jest/eslint/@babel/...) into the SBOM, and the
@@ -3160,14 +3266,44 @@ eolprop() { jq -r --arg n "$1" --arg p "$2" '.components[] | select(.name==$n)
 cp "$WORK/eol.json" "$WORK/eol2.json"
 EOL_DATA_FILE="$FIX/eol-data.json" bash "$LIB/enrich-eol.sh" "$WORK/eol2.json" >/dev/null 2>&1
 if diff -q "$WORK/eol.json" "$WORK/eol2.json" >/dev/null 2>&1; then pass "enrich-eol.sh is idempotent"; else fail "second enrich-eol run changed the SBOM"; fi
-# No bundled dataset -> clean skip (SBOM unchanged), never an abort.
+# No bundled dataset -> per-component clean skip, never an abort, but the
+# document now records that the check was unavailable (see the malicious-index
+# case above for why: an empty EOL section otherwise reads as "checked, all
+# current" rather than "never checked").
 cp "$FIX/eol-components.json" "$WORK/eol3.json"
 EOL_DATA_FILE="$WORK/does-not-exist.json" bash "$LIB/enrich-eol.sh" "$WORK/eol3.json" >/dev/null 2>&1
 rc=$?
-if [ "$rc" = "0" ] && diff -q "$FIX/eol-components.json" "$WORK/eol3.json" >/dev/null 2>&1; then
-    pass "missing dataset -> clean skip, SBOM untouched (air-gap safe)"
+if [ "$rc" = "0" ] && diff <(jq '.components' "$FIX/eol-components.json") <(jq '.components' "$WORK/eol3.json") >/dev/null 2>&1; then
+    pass "missing dataset -> clean skip, components untouched (air-gap safe)"
 else
-    fail "missing-dataset path changed the SBOM or failed (rc=$rc)"
+    fail "missing-dataset path changed a component or failed (rc=$rc)"
+fi
+if [ "$(jq -r '[.metadata.properties[]? | select(.name=="bomlens:eol-check-unavailable")] | .[0].value // "ABSENT"' "$WORK/eol3.json")" = "endoflife.date dataset not built into this image" ]; then
+    pass "missing dataset -> document records the check was unavailable, with its own reason"
+else
+    fail "missing-dataset marker not stamped (or wrong reason)" "$(jq -c '.metadata.properties' "$WORK/eol3.json")"
+fi
+# Re-running (e.g. re-scanning an SBOM that already carries this scanner's own
+# stamp, or a plain retry) must replace rather than accumulate the property.
+EOL_DATA_FILE="$WORK/does-not-exist.json" bash "$LIB/enrich-eol.sh" "$WORK/eol3.json" >/dev/null 2>&1
+if [ "$(jq '[.metadata.properties[]? | select(.name=="bomlens:eol-check-unavailable")] | length' "$WORK/eol3.json")" = "1" ]; then
+    pass "re-running the missing-dataset path does not duplicate the marker"
+else
+    fail "eol-check-unavailable duplicated on re-run" "$(jq -c '.metadata.properties' "$WORK/eol3.json")"
+fi
+# The other missing-file path (eol-purl-map.json itself, not just the dataset)
+# must stamp the same way with its own reason. MAP_FILE is derived from the
+# script's own directory rather than an env var, so run a copy of just the
+# script (plus the pipeline-step.sh it now sources) from an otherwise-empty
+# directory to make that file absent.
+cp "$FIX/eol-components.json" "$WORK/eol4.json"
+mkdir -p "$WORK/eol-no-map"
+cp "$LIB/enrich-eol.sh" "$LIB/pipeline-step.sh" "$WORK/eol-no-map/"
+bash "$WORK/eol-no-map/enrich-eol.sh" "$WORK/eol4.json" >/dev/null 2>&1
+if [ "$(jq -r '[.metadata.properties[]? | select(.name=="bomlens:eol-check-unavailable")] | .[0].value // "ABSENT"' "$WORK/eol4.json")" = "eol-purl-map.json missing from the image" ]; then
+    pass "missing purl map -> document records the check was unavailable, with its own reason"
+else
+    fail "missing-purl-map marker not stamped (or wrong reason)" "$(jq -c '.metadata.properties' "$WORK/eol4.json")"
 fi
 
 echo "== staleness: opt-in deps.dev version currency (enrich-staleness.py, offline fixture) =="
@@ -4272,6 +4408,131 @@ if [ "$(jq '.components | length' "$MODIR/multiline/out.json" 2>/dev/null)" = "2
     pass "a uses() block split across lines still parses"
 else
     fail "multiline uses() was not parsed" "$(jq -c '.components' "$MODIR/multiline/out.json" 2>/dev/null)"
+fi
+
+echo "== \$PROJECT is escaped in generated HTML reports, not injected =="
+# Regression: generate-notice.sh, scan-security.sh, generate-risk-report.sh and
+# validate-sbom.sh all interpolate the project name into an HTML <title>/meta
+# line. In the web UI that name is prefilled from the uploaded SBOM's
+# metadata.component.name, so it is attacker-controlled input, and an unescaped
+# interpolation lets it inject markup into a report a reviewer opens in a browser.
+XSS_PROJECT='<script>alert(1)</script> & "quoted"'
+XSS_ESCAPED='&lt;script&gt;alert(1)&lt;/script&gt;'
+XSS_DIR="$WORK/xss"
+mkdir -p "$XSS_DIR"
+cp "$FIX/good-cyclonedx.json" "$XSS_DIR/proj_bom.json"
+
+bash "$LIB/generate-notice.sh" "$XSS_DIR/proj_bom.json" "$XSS_DIR/notice" "$XSS_PROJECT" >/dev/null 2>&1
+if grep -q '<script>alert' "$XSS_DIR/notice_NOTICE.html" 2>/dev/null; then
+    fail "generate-notice.sh: raw <script> made it into NOTICE.html"
+elif grep -qF "$XSS_ESCAPED" "$XSS_DIR/notice_NOTICE.html" 2>/dev/null; then
+    pass "generate-notice.sh escapes \$PROJECT in NOTICE.html"
+else
+    fail "generate-notice.sh: escaped project name not found in NOTICE.html"
+fi
+
+XSS_FAKEBIN="$WORK/xss/fakebin"
+mkdir -p "$XSS_FAKEBIN"
+cat > "$XSS_FAKEBIN/trivy" <<'SH'
+#!/bin/sh
+out=""
+while [ $# -gt 0 ]; do
+    [ "$1" = "--output" ] && { out="$2"; shift; }
+    shift
+done
+echo '{"SchemaVersion":2,"Results":[]}' > "$out"
+exit 0
+SH
+chmod +x "$XSS_FAKEBIN/trivy"
+PATH="$XSS_FAKEBIN:$PATH" SECURITY_ENRICH=false \
+    bash "$LIB/scan-security.sh" "$XSS_DIR/proj_bom.json" "$XSS_DIR/sec" "$XSS_PROJECT" >/dev/null 2>&1
+if grep -q '<script>alert' "$XSS_DIR/sec_security.html" 2>/dev/null; then
+    fail "scan-security.sh: raw <script> made it into security.html"
+elif grep -qF "$XSS_ESCAPED" "$XSS_DIR/sec_security.html" 2>/dev/null; then
+    pass "scan-security.sh escapes \$PROJECT in security.html"
+else
+    fail "scan-security.sh: escaped project name not found in security.html"
+fi
+
+cp "$XSS_DIR/proj_bom.json" "$XSS_DIR/riskproj_bom.json"
+( cd "$XSS_DIR" && bash "$LIB/generate-risk-report.sh" riskproj "$XSS_PROJECT" >/dev/null 2>&1 )
+if grep -q '<script>alert' "$XSS_DIR/riskproj_risk-report.html" 2>/dev/null; then
+    fail "generate-risk-report.sh: raw <script> made it into risk-report.html"
+elif grep -qF "$XSS_ESCAPED" "$XSS_DIR/riskproj_risk-report.html" 2>/dev/null; then
+    pass "generate-risk-report.sh escapes \$PROJECT in risk-report.html"
+else
+    fail "generate-risk-report.sh: escaped project name not found in risk-report.html"
+fi
+
+bash "$LIB/validate-sbom.sh" "$XSS_DIR/proj_bom.json" "$XSS_DIR/conf" "$XSS_PROJECT" >/dev/null 2>&1
+if grep -q '<script>alert' "$XSS_DIR/conf_conformance.html" 2>/dev/null; then
+    fail "validate-sbom.sh: raw <script> made it into conformance.html"
+elif grep -qF "$XSS_ESCAPED" "$XSS_DIR/conf_conformance.html" 2>/dev/null; then
+    pass "validate-sbom.sh escapes \$PROJECT in conformance.html"
+else
+    fail "validate-sbom.sh: escaped project name not found in conformance.html"
+fi
+
+echo "== real-upstream-sample: cdxgen field shapes have not drifted =="
+# Every fixture above is hand-written to match what our own code already
+# expects, so a real cdxgen field rename (e.g. licenses[].license.id becoming
+# licenses[].license.spdxId) would pass every one of them silently. This
+# fixture is UNMODIFIED real output, captured by actually running cdxgen
+# against a real package-lock.json for a pinned, pre-verified set of
+# dependencies (express/cors/helmet/morgan/dotenv/axios/lodash/moment/
+# winston/compression), so it carries whatever shape cdxgen actually emitted
+# on capture, not what we assume it emits -- but a STATIC fixture cannot
+# detect a shape change in a NEWER cdxgen than the one that captured it,
+# which is exactly why the version check below exists: it is the freshness
+# signal that tells a maintainer to recapture, not proof of current drift.
+RUS="$FIX/cdxgen-real-nodejs-sample.json"
+if [ "$(jq -r '.bomFormat' "$RUS" 2>/dev/null)" = "CycloneDX" ] \
+    && [ "$(jq -r '.components | length > 0' "$RUS" 2>/dev/null)" = "true" ]; then
+    pass "fixture is a real, non-empty CycloneDX document"
+else
+    fail "cdxgen-real-nodejs-sample.json fixture is missing or malformed"
+fi
+FIXTURE_CDXGEN_VER="$(jq -r '.metadata.tools.components[0].version // empty' "$RUS" 2>/dev/null)"
+DOCKERFILE_CDXGEN_VER="$(grep -oE '^ARG CDXGEN_VERSION=[0-9.]+' "$ROOT_DIR/docker/Dockerfile" 2>/dev/null | grep -oE '[0-9.]+$')"
+if [ -z "$FIXTURE_CDXGEN_VER" ] || [ -z "$DOCKERFILE_CDXGEN_VER" ]; then
+    fail "could not read the cdxgen version from the fixture or docker/Dockerfile's ARG CDXGEN_VERSION"
+elif [ "$FIXTURE_CDXGEN_VER" = "$DOCKERFILE_CDXGEN_VER" ]; then
+    pass "fixture was captured with the same cdxgen version the image pins ($DOCKERFILE_CDXGEN_VER)"
+else
+    fail "fixture was captured with cdxgen $FIXTURE_CDXGEN_VER, but docker/Dockerfile now pins $DOCKERFILE_CDXGEN_VER -- recapture tests/fixtures/cdxgen-real-nodejs-sample.json"
+fi
+# The exact shapes normalize-sbom.sh's LICENSE_REVIEW_FIX/LICENSE_CLASS_FIX
+# and license-flags.jq read: licenses[].license.id, purl, type, properties[].
+if jq -e '[.components[] | select(.name=="express")][0]
+        | (.licenses[0].license.id == "MIT") and (.purl | startswith("pkg:npm/express@"))
+          and (.type == "framework")
+          and ([.properties[]?.name] | index("SrcFile") != null)' \
+    "$RUS" >/dev/null 2>&1; then
+    pass "the fields our jq depends on (licenses[].license.id, purl, type, properties[]) are shaped as expected"
+else
+    fail "cdxgen's real output no longer matches the shape our jq scripts read" \
+        "$(jq -c '[.components[] | select(.name=="express")][0]' "$RUS" 2>/dev/null)"
+fi
+
+# Round-trip: run our OWN normalize-sbom.sh against this real document, not a
+# hand-written proxy of it, and confirm the license classifier it applies
+# (license-flags.jq, shared with the NOTICE/risk-report/web UI) reaches the
+# right verdict from cdxgen's real license shape.
+cp "$RUS" "$WORK/real-sample.json"
+bash "$LIB/normalize-sbom.sh" "$WORK/real-sample.json" >/dev/null 2>&1
+EXPRESS_CLASS="$(jq -r '[.components[] | select(.name=="express")][0]
+    | [.properties[]? | select(.name=="bomlens:licenseClass") | .value][0] // "MISSING"' \
+    "$WORK/real-sample.json" 2>/dev/null)"
+if [ "$EXPRESS_CLASS" = "permissive" ]; then
+    pass "normalize-sbom.sh classifies real cdxgen output's MIT-licensed express as permissive"
+else
+    fail "normalize-sbom.sh did not classify express correctly from real cdxgen output" \
+        "got bomlens:licenseClass=$EXPRESS_CLASS"
+fi
+if [ "$(jq '.components | length' "$WORK/real-sample.json" 2>/dev/null)" = "$(jq '.components | length' "$RUS" 2>/dev/null)" ]; then
+    pass "normalize-sbom.sh preserves every component of the real document"
+else
+    fail "normalize-sbom.sh dropped or added components on a real document"
 fi
 
 echo ""

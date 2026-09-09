@@ -12,12 +12,18 @@ import { test, type Page } from "@playwright/test";
  * run → Overview → Components (filter) → Vulnerabilities (expand) →
  * Dependencies (graph, then tree) → Licenses.
  *
+ * Recorded at 2x device pixel ratio (viewport stays 900x563 so the UI layout
+ * matches the guide screenshots; the video and GIF are exported at 1800x1126)
+ * so the GIF stays sharp on high-DPI displays when README/docs show it near
+ * its logical 900px width — the same reasoning as the 2x diagram PNGs in
+ * docs/stylesheets/extra.css.
+ *
  * Regenerate (same pinned container as the guide screenshots, then convert):
  *   docker run --rm -v "$PWD":/repo -v /repo/docker/web/frontend/node_modules \
  *     -w /repo/docker/web/frontend mcr.microsoft.com/playwright:v1.61.1-jammy \
  *     bash -lc "npm ci --silent && npx playwright test --grep @demo"
  *   ffmpeg -y -i docker/web/frontend/test-results/web-ui-demo.webm \
- *     -vf "fps=8,scale=900:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=192[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5" \
+ *     -vf "fps=8,scale=1800:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256[p];[s1][p]paletteuse=dither=bayer:bayer_scale=3" \
  *     docs/images/web-ui-demo.gif   # from the repo root
  */
 
@@ -25,10 +31,12 @@ import { test, type Page } from "@playwright/test";
 const OUT_WEBM = path.join(process.cwd(), "test-results", "web-ui-demo.webm");
 const W = 900;
 const H = 563;
+const SCALE = 2;
 
 test.use({
   viewport: { width: W, height: H },
-  video: { mode: "on", size: { width: W, height: H } },
+  deviceScaleFactor: SCALE,
+  video: { mode: "on", size: { width: W * SCALE, height: H * SCALE } },
 });
 
 // ---------------------------------------------------------------------------
@@ -152,10 +160,14 @@ test("record the walkthrough video @demo", async ({ page }) => {
   await page.getByRole("link", { name: /^Overview/ }).waitFor();
   await beat(page, 3000);
 
-  // 3. Components: the table, then narrow to rows with vulnerabilities.
+  // 3. Components: the table, then narrow to rows with vulnerabilities via the Filters menu.
   await page.getByRole("link", { name: /^Components/ }).click();
   await beat(page, 1800);
-  await page.getByRole("button", { name: "Has vulnerabilities" }).click();
+  await page.getByRole("button", { name: "Filters" }).click();
+  await beat(page, 500);
+  await page.getByRole("checkbox", { name: "Has vulnerabilities" }).click();
+  await beat(page, 400);
+  await page.keyboard.press("Escape");
   await beat(page, 1600);
 
   // 4. Vulnerabilities: expand the critical CVE in place.

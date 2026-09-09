@@ -338,4 +338,47 @@ describe("licenseNeedsDecision", () => {
   it("flags a component where only one of several licences is unplaceable", () => {
     expect(licenseNeedsDecision(["Apache-2.0", "BSD License"])).toBe(true);
   });
+
+  it("does not flag a precise id restated as its own generic classifier", () => {
+    // babel/comm/nbclient's real shape: BSD-3-Clause plus the PyPI trove
+    // classifier for the same grant, not a second, different license.
+    expect(licenseNeedsDecision(["BSD-3-Clause", "BSD License"])).toBe(false);
+    expect(licenseNeedsDecision(["MIT", "MIT License"])).toBe(false);
+    // A genuinely different second license (not the classifier's family)
+    // still needs a decision, exactly as line 339 above.
+    expect(
+      licenseNeedsDecision(["Apache-2.0", "Other/Proprietary License"]),
+    ).toBe(true);
+    // python-dateutil verbatim: BSD License has no BSD sibling here, and
+    // Dual License is genuinely unidentified either way.
+    expect(
+      licenseNeedsDecision(["Apache-2.0", "BSD License", "Dual License"]),
+    ).toBe(true);
+  });
+});
+
+describe("worstTier via licenseRiskSummary (generic-classifier redundancy)", () => {
+  // MIRROR of the license-flags.jq fixture in tests/test-postprocess.sh
+  // ("Generic-classifier redundancy"), verified against a real SBOM
+  // (examples/python/cellpose_1.0.0).
+  it("does not drag a precise permissive id down because its own classifier is also listed", () => {
+    const s = licenseRiskSummary([
+      c({ licenses: ["BSD-3-Clause", "BSD License"] }),
+    ]);
+    expect(s.permissive).toBe(1);
+    expect(s.uncategorized).toBe(0);
+  });
+
+  it("still classifies the generic classifier alone as uncategorized", () => {
+    const s = licenseRiskSummary([c({ licenses: ["BSD License"] })]);
+    expect(s.uncategorized).toBe(1);
+    expect(s.permissive).toBe(0);
+  });
+
+  it("still pulls the class down for a genuinely different second license", () => {
+    const s = licenseRiskSummary([
+      c({ licenses: ["Apache-2.0", "Other/Proprietary License"] }),
+    ]);
+    expect(s.uncategorized).toBe(1);
+  });
 });

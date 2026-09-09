@@ -37,7 +37,7 @@ docker build --build-arg SBOM_SCANOSS=true -t bomlens ./docker
 ## 실행
 
 ```bash
-scan-sbom.sh --project trelay --version 26.4.0 --target ./src \
+./scripts/scan-sbom.sh --project trelay --version 26.4.0 --target ./src \
   --identify-vendored --all --generate-only
 ```
 
@@ -64,7 +64,7 @@ scan-sbom.sh --project trelay --version 26.4.0 --target ./src \
 ```bash
 SCANOSS_API_URL=https://your-scanoss-endpoint \
 SCANOSS_API_KEY=your-key \
-scan-sbom.sh --project trelay --version 26.4.0 --target ./src --identify-vendored --all --generate-only
+./scripts/scan-sbom.sh --project trelay --version 26.4.0 --target ./src --identify-vendored --all --generate-only
 ```
 
 웹 UI·데스크톱 앱에서는 토큰만 화면에서 넣을 수 있습니다. 무료 OSSKB 호출 한도에 걸리면 **파일 단위 식별 (SCANOSS)** 토글을 켤 때 아래에 나타나는 토큰칸에 scanoss.com에서 발급한 토큰을 넣고 다시 실행하세요. 토큰은 그 스캔에만 한 번 쓰이고 저장하거나 로그에 남지 않습니다.

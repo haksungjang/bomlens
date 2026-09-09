@@ -8,7 +8,7 @@ description: How BomLens produces an SBOM, an open-source notice, and a risk rep
 
 An open-source compliance manager receives deliverables from many teams in different forms. This guide shows how to produce the same three deliverables for each of seven input forms. (An AI model differs slightly — an ML-BOM and no security report; see Scenario 7.)
 
-**The three deliverables**
+### The three deliverables
 
 | Deliverable | File | Meaning |
 |-------------|------|---------|
@@ -99,8 +99,6 @@ cd ~/project/c-dev
 $SBOM --project team3-dev --version 1.0.0 --all --deep-license --generate-only
 ```
 
-**C/C++ notes**
-
 - With a package manager (Conan `conanfile.txt` / vcpkg `vcpkg.json`), dependencies resolve and appear in the SBOM.
 - Pure CMake/Make sources have no manager metadata, so the SBOM can be sparse. Enrich first-party license headers with `--deep-license`, and analyze build output (a staging/rootfs with installed libraries) separately with `$SBOM --target <build-dir> --all --generate-only` (syft). For a full server SBOM workflow — OS rootfs, application, and static-link dependencies as separate layers — see the [server SBOM guide](server-delivery.md). In the web UI, `--deep-license` is the **License scan (ScanCode)** toggle under Advanced scan options; it scans your own source files (`/src`), not the declared dependencies, and is slow, so turn it on only when you need per-file license detection.
 - When the source has no package manager (plain Make/CMake) and bundles open source copied straight into the tree — common for embedded and firmware sources — `--identify-vendored` is strongly recommended. Without it the SBOM stays sparse and misses the bundled libraries; with it they are detected as named components with CPEs, so the risk report can match CVEs. See [Identify bundled open source](identify-vendored.md). BomLens also nudges you toward this option automatically when it detects this situation.
@@ -121,7 +119,7 @@ $SBOM --project team4-proj --version 2.0.0 \
 
 - Both CycloneDX and SPDX (JSON/Tag-Value) are accepted and converted to CycloneDX internally.
 - `--analyze` turns on notice and security automatically, so you do not need `--all`.
-- A format conformance report (`_conformance.{json,md,html}`) is also produced, and the first section of the risk report includes the conformance result (whether required fields are present).
+- A format conformance report (`_conformance.{json,md,html}`) is also produced, and the first section of the risk report includes the conformance result (whether required fields are present). For what counts as a `fail` vs. a `warn`, see [Reading the conformance report](supplier-sbom.md#reading-the-conformance-report) in the supplier SBOM guide.
 
 **Deliverables**: notice, SBOM (converted), risk report, conformance report
 
@@ -135,7 +133,7 @@ $SBOM --project team5-image --version 1.0.0 \
   --generate-only
 ```
 
-- Configure the build to emit an SBOM — add `INHERIT += "create-spdx-3.0"` and `INHERIT += "vex"` to `conf/local.conf` — and you get the most out of it. That setting needs 5.0 Scarthgap or later; 4.0 Kirkstone has no such class. SPDX 2.2 (the default on both LTS releases) is read too, from the `.spdx.tar.zst` beside the image document, but carries no CVE verdicts. A build with no SPDX at all falls back to the manifests it wrote anyway; a build with neither stops the scan and says so.
+- Configure the build to emit an SBOM — add `INHERIT += "create-spdx-3.0"` and `INHERIT += "vex"` to `conf/local.conf` — and you get the most out of it. Without it, BomLens still reads what the build wrote by default. See [Yocto images](supplier-sbom.md#yocto-images) for the SPDX-version compatibility table and what happens when a build produced no SPDX at all.
 - The image SBOM under `tmp/deploy/images/<machine>/` is analyzed — not the build tree, which holds sysroots and native build tools that never ship in the image.
 - The component list is the packages installed in the image, and vulnerabilities carry the verdicts the build itself made (patched by a recipe, judged not applicable, or still open). Only the open ones count as findings.
 - If several machines or images were built, the newest SBOM is analyzed and every candidate is listed in the log; pass `--analyze <file>` to choose a different one.
@@ -239,8 +237,9 @@ Pick a scan target at the top of the UI and provide the matching input.
 | Docker image | enter the image name |
 | AI model | enter a HuggingFace model id — the tile appears automatically whenever Docker is running |
 | Model file | upload a `.gguf`, `.safetensors`, `.pt`, etc. (up to 8 GB) |
+| Published dataset | enter a Figshare item — its page URL, its DOI, or the item number — in the same field as the model id |
 
-This table lists what the input scenarios in this guide cover; the full set (10 targets) is in the [web UI reference](../reference/ui.md#new-scan).
+This table lists what the input scenarios in this guide cover; the full set (11 targets) is in the [web UI reference](../reference/ui.md#new-scan).
 
 For source-code scans (current folder, GitHub URL, ZIP upload), an **Advanced scan options** section offers toggles that change how the source is analyzed rather than which files are produced:
 

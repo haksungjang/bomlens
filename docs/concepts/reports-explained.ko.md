@@ -47,6 +47,7 @@ EPSS와 KEV는 외부 API 조회가 필요합니다. 폐쇄망에서는 `SECURIT
 - 데이터는 OSV가 공개하는 악성 패키지 권고(`MAL-` 식별자를 가진 항목)를 이미지에 담아 둔 스냅샷입니다. 그래서 EOL 표시와 마찬가지로 네트워크 없이 동작합니다. 건너뛰려면 `ENRICH_MALICIOUS=false`로 설정합니다.
 - 대부분의 권고는 버전을 특정하지 않는데, 그 패키지의 모든 배포 버전이 악성이라는 뜻입니다. 버전을 특정한 권고는 해당 버전만 표시합니다.
 - 표시된 컴포넌트에는 권고 식별자와 스냅샷 날짜가 함께 기록됩니다(`bomlens:malicious:id`, `bomlens:malicious:source`). 날짜가 중요합니다. 이 분야는 변화가 빨라서, 아무것도 나오지 않았다는 것은 "이 스냅샷에 없다"는 뜻이지 "지금 안전하다"는 뜻이 아닙니다.
+- "표시됨"과 "이 스냅샷에 없음" 외에 세 번째 상태가 있습니다. 스냅샷 자체가 이미지에 없는 경우(옵트아웃 빌드)로, 이때는 검사 자체가 돌지 않았다는 뜻입니다. SBOM의 `metadata.properties`에 `bomlens:malicious-check-unavailable`이 이유와 함께 기록되며, 설명 없이 깨끗해 보이는 결과로 남지 않습니다.
 
 ## 컴포넌트 지원 종료(EOL)
 
@@ -54,6 +55,7 @@ BomLens는 각 컴포넌트의 릴리스 주기가 상위(upstream) 지원 종�
 
 - 날짜는 스캐너 이미지에 번들한 endoflife.date 스냅샷에서 가져옵니다. 그래서 이 점검은 네트워크 호출 없이 오프라인으로 동작하며 폐쇄망에서도 쓸 수 있습니다. 출처와 스냅샷 날짜는 표시된 각 컴포넌트에 기록됩니다(`bomlens:eol:source`).
 - 커버리지는 endoflife.date를 따릅니다. endoflife.date는 런타임, 주요 프레임워크, 운영체제, 데이터베이스를 다룹니다(spring-boot, express, django, nodejs, python, php, nginx, openssl, ubuntu, debian 등). 규모가 작은 라이브러리 다수는 대상이 아니며, 매핑이 없는 컴포넌트는 추측하지 않고 미표기(unknown)로 둡니다.
+- 위 악성 패키지 검사와 같은 세 번째 상태가 여기도 있습니다. 번들된 데이터셋 자체가 이미지에 없으면 SBOM의 `metadata.properties`에 `bomlens:eol-check-unavailable`이 이유와 함께 기록됩니다. 그래야 지원 종료 항목이 하나도 없는 결과가 "확인했더니 전부 최신"이 아니라 "한 번도 확인하지 못했다"로 읽힙니다.
 - 웹 UI에서는 개요(Overview)에 "지원 종료" 개수 타일이 나오고, 그중 취약점도 있는 컴포넌트는 위험색으로 강조됩니다. 지원 종료 컴포넌트는 자신의 CVE에 대한 상위 패치가 없으므로 실제로 대응해야 할 대상입니다. 컴포넌트 표에는 "지원 종료" 배지(가능하면 종료 날짜 포함)와 "지원 종료" 필터가 더해집니다.
 - 오프라인이라 지연이 없어 기본으로 켜져 있습니다. 끄려면 `ENRICH_EOL=false`로 설정합니다. AI/ML 모델 스캔은 런타임이나 프레임워크 컴포넌트가 없어 이 단계를 건너뜁니다.
 
@@ -75,18 +77,14 @@ BomLens는 각 컴포넌트의 릴리스 주기가 상위(upstream) 지원 종�
 | **Unknown** | 심각도 미평가 | 해당 CVE를 직접 확인 후 분류 |
 
 - 보고서의 `Fixed` 열에 버전이 있으면, 그 버전 이상으로 의존성을 올리면 해결됩니다. 가장 빠른 1차 대응입니다.
-- CI 게이트 예시. Critical이 1건이라도 있으면 빌드 실패:
-  ```bash
-  crit=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' *_security.json)
-  [ "$crit" -gt 0 ] && { echo "Critical 취약점 ${crit}건"; exit 1; }
-  ```
+- Critical 발견 시 빌드를 실패시키는 게이트 예시는 [CI/CD 연동](../guides/ci-cd.ko.md)을 참고하세요.
 - 오탐(실제 영향 없음) 판단, 예외 승인, 이력 관리 같은 취약점 분류 업무는 BomLens의 범위를 넘습니다. 취약점 관리 시스템(Dependency-Track, TRUSCA 등)에 SBOM을 업로드해 처리하세요.
 
 ## 오픈소스위험분석보고서
 
 오픈소스위험분석보고서는 취약점을 심각도별로 집계하고 권고 대응 기한(Critical 7일, High 30일)을 명시합니다. 라이선스 요약도 담고 있으며, 공급사 SBOM을 분석한 경우에는 포맷 적합성 결과가 더해집니다.
 
-라이선스 요약에는 카피레프트 강도에 따른 컴포넌트 분류도 함께 담기며, 웹 UI가 보여 주는 분류와 같은 기준을 사용합니다. SBOM의 각 컴포넌트에는 `bomlens:licenseClass` 속성이 `network-copyleft`, `strong-copyleft`, `weak-copyleft`, `permissive`, `uncategorized` 중 하나로 기록되고, 보고서에는 분류별 개수와 카피레프트 노출을 만드는 컴포넌트 목록이 더해집니다. 인식되지 않은 라이선스는 permissive로 간주하지 않고 `uncategorized`로 남겨 사람이 확인하도록 합니다.
+라이선스 요약에는 카피레프트 강도에 따른 컴포넌트 분류도 함께 담기며, 웹 UI가 보여 주는 분류와 같은 기준을 사용합니다. SBOM의 각 컴포넌트에는 `bomlens:licenseClass` 속성이 `network-copyleft`(AGPL), `strong-copyleft`(GPL), `weak-copyleft`(LGPL, MPL, EPL, 데이터셋·AI 모델의 경우 CC-BY-SA), `permissive`(MIT, Apache-2.0, BSD, 일반 CC-BY), `uncategorized` 중 하나로 기록되고, 보고서에는 분류별 개수와 카피레프트 노출을 만드는 컴포넌트 목록이 더해집니다. 인식되지 않은 라이선스는 permissive로 간주하지 않고 `uncategorized`로 남겨 사람이 확인하도록 합니다.
 
 ## 관련 문서
 

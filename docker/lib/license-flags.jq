@@ -81,11 +81,64 @@ def license_class($s):
 # an unknown license; an unknown license outranks known-permissive.
 def class_rank: {"network-copyleft": 5, "strong-copyleft": 4, "weak-copyleft": 3, "uncategorized": 2, "permissive": 1};
 
+# ---------------------------------------------------------------------------
+# Generic-classifier redundancy, MIRRORED in licenses.ts (worstTier).
+#
+# A component can carry the same license twice: a precise SPDX id (from a
+# lockfile or wheel metadata) and a PyPI trove-classifier string ("License ::
+# OSI Approved :: BSD License") for the same grant. The classifier alone is
+# genuinely ambiguous (which BSD?) and stays uncategorized on its own — that
+# headline rule is unchanged. But worst-of was treating the SAME license
+# stated twice as if the second statement were an unrelated, unidentified
+# second license, which pulled real python packages (babel, python-dateutil,
+# every Jupyter package pinning "BSD License" alongside "BSD-3-Clause") down
+# to Uncategorized despite an exact, known-permissive id sitting right next to
+# it in the same array. Only drop the generic string when a specific id from
+# its OWN family is also present on the SAME component — a genuinely
+# different second license (nvidia-nvtx's Apache-2.0 + Other/Proprietary
+# License, python-dateutil's + Dual License) still pulls the class down, since
+# neither is this classifier's family.
+def generic_license_synonym_family($s):
+  {
+    "BSD LICENSE": "BSD",
+    "APACHE SOFTWARE LICENSE": "APACHE",
+    "APACHE LICENSE 2.0": "APACHE",
+    "APACHE LICENSE, VERSION 2.0": "APACHE",
+    "MIT LICENSE": "MIT",
+    "PYTHON SOFTWARE FOUNDATION LICENSE": "PYTHON"
+  }[$s];
+
+def license_family_ids($family):
+  {
+    "BSD": ["BSD-2-CLAUSE", "BSD-3-CLAUSE"],
+    "APACHE": ["APACHE-1.1", "APACHE-2.0"],
+    "MIT": ["MIT", "MIT-0"],
+    "PYTHON": ["PSF-2.0", "PYTHON-2.0"]
+  }[$family];
+
+# Drop a generic classifier string from $ids when the same list also carries a
+# precise id from its family; every other string (including a genuinely
+# unidentified one) passes through untouched.
+def drop_redundant_generic_synonyms($ids):
+  ($ids | map(ascii_upcase)) as $upper
+  | $ids | map(
+      . as $id
+      | generic_license_synonym_family($id | ascii_upcase) as $family
+      | select(
+          $family == null
+          or ([$upper[] | select(. as $u | license_family_ids($family) | index($u))] | length == 0)
+        )
+      | $id
+    );
+
 # One class for a whole CycloneDX component: the strongest class across its
 # non-empty license ids/names/expressions (the same strings the web server
-# extracts for the UI); a component with no license info is "uncategorized".
+# extracts for the UI), after dropping a generic classifier redundant with a
+# precise id also on this component; a component with no license info (or
+# only redundant generic strings) is "uncategorized".
 def component_license_class:
   [ (.licenses // [])[] | (.license.id // .license.name // .expression // "") | select(. != "") ]
+  | drop_redundant_generic_synonyms(.)
   | if length == 0 then "uncategorized"
     else map(license_class(.)) | max_by(class_rank[.]) end;
 

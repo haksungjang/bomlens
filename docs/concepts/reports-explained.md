@@ -47,6 +47,7 @@ A vulnerability says an honest package has a flaw. A malicious package is a diff
 - The data is a bundled snapshot of the malicious-package advisories OSV publishes (the ones carrying a `MAL-` id), so the check runs offline like the EOL flag. Set `ENRICH_MALICIOUS=false` to skip it.
 - Most advisories name no versions, which means every published version of that package is malicious. When an advisory does name versions, only those are flagged.
 - Each flagged component carries the advisory id and the snapshot date (`bomlens:malicious:id`, `bomlens:malicious:source`). The date matters: this is a fast-moving area, so a clean result means "not in this snapshot", not "safe today".
+- A third state exists beyond "flagged" and "not in this snapshot": the snapshot itself was missing from the scanner image (an opt-out build), in which case the check did not run at all and the SBOM's `metadata.properties` carries `bomlens:malicious-check-unavailable` with the reason, rather than a clean-looking result with no explanation.
 
 ## Component end-of-life (EOL)
 
@@ -54,6 +55,7 @@ BomLens also flags whether each component's release cycle has reached its upstre
 
 - The dates come from a snapshot of endoflife.date bundled into the scanner image, so the check runs offline with no network call and works air-gapped. The source and snapshot date are recorded on each flagged component (`bomlens:eol:source`).
 - Coverage follows endoflife.date, which tracks runtimes, major frameworks, operating systems and databases (spring-boot, express, django, nodejs, python, php, nginx, openssl, ubuntu, debian, and so on). Most smaller libraries are not tracked, and a component with no mapping is left unknown rather than guessed.
+- Same third state as the malicious-package check above: if the bundled dataset itself is missing from the image, the SBOM's `metadata.properties` carries `bomlens:eol-check-unavailable` with the reason, so an empty EOL section reads as "never checked" rather than "checked, all current".
 - In the web UI, the Overview shows an "End of life" count tile, with the components that are also vulnerable highlighted in the risk colour — an EOL component gets no upstream patch for its CVEs, so that is the set to act on. The Components table adds an "End of life" badge, with the EOL date where known, and an "End of life" filter.
 - It is on by default and adds no delay because it is offline. To turn it off, set `ENRICH_EOL=false`. AI/ML model scans skip it, since they have no runtime or framework components.
 
@@ -75,18 +77,14 @@ Sitting on a supported release cycle is not the same as running its latest versi
 | **Unknown** | severity not assessed | check the CVE directly and classify |
 
 - If the report's `Fixed` column has a version, raising the dependency to that version or higher resolves it. This is the fastest first response.
-- CI gate example. Fail the build if there is even one Critical:
-  ```bash
-  crit=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' *_security.json)
-  [ "$crit" -gt 0 ] && { echo "${crit} Critical vulnerabilities"; exit 1; }
-  ```
+- To fail a build on a Critical finding, see the gate example in [CI/CD integration](../guides/ci-cd.md).
 - Triage — judging false positives (no real impact) and approving exceptions — and history management are beyond the scope of BomLens. Upload the SBOM to a vulnerability management system (Dependency-Track, TRUSCA, etc.) to handle it.
 
 ## The open-source risk report
 
 The open-source risk report aggregates vulnerabilities by severity with recommended response deadlines (Critical 7 days, High 30 days). It includes a license summary, and for a supplier SBOM it adds the format conformance result.
 
-The license summary also classifies components by copyleft strength, with the same rules the web UI uses. Each component in the SBOM carries a `bomlens:licenseClass` property holding one of `network-copyleft`, `strong-copyleft`, `weak-copyleft`, `permissive` or `uncategorized`, and the report shows a per-class count plus the components that drive the copyleft exposure. A license the tool does not recognize is never assumed permissive; it stays `uncategorized` for a human to review.
+The license summary also classifies components by copyleft strength, with the same rules the web UI uses. Each component in the SBOM carries a `bomlens:licenseClass` property holding one of `network-copyleft` (AGPL), `strong-copyleft` (GPL), `weak-copyleft` (LGPL, MPL, EPL, and — for a dataset or AI model — CC-BY-SA), `permissive` (MIT, Apache-2.0, BSD, and plain CC-BY) or `uncategorized`, and the report shows a per-class count plus the components that drive the copyleft exposure. A license the tool does not recognize is never assumed permissive; it stays `uncategorized` for a human to review.
 
 ## Related
 

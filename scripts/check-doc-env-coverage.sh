@@ -26,6 +26,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HELP_SRC="$ROOT/scripts/scan-sbom.sh"
 DOCS=("$ROOT/docs/reference/cli.md" "$ROOT/docs/reference/docker-image.md")
+DOCS_KO=("$ROOT/docs/reference/cli.ko.md" "$ROOT/docs/reference/docker-image.ko.md")
 bt='`'
 fail=0
 
@@ -40,7 +41,9 @@ envs="$(awk '
 
 [ -n "$envs" ] || { echo "ERROR: could not read the Environment block from $HELP_SRC"; exit 2; }
 
-# 2) Each must be documented (as `VAR`) in at least one reference page.
+# 2) Each must be documented (as `VAR`) in at least one reference page, English
+#    and Korean — the name is a code literal, never translated, so the same
+#    check applies to both.
 while IFS= read -r v; do
     [ -z "$v" ] && continue
     found=0
@@ -51,7 +54,19 @@ while IFS= read -r v; do
     if [ "$found" -eq 0 ]; then
         echo "FAIL: env var '$v' is advertised in scan-sbom.sh --help but is documented in neither"
         echo "      docs/reference/cli.md nor docs/reference/docker-image.md."
-        echo "      Add a row/mention for ${bt}${v}${bt} to one of them (and its .ko.md mirror)."
+        echo "      Add a row/mention for ${bt}${v}${bt} to one of them."
+        fail=1
+    fi
+
+    found_ko=0
+    for d in "${DOCS_KO[@]}"; do
+        [ -f "$d" ] || continue
+        if grep -qF "${bt}${v}${bt}" "$d"; then found_ko=1; break; fi
+    done
+    if [ "$found_ko" -eq 0 ]; then
+        echo "FAIL: env var '$v' is advertised in scan-sbom.sh --help but is documented in neither"
+        echo "      docs/reference/cli.ko.md nor docs/reference/docker-image.ko.md."
+        echo "      Add a row/mention for ${bt}${v}${bt} to one of them."
         fail=1
     fi
 done <<EOF

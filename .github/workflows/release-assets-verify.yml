@@ -21,10 +21,27 @@ permissions:
   contents: read
   packages: read
 
+# Read-only verification, not a publish path, so unlike docker-publish.yml/
+# release.yml a redundant concurrent run is safe to cancel outright rather
+# than queue behind -- but only when it really is redundant. `schedule` and
+# `workflow_dispatch` both resolve github.ref to refs/heads/main, and
+# `inputs.tag` is optional, so a TAGLESS dispatch's key would otherwise match
+# the scheduled run's exactly. github.event_name is in the key too so the two
+# never share a group even when tag is empty on both. cancel-in-progress is
+# false only for workflow_dispatch (true for both `release` and `schedule`),
+# so a person's in-flight manual dry-run is never cancelled by anything else
+# arriving, though two dispatches for the same tag do still queue rather than
+# run concurrently. A `release` event's ref is the tag itself, already unique
+# on its own, so none of this actually matters for that trigger either way.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.tag }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
 jobs:
   verify-downloads:
     name: Verify desktop download URLs
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Check latest-release installers resolve
         run: |
@@ -95,9 +112,19 @@ jobs:
     name: Full release-gate dry-run
     if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
     runs-on: ubuntu-latest
+    # Same script as release-gate in release.yml (see its comment for the
+    # breakdown, including the final-pull-past-the-deadline overrun each
+    # polling step can add): scripts/verify-release.sh's five steps sum to a
+    # worst case around 210-220 min, not just the main image's own 35 min.
+    # This job has no checksum/cosign/publish steps after the script the way
+    # release-gate does, so it needs less margin above that sum -- 240 here
+    # against release-gate's 260.
+    timeout-minutes: 240
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3

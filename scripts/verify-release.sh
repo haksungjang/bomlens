@@ -20,6 +20,8 @@
 #   2. The published scanner image for this version is pullable.
 #   3. The documented first-scan command produces a valid SBOM on that exact
 #      published image (not a CI-built one).
+#   4. The three opt-in images (firmware/aibom/deep-cve) are pullable too
+#      (checked after step 3, not before -- see that step's own comment).
 #
 # It only verifies (no publish/side effects), so the release-gate job can run it
 # while the release is still a draft, and it can be dry-run on demand against an
@@ -27,7 +29,22 @@
 #
 # Usage: verify-release.sh <tag>            e.g. verify-release.sh v1.5.1
 # Env:   GH_TOKEN          token for `gh` (GITHUB_TOKEN in Actions)
-#        VERIFY_TIMEOUT    seconds to wait for async artifacts (default 2100)
+#        VERIFY_TIMEOUT    seconds to wait for the installers and the main
+#                          image (default 2100)
+#        VERIFY_SECONDARY_TIMEOUT  seconds for the WHOLE step checking the
+#                          three opt-in images, shared rather than split three
+#                          ways (default 5400 = 90 min): they do not take
+#                          equal time to build (measured on a real run:
+#                          firmware ~11min, deep-cve ~9min, aibom ~86min, all
+#                          starting alongside the main image in the same
+#                          docker-publish.yml call, not after it), and this
+#                          job has no other way to learn docker-publish.yml
+#                          finished -- release-upstream.yml's `release` and
+#                          `images` jobs are not ordered by `needs:`, so this
+#                          polling loop IS the synchronization. If the
+#                          self-hosted runner ever serializes these image
+#                          builds instead of running them concurrently, this
+#                          default may need to grow again.
 #        PUBLISH_REPO      owner/repo the release lives in (default sktelecom/bomlens)
 #        GITHUB_REPOSITORY fallback for PUBLISH_REPO
 set -uo pipefail
@@ -41,6 +58,7 @@ REPO="${PUBLISH_REPO:-${GITHUB_REPOSITORY:-sktelecom/bomlens}}"
 OWNER="${REPO%%/*}"
 IMAGE="ghcr.io/${OWNER}/bomlens:${IMAGE_VERSION}"
 TIMEOUT="${VERIFY_TIMEOUT:-2100}"
+SECONDARY_TIMEOUT="${VERIFY_SECONDARY_TIMEOUT:-5400}"
 MIN_BYTES=1000000   # a real installer is tens of MB; guard against 0-byte stubs
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -50,7 +68,7 @@ fail=0
 # Resolve gh once, up front, rather than relying on it staying on PATH for the
 # whole script. Observed on v1.11.4 (self-hosted runner): `gh` resolved fine
 # at the start of this script but had silently dropped off PATH by the time
-# step 4 ran, ~6 minutes and a `bash tests/test-docs-walkthrough.sh` later --
+# step 3 ran, ~6 minutes and a `bash tests/test-docs-walkthrough.sh` later --
 # the exact mechanism wasn't pinned down. A fixed path sidesteps whatever is
 # mutating PATH mid-script instead of chasing it further.
 GH_BIN="$(command -v gh || true)"
@@ -58,6 +76,44 @@ if [ -z "$GH_BIN" ]; then
     echo "❌ gh CLI not found on PATH; cannot verify the release" >&2
     exit 1
 fi
+
+# Pulls one image, retrying every $3 seconds (default 30; overridable only
+# so tests/test-verify-release.sh doesn't have to wait out a real 30s) until
+# the ABSOLUTE deadline $2 (epoch seconds, not a duration), then reports
+# pass/fail and removes it again on success (step 4 below has no later use
+# for it, unlike the main $IMAGE). An absolute deadline, not each image
+# getting its own fresh budget: docker-publish.yml's opt-in images do not
+# all take the same time to build (measured: firmware ~11min, deep-cve
+# ~9min, aibom ~86min, all amd64-only builds except aibom which is also
+# multi-arch), so step 4 below computes ONE shared deadline sized for the
+# slowest of the three and gives each image whatever of it remains, rather
+# than splitting one timeout three equal ways regardless of which image
+# actually needs it. A function, not inlined into the step 4 loop, so that
+# test can lift it out and drive it against a stubbed `docker` on PATH the
+# same way tests/test-image-refresh.sh does for scan-sbom.sh's own functions.
+check_secondary_image() {
+    local img="$1" deadline="$2" retry_s="${3:-30}"
+    local pulled=1
+    while :; do
+        if docker pull "$img" >/dev/null 2>&1; then
+            pulled=0
+            break
+        fi
+        [ "$(date +%s)" -ge "$deadline" ] && break
+        sleep "$retry_s"
+    done
+    # Judge success by the pull's own exit status, not a follow-up `docker
+    # image inspect`: on a non-ephemeral (self-hosted) runner, a prior run's
+    # image can already sit in the local daemon, so inspect would report
+    # success even though every pull attempt here actually failed.
+    if [ "$pulled" -eq 0 ]; then
+        echo "  ✓ pulled $img"
+        docker rmi "$img" >/dev/null 2>&1 || true
+        return 0
+    fi
+    echo "  ❌ could not pull $img before the shared deadline"
+    return 1
+}
 
 echo "Verifying release $TAG (image $IMAGE)"
 
@@ -116,6 +172,14 @@ fi
 # ---------------------------------------------------------------------------
 # 3) Documented first-scan command runs on the published image. The walkthrough
 #    harness honours SBOM_SCANNER_IMAGE and runs the docs' runnable blocks.
+#    Deliberately BEFORE step 4's opt-in-image check, not after: the opt-in
+#    images build concurrently with the main one in the same docker-publish.yml
+#    call (not after it), and aibom alone measures ~86 minutes to build vs. the
+#    main image's ~24 -- so by the time this ~40-45 minute walkthrough finishes,
+#    aibom has had that much longer to become pullable. Running step 4 first
+#    would instead have this gate sit idle waiting on aibom, then only start
+#    the walkthrough afterward, wasting on the order of 40 minutes per release
+#    for no benefit (neither step's outcome depends on the other's).
 # ---------------------------------------------------------------------------
 echo "3) Documented first-scan command on the published image"
 if docker image inspect "$IMAGE" >/dev/null 2>&1; then
@@ -129,11 +193,47 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 4) The release describes itself. upload-assets attaches an SBOM for the
+# 4) The three opt-in images (firmware/aibom/deep-cve) pullable at this
+#    version. docker-publish.yml's build-firmware/build-aibom/build-deep-cve
+#    jobs run unconditionally alongside the main image on a real release, so
+#    a broken push for one of them is exactly as release-blocking as the main
+#    image being missing -- just harder to notice, since nothing else in this
+#    gate ever pulls them. Pull-only, not a full scan: these are large --
+#    measured compressed sizes: aibom ~3.8 GB (the biggest of the four
+#    images, base included), deep-cve ~0.7 GB (its ~1.8 GB vulnerability DB is
+#    built INTO the image, not fetched here), firmware ~0.4 GB -- and each
+#    already gets its own Trivy scan inside docker-publish.yml. One shared
+#    deadline for all three (see VERIFY_SECONDARY_TIMEOUT above), not a
+#    separate budget each: aibom alone measures ~86 minutes to build, so
+#    treating it the same as firmware's ~11 or deep-cve's ~9 would either
+#    waste time three times over or starve the one that actually needs it.
+#    Run AFTER step 3's walkthrough (see that step's comment): by now aibom
+#    has had the walkthrough's own ~40-45 minutes of extra build time, so this
+#    deadline mostly only needs to cover what remains, not the whole build.
+#    Removed after each check, not kept like the main image: nothing later in
+#    this script needs them. The main image, by contrast, is kept and tagged
+#    :latest above (step 2) precisely so step 3's walkthrough reuses that
+#    local copy instead of pulling it again -- these three have no such
+#    later reader, so there is nothing to keep them for.
+#    Only the bomlens-* names are checked, not the legacy sbom-scanner-*
+#    aliases docker-publish.yml also signs: both names tag the exact same
+#    DIGEST there, so a pull of one proves the other's manifest is just as
+#    reachable, and checking it again here would only spend more of the
+#    shared deadline on a second pull of bytes already confirmed present.
+# ---------------------------------------------------------------------------
+echo "4) Opt-in images (firmware/aibom/deep-cve) pullable"
+secondary_deadline=$(( $(date +%s) + SECONDARY_TIMEOUT ))
+for suffix in firmware aibom deep-cve; do
+    img="ghcr.io/${OWNER}/bomlens-${suffix}:${IMAGE_VERSION}"
+    check_secondary_image "$img" "$secondary_deadline" || fail=1
+done
+
+# ---------------------------------------------------------------------------
+# 5) The release describes itself. upload-assets attaches an SBOM for the
 #    desktop dependency tree and one for the source bundles; a release that
 #    quietly lost them would still install and scan, so nothing else notices.
 # ---------------------------------------------------------------------------
-echo "4) SBOM assets attached to release $TAG"
+echo "5) SBOM assets attached to release $TAG"
 # A single one-shot `gh release view` here (unlike step 1's polling loop) had
 # no resilience against a transient read failure -- observed on v1.11.4: the
 # call silently came back empty (stderr swallowed by 2>/dev/null) even though
@@ -161,4 +261,4 @@ if [ "$fail" -ne 0 ]; then
     echo "❌ release $TAG is NOT ready (a recommended entry point is broken)"
     exit 1
 fi
-echo "✅ release $TAG verified: installers attached, image published, documented command works, SBOMs attached"
+echo "✅ release $TAG verified: installers attached, all four images published, documented command works, SBOMs attached"

@@ -53,6 +53,13 @@ MAX_KV_PAIRS = 100000               # GGUF key/value pairs
 MAX_ST_HEADER = 128 * 1024 * 1024   # safetensors JSON header
 HASH_BLOCK = 4 * 1024 * 1024
 
+# 1.7, not the docker/lib/cdx-version.sh bash constant (1.6): AI/dataset
+# SBOMs use 1.7 for the `data` component type and richer machine-learning-model
+# support that version added. Restated here rather than imported, since nothing
+# in bash needs it and there is no cross-language import convention in this
+# codebase to introduce for two call sites (the other is scan-figshare.py).
+CDX_SPEC_VERSION = "1.7"
+
 # Extension -> the format it claims to be. Used only to compare against what the
 # magic bytes actually say; the magic wins whenever the two disagree.
 EXT_CLAIMS = {
@@ -384,7 +391,7 @@ def build_bom(path, version, scan_name, fmt, facts, digest):
 
     return {
         "bomFormat": "CycloneDX",
-        "specVersion": "1.7",
+        "specVersion": CDX_SPEC_VERSION,
         # Derived from the file's own hash: re-scanning the same file yields the
         # same document identifier, which is what --byte-stable output needs.
         "serialNumber": "urn:uuid:%s-%s-%s-%s-%s" % (

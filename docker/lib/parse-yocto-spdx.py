@@ -56,7 +56,7 @@ import sys
 import tarfile
 import tempfile
 
-CDX_VERSION = "1.6"
+CDX_SPEC_VERSION = "1.6"
 
 # SPDX 3.0 VEX relationship types we understand. Anything else leaves the
 # vulnerability unresolved, which is the safe direction (it stays visible).
@@ -303,7 +303,7 @@ def write_cyclonedx(path, components, source_name, doc_graph=(), dependencies=()
         metadata["timestamp"] = timestamp
     doc = {
         "bomFormat": "CycloneDX",
-        "specVersion": CDX_VERSION,
+        "specVersion": CDX_SPEC_VERSION,
         "version": 1,
         "metadata": metadata,
         "components": components,
@@ -629,7 +629,7 @@ def write_cyclonedx_spdx2(path, components, source_name, image_name, image_versi
         metadata["timestamp"] = created
     doc = {
         "bomFormat": "CycloneDX",
-        "specVersion": CDX_VERSION,
+        "specVersion": CDX_SPEC_VERSION,
         "version": 1,
         "metadata": metadata,
         "components": components,

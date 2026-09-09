@@ -39,6 +39,16 @@ on:
 permissions:
   contents: read
 
+# Safe to key by version here, unlike docker-publish.yml/release.yml: this
+# workflow is only ever reached by a deliberate workflow_dispatch (no push
+# trigger, and nothing else calls it), so the only way to get two runs in the
+# same group is a human dispatching the same version twice. No
+# cancel-in-progress -- the second dispatch queues behind the first rather
+# than killing a signing/publish step partway through; a different version
+# gets its own group and runs unaffected.
+concurrency:
+  group: release-upstream-${{ inputs.version }}
+
 jobs:
   # The images first: release.yml's gate pulls the published image to verify the
   # documented first-scan command, and the desktop app pins the image matching
@@ -51,6 +61,20 @@ jobs:
       contents: write
       id-token: write
       packages: write
+      # docker-publish.yml's jobs now upload-sarif, which needs this. A
+      # called workflow cannot ask for more than the caller grants -- omitting
+      # this makes every job in that workflow fail before it starts (see
+      # commit 6dc87c8b, the same failure mode from a missing packages:read).
+      # Note this does not make the SARIF uploads themselves succeed here:
+      # the `github` context inside a reusable workflow call resolves to the
+      # CALLER's repository, so a run through this path uploads to the
+      # fork's Security tab, not sktelecom/bomlens's -- and code scanning is
+      # off by default on a fork, so the upload 403s (silently, under
+      # continue-on-error: true). The scans still run and gate nothing
+      # (report-only by design), so this is a visibility gap, not a
+      # correctness one: the Security-tab numbers this was meant to surface
+      # are only real from a direct push/tag run against the org repo.
+      security-events: write
     with:
       owner: sktelecom
       push: ${{ inputs.push_images }}

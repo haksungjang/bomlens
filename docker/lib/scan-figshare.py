@@ -55,6 +55,13 @@ USER_AGENT = "BomLens (+https://github.com/sktelecom/bomlens)"
 # builder in enrich-aibom.sh.
 HASH_CAP = 64
 
+# 1.7, not the docker/lib/cdx-version.sh bash constant (1.6): AI/dataset SBOMs
+# use 1.7 for the `data` component type this document's root component is.
+# Restated here rather than imported, since nothing in bash needs it and there
+# is no cross-language import convention in this codebase to introduce for two
+# call sites (the other is identify-model-file.py).
+CDX_SPEC_VERSION = "1.7"
+
 # The seven licences the public instance offers, by the name it returns. An
 # institutional instance can add its own, which is what the url patterns below
 # are for.
@@ -268,7 +275,7 @@ def build(item, reference, project_version):
         root["version"] = project_version
     return {
         "bomFormat": "CycloneDX",
-        "specVersion": "1.7",
+        "specVersion": CDX_SPEC_VERSION,
         "version": 1,
         "metadata": {
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),

@@ -1856,6 +1856,264 @@ else
 fi
 rm -f "$OUT"/deg_1.0_* "$OUT"/clean_1.0_*
 
+echo "== sbom-oversized property (sbom_summary) =="
+# When entrypoint.sh's size-cap check stamps bomlens:sbom-oversized, the
+# summary must surface it too; absent -> None.
+cat > "$OUT/big_1.0_bom.json" <<'JSON'
+{"bomFormat":"CycloneDX","metadata":{"component":{"name":"big","version":"1.0"},"properties":[{"name":"bomlens:sbom-oversized","value":"104857601 bytes"}]},"components":[{"name":"flask","version":"2.0","type":"library","purl":"pkg:pypi/flask@2.0"}]}
+JSON
+cat > "$OUT/small_1.0_bom.json" <<'JSON'
+{"bomFormat":"CycloneDX","metadata":{"component":{"name":"small","version":"1.0"}},"components":[{"name":"flask","version":"2.0","type":"library","purl":"pkg:pypi/flask@2.0"}]}
+JSON
+if SBOM_OUTPUT_DIR="$OUT" python3 - "$ROOT_DIR" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+assert server.sbom_summary("big_1.0")["sbomOversizedBytes"] == "104857601 bytes"
+assert server.sbom_summary("small_1.0")["sbomOversizedBytes"] is None
+PY
+then
+    pass "sbomOversizedBytes surfaced from metadata (None when absent)"
+else
+    fail "sbomOversizedBytes not surfaced correctly"
+fi
+rm -f "$OUT"/big_1.0_* "$OUT"/small_1.0_*
+
+echo "== stale upload sweep: TTL-expired uploads are removed, active/young ones are not =="
+UPDIR="$OUT/.uploads"
+mkdir -p "$UPDIR"
+if SBOM_OUTPUT_DIR="$OUT" python3 - "$ROOT_DIR" <<'PY'
+import sys, os, time
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+
+old_token = "a" * 32
+active_token = "b" * 32
+young_token = "c" * 32
+junk_name = "not-a-token-dir"
+
+for name in (old_token, active_token, young_token, junk_name):
+    d = os.path.join(server.UPLOAD_DIR, name)
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "f"), "w") as f:
+        f.write("x")
+
+now = time.time()
+old_mtime = now - server.UPLOAD_TTL_SECONDS - 3600
+young_mtime = now - 60
+for name in (old_token, active_token, junk_name):
+    os.utime(os.path.join(server.UPLOAD_DIR, name), (old_mtime, old_mtime))
+os.utime(os.path.join(server.UPLOAD_DIR, young_token), (young_mtime, young_mtime))
+
+server._active_upload_tokens.add(active_token)
+server._sweep_stale_uploads(now=now)
+
+assert not os.path.isdir(os.path.join(server.UPLOAD_DIR, old_token)), \
+    "expired inactive upload was not swept"
+assert os.path.isdir(os.path.join(server.UPLOAD_DIR, active_token)), \
+    "active upload was wrongly swept despite being expired"
+assert os.path.isdir(os.path.join(server.UPLOAD_DIR, young_token)), \
+    "young upload was wrongly swept"
+assert os.path.isdir(os.path.join(server.UPLOAD_DIR, junk_name)), \
+    "an unrecognized directory name was wrongly swept"
+
+# Throttling: a sweep call inside the throttle window must be a no-op, even
+# with a fresh TTL-expired entry sitting there ready to be removed.
+new_stale = "d" * 32
+d = os.path.join(server.UPLOAD_DIR, new_stale)
+os.makedirs(d, exist_ok=True)
+stale_mtime = now - server.UPLOAD_TTL_SECONDS - 3600
+os.utime(d, (stale_mtime, stale_mtime))
+server._sweep_stale_uploads(now=now + 1)
+assert os.path.isdir(d), "sweep ran again inside its throttle window"
+server._sweep_stale_uploads(now=now + server._UPLOAD_SWEEP_INTERVAL_SECONDS + 1)
+assert not os.path.isdir(d), "sweep did not run again once the throttle window elapsed"
+
+# Boundary shapes for _UPLOAD_ENTRY_RE, past the throttle window above: a
+# git-clone scratch dir IS swept (same rules as an upload token); a too-short
+# hex string, an uppercase one, and a name carrying a trailing newline are all
+# left alone -- the last one is the regression check for match()+"$" silently
+# accepting "token\n" that fullmatch() closes.
+later = now + 3 * server._UPLOAD_SWEEP_INTERVAL_SECONDS
+git_token = "git-" + "e" * 16
+short_hex = "a" * 31
+upper_hex = "A" * 32
+newline_name = "a" * 32 + "\n"
+newline_created = False
+for name in (git_token, short_hex, upper_hex, newline_name):
+    try:
+        entry = os.path.join(server.UPLOAD_DIR, name)
+        os.makedirs(entry, exist_ok=True)
+        os.utime(entry, (stale_mtime, stale_mtime))
+        if name == newline_name:
+            newline_created = True
+    except OSError:
+        pass  # newline_name may not be creatable on every filesystem
+server._sweep_stale_uploads(now=later)
+assert not os.path.isdir(os.path.join(server.UPLOAD_DIR, git_token)), \
+    "an expired git-clone scratch dir was not swept"
+assert os.path.isdir(os.path.join(server.UPLOAD_DIR, short_hex)), \
+    "a too-short hex name was wrongly swept"
+assert os.path.isdir(os.path.join(server.UPLOAD_DIR, upper_hex)), \
+    "an uppercase-hex name was wrongly swept (regex is lowercase-only)"
+if newline_created:
+    assert os.path.isdir(os.path.join(server.UPLOAD_DIR, newline_name)), \
+        "a name with a trailing newline was wrongly swept (match()+'$' vs fullmatch() regression)"
+else:
+    raise AssertionError("test setup: could not create a directory with a trailing newline "
+                          "in its name on this filesystem -- the fullmatch() regression check "
+                          "above did not run; investigate rather than silently skip")
+PY
+then
+    pass "stale upload sweep: TTL-expired+inactive removed, active/young/unrecognized kept, throttled"
+else
+    fail "stale upload sweep behaved incorrectly"
+fi
+rm -rf "$UPDIR"
+
+echo "== /scans caching: unchanged BOM reuses the cached row, changed BOM recomputes =="
+cat > "$OUT/cache1_1.0_bom.json" <<'JSON'
+{"bomFormat":"CycloneDX","metadata":{"component":{"name":"cache1","version":"1.0"}},"components":[{"name":"flask","version":"2.0","type":"library","purl":"pkg:pypi/flask@2.0"}]}
+JSON
+if SBOM_OUTPUT_DIR="$OUT" python3 - "$ROOT_DIR" <<'PY'
+import sys, os, json
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+
+bom_path = os.path.join(server.OUTPUT_DIR, "cache1_1.0_bom.json")
+
+scans1 = server.list_scans()
+row1 = next((s for s in scans1 if s["id"] == "cache1_1.0"), None)
+assert row1 is not None, "scan not listed on first call"
+assert row1["components"] == 1, "first parse: wrong component count (%r)" % (row1,)
+
+# Preserve mtime AND size, then corrupt the JSON (the cache key is (mtime_ns,
+# size), not mtime alone, so the replacement must match the original's byte
+# length or this would just be exercising cache invalidation, not a hit). A
+# correct cache must return the cached row without re-reading this file: if
+# it tried, the entry would silently vanish (add_scan swallows JSONDecodeError).
+st = os.stat(bom_path)
+mtime_ns = st.st_mtime_ns
+corrupt = ("not json " * 30)[: st.st_size].ljust(st.st_size, "x")
+with open(bom_path, "w") as f:
+    f.write(corrupt)
+assert os.path.getsize(bom_path) == st.st_size, "test setup: corrupted content changed size"
+# ns=, not the float-seconds form: st_mtime (float) loses the sub-second
+# precision st_mtime_ns has, so round-tripping through it would silently
+# produce a DIFFERENT nanosecond value than the original -- exactly the kind
+# of drift the server's cache key (st_mtime_ns, size) is deliberately precise
+# enough to no longer treat as "unchanged".
+os.utime(bom_path, ns=(mtime_ns, mtime_ns))
+
+scans2 = server.list_scans()
+row2 = next((s for s in scans2 if s["id"] == "cache1_1.0"), None)
+assert row2 is not None, "cached row vanished after the file was corrupted at the same (mtime, size)"
+assert row2 == row1, "cached row content changed even though (mtime, size) did not"
+
+# Now really change the file and bump its mtime: the cache must invalidate.
+with open(bom_path, "w") as f:
+    json.dump({
+        "bomFormat": "CycloneDX",
+        "metadata": {"component": {"name": "cache1", "version": "1.0"}},
+        "components": [
+            {"name": "flask", "version": "2.0", "type": "library", "purl": "pkg:pypi/flask@2.0"},
+            {"name": "lodash", "version": "4.0", "type": "library", "purl": "pkg:npm/lodash@4.0"},
+        ],
+    }, f)
+os.utime(bom_path, ns=(mtime_ns + 5_000_000_000, mtime_ns + 5_000_000_000))
+
+scans3 = server.list_scans()
+row3 = next((s for s in scans3 if s["id"] == "cache1_1.0"), None)
+assert row3 is not None, "scan missing after a real content change"
+assert row3["components"] == 2, "cache did not invalidate after the mtime changed (%r)" % (row3,)
+PY
+then
+    pass "/scans row cache: reused when unchanged, invalidated on a real mtime-bearing change"
+else
+    fail "/scans row caching behaved incorrectly"
+fi
+rm -f "$OUT/cache1_1.0_bom.json"
+
+echo "== /scans caching: a Trivy report written after the BOM is still picked up =="
+# A scan in progress is listed here too (list_scans walks the whole OUTPUT_DIR,
+# not just finished runs), and Trivy finishes after the BOM's own enrichment
+# steps are done writing to it. A request landing in that exact gap must not
+# freeze maxSeverity at null forever once security_summary has something to say.
+mkdir -p "$OUT/secrace_1.0"
+cat > "$OUT/secrace_1.0/secrace_1.0_bom.json" <<'JSON'
+{"bomFormat":"CycloneDX","metadata":{"component":{"name":"secrace","version":"1.0"}},"components":[{"name":"flask","version":"2.0","type":"library","purl":"pkg:pypi/flask@2.0"}]}
+JSON
+if SBOM_OUTPUT_DIR="$OUT" python3 - "$ROOT_DIR" <<'PY'
+import sys, os, json
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+
+scans1 = server.list_scans()
+row1 = next((s for s in scans1 if s["id"] == "secrace_1.0"), None)
+assert row1 is not None, "scan not listed before its security report exists"
+assert row1["maxSeverity"] is None, "maxSeverity should be null with no security report yet (%r)" % (row1,)
+
+# Write the security report. This does not touch the BOM at all (no reason
+# to: writing a sibling file has no bearing on the BOM's own mtime) -- which
+# is exactly the real ordering this test exists to cover: Trivy runs and
+# writes _security.json after the BOM's enrichment steps already finished.
+# If sec_sig were missing from the cache key, only bom_sig would still be
+# unchanged here, so this file's absence from the key is what this test
+# actually exercises -- do not re-touch bom_path's mtime as a "safety" step,
+# that would silently change bom_sig instead and make the test pass for the
+# wrong reason.
+sec = {"Results": [{"Vulnerabilities": [{"Severity": "CRITICAL", "VulnerabilityID": "CVE-2024-0001"}]}]}
+with open(os.path.join(server.OUTPUT_DIR, "secrace_1.0", "secrace_1.0_security.json"), "w") as f:
+    json.dump(sec, f)
+
+scans2 = server.list_scans()
+row2 = next((s for s in scans2 if s["id"] == "secrace_1.0"), None)
+assert row2 is not None, "scan missing after its security report was written"
+assert row2["maxSeverity"] == "CRITICAL", \
+    "cache did not pick up the security report written after the BOM (%r)" % (row2,)
+PY
+then
+    pass "/scans row cache: a security report written after the BOM is picked up, not stuck at the pre-Trivy row"
+else
+    fail "/scans row cache missed a security report written after the BOM"
+fi
+rm -rf "$OUT/secrace_1.0"
+
+echo "== /scans caching: legacy flat and run-subfolder layouts sharing an id do not clobber each other =="
+# list_scans() lists a legacy flat OUTPUT_DIR/foo_1.0_bom.json AND a run
+# subfolder OUTPUT_DIR/foo_1.0/foo_1.0_bom.json under the SAME id "foo_1.0" if
+# both exist (a pre-upgrade scan plus a fresh re-scan of the same
+# project/version). A cache keyed by run_id alone would let one call's
+# add_scan() overwrite the other's cache slot, so the wrong row is served.
+cat > "$OUT/dup_1.0_bom.json" <<'JSON'
+{"bomFormat":"CycloneDX","metadata":{"component":{"name":"dup-flat","version":"1.0"}},"components":[{"name":"a","version":"1","type":"library","purl":"pkg:pypi/a@1"}]}
+JSON
+mkdir -p "$OUT/dup_1.0"
+cat > "$OUT/dup_1.0/dup_1.0_bom.json" <<'JSON'
+{"bomFormat":"CycloneDX","metadata":{"component":{"name":"dup-folder","version":"1.0"}},"components":[{"name":"a","version":"1","type":"library","purl":"pkg:pypi/a@1"},{"name":"b","version":"1","type":"library","purl":"pkg:pypi/b@1"}]}
+JSON
+if SBOM_OUTPUT_DIR="$OUT" python3 - "$ROOT_DIR" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+
+for _ in range(2):  # twice: once cold, once with both cache slots populated
+    rows = [s for s in server.list_scans() if s["id"] == "dup_1.0"]
+    assert len(rows) == 2, "expected both the flat and the subfolder row, got %r" % (rows,)
+    projects = sorted(r["project"] for r in rows)
+    assert projects == ["dup-flat", "dup-folder"], \
+        "one layout's row was replaced by the other's (%r)" % (rows,)
+    counts = sorted(r["components"] for r in rows)
+    assert counts == [1, 2], "component counts got mixed up between the two rows (%r)" % (rows,)
+PY
+then
+    pass "/scans: flat-layout and subfolder-layout rows for the same id stay distinct across repeated calls"
+else
+    fail "flat and subfolder layouts sharing an id clobbered each other's cached row"
+fi
+rm -f "$OUT/dup_1.0_bom.json"
+rm -rf "$OUT/dup_1.0"
+
 echo "== direct/transitive scope with an empty root dependsOn (cdxgen quirk) =="
 # Regression: cdxgen sometimes emits the root component with an EMPTY dependsOn
 # and floats the real direct deps as nodes nothing depends on. sbom_summary must
@@ -2144,6 +2402,28 @@ if [ ! -f "$OUT/demo_1.0_bom.json" ] && [ ! -f "$OUT/demo_1.0_security_epss.json
 else
     fail "demo_1.0 artifacts still present after delete" "$(ls "$OUT"/demo_1.0_* 2>/dev/null)"
 fi
+
+echo "== Host/Origin: a DNS-rebound or cross-site browser request is rejected =="
+# Loopback binding alone does not stop DNS rebinding — a page at a domain that
+# resolves to 127.0.0.1 still reaches this port, with the browser sending that
+# domain as Host. Host is checked on every request; Origin additionally covers
+# a classic cross-site POST, where Host is correctly this server but Origin
+# names the page that issued the request.
+h_code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: evil.example" "$BASE/capabilities")
+[ "$h_code" = "403" ] && pass "a forged Host header is rejected (403)" || fail "forged Host returned $h_code (expected 403)"
+
+cat > "$OUT/hostcheck_1.0_bom.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6","components":[]}
+JSON
+o_code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Origin: http://evil.example" "$BASE/scan-delete?id=hostcheck_1.0")
+[ "$o_code" = "403" ] && pass "a cross-site Origin on /scan-delete is rejected (403)" || fail "cross-site Origin returned $o_code (expected 403)"
+[ -f "$OUT/hostcheck_1.0_bom.json" ] && pass "the rejected /scan-delete did not actually delete anything" || fail "scan-delete ran despite the rejected Origin"
+
+del_ok=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/scan-delete?id=hostcheck_1.0")
+[ "$del_ok" = "200" ] && pass "the same request with no Origin (an ordinary browser/curl call) still succeeds" || fail "legitimate scan-delete (no Origin) returned $del_ok (expected 200)"
+
+es_code=$(curl -s -o /dev/null -w '%{http_code}' -N -H "Origin: http://evil.example" "$BASE/scan-stream?project=hostcheck2&version=1.0&source=current-dir")
+[ "$es_code" = "403" ] && pass "a cross-site Origin on /scan-stream is rejected (403) before any scan starts" || fail "cross-site Origin on /scan-stream returned $es_code (expected 403)"
 del_gone=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/scan?id=demo_1.0")
 [ "$del_gone" = "404" ] && pass "deleted scan is gone (404)" || fail "deleted scan returned $del_gone (expected 404)"
 rm -f "$OUT"/demo_1.0_*
@@ -2174,6 +2454,13 @@ cat > "$OUT/demo_1.0/demo_1.0_security.json" <<'JSON'
 JSON
 cat > "$OUT/demo_1.0/demo_1.0_security_epss.json" <<'JSON'
 {"CVE-1":{"epss":0.91,"kev":true}}
+JSON
+# Regression: _yocto_vex.json was missing from ARTIFACT_SUFFIXES, so a real
+# deliverable (entrypoint.sh's own ARTIFACTS array already treats it as one)
+# was invisible in /scan, undeletable via /scan-delete, and absent from
+# /download-all's bundle.
+cat > "$OUT/demo_1.0/demo_1.0_yocto_vex.json" <<'JSON'
+{"judgements":{"fixed":3,"notAffected":1,"affected":0},"unresolved":2}
 JSON
 # A timestamped run: the folder name (demo_1.0_20260101-120000) differs from the
 # file prefix (demo_1.0), proving the helpers resolve artifacts by suffix glob,
@@ -2260,6 +2547,8 @@ assert d['ok'] is True and d['id'] == 'demo_1.0', d
 assert d['sbom']['components'] == 2 and d['security']['TOTAL'] == 1, d
 names = [r['name'] for r in d['results']]
 assert 'demo_1.0_security_epss.json' in names, names
+assert 'demo_1.0_yocto_vex.json' in names, names
+assert d['yoctoVex'] == {'fixed': 3, 'notAffected': 1, 'affected': 0, 'unresolved': 2}, d['yoctoVex']
 "; then
     pass "/scan?id=<run_id> re-opens a subfolder scan with its artifacts"
 else
@@ -2283,7 +2572,7 @@ curl -fsS "$BASE/download-all?id=demo_1.0" -o "$WORK/dl.zip" 2>/dev/null
 if python3 -c "
 import zipfile
 names = set(zipfile.ZipFile('$WORK/dl.zip').namelist())
-assert {'demo_1.0_bom.json','demo_1.0_security.json','demo_1.0_security_epss.json'} <= names, names
+assert {'demo_1.0_bom.json','demo_1.0_security.json','demo_1.0_security_epss.json','demo_1.0_yocto_vex.json'} <= names, names
 "; then
     pass "/download-all?id=<run_id> zips the run folder's artifacts"
 else
@@ -2305,6 +2594,13 @@ cat > "$OUT/legacy_1.0_bom.json" <<'JSON'
 JSON
 cat > "$OUT/legacy_1.0_security.json" <<'JSON'
 {"Results":[{"Vulnerabilities":[{"VulnerabilityID":"CVE-L","Severity":"MEDIUM","PkgName":"openssl","InstalledVersion":"3.0"}]}]}
+JSON
+# Same _yocto_vex.json regression as the subfolder fixture above, but here the
+# flat-layout delete path matters: it iterates ARTIFACT_SUFFIXES to remove each
+# {prefix}_* file individually (no whole-folder rmtree), so a missing suffix
+# leaves this exact kind of file orphaned on disk.
+cat > "$OUT/legacy_1.0_yocto_vex.json" <<'JSON'
+{"judgements":{"fixed":1,"notAffected":0,"affected":0},"unresolved":0}
 JSON
 if curl -fsS "$BASE/scans" 2>/dev/null | python3 -c "
 import sys, json
@@ -2332,7 +2628,7 @@ curl -fsS "$BASE/download-all?id=legacy_1.0" -o "$WORK/dl-legacy.zip" 2>/dev/nul
 if python3 -c "
 import zipfile
 names = set(zipfile.ZipFile('$WORK/dl-legacy.zip').namelist())
-assert 'legacy_1.0_bom.json' in names and 'legacy_1.0_security.json' in names, names
+assert {'legacy_1.0_bom.json','legacy_1.0_security.json','legacy_1.0_yocto_vex.json'} <= names, names
 "; then
     pass "/download-all?id= bundles a legacy flat scan"
 else
@@ -2364,7 +2660,11 @@ assert d['deleted'] == 'legacy_1.0' and d['removed'] >= 1, d
 else
     fail "/scan-delete did not delete the legacy flat scan" "$del_legacy"
 fi
-[ ! -f "$OUT/legacy_1.0_bom.json" ] && pass "/scan-delete left no legacy flat artifact behind" || fail "legacy flat artifacts still present after delete"
+if [ ! -f "$OUT/legacy_1.0_bom.json" ] && [ ! -f "$OUT/legacy_1.0_yocto_vex.json" ]; then
+    pass "/scan-delete left no legacy flat artifact behind (incl. yocto_vex)"
+else
+    fail "legacy flat artifacts still present after delete" "$(ls "$OUT"/legacy_1.0_* 2>/dev/null)"
+fi
 
 echo "== /scan-stream SSE contract (stub scanner via SBOM_RUN_SCAN) =="
 # The SSE scan stream was previously exercised only by the container-based
@@ -2605,6 +2905,81 @@ else
     fail "git clone failure contract violated" "$events"
 fi
 
+echo "== zip-upload: hostile archives are rejected before extraction (zip-slip / tar traversal / tar symlink) =="
+# safe_extract_zip() and the zip-upload tar branch (server.py) are the only
+# things standing between an uploaded archive and the filesystem outside the
+# scan's own extraction directory. Exercise all three guards end to end
+# through the real upload + scan-stream endpoints, not just the function in
+# isolation, so a regression in the wiring (not just the check itself) fails
+# a test.
+python3 - "$WORK/slip.zip" <<'ZIPSLIP'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as z:
+    z.writestr("../../../../tmp/evil-zip-slip.txt", "pwned")
+ZIPSLIP
+ztoken=$(curl -fsS -F "kind=zip" -F "file=@$WORK/slip.zip" "$BASE2/upload?kind=zip" 2>/dev/null \
+         | python3 -c "import sys,json;print(json.load(sys.stdin).get('token',''))" 2>/dev/null)
+events=$(sse_events "project=zipslip&version=1.0&source=zip-upload&token=$ztoken")
+if echo "$events" | python3 -c "
+import sys, json
+evs = json.load(sys.stdin)
+errs = [e for e in evs if e['event'] == 'error']
+assert errs and 'unsafe path in archive' in str(errs[0]['data']), evs
+assert [e for e in evs if e['event'] == 'done'][0]['data']['ok'] is False
+"; then
+    pass "zip-slip member (../../../../tmp/...) is rejected, not extracted"
+else
+    fail "zip-slip contract violated" "$events"
+fi
+[ -e /tmp/evil-zip-slip.txt ] && fail "zip-slip actually wrote outside the extraction dir" || pass "zip-slip left no file outside the extraction dir"
+rm -f /tmp/evil-zip-slip.txt
+
+python3 - "$WORK/slip.tar" <<'TARSLIP'
+import sys, tarfile, io
+with tarfile.open(sys.argv[1], "w") as t:
+    data = b"pwned"
+    info = tarfile.TarInfo(name="../evil-tar-slip.txt")
+    info.size = len(data)
+    t.addfile(info, io.BytesIO(data))
+TARSLIP
+ttoken=$(curl -fsS -F "kind=zip" -F "file=@$WORK/slip.tar" "$BASE2/upload?kind=zip" 2>/dev/null \
+         | python3 -c "import sys,json;print(json.load(sys.stdin).get('token',''))" 2>/dev/null)
+events=$(sse_events "project=tarslip&version=1.0&source=zip-upload&token=$ttoken")
+if echo "$events" | python3 -c "
+import sys, json
+evs = json.load(sys.stdin)
+errs = [e for e in evs if e['event'] == 'error']
+assert errs and 'unsafe path in archive' in str(errs[0]['data']), evs
+assert [e for e in evs if e['event'] == 'done'][0]['data']['ok'] is False
+"; then
+    pass "tar member (../evil-tar-slip.txt) is rejected, not extracted"
+else
+    fail "tar path-traversal contract violated" "$events"
+fi
+
+python3 - "$WORK/symlink.tar" <<'TARSYM'
+import sys, tarfile
+with tarfile.open(sys.argv[1], "w") as t:
+    link = tarfile.TarInfo(name="escape")
+    link.type = tarfile.SYMTYPE
+    link.linkname = "/etc"
+    t.addfile(link)
+TARSYM
+stoken=$(curl -fsS -F "kind=zip" -F "file=@$WORK/symlink.tar" "$BASE2/upload?kind=zip" 2>/dev/null \
+         | python3 -c "import sys,json;print(json.load(sys.stdin).get('token',''))" 2>/dev/null)
+events=$(sse_events "project=tarsym&version=1.0&source=zip-upload&token=$stoken")
+if echo "$events" | python3 -c "
+import sys, json
+evs = json.load(sys.stdin)
+errs = [e for e in evs if e['event'] == 'error']
+assert errs and 'unsafe link in archive' in str(errs[0]['data']), evs
+assert [e for e in evs if e['event'] == 'done'][0]['data']['ok'] is False
+"; then
+    pass "tar symlink member pointing outside the archive is rejected"
+else
+    fail "tar symlink contract violated" "$events"
+fi
+
 echo hang > "$STUB_MODE_FILE"
 rm -f "$STUB_HEARTBEAT"
 curl -sN --max-time 2 "$BASE2/scan-stream?project=cancel&version=1.0&source=current-dir" >/dev/null 2>&1 || true
@@ -2653,6 +3028,16 @@ if [ "$(sed -n 's/^MODE=//p' "$WORK/stub-env")" = "MODELFILE" ] \
 else
     fail "model upload did not route to MODELFILE" "$(cat "$WORK/stub-env")"
 fi
+# A REAL scan launch (not a test manually poking _active_upload_tokens) must
+# both claim the token while it runs and release + clean it up once the SSE
+# stream reaches its "done" event -- the finally block's own contract, now
+# reordered (rmtree before the active-tracking discard) and exercised here
+# through the actual HTTP path, not just called as a bare function.
+if [ ! -d "$OUT2/.uploads/$mtoken" ]; then
+    pass "a real scan-stream consumes and cleans up its upload token's directory"
+else
+    fail "upload token directory survived a completed real scan" "$OUT2/.uploads/$mtoken"
+fi
 # The usage scenario tailors the risk verdict for a model file exactly as it
 # does for a model named on HuggingFace. Uploaded again: a scan consumes the
 # upload, so replaying the first token would fail before reaching the env.
@@ -2665,6 +3050,45 @@ if [ "$(sed -n 's/^AI_USAGE_CONTEXT=//p' "$WORK/stub-env")" = "product" ]; then
 else
     fail "usage not forwarded for model-upload" "$(cat "$WORK/stub-env")"
 fi
+
+echo "== an upload actively feeding a RUNNING scan survives even a far-expired TTL =="
+# The earlier "cleaned up after a completed scan" check above cannot tell
+# active-tracking apart from the pre-existing finally-block rmtree -- both
+# leave an empty directory once the scan is done either way. This proves the
+# actual claim: while the scan is still running (hang mode, real heartbeat),
+# age the upload dir on disk past even this server's 24h default TTL, then
+# hit /scans (the real sweep, in the real server process) and check the
+# directory is still there specifically because _active_upload_tokens says so
+# -- not because the TTL happened not to have elapsed yet.
+echo hang > "$STUB_MODE_FILE"
+rm -f "$STUB_HEARTBEAT"
+htoken=$(curl -fsS -F "kind=model" -F "file=@$WORK/w.gguf" "$BASE2/upload?kind=model" 2>/dev/null \
+         | python3 -c "import sys,json;print(json.load(sys.stdin).get('token',''))" 2>/dev/null)
+curl -sN --max-time 10 "$BASE2/scan-stream?project=hangup&version=1.0&source=model-upload&token=$htoken" \
+    >/dev/null 2>&1 &
+hang_curl_pid=$!
+hb_seen=0
+for _ in $(seq 1 30); do
+    [ -s "$STUB_HEARTBEAT" ] && { hb_seen=1; break; }
+    sleep 0.1
+done
+if [ "$hb_seen" = 1 ]; then
+    python3 - "$OUT2/.uploads/$htoken" <<'PY'
+import os, sys, time
+os.utime(sys.argv[1], (time.time() - 30 * 3600, time.time() - 30 * 3600))
+PY
+    curl -fsS "$BASE2/scans" >/dev/null 2>&1
+    if [ -d "$OUT2/.uploads/$htoken" ]; then
+        pass "an upload token claimed by a running scan is not swept, even 30h past the TTL"
+    else
+        fail "a running scan's own upload directory was swept out from under it"
+    fi
+else
+    fail "hang-mode scan never started (no heartbeat) -- could not exercise this check"
+fi
+kill "$hang_curl_pid" 2>/dev/null
+wait "$hang_curl_pid" 2>/dev/null
+echo ok > "$STUB_MODE_FILE"
 
 echo "== package upload: extension decides the scan mode =="
 # jar and OS packages are read as a file (BINARY); a wheel carries no manifest
@@ -3483,6 +3907,70 @@ assert d == {'found': False, 'items': [], 'truncated': False}, d
 else
     fail "/package-advisories clean-package handling failed" "$body"
 fi
+
+echo "== stale upload sweep: really wired to GET /scans and POST /upload, not just callable =="
+# Every assertion above calls _sweep_stale_uploads() directly. This is the
+# black-box check that the two real HTTP endpoints actually reach it: a
+# pre-aged upload dir created before its server even starts (no need to wait
+# out the real TTL), then one real curl call. Each endpoint gets its OWN
+# freshly started server so the 5-minute sweep throttle -- a module-global
+# that starts at 0 for a brand new process -- can never make the second
+# server's first sweep call a no-op regardless of what the first one did.
+#
+# $1 = port offset, $2 = "scans" or "upload"; PASS/FAIL directly via pass/fail.
+sweep_wiring_check() {
+    local port out token srv_pid rdy curl_out curl_rc swept
+    port="$((PORT + $1))"
+    out="$WORK/out$1"
+    token="ffeeddccbbaa99887766554433221100"
+    mkdir -p "$out/.uploads/$token"
+    : > "$out/.uploads/$token/f"
+    python3 - "$out/.uploads/$token" <<'PY'
+import os, sys, time
+old = time.time() - 7200
+os.utime(sys.argv[1], (old, old))
+PY
+    SBOM_OUTPUT_DIR="$out" UI_PORT="$port" SBOM_UPLOAD_TTL_HOURS=1 \
+        python3 "$SERVER" > "$WORK/server$1.log" 2>&1 &
+    srv_pid=$!
+    disown "$srv_pid" 2>/dev/null || true
+    rdy=0
+    for _ in $(seq 1 30); do
+        if curl -fsS "http://127.0.0.1:${port}/capabilities" >/dev/null 2>&1; then rdy=1; break; fi
+        kill -0 "$srv_pid" 2>/dev/null || break
+        sleep 0.3
+    done
+    if [ "$rdy" != 1 ]; then
+        fail "wiring-test server (port offset $1) did not start" "$(cat "$WORK/server$1.log" 2>/dev/null)"
+        kill "$srv_pid" 2>/dev/null
+        return
+    fi
+    if [ "$2" = "scans" ]; then
+        curl_out=$(curl -sS -w '\nHTTP_CODE=%{http_code}' "http://127.0.0.1:${port}/scans" 2>&1)
+    else
+        curl_out=$(curl -sS -w '\nHTTP_CODE=%{http_code}' -F "kind=zip" -F "file=@$SERVER;filename=x.zip" \
+            "http://127.0.0.1:${port}/upload?kind=zip" 2>&1)
+    fi
+    curl_rc=$?
+    # Deliberately runs AFTER self._send() (so a large rmtree never delays the
+    # response), which means curl returning is not proof the sweep has run
+    # yet -- the client can see the full response body before the server
+    # thread gets past that line. Poll briefly instead of checking once.
+    swept=0
+    for _ in $(seq 1 20); do
+        [ -d "$out/.uploads/$token" ] || { swept=1; break; }
+        sleep 0.1
+    done
+    if [ "$swept" = 1 ]; then
+        pass "a real HTTP call to $2 sweeps a pre-aged stale upload"
+    else
+        fail "a real HTTP GET/POST to $2 did not sweep a real pre-aged stale upload" \
+            "curl exit=$curl_rc: $curl_out"
+    fi
+    kill "$srv_pid" 2>/dev/null
+}
+sweep_wiring_check 6 scans
+sweep_wiring_check 7 upload
 
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed"

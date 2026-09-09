@@ -16,6 +16,10 @@
 # need NO SPDX branch because everything downstream sees CycloneDX.
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=docker/lib/cdx-version.sh
+. "$SCRIPT_DIR/cdx-version.sh"
+
 INPUT="$1"
 OUTPUT="$2"
 
@@ -53,9 +57,9 @@ fi
 # jq fallback: SPDX-JSON -> minimal CycloneDX (license-preserving).
 # --------------------------------------------------------
 spdx_json_to_cdx() {
-    jq '{
+    jq --arg spec "$CDX_SPEC_VERSION" '{
       bomFormat: "CycloneDX",
-      specVersion: "1.6",
+      specVersion: $spec,
       version: 1,
       metadata: {
         timestamp: (.creationInfo.created // "1970-01-01T00:00:00Z"),
@@ -82,7 +86,7 @@ case "$FORMAT" in
         ;;
     SPDX-JSON|SPDX-TagValue|SPDX-3.0)
         echo "[convert] input is $FORMAT; converting to CycloneDX..."
-        if command -v syft >/dev/null 2>&1 && syft convert "$INPUT" -o cyclonedx-json@1.6="$OUTPUT" >/dev/null 2>&1 \
+        if command -v syft >/dev/null 2>&1 && syft convert "$INPUT" -o "cyclonedx-json@$CDX_SPEC_VERSION=$OUTPUT" >/dev/null 2>&1 \
            && [ -s "$OUTPUT" ] && jq -e '.bomFormat=="CycloneDX"' "$OUTPUT" >/dev/null 2>&1; then
             echo "[convert] syft convert succeeded."
         elif [ "$FORMAT" = "SPDX-JSON" ]; then

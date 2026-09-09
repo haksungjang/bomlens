@@ -12,7 +12,31 @@
 # no trace. run_optional_step keeps the "never abort" guarantee while logging the
 # failure and recording it on the SBOM, so the failure is observable.
 #
-# Sourced by docker/entrypoint.sh; unit-tested by tests/test-postprocess.sh.
+# Sourced by docker/entrypoint.sh and, for mark_document_status specifically,
+# by enrich-eol.sh / enrich-malicious.sh directly (they run as their own `bash
+# script.sh` process, not sourced into entrypoint.sh's shell, so each sources
+# this file itself). Unit-tested by tests/test-postprocess.sh.
+
+# Stamp a single-valued document-level status property, replacing any existing
+# entry of the same name rather than appending — so re-running the same check,
+# or re-scanning an SBOM that already carries this scanner's own stamp (a
+# supplier-submitted BomLens SBOM re-processed with --analyze), does not
+# accumulate duplicates. Distinct from mark_pipeline_warning below, whose
+# entries intentionally form a list (one failed step co-exists with another).
+mark_document_status() {
+    local file="$1" name="$2" value="$3" tmp
+    [ -n "$file" ] && [ -f "$file" ] || return 0
+    command -v jq >/dev/null 2>&1 || return 0
+    tmp="${file}.docstatus.tmp"
+    if jq --arg n "$name" --arg v "$value" \
+        '(.metadata.properties) = (((.metadata.properties // [])
+            | map(select(.name != $n))) + [{name:$n, value:$v}])' \
+        "$file" > "$tmp" 2>/dev/null; then
+        mv "$tmp" "$file"
+    else
+        rm -f "$tmp"
+    fi
+}
 
 # Record that a best-effort post-process step failed. Distinct from the
 # bomlens:sbom-tool-degraded signal (a shallow syft *generation* fallback); this
