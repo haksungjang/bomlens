@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v1.11.9] - 2026-09-09
+
+### Added
+
+- The CycloneDX `specVersion` literal, previously hardcoded in about 30 places across the scanner, is now a single source of truth, and the generated SBOM body is capped at 100 MB with a stamped warning above that — neither the CLI path nor the web UI's read paths had a size guard before.
+- The web UI's scan listing is now cached instead of re-parsing every past scan's SBOM and security report on every request, and a picked-then-abandoned upload is swept automatically after a configurable TTL (`SBOM_UPLOAD_TTL_HOURS`, default 24h).
+
+### Fixed
+
+- A zip-slip guard on archive ingestion could be bypassed by an entry name containing a space, since the column-based parser it used split on whitespace the same way its own table format did.
+- Archive extraction now also rejects member names containing characters Windows forbids in a path, closing a gap the existing zip-slip guard didn't cover.
+- The web UI's upload handler destroyed non-ASCII filenames with an ASCII-only sanitizer, affecting the common case of a Korean project archive.
+- A value in `bomlens.settings.txt` (the no-CLI Windows settings file) containing shell metacharacters could inject into the commands the launcher assembles from it; such values are now rejected.
+- `scan-sbom.bat`'s delayed-expansion mode, needed for its Git Bash discovery loop, ate a literal `!` in arguments forwarded to the underlying script.
+- The web server accepted any `Host`/`Origin` header, so DNS rebinding could reach a loopback-bound instance from a browser tab on an unrelated domain; a request now must name the server's own address.
+- The project name was interpolated unescaped into the `<title>`/meta line of generated HTML reports, and in the web UI that name is user-supplied.
+- A component carrying both a precise SPDX license id and a generic PyPI trove classifier for the same grant (e.g. `BSD-3-Clause` + "BSD License") was pulled down to Uncategorized instead of keeping its real permissive classification.
+- The EOL and known-malicious-package checks exited silently when their offline data bundle wasn't built into the image, leaving a scan that never actually checked indistinguishable from one that checked and found nothing; both are now stamped as unavailable instead.
+- Generated artifacts (the BOM, NOTICE, security report) now sync to the host incrementally as each is produced rather than only in one copy at the very end, so a container killed partway through a scan no longer loses artifacts that had already finished.
+- A DATASET-mode scan logged a spurious "no lifecycle phase defined" warning on every run.
+- The set of artifact suffixes tracked by the scanner, the web server, and the docs reference had drifted; `_yocto_vex.json` in particular was a real deliverable the web UI never surfaced (not listed, not downloadable, not deletable).
+- Corrected several guide examples (the CI/CD pipeline snippets, the server-SBOM merge workflow, the reports quick-start) that referenced output paths from before scans moved into a per-run subfolder, and filled gaps in the Korean docs — a missing artifacts-reference table section, and links that pointed to the English page instead of its Korean mirror.
+
 ## [v1.11.8] - 2026-09-07
 
 ### Added
