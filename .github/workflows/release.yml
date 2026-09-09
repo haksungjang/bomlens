@@ -46,22 +46,44 @@ env:
   PUBLISH_REPO: ${{ inputs.target_repository || github.repository }}
   PUBLISH_OWNER: ${{ inputs.owner || github.repository_owner }}
 
+# Keyed by PUBLISH_REPO (the actual release target), not by which repository
+# is running the job -- those differ for exactly the case this needs to
+# handle. A rehearsal tag push on the fork and a release-upstream.yml dispatch
+# for the same version are BOTH runs of this workflow on the fork's runners,
+# but they target different releases: the tag push's PUBLISH_REPO defaults to
+# github.repository (the fork itself), while the dispatch explicitly sets
+# target_repository to sktelecom/bomlens. Keying on ref/version alone would
+# put them in the same group and make the real release's release-gate queue
+# behind a rehearsal that publishes nowhere near it -- and that exact
+# sequence (rehearsal tag push, then release-upstream dispatch) is this
+# project's own documented release procedure. No cancel-in-progress: the rare
+# case that DOES collide (two dispatches for the same target and version)
+# queues rather than cancelling release-gate partway through signing the
+# checksum file.
+concurrency:
+  # Same expression PUBLISH_REPO uses below -- the `env` context is not
+  # available in a top-level `concurrency:` block, so it is repeated here
+  # rather than referenced.
+  group: release-${{ inputs.target_repository || github.repository }}-${{ inputs.version || github.ref_name }}
+
 jobs:
   create-release:
     name: Create Release
     runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
+    timeout-minutes: 15
     permissions:
       contents: write
 
     outputs:
       version: ${{ steps.version.outputs.version }}
       upload_url: ${{ steps.create_release.outputs.upload_url }}
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       
       - name: Extract version
         id: version
@@ -141,13 +163,16 @@ jobs:
     name: Upload Release Assets
     needs: create-release
     runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
+    timeout-minutes: 20
     permissions:
       contents: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      
+        with:
+          persist-credentials: false
+
       - name: Prepare release assets
         run: |
           mkdir -p release-assets
@@ -308,6 +333,26 @@ jobs:
     name: Release Gate (verify entry points, then publish)
     needs: [create-release, upload-assets, docs-walkthrough]
     runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
+    # verify-release.sh runs five separate polling/verification steps, each
+    # with its own worst-case ceiling: installers (VERIFY_TIMEOUT, 35 min
+    # default), the main image (another 35 min, plus however long its one
+    # final pull attempt past the deadline takes -- the deadline check only
+    # runs BETWEEN attempts, not during one), the docs walkthrough against
+    # the published image (~40-45 min observed, in between the two so the
+    # opt-in images below get more time to build first -- see its own
+    # comment), the three opt-in images checked against ONE shared deadline
+    # (VERIFY_SECONDARY_TIMEOUT, 90 min default -- sized for aibom's own
+    # ~86-minute build, the slowest of the three -- plus one final pull past
+    # that deadline too, aibom's own ~3.8 GB), and the checksum/cosign/
+    # publish steps after it (a few min, with their own small retries).
+    # Summed worst case is around 210-220 min for the script alone, plus
+    # this job's own non-script steps around it (checkout, buildx setup,
+    # installer checksums, cosign install, gh release download/sign-blob/
+    # upload/edit -- another ~5-10 min): call it 230 min. This bounds a
+    # genuine hang, not the normal slow-but-succeeding poll, so it needs
+    # real margin above that sum, not a number equal to it or below --
+    # hence 260, not 230.
+    timeout-minutes: 260
     permissions:
       contents: write
       packages: read
@@ -315,6 +360,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -391,7 +438,8 @@ jobs:
     name: Release Summary
     needs: [create-release, upload-assets, docs-walkthrough, release-gate]
     runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
-    
+    timeout-minutes: 5
+
     steps:
       - name: Generate summary
         run: |
