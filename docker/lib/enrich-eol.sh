@@ -36,6 +36,8 @@ set -e
 
 SBOM="$1"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=docker/lib/pipeline-step.sh
+. "$SCRIPT_DIR/pipeline-step.sh"
 
 if [ -z "$SBOM" ] || [ ! -f "$SBOM" ]; then
     echo "[eol] SBOM file not found: $SBOM" >&2
@@ -46,16 +48,25 @@ if ! jq empty "$SBOM" 2>/dev/null; then
     exit 0
 fi
 
+# Stamps that this check did not run at all, distinct from running it and
+# finding nothing: an empty EOL section otherwise reads as "checked, all
+# current" rather than "never checked", which is the wrong kind of clean.
+mark_unavailable() {
+    mark_document_status "$SBOM" "bomlens:eol-check-unavailable" "$1"
+}
+
 MAP_FILE="$SCRIPT_DIR/eol-purl-map.json"
 DATA_FILE="${EOL_DATA_FILE:-$SCRIPT_DIR/eol-data.json}"
 if [ ! -f "$MAP_FILE" ]; then
     echo "[eol] WARN: eol-purl-map.json not found; skipping EOL enrichment" >&2
+    mark_unavailable "eol-purl-map.json missing from the image"
     exit 0
 fi
 if [ ! -f "$DATA_FILE" ]; then
     # No bundled endoflife snapshot (e.g. an image built without the EOL data
     # layer). Skip cleanly rather than fail — EOL is best-effort.
     echo "[eol] endoflife dataset not bundled ($DATA_FILE); skipping EOL enrichment" >&2
+    mark_unavailable "endoflife.date dataset not built into this image"
     exit 0
 fi
 

@@ -37,6 +37,8 @@ set -e
 
 SBOM="$1"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=docker/lib/pipeline-step.sh
+. "$SCRIPT_DIR/pipeline-step.sh"
 
 if [ -z "$SBOM" ] || [ ! -f "$SBOM" ]; then
     echo "[malicious] SBOM file not found: $SBOM" >&2
@@ -51,7 +53,12 @@ DATA_FILE="${MALICIOUS_DATA_FILE:-$SCRIPT_DIR/malicious-index.json}"
 if [ ! -f "$DATA_FILE" ]; then
     # No bundled snapshot (e.g. an image built without the malicious-index layer).
     # Skip cleanly rather than fail — the check is best-effort, never a blocker.
+    # Stamped on the document (not a component): a reader of the SBOM must be
+    # able to tell "the index was missing" from "checked, nothing in the
+    # snapshot" — an absent index otherwise looks identical to a clean result.
     echo "[malicious] OSV malicious snapshot not bundled ($DATA_FILE); skipping check" >&2
+    mark_document_status "$SBOM" "bomlens:malicious-check-unavailable" \
+        "OSV malicious-package index not built into this image"
     exit 0
 fi
 

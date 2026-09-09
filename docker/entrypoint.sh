@@ -871,7 +871,7 @@ esac
 # that one wins (it carries licenses), so we skip this fallback. Best-effort:
 # never aborts.
 if [ ! -f "${OUT_PREFIX}_scancode.json" ] && [ -n "$SRC_TREE_DIR" ]; then
-    bash "$LIBDIR/source-file-tree.sh" "$SRC_TREE_DIR" "${OUT_PREFIX}_files.json" || true
+    run_optional_step source-file-tree bash "$LIBDIR/source-file-tree.sh" "$SRC_TREE_DIR" "${OUT_PREFIX}_files.json"
 fi
 
 # Whether the tree pinned the versions its SBOM reports. Source scans only: an
@@ -918,17 +918,36 @@ fi
 [ -f "${OUT_PREFIX}_yocto_vex.json" ] && ARTIFACTS+=("${OUT_PREFIX}_yocto_vex.json")
 
 if [ "${GENERATE_NOTICE:-false}" = "true" ]; then
-    if bash "$LIBDIR/generate-notice.sh" "$OUTPUT_FILE" "$OUT_PREFIX" "$PROJECT_NAME"; then
-        ARTIFACTS+=("${OUT_PREFIX}_NOTICE.txt" "${OUT_PREFIX}_NOTICE.html")
-        # PDF is produced only when a renderer is in the image (SBOM_PDF=true).
-        [ -f "${OUT_PREFIX}_NOTICE.pdf" ] && ARTIFACTS+=("${OUT_PREFIX}_NOTICE.pdf")
-    fi
+    run_optional_step generate-notice bash "$LIBDIR/generate-notice.sh" "$OUTPUT_FILE" "$OUT_PREFIX" "$PROJECT_NAME"
+    [ -f "${OUT_PREFIX}_NOTICE.txt" ] && ARTIFACTS+=("${OUT_PREFIX}_NOTICE.txt")
+    [ -f "${OUT_PREFIX}_NOTICE.html" ] && ARTIFACTS+=("${OUT_PREFIX}_NOTICE.html")
+    # PDF is produced only when a renderer is in the image (SBOM_PDF=true).
+    [ -f "${OUT_PREFIX}_NOTICE.pdf" ] && ARTIFACTS+=("${OUT_PREFIX}_NOTICE.pdf")
 fi
 
 if [ "${GENERATE_SECURITY:-false}" = "true" ]; then
-    if bash "$LIBDIR/scan-security.sh" "$OUTPUT_FILE" "$OUT_PREFIX" "$PROJECT_NAME"; then
-        ARTIFACTS+=("${OUT_PREFIX}_security.json" "${OUT_PREFIX}_security.md" "${OUT_PREFIX}_security.html")
-    fi
+    run_optional_step scan-security bash "$LIBDIR/scan-security.sh" "$OUTPUT_FILE" "$OUT_PREFIX" "$PROJECT_NAME"
+    [ -f "${OUT_PREFIX}_security.json" ] && ARTIFACTS+=("${OUT_PREFIX}_security.json")
+    [ -f "${OUT_PREFIX}_security.md" ] && ARTIFACTS+=("${OUT_PREFIX}_security.md")
+    [ -f "${OUT_PREFIX}_security.html" ] && ARTIFACTS+=("${OUT_PREFIX}_security.html")
+fi
+
+# Risk report (오픈소스위험분석보고서): always for ANALYZE, and for every other
+# mode when GENERATE_REPORT=true (the CLI/UI default, opt-out via --no-report).
+# It re-aggregates the notice + security artifacts already produced above.
+# Conformance artifacts exist in ANALYZE and AIBOM; the [ -f ] guard skips them
+# in other modes, and generate-risk-report.sh drops the 포맷 검증 section accordingly.
+# Placed before SPDX export/signing below: on failure, run_optional_step stamps
+# $OUTPUT_FILE, and a stamp written after cosign has already signed it would
+# invalidate that signature (the .sig would no longer verify against the
+# now-different file).
+if [ "$SCAN_MODE" = "ANALYZE" ] || [ "${GENERATE_REPORT:-false}" = "true" ]; then
+    for ext in json md html; do
+        [ -f "${OUT_PREFIX}_conformance.${ext}" ] && ARTIFACTS+=("${OUT_PREFIX}_conformance.${ext}")
+    done
+    run_optional_step generate-risk-report bash "$LIBDIR/generate-risk-report.sh" "$OUT_PREFIX" "$PROJECT_NAME"
+    [ -f "${OUT_PREFIX}_risk-report.md" ] && ARTIFACTS+=("${OUT_PREFIX}_risk-report.md")
+    [ -f "${OUT_PREFIX}_risk-report.html" ] && ARTIFACTS+=("${OUT_PREFIX}_risk-report.html")
 fi
 
 # SPDX export (opt-in): convert the FINISHED CycloneDX BOM to SPDX 2.3 JSON as an
@@ -982,20 +1001,6 @@ if [ "${SIGN_SBOM:-false}" = "true" ]; then
         fi
     else
         echo "[WARN] --sign requested but cosign/COSIGN_KEY unavailable; skipping."
-    fi
-fi
-
-# Risk report (오픈소스위험분석보고서): always for ANALYZE, and for every other
-# mode when GENERATE_REPORT=true (the CLI/UI default, opt-out via --no-report).
-# It re-aggregates the notice + security artifacts already produced above.
-# Conformance artifacts exist in ANALYZE and AIBOM; the [ -f ] guard skips them
-# in other modes, and generate-risk-report.sh drops the 포맷 검증 section accordingly.
-if [ "$SCAN_MODE" = "ANALYZE" ] || [ "${GENERATE_REPORT:-false}" = "true" ]; then
-    for ext in json md html; do
-        [ -f "${OUT_PREFIX}_conformance.${ext}" ] && ARTIFACTS+=("${OUT_PREFIX}_conformance.${ext}")
-    done
-    if bash "$LIBDIR/generate-risk-report.sh" "$OUT_PREFIX" "$PROJECT_NAME"; then
-        ARTIFACTS+=("${OUT_PREFIX}_risk-report.md" "${OUT_PREFIX}_risk-report.html")
     fi
 fi
 
