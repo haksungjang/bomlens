@@ -37,7 +37,7 @@ docker build --build-arg SBOM_SCANOSS=true -t bomlens ./docker
 ## Run it
 
 ```bash
-scan-sbom.sh --project trelay --version 26.4.0 --target ./src \
+./scripts/scan-sbom.sh --project trelay --version 26.4.0 --target ./src \
   --identify-vendored --all --generate-only
 ```
 
@@ -64,7 +64,7 @@ The default endpoint is the free OSSKB API, which is rate-limited and intended f
 ```bash
 SCANOSS_API_URL=https://your-scanoss-endpoint \
 SCANOSS_API_KEY=your-key \
-scan-sbom.sh --project trelay --version 26.4.0 --target ./src --identify-vendored --all --generate-only
+./scripts/scan-sbom.sh --project trelay --version 26.4.0 --target ./src --identify-vendored --all --generate-only
 ```
 
 In the web UI and desktop app, you can supply only the token from the screen. If you hit the free OSSKB rate limit, turn on **File-level identification (SCANOSS)** and paste a token from scanoss.com into the field that appears below the toggle, then run again. The token is used once for that scan and is never stored or logged.

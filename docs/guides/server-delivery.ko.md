@@ -27,8 +27,11 @@ description: 서버의 SBOM을 만드는 방법. OS rootfs, 애플리케이션, 
 # Docker 20.10+ 필요. 스캐너 이미지를 한 번 받습니다.
 docker pull ghcr.io/sktelecom/bomlens:latest
 
-# 스크립트 경로를 변수에 둡니다.
+# 스크립트 경로와, 모든 층의 산출물을 모을 공유 디렉터리를 변수에 둡니다
+# (각 층은 그 안에서도 자기만의 {project}_{version}/ 하위 폴더에 생깁니다 —
+# CLI 레퍼런스의 "산출물 위치" 참고).
 SBOM=/path/to/bomlens/scripts/scan-sbom.sh
+OUT=/path/to/server-sboms
 ```
 
 ## 1층 — OS 패키지
@@ -39,11 +42,13 @@ SBOM=/path/to/bomlens/scripts/scan-sbom.sh
 # rootfs 디렉터리를 대상으로:
 $SBOM --project mms-relay-os --version 6.10 \
   --target /path/to/server-rootfs \
+  --output-dir "$OUT" \
   --all --generate-only
 
 # 서버가 컨테이너 이미지로 패키징돼 있다면:
 $SBOM --project mms-relay-os --version 6.10 \
   --target mms-relay:6.10 \
+  --output-dir "$OUT" \
   --all --generate-only
 ```
 
@@ -55,7 +60,7 @@ $SBOM --project mms-relay-os --version 6.10 \
 
 ```bash
 cd /path/to/app-source
-$SBOM --project mms-relay-app --version 2.0.0 --all --generate-only
+$SBOM --project mms-relay-app --version 2.0.0 --output-dir "$OUT" --all --generate-only
 ```
 
 빌드를 먼저 하세요. 빌드나 설치 전 상태에서 스캔하면 전이 의존성이 해석되지 않습니다. 매니페스트가 없는 순수 CMake/Make 애플리케이션은 컴포넌트 목록이 희소해지므로, `--deep-license`로 자체 소스의 라이선스를 보강합니다.
@@ -69,6 +74,7 @@ $SBOM --project mms-relay-app --version 2.0.0 --all --generate-only
 ```bash
 $SBOM --project mms-relay-bin --version 2.0.0 \
   --target /path/to/delivered-binary \
+  --output-dir "$OUT" \
   --all --generate-only
 ```
 
@@ -79,7 +85,10 @@ $SBOM --project mms-relay-bin --version 2.0.0 \
 층별 SBOM과 정적 링크 SBOM을 그대로 둡니다. 합친 파일이 아니라 각 SBOM을 따로 확인해, 문제를 해당 위치에서 바로 잡습니다. 각 SBOM이 올바른 형식이고 컴포넌트가 실제 purl을 갖는지 봅니다.
 
 ```bash
-for bom in mms-relay-os_6.10_bom.json mms-relay-app_2.0.0_bom.json mms-relay-bin_2.0.0_bom.json; do
+cd "$OUT"
+for bom in mms-relay-os_6.10/mms-relay-os_6.10_bom.json \
+           mms-relay-app_2.0.0/mms-relay-app_2.0.0_bom.json \
+           mms-relay-bin_2.0.0/mms-relay-bin_2.0.0_bom.json; do
   echo "$bom: $(jq '.components | length' "$bom") 컴포넌트, \
 $(jq '[.components[] | select(.purl)] | length' "$bom") purl 보유"
 done
@@ -95,14 +104,15 @@ done
 
 <!-- runnable -->
 ```bash
+cd "$OUT"
 $SBOM --project mms-relay-server --version 1.0.0 \
-  --merge mms-relay-os_6.10_bom.json \
-          mms-relay-app_2.0.0_bom.json \
-          mms-relay-bin_2.0.0_bom.json \
+  --merge mms-relay-os_6.10/mms-relay-os_6.10_bom.json \
+          mms-relay-app_2.0.0/mms-relay-app_2.0.0_bom.json \
+          mms-relay-bin_2.0.0/mms-relay-bin_2.0.0_bom.json \
   --generate-only
 ```
 
-이 명령은 `mms-relay-server_1.0.0_bom.json`을 만들고, `metadata.component`를 서버 제품으로 설정하며, 병합된 컴포넌트 집합 위에 고지문과 위험분석보고서를 생성합니다. 각 컴포넌트에는 `bomlens:layer` 속성이 남으므로 층별로 걸러 볼 수 있습니다(`jq '.components[] | select(.properties[]?.value == "centos")'`).
+이 명령은 `mms-relay-server_1.0.0/mms-relay-server_1.0.0_bom.json`을 만들고, `metadata.component`를 서버 제품으로 설정하며, 병합된 컴포넌트 집합 위에 고지문과 위험분석보고서를 생성합니다. 각 컴포넌트에는 그 층을 스캔할 때 쓴 `--project` 값이 `bomlens:layer` 속성으로 남으므로 층별로 걸러 볼 수 있습니다(`jq '.components[] | select(.properties[]?.value == "mms-relay-os")'`).
 
 병합본은 각 층의 `dependencies` 그래프를 보존합니다(ref 기준으로 엣지를 합침). 따라서 전이 의존성 정보가 그대로 남아 적합성 검증의 전이 의존성 항목을 통과합니다. 생태계가 달라 `bom-ref` 충돌은 드물고, 같은 ref는 dependsOn 목록을 합칩니다.
 
@@ -119,4 +129,4 @@ OS층과 애플리케이션층은 웹 UI(`$SBOM --ui`)에서도 실행할 수 �
 
 ---
 
-> **관련**: [입력 시나리오](by-input.md) | [펌웨어 분석](firmware.md) | [받은 SBOM 검증](supplier-sbom.md) | [CLI 레퍼런스](../reference/cli.md)
+> **관련**: [입력 시나리오](by-input.ko.md) | [펌웨어 분석](firmware.ko.md) | [받은 SBOM 검증](supplier-sbom.ko.md) | [CLI 레퍼런스](../reference/cli.ko.md)

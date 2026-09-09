@@ -150,7 +150,9 @@ A source badge on each row says where a satisfied value comes from:
 - Auto (22 checks) — read directly from a field of the ML-BOM.
 - Inferred (15) — derived from signals in the BOM rather than a single dedicated field.
 - Declared (4) — present only when a person or a manifest supplied the value.
-- Review needed (10) — no automated source exists; a person has to confirm it. The same result ships in three formats: `{Project}_{Version}_conformance.json` for machines (CI gates, diffing), `_conformance.md` as a readable table, and `_conformance.html` as a visual summary. Each format also carries the [regulatory crosswalk](#regulatory-crosswalk); in JSON it is the `regulatoryCrosswalk` object, present only when at least one mapped check was evaluated.
+- Review needed (10) — no automated source exists; a person has to confirm it.
+
+The same result ships in three formats: `{Project}_{Version}_conformance.json` for machines (CI gates, diffing), `_conformance.md` as a readable table, and `_conformance.html` as a visual summary. Each format also carries the [regulatory crosswalk](#regulatory-crosswalk); in JSON it is the `regulatoryCrosswalk` object, present only when at least one mapped check was evaluated.
 
 The report shows how to close a gap, not only that one exists. Every advisory element with an automated source that is still absent carries a CycloneDX fragment and a link to the authoritative documentation — in the HTML, behind the "Evidence / how to fill" cell on that row; in the Markdown, gathered under "How to fill the gaps". Passing and review-only elements are left out, so a well-documented model shows none of this.
 
@@ -266,6 +268,8 @@ The verdicts are guidance, not legal advice, and every report that prints them s
 - A compound SPDX license expression (`MIT OR Apache-2.0`) is assessed as a whole rather than by resolving the choice, so a dual-licensed model can read `review` where either option alone would be `ok`. The direction is deliberately cautious — it never under-warns — but it may over-flag; the report names the exact expression so a reviewer can confirm.
 - The conformance report does not certify compliance with the EU AI Act or any other regulation. It makes documentation gaps visible so a person can close them.
 - It fetches metadata over the network, so offline use is not supported. Private and gated models need `HF_TOKEN` (see [Private and gated models](#private-and-gated-models)).
-- The model id must be `org/model`. A collection name or a full URL will not resolve. ---
+- The model id must be `org/model`. A collection name or a full URL will not resolve.
+
+---
 
 > **Related**: [Pipeline by input type](../concepts/pipeline-by-input.md) | [Web UI reference](../reference/ui.md) | [CLI reference](../reference/cli.md)

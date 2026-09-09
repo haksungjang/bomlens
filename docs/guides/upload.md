@@ -31,3 +31,20 @@ API_URL="https://<TRUSCA host>" API_KEY="tos_..." \
 ## From the web UI
 
 You can upload without the CLI. On the New scan form, turn on the **Upload** step, choose Dependency-Track or TRUSCA, and enter the server URL and access token (plus the project id for TRUSCA). The scan runs and then uploads in one step, using the same endpoints and authentication described above. The URL and token are used for that run only and are not saved. See the [Web UI reference](../reference/ui.md).
+
+## Troubleshooting
+
+| Symptom | Cause / fix |
+|---------|-------------|
+| `TRUSCA upload needs API_URL, API_KEY (Bearer token), and TRUSCA_PROJECT_ID` | One of the three is missing. All three are required for `--trusca` / `UPLOAD_TARGET=trusca`; there is no partial mode. |
+| `API_KEY and API_URL are required for upload` | Same requirement on the Dependency-Track path (the default target). |
+| `Upload to <url> did not complete (curl exit N: no response)` | The server is unreachable — wrong URL, network/proxy, or the server is down. The scan itself already finished and its artifacts were saved; fix `API_URL` and re-upload, or add `--generate-only` to skip the upload step entirely. |
+| `TRUSCA ingest failed (HTTP <code>)` | TRUSCA rejected the request. The response body printed alongside the error names the reason — a bad token, an unknown project id, or a malformed SBOM. |
+| `Upload failed (HTTP <code>)` (Dependency-Track) | Same idea — the printed response body has the server's reason. A 401 usually means a wrong or expired `API_KEY`. |
+| `Cannot reach Dependency Track at <url>` (a warning, not a failure) | A pre-flight check failed but the upload is attempted anyway, since some deployments block the version endpoint but still accept the BOM upload. If the upload itself then fails too, it is a real connectivity problem. |
+
+For TRUSCA, `HTTP 202` only means the ingest was queued; tracking it to completion happens in the TRUSCA UI (`GET /v1/scans/{id}`), not in BomLens.
+
+---
+
+> **Related**: [CLI reference](../reference/cli.md) | [Web UI reference](../reference/ui.md) | [Generate notice, security & risk reports](reports.md)

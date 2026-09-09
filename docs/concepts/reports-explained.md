@@ -77,18 +77,14 @@ Sitting on a supported release cycle is not the same as running its latest versi
 | **Unknown** | severity not assessed | check the CVE directly and classify |
 
 - If the report's `Fixed` column has a version, raising the dependency to that version or higher resolves it. This is the fastest first response.
-- CI gate example. Fail the build if there is even one Critical:
-  ```bash
-  crit=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' *_security.json)
-  [ "$crit" -gt 0 ] && { echo "${crit} Critical vulnerabilities"; exit 1; }
-  ```
+- To fail a build on a Critical finding, see the gate example in [CI/CD integration](../guides/ci-cd.md).
 - Triage — judging false positives (no real impact) and approving exceptions — and history management are beyond the scope of BomLens. Upload the SBOM to a vulnerability management system (Dependency-Track, TRUSCA, etc.) to handle it.
 
 ## The open-source risk report
 
 The open-source risk report aggregates vulnerabilities by severity with recommended response deadlines (Critical 7 days, High 30 days). It includes a license summary, and for a supplier SBOM it adds the format conformance result.
 
-The license summary also classifies components by copyleft strength, with the same rules the web UI uses. Each component in the SBOM carries a `bomlens:licenseClass` property holding one of `network-copyleft`, `strong-copyleft`, `weak-copyleft`, `permissive` or `uncategorized`, and the report shows a per-class count plus the components that drive the copyleft exposure. A license the tool does not recognize is never assumed permissive; it stays `uncategorized` for a human to review.
+The license summary also classifies components by copyleft strength, with the same rules the web UI uses. Each component in the SBOM carries a `bomlens:licenseClass` property holding one of `network-copyleft` (AGPL), `strong-copyleft` (GPL), `weak-copyleft` (LGPL, MPL, EPL, and — for a dataset or AI model — CC-BY-SA), `permissive` (MIT, Apache-2.0, BSD, and plain CC-BY) or `uncategorized`, and the report shows a per-class count plus the components that drive the copyleft exposure. A license the tool does not recognize is never assumed permissive; it stays `uncategorized` for a human to review.
 
 ## Related
 
