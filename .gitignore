@@ -29,6 +29,7 @@ bom.json
 *_source.json
 *_input.json
 *_yocto_vex.json
+*_security_yocto.json
 *_ai-profile.json
 *_ai-profile.md
 *_ai-profile.html

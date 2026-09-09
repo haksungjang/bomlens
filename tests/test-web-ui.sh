@@ -2116,6 +2116,13 @@ JSON
 cat > "$OUT/demo_1.0/demo_1.0_security_epss.json" <<'JSON'
 {"CVE-1":{"epss":0.91,"kev":true}}
 JSON
+# Regression: _yocto_vex.json was missing from ARTIFACT_SUFFIXES, so a real
+# deliverable (entrypoint.sh's own ARTIFACTS array already treats it as one)
+# was invisible in /scan, undeletable via /scan-delete, and absent from
+# /download-all's bundle.
+cat > "$OUT/demo_1.0/demo_1.0_yocto_vex.json" <<'JSON'
+{"judgements":{"fixed":3,"notAffected":1,"affected":0},"unresolved":2}
+JSON
 # A timestamped run: the folder name (demo_1.0_20260101-120000) differs from the
 # file prefix (demo_1.0), proving the helpers resolve artifacts by suffix glob,
 # not by deriving the filename from the folder name.
@@ -2201,6 +2208,8 @@ assert d['ok'] is True and d['id'] == 'demo_1.0', d
 assert d['sbom']['components'] == 2 and d['security']['TOTAL'] == 1, d
 names = [r['name'] for r in d['results']]
 assert 'demo_1.0_security_epss.json' in names, names
+assert 'demo_1.0_yocto_vex.json' in names, names
+assert d['yoctoVex'] == {'fixed': 3, 'notAffected': 1, 'affected': 0, 'unresolved': 2}, d['yoctoVex']
 "; then
     pass "/scan?id=<run_id> re-opens a subfolder scan with its artifacts"
 else
@@ -2224,7 +2233,7 @@ curl -fsS "$BASE/download-all?id=demo_1.0" -o "$WORK/dl.zip" 2>/dev/null
 if python3 -c "
 import zipfile
 names = set(zipfile.ZipFile('$WORK/dl.zip').namelist())
-assert {'demo_1.0_bom.json','demo_1.0_security.json','demo_1.0_security_epss.json'} <= names, names
+assert {'demo_1.0_bom.json','demo_1.0_security.json','demo_1.0_security_epss.json','demo_1.0_yocto_vex.json'} <= names, names
 "; then
     pass "/download-all?id=<run_id> zips the run folder's artifacts"
 else
@@ -2246,6 +2255,13 @@ cat > "$OUT/legacy_1.0_bom.json" <<'JSON'
 JSON
 cat > "$OUT/legacy_1.0_security.json" <<'JSON'
 {"Results":[{"Vulnerabilities":[{"VulnerabilityID":"CVE-L","Severity":"MEDIUM","PkgName":"openssl","InstalledVersion":"3.0"}]}]}
+JSON
+# Same _yocto_vex.json regression as the subfolder fixture above, but here the
+# flat-layout delete path matters: it iterates ARTIFACT_SUFFIXES to remove each
+# {prefix}_* file individually (no whole-folder rmtree), so a missing suffix
+# leaves this exact kind of file orphaned on disk.
+cat > "$OUT/legacy_1.0_yocto_vex.json" <<'JSON'
+{"judgements":{"fixed":1,"notAffected":0,"affected":0},"unresolved":0}
 JSON
 if curl -fsS "$BASE/scans" 2>/dev/null | python3 -c "
 import sys, json
@@ -2273,7 +2289,7 @@ curl -fsS "$BASE/download-all?id=legacy_1.0" -o "$WORK/dl-legacy.zip" 2>/dev/nul
 if python3 -c "
 import zipfile
 names = set(zipfile.ZipFile('$WORK/dl-legacy.zip').namelist())
-assert 'legacy_1.0_bom.json' in names and 'legacy_1.0_security.json' in names, names
+assert {'legacy_1.0_bom.json','legacy_1.0_security.json','legacy_1.0_yocto_vex.json'} <= names, names
 "; then
     pass "/download-all?id= bundles a legacy flat scan"
 else
@@ -2305,7 +2321,11 @@ assert d['deleted'] == 'legacy_1.0' and d['removed'] >= 1, d
 else
     fail "/scan-delete did not delete the legacy flat scan" "$del_legacy"
 fi
-[ ! -f "$OUT/legacy_1.0_bom.json" ] && pass "/scan-delete left no legacy flat artifact behind" || fail "legacy flat artifacts still present after delete"
+if [ ! -f "$OUT/legacy_1.0_bom.json" ] && [ ! -f "$OUT/legacy_1.0_yocto_vex.json" ]; then
+    pass "/scan-delete left no legacy flat artifact behind (incl. yocto_vex)"
+else
+    fail "legacy flat artifacts still present after delete" "$(ls "$OUT"/legacy_1.0_* 2>/dev/null)"
+fi
 
 echo "== /scan-stream SSE contract (stub scanner via SBOM_RUN_SCAN) =="
 # The SSE scan stream was previously exercised only by the container-based
