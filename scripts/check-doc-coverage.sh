@@ -36,22 +36,39 @@ doc_path() {
   esac
 }
 
+# Korean mirror of doc_path(). README has none (no README.ko.md); every other
+# key's .md has a same-named .ko.md sibling (mkdocs_static_i18n's suffix
+# convention), so the ko path is derived rather than duplicated here.
+doc_path_ko() {
+  [ "$1" = "readme" ] && { echo ""; return; }
+  en="$(doc_path "$1")"
+  [ -n "$en" ] && echo "${en%.md}.ko.md"
+}
+
 # Modes that are internal plumbing, not a user-facing input form.
 INTERNAL="MERGE POSTPROCESS UI"
 
 # Coverage manifest — one line per user-facing mode:
-#   MODE :: grep -iE pattern :: comma-separated docs that must mention it
+#   MODE :: en pattern :: ko pattern :: comma-separated docs that must mention it
 # When you add a mode to docker/entrypoint.sh, add a line here too.
+#
+# The ko pattern is NOT the en pattern reused: an English phrase like "docker
+# image" or "binary" is translated away in prose ("Docker 이미지", "바이너리"),
+# so checking for the literal English pattern in a .ko.md file finds nothing
+# and the check would always fail. Each ko pattern below was chosen by reading
+# what the Korean docs actually say for that mode; a bare CLI flag (--git,
+# --firmware, ...) and a few loanwords/proper nouns (rootfs, ANALYZE, Figshare)
+# survive translation unchanged and anchor both patterns.
 COVERAGE="
-SOURCE :: --git|GitHub URL|source folder :: by-input,ui,cli,architecture,readme
-IMAGE :: docker image|docker\.sock :: ui,cli,architecture
-BINARY :: binary :: cli,architecture
-ROOTFS :: rootfs|directory path :: cli,architecture
-FIRMWARE :: --firmware|firmware :: by-input,ui,cli,architecture,readme,pipeline-by-input
-ANALYZE :: --analyze|ANALYZE :: by-input,ui,cli,architecture,readme,pipeline-by-input
-AIBOM :: --model|AI model :: by-input,ui,cli,architecture,readme,pipeline-by-input
-MODELFILE :: --model-file|model file :: by-input,ui,cli,architecture,readme,pipeline-by-input
-DATASET :: Figshare|figshare :: by-input,ui,cli,architecture,readme,pipeline-by-input
+SOURCE :: --git|GitHub URL|source folder :: --git|GitHub URL :: by-input,ui,cli,architecture,readme
+IMAGE :: docker image|docker\.sock :: Docker 이미지|docker\.sock :: ui,cli,architecture
+BINARY :: binary :: 바이너리 :: cli,architecture
+ROOTFS :: rootfs|directory path :: rootfs|디렉터리 경로 :: cli,architecture
+FIRMWARE :: --firmware|firmware :: --firmware|펌웨어 :: by-input,ui,cli,architecture,readme,pipeline-by-input
+ANALYZE :: --analyze|ANALYZE :: --analyze|ANALYZE :: by-input,ui,cli,architecture,readme,pipeline-by-input
+AIBOM :: --model|AI model :: --model|AI 모델 :: by-input,ui,cli,architecture,readme,pipeline-by-input
+MODELFILE :: --model-file|model file :: --model-file|모델 파일 :: by-input,ui,cli,architecture,readme,pipeline-by-input
+DATASET :: Figshare|figshare :: Figshare|figshare :: by-input,ui,cli,architecture,readme,pipeline-by-input
 "
 
 # 1) Pull the authoritative mode list from entrypoint.sh.
@@ -70,12 +87,14 @@ for m in $modes; do
   fi
 done
 
-# 3) Each manifest pattern must appear in each listed doc.
+# 3) Each manifest pattern must appear in each listed doc, English and (where
+#    a Korean mirror exists) Korean.
 while IFS= read -r line; do
   [ -z "$line" ] && continue
   mode=$(printf '%s' "$line" | awk -F ' :: ' '{print $1}')
   pat=$(printf '%s' "$line" | awk -F ' :: ' '{print $2}')
-  docs=$(printf '%s' "$line" | awk -F ' :: ' '{print $3}')
+  pat_ko=$(printf '%s' "$line" | awk -F ' :: ' '{print $3}')
+  docs=$(printf '%s' "$line" | awk -F ' :: ' '{print $4}')
   oldIFS="$IFS"; IFS=','
   for d in $docs; do
     rel="$(doc_path "$d")"
@@ -84,6 +103,16 @@ while IFS= read -r line; do
     if ! grep -qiE -e "$pat" "$f"; then
       echo "FAIL: mode '$mode' (pattern: $pat) is missing in $rel"
       fail=1
+    fi
+
+    rel_ko="$(doc_path_ko "$d")"
+    if [ -n "$rel_ko" ]; then
+      f_ko="$ROOT/$rel_ko"
+      if [ ! -f "$f_ko" ]; then echo "FAIL: doc key '$d' maps to a missing Korean mirror ($rel_ko)"; fail=1; continue; fi
+      if ! grep -qiE -e "$pat_ko" "$f_ko"; then
+        echo "FAIL: mode '$mode' (pattern: $pat_ko) is missing in $rel_ko"
+        fail=1
+      fi
     fi
   done
   IFS="$oldIFS"

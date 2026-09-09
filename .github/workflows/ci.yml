@@ -505,16 +505,7 @@ jobs:
             echo "⚠️ docs/ directory not found - skipping doc checks"
             exit 0
           fi
-          
-          # User documentation (if exists)
-          for doc in getting-started.md usage-guide.md examples-guide.md; do
-            if [ -f "docs/$doc" ]; then
-              echo "✓ docs/$doc found"
-            else
-              echo "⚠️ docs/$doc not found (optional)"
-            fi
-          done
-          
+
           # Docker documentation
           if [ -f docker/README.md ]; then
             echo "✓ docker/README.md found"
