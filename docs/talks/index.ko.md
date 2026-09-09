@@ -8,36 +8,24 @@ BomLens를 발표한 자리와 슬라이드를 모읍니다. 행사에 BomLens �
 
 ## OSPOlogy Asia 2026 — 도쿄
 
-BomLens: An Open-Source, One-Click SBOM Tool for Supply Chain Security and Regulatory Compliance
-
 - **행사:** [OSPOlogy Asia 2026 (Linux Foundation)](https://community.linuxfoundation.org/events/details/lfhq-ospology-asia-presents-ospology-asia/)
 - **일자:** 2026년 7월 27일
 - **장소:** 일본 도쿄
 - **형식:** 30분 라이브 데모
 
-폴더, Git 저장소, 받은 SBOM, AI 모델을 SBOM으로 만들고 취약점과 라이선스, 규제 적합성까지 함께 검증하는 과정을 라이브로 보여 줍니다.
-
 [슬라이드 보기](ospology-asia-2026-tokyo/slides.html){ .md-button .md-button--primary target=_blank }
 
 ## AI 시대 오픈소스 점검 교육
 
-BomLens로 SBOM을 만들고 결과를 읽는 방법을 처음부터 끝까지 다루는 교육입니다.
-
 - **형식:** 온라인 교육
 - **일자:** 2026년 9월 7일
-
-실제 Python 프로젝트를 SBOM으로 만들고 라이선스·취약점 결과를 읽는 과정, Cellpose 사례로 보는 AI 모델·데이터셋 확인까지 다룹니다.
 
 [슬라이드 보기](oss-check-training-2026-09/slides.ko.html){ .md-button .md-button--primary target=_blank }
 
 ## 오픈소스 공급망 보안 도구 — OpenChain Korea Work Group
 
-BomLens, Trusted OSS, TRUSCA: 공급사 쪽에서 쓸 수 있는 SBOM을 만드는 방법과, AI 코딩 시대의 거버넌스를 받는 쪽에서 집행하는 방법을 다룹니다.
-
 - **행사:** [OpenChain Korea Work Group 31차 정기모임](https://openchain-project.github.io/OpenChain-KWG/)
 - **일자:** 2026년 9월 8일
 - **형식:** 25분 세션
-
-BomLens는 쓸 수 있는 SBOM을 만들고, Trusted OSS와 TRUSCA는 정책을 실제로 집행합니다.
 
 [슬라이드 보기](kwg-31-supply-chain-tools/slides.ko.html){ .md-button .md-button--primary target=_blank }
