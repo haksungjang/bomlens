@@ -977,8 +977,15 @@ ingest_archive() {
     case "$lower" in
         *.zip)
             # zip-slip guard: reject absolute or parent-traversal entries before extracting.
+            # `-Z1` (zipinfo, names only) not `-l` (a fixed-width listing table):
+            # a filename containing a space breaks `-l`'s "name is column 4"
+            # assumption apart, since awk splits on whitespace too — a crafted
+            # entry like "evil name/../../../etc/passwd" then extracts $4 as
+            # just "evil", silently dropping the traversal from what gets
+            # checked. Confirmed empirically: that exact entry passed this
+            # guard right through under `-l`+awk.
             if command -v unzip >/dev/null 2>&1; then
-                if unzip -l "$arc" 2>/dev/null | awk '{print $4}' | grep -qE '(^/|(^|/)\.\.(/|$))'; then
+                if unzip -Z1 "$arc" 2>/dev/null | grep -qE '(^/|(^|/)\.\.(/|$))'; then
                     echo "[ERROR] unsafe path in archive (zip-slip)"; exit 1
                 fi
                 if ! unzip -q -d "$tmp" -- "$arc"; then

@@ -99,6 +99,15 @@ REM Hand Git Bash a forward-slash script path; it takes those most reliably.
 set "SCRIPT_SH=%~dp0scan-sbom.sh"
 set "SCRIPT_SH=%SCRIPT_SH:\=/%"
 
+REM Delayed expansion (enabled above, for the Git Bash discovery loop) scans
+REM this line's fully-%*-expanded text for "!...!" pairs. A lone "!" in a
+REM user-supplied value (e.g. --project "Weird!Name") has no closing "!" on
+REM the line, so cmd silently DROPS it rather than erroring -- confirmed:
+REM the project name that reaches scan-sbom.sh came out as "WeirdName", not
+REM "Weird!Name". %BASH_EXE%/%SCRIPT_SH% only need plain (non-delayed)
+REM expansion, so drop into a scope with delayed expansion off just for the
+REM forwarding line, where %* is safe to pass through unmangled.
+setlocal DisableDelayedExpansion
 "%BASH_EXE%" "%SCRIPT_SH%" %*
 set "RC=%ERRORLEVEL%"
 

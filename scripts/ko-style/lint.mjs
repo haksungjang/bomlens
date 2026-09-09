@@ -43,6 +43,8 @@ const SCOPE = [
   "docs",
   "README.md",
   "CONTRIBUTING.ko.md",
+  "SECURITY.ko.md",
+  "CODE_OF_CONDUCT.ko.md",
   "examples",
   "docker",
   "electron",
