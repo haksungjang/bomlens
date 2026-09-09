@@ -25,6 +25,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HELP_SRC="$ROOT/scripts/scan-sbom.sh"
 DOC="$ROOT/docs/reference/cli.md"
+DOC_KO="$ROOT/docs/reference/cli.ko.md"
 bt='`'
 fail=0
 
@@ -42,13 +43,21 @@ flags="$(awk '
 
 # 2) Each must have its own row in the options table ("| `--flag ...` | ..."),
 #    not merely a backticked mention in some other row's description — a
-#    passing mention is exactly how a missing flag hides.
+#    passing mention is exactly how a missing flag hides. Checked against both
+#    the English table and its Korean mirror: the flag itself is a code
+#    literal, never translated, so the same row-pattern applies to both.
 while IFS= read -r f; do
     [ -z "$f" ] && continue
     if ! grep -qE "^\| ${bt}${f}[ ${bt}]" "$DOC"; then
         echo "FAIL: CLI flag '$f' is advertised in scan-sbom.sh --help but has no row"
         echo "      in the options table of docs/reference/cli.md."
-        echo "      Add a ${bt}${f}${bt} row to the table (and its .ko.md mirror)."
+        echo "      Add a ${bt}${f}${bt} row to the table."
+        fail=1
+    fi
+    if ! grep -qE "^\| ${bt}${f}[ ${bt}]" "$DOC_KO"; then
+        echo "FAIL: CLI flag '$f' is advertised in scan-sbom.sh --help but has no row"
+        echo "      in the options table of docs/reference/cli.ko.md."
+        echo "      Add a ${bt}${f}${bt} row to the table."
         fail=1
     fi
 done <<EOF
