@@ -6,37 +6,34 @@ import * as path from "node:path";
 import { test, type Page } from "@playwright/test";
 
 /**
- * Demo recording for docs/images/web-ui-demo.gif (run on demand, excluded from
- * the normal `test:ui` run via the @demo tag). Replaces the old hand-recorded
- * GIF with a reproducible walkthrough over a stubbed backend: New scan form →
- * run → Overview → Components (filter) → Vulnerabilities (expand) →
- * Dependencies (graph, then tree) → Licenses.
+ * Hero screenshot for docs/images/web-ui-demo.png (run on demand, excluded
+ * from the normal `test:ui` run via the @demo tag). Runs the New scan form
+ * over a stubbed backend, then captures the Overview screen — counts,
+ * needs-attention, severity distribution, license classification and the
+ * highest-risk components all in one view.
  *
- * Recorded at 2x device pixel ratio (viewport stays 900x563 so the UI layout
- * matches the guide screenshots; the video and GIF are exported at 1800x1126)
- * so the GIF stays sharp on high-DPI displays when README/docs show it near
- * its logical 900px width — the same reasoning as the 2x diagram PNGs in
- * docs/stylesheets/extra.css.
+ * A static PNG rather than a recorded video/GIF: Playwright's video capture
+ * (CDP screencast) does not honor deviceScaleFactor — a 2x deviceScaleFactor
+ * with an enlarged video.size left the recorded frame only partially painted
+ * (the rest blank), and doubling the viewport itself instead changed the
+ * page's own layout (more whitespace at the wider width). page.screenshot(),
+ * used here, does honor deviceScaleFactor directly, so the original 900x563
+ * layout is captured at full 2x pixel density with no such tradeoff.
  *
- * Regenerate (same pinned container as the guide screenshots, then convert):
+ * Regenerate (same pinned container as the guide screenshots):
  *   docker run --rm -v "$PWD":/repo -v /repo/docker/web/frontend/node_modules \
  *     -w /repo/docker/web/frontend mcr.microsoft.com/playwright:v1.61.1-jammy \
  *     bash -lc "npm ci --silent && npx playwright test --grep @demo"
- *   ffmpeg -y -i docker/web/frontend/test-results/web-ui-demo.webm \
- *     -vf "fps=8,scale=1800:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256[p];[s1][p]paletteuse=dither=bayer:bayer_scale=3" \
- *     docs/images/web-ui-demo.gif   # from the repo root
  */
 
 // Playwright runs from docker/web/frontend, so cwd-relative is stable.
-const OUT_WEBM = path.join(process.cwd(), "test-results", "web-ui-demo.webm");
+const OUT_PNG = path.join(process.cwd(), "..", "..", "..", "docs", "images", "web-ui-demo.png");
 const W = 900;
 const H = 563;
-const SCALE = 2;
 
 test.use({
   viewport: { width: W, height: H },
-  deviceScaleFactor: SCALE,
-  video: { mode: "on", size: { width: W * SCALE, height: H * SCALE } },
+  deviceScaleFactor: 2,
 });
 
 // ---------------------------------------------------------------------------
@@ -144,11 +141,11 @@ async function stub(page: Page) {
 
 const beat = (page: Page, ms: number) => page.waitForTimeout(ms);
 
-test("record the walkthrough video @demo", async ({ page }) => {
-  test.setTimeout(120_000);
+test("capture the Overview hero screenshot @demo", async ({ page }) => {
+  test.setTimeout(60_000);
   await stub(page);
 
-  // 1. New scan: type the project identity, then run.
+  // New scan: type the project identity, then run.
   await page.goto("/#/new");
   await beat(page, 1200);
   await page.locator("#project").pressSequentially("demo-app", { delay: 70 });
@@ -156,41 +153,15 @@ test("record the walkthrough video @demo", async ({ page }) => {
   await beat(page, 700);
   await page.getByTestId("run-scan").click();
 
-  // 2. Overview: counts, needs-attention, severity/license axes.
+  // Overview: counts, needs-attention, severity/license axes, highest-risk table.
   await page.getByRole("link", { name: /^Overview/ }).waitFor();
-  await beat(page, 3000);
+  await beat(page, 1200);
+  // The main content area scrolls independently of the document (window.scrollTo
+  // has no effect on it), and it starts already scrolled past the page heading
+  // and the count cards' numbers. Scroll the heading itself into view instead.
+  await page.getByRole("heading", { name: "Overview" }).scrollIntoViewIfNeeded();
+  await beat(page, 300);
 
-  // 3. Components: the table, then narrow to rows with vulnerabilities via the Filters menu.
-  await page.getByRole("link", { name: /^Components/ }).click();
-  await beat(page, 1800);
-  await page.getByRole("button", { name: "Filters" }).click();
-  await beat(page, 500);
-  await page.getByRole("checkbox", { name: "Has vulnerabilities" }).click();
-  await beat(page, 400);
-  await page.keyboard.press("Escape");
-  await beat(page, 1600);
-
-  // 4. Vulnerabilities: expand the critical CVE in place.
-  await page.getByRole("link", { name: /^Vulnerabilities/ }).click();
-  await beat(page, 1500);
-  await page.getByText("CVE-2024-0001").first().click();
-  await beat(page, 2000);
-
-  // 5. Dependencies: the graph, then the tree.
-  await page.getByRole("link", { name: /^Dependencies/ }).click();
-  await beat(page, 2200);
-  await page.getByRole("button", { name: "Tree", exact: true }).click();
-  await beat(page, 1800);
-
-  // 6. Licenses: classification axis and distribution.
-  await page.getByRole("link", { name: /^Licenses/ }).click();
-  await beat(page, 2600);
-
-  // Finalize the video and park it at a stable path for the ffmpeg step.
-  await page.close();
-  const video = page.video();
-  if (video) {
-    fs.mkdirSync(path.dirname(OUT_WEBM), { recursive: true });
-    fs.copyFileSync(await video.path(), OUT_WEBM);
-  }
+  fs.mkdirSync(path.dirname(OUT_PNG), { recursive: true });
+  await page.screenshot({ path: OUT_PNG });
 });

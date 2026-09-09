@@ -19,7 +19,7 @@ Want to see what a result looks like before installing anything? The [live demo]
 
 Prefer no command line? Download the installer and double-click it. A Docker engine is required; the free [Rancher Desktop](https://rancherdesktop.io/) works well on Windows. A step-by-step walkthrough is in the [no-CLI quick start](start/no-cli.md).
 
-![BomLens web UI showing a scan result: the Overview with counts and a severity/license summary, the Components table with filters, the Vulnerabilities list, the Dependencies as a graph and tree, and the Licenses section](images/web-ui-demo.gif){ .home-shot }
+![BomLens web UI Overview screen for a finished scan: component/vulnerability/dependency/artifact counts, a needs-attention banner, and the severity and license classification distributions](images/web-ui-demo.png){ .home-shot }
 
 ## Where to go next
 

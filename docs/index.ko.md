@@ -19,7 +19,7 @@ Windows 설치 파일은 Docker 엔진이 미리 켜져 있어야 동작합니�
 
 CLI가 부담스럽다면 설치 파일을 받아 더블클릭하세요. 단계별 안내는 [비개발자 빠른 시작](start/no-cli.ko.md)에 있습니다. Docker 엔진이 필요하며, Windows에서는 무료 [Rancher Desktop](https://rancherdesktop.io/)이 잘 맞습니다.
 
-![BomLens 웹 UI의 스캔 결과 — 수치와 심각도·라이선스 요약이 있는 개요, 필터가 있는 컴포넌트 표, 취약점 목록, 그래프와 트리로 보는 의존성, 라이선스 섹션](images/web-ui-demo.gif){ .home-shot }
+![완료된 스캔의 BomLens 웹 UI 개요 화면: 컴포넌트·취약점·의존성·산출물 개수, 확인 필요 배너, 심각도와 라이선스 분류 분포](images/web-ui-demo.png){ .home-shot }
 
 ## 무엇부터 볼까
 
