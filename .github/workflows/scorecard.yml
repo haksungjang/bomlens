@@ -7,8 +7,14 @@ name: Scorecard supply-chain security
 # On demand only. Every other workflow here runs on self-hosted runners, and
 # this one cannot follow: the results API verifies the workflow file itself and
 # accepts a single `ubuntu-latest`-class runner label with no plain `run:`
-# steps, so a self-hosted label makes it reject the upload. Restore the
-# automatic triggers below once GitHub-hosted runners are in use again:
+# steps, so a self-hosted label makes it reject the upload.
+#
+# This job already satisfies both conditions (runs-on: ubuntu-latest, every
+# step is `uses:`), so on paper the automatic triggers below could be restored
+# right now. Left as workflow_dispatch-only pending a manual dispatch to
+# confirm the publish actually succeeds end to end before turning on a
+# recurring schedule nobody is watching. Restore the automatic triggers below
+# once that's confirmed:
 #
 #   branch_protection_rule:
 #   schedule:
@@ -18,12 +24,17 @@ name: Scorecard supply-chain security
 on:
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 permissions: read-all
 
 jobs:
   analysis:
     name: Scorecard analysis
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       security-events: write
       id-token: write   # publish results to the OpenSSF API

@@ -2321,6 +2321,28 @@ if [ ! -f "$OUT/demo_1.0_bom.json" ] && [ ! -f "$OUT/demo_1.0_security_epss.json
 else
     fail "demo_1.0 artifacts still present after delete" "$(ls "$OUT"/demo_1.0_* 2>/dev/null)"
 fi
+
+echo "== Host/Origin: a DNS-rebound or cross-site browser request is rejected =="
+# Loopback binding alone does not stop DNS rebinding — a page at a domain that
+# resolves to 127.0.0.1 still reaches this port, with the browser sending that
+# domain as Host. Host is checked on every request; Origin additionally covers
+# a classic cross-site POST, where Host is correctly this server but Origin
+# names the page that issued the request.
+h_code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: evil.example" "$BASE/capabilities")
+[ "$h_code" = "403" ] && pass "a forged Host header is rejected (403)" || fail "forged Host returned $h_code (expected 403)"
+
+cat > "$OUT/hostcheck_1.0_bom.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6","components":[]}
+JSON
+o_code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Origin: http://evil.example" "$BASE/scan-delete?id=hostcheck_1.0")
+[ "$o_code" = "403" ] && pass "a cross-site Origin on /scan-delete is rejected (403)" || fail "cross-site Origin returned $o_code (expected 403)"
+[ -f "$OUT/hostcheck_1.0_bom.json" ] && pass "the rejected /scan-delete did not actually delete anything" || fail "scan-delete ran despite the rejected Origin"
+
+del_ok=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/scan-delete?id=hostcheck_1.0")
+[ "$del_ok" = "200" ] && pass "the same request with no Origin (an ordinary browser/curl call) still succeeds" || fail "legitimate scan-delete (no Origin) returned $del_ok (expected 200)"
+
+es_code=$(curl -s -o /dev/null -w '%{http_code}' -N -H "Origin: http://evil.example" "$BASE/scan-stream?project=hostcheck2&version=1.0&source=current-dir")
+[ "$es_code" = "403" ] && pass "a cross-site Origin on /scan-stream is rejected (403) before any scan starts" || fail "cross-site Origin on /scan-stream returned $es_code (expected 403)"
 del_gone=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/scan?id=demo_1.0")
 [ "$del_gone" = "404" ] && pass "deleted scan is gone (404)" || fail "deleted scan returned $del_gone (expected 404)"
 rm -f "$OUT"/demo_1.0_*
@@ -2800,6 +2822,81 @@ assert [e for e in evs if e['event'] == 'done'][0]['data']['ok'] is False
     pass "failed git clone reports error + done ok:false"
 else
     fail "git clone failure contract violated" "$events"
+fi
+
+echo "== zip-upload: hostile archives are rejected before extraction (zip-slip / tar traversal / tar symlink) =="
+# safe_extract_zip() and the zip-upload tar branch (server.py) are the only
+# things standing between an uploaded archive and the filesystem outside the
+# scan's own extraction directory. Exercise all three guards end to end
+# through the real upload + scan-stream endpoints, not just the function in
+# isolation, so a regression in the wiring (not just the check itself) fails
+# a test.
+python3 - "$WORK/slip.zip" <<'ZIPSLIP'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as z:
+    z.writestr("../../../../tmp/evil-zip-slip.txt", "pwned")
+ZIPSLIP
+ztoken=$(curl -fsS -F "kind=zip" -F "file=@$WORK/slip.zip" "$BASE2/upload?kind=zip" 2>/dev/null \
+         | python3 -c "import sys,json;print(json.load(sys.stdin).get('token',''))" 2>/dev/null)
+events=$(sse_events "project=zipslip&version=1.0&source=zip-upload&token=$ztoken")
+if echo "$events" | python3 -c "
+import sys, json
+evs = json.load(sys.stdin)
+errs = [e for e in evs if e['event'] == 'error']
+assert errs and 'unsafe path in archive' in str(errs[0]['data']), evs
+assert [e for e in evs if e['event'] == 'done'][0]['data']['ok'] is False
+"; then
+    pass "zip-slip member (../../../../tmp/...) is rejected, not extracted"
+else
+    fail "zip-slip contract violated" "$events"
+fi
+[ -e /tmp/evil-zip-slip.txt ] && fail "zip-slip actually wrote outside the extraction dir" || pass "zip-slip left no file outside the extraction dir"
+rm -f /tmp/evil-zip-slip.txt
+
+python3 - "$WORK/slip.tar" <<'TARSLIP'
+import sys, tarfile, io
+with tarfile.open(sys.argv[1], "w") as t:
+    data = b"pwned"
+    info = tarfile.TarInfo(name="../evil-tar-slip.txt")
+    info.size = len(data)
+    t.addfile(info, io.BytesIO(data))
+TARSLIP
+ttoken=$(curl -fsS -F "kind=zip" -F "file=@$WORK/slip.tar" "$BASE2/upload?kind=zip" 2>/dev/null \
+         | python3 -c "import sys,json;print(json.load(sys.stdin).get('token',''))" 2>/dev/null)
+events=$(sse_events "project=tarslip&version=1.0&source=zip-upload&token=$ttoken")
+if echo "$events" | python3 -c "
+import sys, json
+evs = json.load(sys.stdin)
+errs = [e for e in evs if e['event'] == 'error']
+assert errs and 'unsafe path in archive' in str(errs[0]['data']), evs
+assert [e for e in evs if e['event'] == 'done'][0]['data']['ok'] is False
+"; then
+    pass "tar member (../evil-tar-slip.txt) is rejected, not extracted"
+else
+    fail "tar path-traversal contract violated" "$events"
+fi
+
+python3 - "$WORK/symlink.tar" <<'TARSYM'
+import sys, tarfile
+with tarfile.open(sys.argv[1], "w") as t:
+    link = tarfile.TarInfo(name="escape")
+    link.type = tarfile.SYMTYPE
+    link.linkname = "/etc"
+    t.addfile(link)
+TARSYM
+stoken=$(curl -fsS -F "kind=zip" -F "file=@$WORK/symlink.tar" "$BASE2/upload?kind=zip" 2>/dev/null \
+         | python3 -c "import sys,json;print(json.load(sys.stdin).get('token',''))" 2>/dev/null)
+events=$(sse_events "project=tarsym&version=1.0&source=zip-upload&token=$stoken")
+if echo "$events" | python3 -c "
+import sys, json
+evs = json.load(sys.stdin)
+errs = [e for e in evs if e['event'] == 'error']
+assert errs and 'unsafe link in archive' in str(errs[0]['data']), evs
+assert [e for e in evs if e['event'] == 'done'][0]['data']['ok'] is False
+"; then
+    pass "tar symlink member pointing outside the archive is rejected"
+else
+    fail "tar symlink contract violated" "$events"
 fi
 
 echo hang > "$STUB_MODE_FILE"
