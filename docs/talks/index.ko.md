@@ -28,7 +28,7 @@ BomLens로 SBOM을 만들고 결과를 읽는 방법을 처음부터 끝까지 �
 
 실제 Python 프로젝트를 SBOM으로 만들고 라이선스·취약점 결과를 읽는 과정, Cellpose 사례로 보는 AI 모델·데이터셋 확인까지 다룹니다.
 
-[슬라이드 보기](oss-check-training-2026-09/slides.html){ .md-button .md-button--primary target=_blank }
+[슬라이드 보기](oss-check-training-2026-09/slides.ko.html){ .md-button .md-button--primary target=_blank }
 
 ## 오픈소스 공급망 보안 도구 — OpenChain Korea Work Group
 
@@ -38,6 +38,6 @@ BomLens, Trusted OSS, TRUSCA: 반려되는 SBOM은 공급사 쪽에서 어떻게
 - **일자:** 2026년 9월 8일
 - **형식:** 25분 세션
 
-문제 두 가지에 답 두 가지입니다. 형식은 SBOM인데 쓸 수 없어 반려되는 문제는 BomLens로, AI 에이전트가 알아서 의존성을 추가하면서 정책이 실제로는 지켜지지 않는 문제는 Trusted OSS와 TRUSCA로 답합니다.
+쓸 수 없는 SBOM은 BomLens로, 강제할 방법이 없던 정책은 Trusted OSS와 TRUSCA로 다룹니다.
 
-[슬라이드 보기](kwg-31-supply-chain-tools/slides.html){ .md-button .md-button--primary target=_blank }
+[슬라이드 보기](kwg-31-supply-chain-tools/slides.ko.html){ .md-button .md-button--primary target=_blank }

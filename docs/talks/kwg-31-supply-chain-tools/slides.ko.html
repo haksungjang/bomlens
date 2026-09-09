@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="ko">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Open Source Supply Chain Security Tools · OpenChain KWG 31st Meeting, Session 3</title>
+<title>오픈소스 공급망 보안 도구 · OpenChain KWG 31차 Session 3</title>
 <!--
   Self-contained offline deck. No external requests: fonts (Geist, Geist Mono,
   Pretendard — all OFL) are inlined as data URIs, all CSS/JS is here. Opens
@@ -642,9 +642,11 @@ body{
 /* ---- deck-local overrides ---- */
   .slide a{color:inherit;text-decoration:underline;text-decoration-color:var(--line-2,currentColor);text-underline-offset:3px}
   .slide a:hover{text-decoration-color:currentColor}
+  /* 세션명은 표지(첫 장)에만 표시, 나머지 장은 페이지 번호만 */
   .deck__footer .sess{visibility:hidden}
   .deck:has(> .slide:first-child.active) .deck__footer .sess{visibility:visible}
   .logo-mark{flex:0 0 auto;border-radius:7px}
+  /* 데모 장: 어느 도구 데모인지 DEMO 표시 색으로 구분 (배경은 그대로, 텍스트 색만) */
   .section-no.tone-bomlens{color:#EA002C}
   .section-no.tone-trusca{color:#0f766e}
 </style>
@@ -683,102 +685,102 @@ body{
 <div class="stage">
 <div class="deck" data-session="OpenChain KWG">
 
-  <!-- 1. Cover -->
-  <section class="slide end slide--dark" data-section="Intro" data-transition="rise">
+  <!-- 1. 표지 -->
+  <section class="slide end slide--dark" data-section="도입" data-transition="rise">
     <div class="coord">Session 3<br>25 MIN</div>
     <div class="stack">
-      <span class="eyebrow">OpenChain KWG 31st Meeting · 2026-09-08</span>
-      <h1 class="display">Open Source Supply<br>Chain Security Tools</h1>
+      <span class="eyebrow">OpenChain KWG 31차 · 2026-09-08</span>
+      <h1 class="display">오픈소스<br>공급망 보안 도구</h1>
       <p class="lead">BomLens · Trusted OSS · TRUSCA</p>
-      <p class="small mono">Haksung Jang · SK Telecom</p>
+      <p class="small mono">장학성 · SK텔레콤</p>
     </div>
   </section>
 
-  <!-- 2. SBOM as a delivery condition -->
-  <section class="slide" data-section="Supply Chain">
-    <div class="coord">02<br>Supply Chain</div>
+  <!-- 2. 납품 조건이 된 SBOM -->
+  <section class="slide" data-section="공급망">
+    <div class="coord">02<br>공급망</div>
     <div class="stack fill">
       <div class="stack tight" style="margin-bottom:26px">
-        <span class="eyebrow plain">Starting with supply chain</span>
-        <h2 class="headline">SBOMs Became a Delivery Condition</h2>
-        <p class="lead">SK Telecom requires every partner delivering software to it to submit an SBOM (Software Bill of Materials).</p>
+        <span class="eyebrow plain">공급망 이야기부터</span>
+        <h2 class="headline">납품 조건이 된 SBOM</h2>
+        <p class="lead">SK텔레콤은 소프트웨어를 납품하는 모든 파트너사에 SBOM(Software Bill of Materials) 제출을 의무화했습니다.</p>
       </div>
       <div class="flow horizontal fill">
-        <div class="node"><span class="num">01</span><div><div class="nt">Delivery</div><div class="nd">Source code · container images · binaries · firmware · servers · off-the-shelf products</div></div></div>
+        <div class="node"><span class="num">01</span><div><div class="nt">납품</div><div class="nd">소스코드 · 컨테이너 이미지 · 바이너리 · 펌웨어 · 서버 · 상용 완제품</div></div></div>
         <div class="connector"></div>
-        <div class="node"><span class="num">02</span><div><div class="nt">SBOM enclosed</div><div class="nd">CycloneDX or SPDX. A component list ships with every deliverable</div></div></div>
+        <div class="node"><span class="num">02</span><div><div class="nt">SBOM 동봉</div><div class="nd">CycloneDX 또는 SPDX. 납품물마다 구성 목록을 함께 냅니다</div></div></div>
         <div class="connector"></div>
-        <div class="node"><span class="num">03</span><div><div class="nt">Inspection</div><div class="nd">Format and content are both checked. Falling short means rejection</div></div></div>
+        <div class="node"><span class="num">03</span><div><div class="nt">검수</div><div class="nd">형식과 내용을 함께 봅니다. 기준에 못 미치면 반려됩니다</div></div></div>
         <div class="connector is-accent"></div>
-        <div class="node is-accent"><span class="num">04</span><div><div class="nt">Remediation</div><div class="nd">High-or-above vulnerabilities must be fixed before delivery is complete</div></div></div>
+        <div class="node is-accent"><span class="num">04</span><div><div class="nt">조치</div><div class="nd">High 이상 취약점을 고쳐야 납품이 끝납니다</div></div></div>
       </div>
       <div class="foot">
-        <span><b>Source</b> <a href="https://sktelecom.github.io/guide/supply-chain/for-suppliers" target="_blank" rel="noopener">sktelecom.github.io/guide/supply-chain/for-suppliers</a></span>
-        <span><b>Same direction</b> The EU CRA also requires SBOMs and vulnerability reporting</span>
+        <span><b>출처</b> <a href="https://sktelecom.github.io/guide/supply-chain/for-suppliers" target="_blank" rel="noopener">sktelecom.github.io/guide/supply-chain/for-suppliers</a></span>
+        <span><b>같은 방향</b> EU CRA도 SBOM과 취약점 보고를 요구합니다</span>
       </div>
     </div>
   </section>
 
-  <!-- 3. Rejection reasons -->
-  <section class="slide" data-section="Supply Chain">
-    <div class="coord">03<br>Rejected</div>
+  <!-- 3. 반려 사유 -->
+  <section class="slide" data-section="공급망">
+    <div class="coord">03<br>반려</div>
     <div class="stack fill">
       <div class="stack tight" style="margin-bottom:22px">
-        <span class="eyebrow">Why submissions get rejected</span>
-        <h2 class="headline sm">SBOMs You Can't Actually Use</h2>
-        <p class="lead">Much of what comes in is SBOM-shaped but can't be mapped against a vulnerability database. These are the three most common rejection reasons.</p>
+        <span class="eyebrow">반려 사유</span>
+        <h2 class="headline sm">쓸 수 없는 SBOM</h2>
+        <p class="lead">제출물의 상당수가 형식은 SBOM인데 취약점 DB와 매핑할 수 없습니다. 반려 사유 목록에서 자주 나오는 세 가지입니다.</p>
       </div>
       <div class="grid">
         <div class="col-7">
           <div class="codecard">
-            <div class="codecard__bar"><i></i><i></i><i></i><span class="fn">Rejected submission (CycloneDX excerpt)</span></div>
+            <div class="codecard__bar"><i></i><i></i><i></i><span class="fn">반려된 제출물 (CycloneDX 발췌)</span></div>
             <div class="code"><span class="ln"><span class="k">"components"</span><span class="p">: [</span></span>
-<span class="ln">  <span class="c">// the purl field is missing entirely</span></span>
+<span class="ln">  <span class="c">// purl 필드가 통째로 없다</span></span>
 <span class="ln hl">  <span class="p">{</span> <span class="k">"name"</span><span class="p">:</span> <span class="s">"libfoo"</span><span class="p">,</span> <span class="k">"version"</span><span class="p">:</span> <span class="s">"1.2.0"</span> <span class="p">},</span></span>
-<span class="ln">  <span class="c">// the ecosystem couldn't be identified</span></span>
+<span class="ln">  <span class="c">// 생태계를 식별하지 못했다</span></span>
 <span class="ln hl">  <span class="p">{</span> <span class="k">"purl"</span><span class="p">:</span> <span class="a">"pkg:generic/commons-lang3@3.12.0"</span> <span class="p">}</span></span>
 <span class="ln"><span class="p">],</span></span>
-<span class="ln"><span class="c">// no transitive dependency record</span></span>
+<span class="ln"><span class="c">// 전이 의존성 기록이 없다</span></span>
 <span class="ln hl"><span class="k">"dependencies"</span><span class="p">: []</span></span></div>
           </div>
         </div>
         <div class="col-5 stack tight">
           <div>
-            <div class="title-sm">Missing PURL</div>
-            <p class="body muted">Scan a bare install directory or raw files, and the identifier drops out entirely.</p>
+            <div class="title-sm">PURL 누락</div>
+            <p class="body muted">패키지 매니저 정보 없이 설치 디렉터리나 원시 파일만 스캔하면 식별자가 통째로 빠집니다.</p>
           </div>
           <div>
-            <div class="title-sm">Missing transitive dependencies</div>
-            <p class="body muted">Scanning source before the build step skips npm install or mvn package.</p>
+            <div class="title-sm">전이 의존성 누락</div>
+            <p class="body muted">빌드 전 소스만 스캔하고 npm install, mvn package 같은 빌드 단계를 건너뛴 결과입니다.</p>
           </div>
           <div>
-            <div class="title-sm">The pkg:generic/ fallback</div>
-            <p class="body muted">Shows up when the ecosystem can't be identified — the package stays unpinned.</p>
+            <div class="title-sm">pkg:generic/ 처리</div>
+            <p class="body muted">도구가 생태계를 식별하지 못하면 이렇게 표시되고, 어떤 패키지인지 특정할 수 없습니다.</p>
           </div>
         </div>
       </div>
       <div class="foot">
-        <span><b>Source</b> <a href="https://sktelecom.github.io/guide/supply-chain/for-suppliers/rejection-reasons" target="_blank" rel="noopener">sktelecom.github.io/guide/supply-chain/for-suppliers/rejection-reasons</a></span>
-        <span><b>Common thread</b> All three happen because the tool being used never produced that information</span>
+        <span><b>출처</b> <a href="https://sktelecom.github.io/guide/supply-chain/for-suppliers/rejection-reasons" target="_blank" rel="noopener">sktelecom.github.io/guide/supply-chain/for-suppliers/rejection-reasons</a></span>
+        <span><b>공통점</b> 셋 다 쓰던 도구가 그 정보를 만들어 주지 않아서 생깁니다</span>
       </div>
     </div>
   </section>
 
-  <!-- 4. BomLens pivot -->
+  <!-- 4. BomLens 피벗 -->
   <section class="slide center slide--fill slide--bleed" data-section="BomLens" data-transition="rise">
     <div class="stack">
       <div class="row" style="align-items:center;gap:10px">
         <svg class="logo-mark" width="28" height="28"><use href="#logo-bomlens"/></svg>
         <span class="eyebrow">BomLens</span>
       </div>
-      <h2 class="display">An Open Source Tool That Lets Suppliers<br>Generate the SBOM Themselves: <span class="hl">BomLens</span></h2>
-      <p class="lead">The obligation existed. The tool didn't.</p>
-      <p class="body">An SBOM generator that also runs open source risk assessment. No account, no upload required.</p>
+      <h2 class="display">공급사에서 SBOM을 만들 수 있는<br>오픈소스 도구, <span class="hl">BomLens</span></h2>
+      <p class="lead">의무는 있는데, 도구가 없었습니다.</p>
+      <p class="body">오픈소스 리스크 평가까지 함께 하는 SBOM 생성기입니다. 계정도 업로드도 필요하지 않습니다.</p>
       <p class="small mono">Apache-2.0 · <a href="https://github.com/sktelecom/bomlens" target="_blank" rel="noopener">github.com/sktelecom/bomlens</a></p>
     </div>
   </section>
 
-  <!-- 5. BomLens architecture -->
+  <!-- 5. BomLens 구조 -->
   <section class="slide" data-section="BomLens">
     <div class="coord">05<br>BOMLENS</div>
     <div class="stack fill">
@@ -787,53 +789,53 @@ body{
           <svg class="logo-mark" width="24" height="24"><use href="#logo-bomlens"/></svg>
           <span class="eyebrow plain">Local-first</span>
         </div>
-        <h2 class="headline">One Scanner</h2>
-        <p class="lead">Source, container, or a received SBOM — the same scanner runs and produces the same result.</p>
+        <h2 class="headline">하나의 스캐너</h2>
+        <p class="lead">소스든 컨테이너든 받은 SBOM이든, 같은 스캐너가 실행되어 같은 결과를 냅니다.</p>
         <div class="chiprow">
-          <span class="chip">Source code</span><span class="chip">Containers</span><span class="chip">Binaries · firmware</span>
-          <span class="chip">A received SBOM</span><span class="chip">Hugging Face models</span><span class="chip">GitHub URL · ZIP</span>
+          <span class="chip">소스 코드</span><span class="chip">컨테이너</span><span class="chip">바이너리 · 펌웨어</span>
+          <span class="chip">받은 SBOM</span><span class="chip">HuggingFace 모델</span><span class="chip">GitHub URL · ZIP</span>
         </div>
       </div>
       <div class="route fill">
         <div class="rnode acc" style="flex:0 0 250px">
-          <div class="rt">One Docker image</div>
-          <div class="rd">CLI, web UI, and desktop app<br>all run the same scanner</div>
+          <div class="rt">Docker 이미지 하나</div>
+          <div class="rd">CLI · 웹 UI · 데스크톱 앱이<br>모두 같은 스캐너를 실행합니다</div>
         </div>
-        <div class="arrow"><span class="cap">Your source never leaves the machine</span></div>
+        <div class="arrow"><span class="cap">소스는 로컬을 떠나지 않습니다</span></div>
         <div class="split"><span class="bar"></span><span class="arm a1"></span><span class="arm" style="top:50%"></span><span class="arm a2"></span></div>
         <div class="fanout">
-          <div class="rnode"><div class="rt">CycloneDX SBOM</div><div class="rd">PURL per component, including transitive dependencies</div></div>
-          <div class="rnode"><div class="rt">Open source notice</div><div class="rd">The notice document that goes in your distribution</div></div>
-          <div class="rnode"><div class="rt">Risk report</div><div class="rd">Security vulnerabilities and license obligations</div></div>
+          <div class="rnode"><div class="rt">CycloneDX SBOM</div><div class="rd">컴포넌트마다 PURL, 전이 의존성 포함</div></div>
+          <div class="rnode"><div class="rt">오픈소스 고지문</div><div class="rd">배포물에 넣을 고지 문서</div></div>
+          <div class="rnode"><div class="rt">리스크 리포트</div><div class="rd">보안 취약점과 라이선스 의무</div></div>
         </div>
       </div>
-      <div class="foot"><span><b>License</b> Apache-2.0</span><span><b>Repository</b> <a href="https://github.com/sktelecom/bomlens" target="_blank" rel="noopener">github.com/sktelecom/bomlens</a></span></div>
+      <div class="foot"><span><b>라이선스</b> Apache-2.0</span><span><b>저장소</b> <a href="https://github.com/sktelecom/bomlens" target="_blank" rel="noopener">github.com/sktelecom/bomlens</a></span></div>
     </div>
   </section>
 
-  <!-- 6. Where to look in the scan results -->
+  <!-- 6. 스캔 결과에서 볼 곳 -->
   <section class="slide" data-section="BomLens">
-    <div class="coord">06<br>Results</div>
+    <div class="coord">06<br>결과</div>
     <div class="stack fill">
       <div class="grid items-center fill">
         <div class="col-5 stack tight">
           <div class="row" style="align-items:center;gap:10px">
             <svg class="logo-mark" width="24" height="24"><use href="#logo-bomlens"/></svg>
-            <span class="eyebrow plain">Before the demo</span>
+            <span class="eyebrow plain">데모 전에</span>
           </div>
-          <h2 class="headline sm">Where to Look in the Scan Results</h2>
-          <p class="body muted">Before the demo, let's fix in advance where each of the three rejection reasons gets resolved on the results screen.</p>
+          <h2 class="headline sm">스캔 결과에서 볼 곳</h2>
+          <p class="body muted">앞에서 본 반려 사유 세 가지가 결과 화면의 어디에서 해소되는지 미리 정해 두고 데모를 봅니다.</p>
           <div>
-            <div class="title-sm">PURL column</div>
-            <p class="body muted">Ecosystem, name, and version all land on one row.</p>
-          </div>
-          <div>
-            <div class="title-sm">Origin column</div>
-            <p class="body muted">Even transitively-pulled components stay on the list as their own row.</p>
+            <div class="title-sm">PURL 컬럼</div>
+            <p class="body muted">생태계와 이름, 버전이 한 줄에 다 적힙니다.</p>
           </div>
           <div>
-            <div class="title-sm">License column</div>
-            <p class="body muted">Flows straight into the notice file from the same scan.</p>
+            <div class="title-sm">유입 컬럼</div>
+            <p class="body muted">전이로 딸려 온 것까지 행으로 남습니다.</p>
+          </div>
+          <div>
+            <div class="title-sm">라이선스 컬럼</div>
+            <p class="body muted">같은 스캔에서 고지문으로 그대로 이어집니다.</p>
           </div>
         </div>
         <div class="col-7">
@@ -841,174 +843,174 @@ body{
             <div class="browser__bar"><i></i><i></i><i></i><span class="browser__url">localhost:8080 · Components</span></div>
             <div class="browser__body">
               <table class="scan-table">
-                <thead><tr><th>Component</th><th>PURL</th><th>License</th><th>Origin</th></tr></thead>
+                <thead><tr><th>컴포넌트</th><th>PURL</th><th>라이선스</th><th>유입</th></tr></thead>
                 <tbody>
-                  <tr><td>lodash 4.17.21</td><td class="mono">pkg:npm/lodash@4.17.21</td><td>MIT</td><td><span class="sev ok">Direct</span></td></tr>
-                  <tr><td>commons-lang3 3.12.0</td><td class="mono">pkg:maven/org.apache.commons/commons-lang3@3.12.0</td><td>Apache-2.0</td><td><span class="sev ok">Direct</span></td></tr>
-                  <tr><td>requests 2.31.0</td><td class="mono">pkg:pypi/requests@2.31.0</td><td>Apache-2.0</td><td><span class="sev md">Transitive</span></td></tr>
-                  <tr><td>urllib3 2.2.1</td><td class="mono">pkg:pypi/urllib3@2.2.1</td><td>MIT</td><td><span class="sev md">Transitive</span></td></tr>
-                  <tr><td>gin 1.9.1</td><td class="mono">pkg:golang/github.com/gin-gonic/gin@1.9.1</td><td>MIT</td><td><span class="sev md">Transitive</span></td></tr>
+                  <tr><td>lodash 4.17.21</td><td class="mono">pkg:npm/lodash@4.17.21</td><td>MIT</td><td><span class="sev ok">직접</span></td></tr>
+                  <tr><td>commons-lang3 3.12.0</td><td class="mono">pkg:maven/org.apache.commons/commons-lang3@3.12.0</td><td>Apache-2.0</td><td><span class="sev ok">직접</span></td></tr>
+                  <tr><td>requests 2.31.0</td><td class="mono">pkg:pypi/requests@2.31.0</td><td>Apache-2.0</td><td><span class="sev md">전이</span></td></tr>
+                  <tr><td>urllib3 2.2.1</td><td class="mono">pkg:pypi/urllib3@2.2.1</td><td>MIT</td><td><span class="sev md">전이</span></td></tr>
+                  <tr><td>gin 1.9.1</td><td class="mono">pkg:golang/github.com/gin-gonic/gin@1.9.1</td><td>MIT</td><td><span class="sev md">전이</span></td></tr>
                 </tbody>
               </table>
             </div>
           </div>
         </div>
       </div>
-      <div class="foot"><span><b>Compare</b> Both of these columns were blank in the excerpt on slide 3</span></div>
+      <div class="foot"><span><b>대조</b> 3장의 발췌에는 이 두 컬럼이 비어 있었습니다</span></div>
     </div>
   </section>
 
-  <!-- 7. BomLens demo -->
+  <!-- 7. BomLens 데모 -->
   <section class="slide center" data-section="BomLens" data-transition="rise">
     <div class="stack">
       <div class="row" style="align-items:center;gap:10px">
         <svg class="logo-mark" width="28" height="28"><use href="#logo-bomlens"/></svg>
-        <span class="section-no tone-bomlens">DEMO · 4 MIN</span>
+        <span class="section-no tone-bomlens">DEMO · 4분</span>
       </div>
-      <h2 class="display lg">The Generation Screen</h2>
+      <h2 class="display lg">생성 화면</h2>
       <div class="grid cards-eq">
         <div class="col-4 card">
-          <div class="card__t">Run the scan</div>
-          <div class="card__d">Scanning a sample project on the public demo. <a href="https://sktelecom.github.io/bomlens/demo" target="_blank" rel="noopener">sktelecom.github.io/bomlens/demo</a></div>
+          <div class="card__t">스캔 실행</div>
+          <div class="card__d">공개 데모에서 샘플 프로젝트를 스캔합니다. <a href="https://sktelecom.github.io/bomlens/demo" target="_blank" rel="noopener">sktelecom.github.io/bomlens/demo</a></div>
         </div>
         <div class="col-4 card">
           <div class="card__t">Components</div>
-          <div class="card__d">The PURL column shows ecosystem, name, and version together</div>
+          <div class="card__d">PURL 컬럼에 생태계와 이름, 버전이 함께 적힙니다</div>
         </div>
         <div class="col-4 card accent">
           <div class="card__t">Dependencies · SBOM</div>
-          <div class="card__d">Check transitive dependencies and download the CycloneDX file</div>
+          <div class="card__d">전이 의존성을 확인하고 CycloneDX 파일을 내려받습니다</div>
         </div>
       </div>
-      <p class="body">The three rejection reasons from slide 3 disappear one by one on this screen.</p>
+      <p class="body">3장에서 본 반려 사유 세 가지가 이 화면에서 하나씩 사라집니다.</p>
     </div>
   </section>
 
-  <!-- 7-2. Models, with the same tool -->
+  <!-- 7-2. AI 모델도 같은 도구로 -->
   <section class="slide center" data-section="BomLens" data-transition="rise">
     <div class="stack">
       <div class="row" style="align-items:center;gap:10px">
         <svg class="logo-mark" width="28" height="28"><use href="#logo-bomlens"/></svg>
-        <span class="section-no tone-bomlens">DEMO · 1 MIN</span>
+        <span class="section-no tone-bomlens">DEMO · 1분</span>
       </div>
-      <h2 class="display lg">Same Tool, for Models Too</h2>
+      <h2 class="display lg">같은 도구로, 모델도</h2>
       <div class="grid cards-eq">
         <div class="col-4 card">
-          <div class="card__t">Open a model</div>
-          <div class="card__d">Open the bert-base-uncased scan result under the AI Model tab on the same local server</div>
+          <div class="card__t">모델 열기</div>
+          <div class="card__d">같은 로컬 서버의 AI 모델 탭에서 bert-base-uncased 스캔 결과를 엽니다</div>
         </div>
         <div class="col-4 card accent">
-          <div class="card__t">Model and dataset</div>
-          <div class="card__d">The model is Apache-2.0; the two datasets split between wikipedia (CC-BY-SA-3.0, conditional) and bookcorpus (license unknown, needs review)</div>
+          <div class="card__t">모델·데이터셋</div>
+          <div class="card__d">모델은 Apache-2.0, 데이터셋은 wikipedia(CC-BY-SA-3.0, 조건부)와 bookcorpus(라이선스 unknown, review)로 갈립니다</div>
         </div>
         <div class="col-4 card">
-          <div class="card__t">Conformance</div>
-          <div class="card__d">30/41 G7 minimum elements met</div>
+          <div class="card__t">적합성</div>
+          <div class="card__d">G7 최소 요소 30/41 충족</div>
         </div>
       </div>
-      <p class="body">This is the answer to the first question in this morning's group discussion topic A — how do you actually review the license of an open model.</p>
+      <p class="body">오전 그룹 토의 주제 A의 첫 질문, 개방형 모델의 라이선스를 실제로 어떻게 검토하느냐에 대한 답입니다.</p>
     </div>
   </section>
 
-  <!-- 8. What AI coding changed -->
-  <section class="slide" data-section="AI Coding">
-    <div class="coord">08<br>AI Coding</div>
+  <!-- 8. AI 코딩이 바꾼 조건 -->
+  <section class="slide" data-section="AI 코딩">
+    <div class="coord">08<br>AI 코딩</div>
     <div class="stack fill">
       <div class="stack tight">
-        <span class="eyebrow">The AI coding problem</span>
-        <h2 class="headline">Three Things AI Coding Changed</h2>
-        <p class="lead">That's the supply chain half. What follows is a problem happening inside our own development organizations.</p>
+        <span class="eyebrow">AI 코딩 문제</span>
+        <h2 class="headline">AI 코딩이 바꾼 조건 셋</h2>
+        <p class="lead">공급망 이야기는 여기까지입니다. 다음은 우리 개발 조직 안에서 벌어지는 문제입니다.</p>
       </div>
       <div class="recap fill">
-        <div class="item"><div class="rn">01</div><div class="rt"><b>The agent installs things on its own.</b> No one signs off on every new dependency anymore.</div></div>
-        <div class="item"><div class="rn">02</div><div class="rt"><b>Review always comes late.</b> You see the library only after it's already in the code.</div></div>
-        <div class="item"><div class="rn">03</div><div class="rt"><b>MCP tools live outside the repository.</b> A description alone can't tell you what the model is actually calling.</div></div>
+        <div class="item"><div class="rn">01</div><div class="rt"><b>에이전트가 알아서 설치합니다.</b> 의존성 추가를 사람이 매번 승인하지 않습니다.</div></div>
+        <div class="item"><div class="rn">02</div><div class="rt"><b>검토는 늘 뒤늦습니다.</b> 코드에 이미 들어간 라이브러리를 나중에야 봅니다.</div></div>
+        <div class="item"><div class="rn">03</div><div class="rt"><b>MCP 도구는 저장소 밖에 있습니다.</b> 모델이 실제로 무엇을 부르는지 설명만으로는 알 수 없습니다.</div></div>
       </div>
       <div class="foot">
-        <span><b>The difference</b> Before, it was the quality of what came in. Now it's the path code takes into our own repository</span>
-        <span><b>Next</b> What replaces the sign-off step a person used to own</span>
+        <span><b>차이</b> 앞의 문제는 받은 제출물의 품질, 이 문제는 우리 저장소에 들어오는 코드의 경로입니다</span>
+        <span><b>다음</b> 사람이 승인하던 자리를 무엇으로 대신할지</span>
       </div>
     </div>
   </section>
 
-  <!-- 9. Trusted OSS pivot -->
+  <!-- 9. Trusted OSS 피벗 -->
   <section class="slide center slide--fill slide--bleed" data-section="Trusted OSS" data-transition="rise">
     <div class="stack">
       <div class="row" style="align-items:center;gap:10px">
         <svg class="logo-mark" width="28" height="28"><use href="#logo-trustedoss"/></svg>
         <span class="eyebrow">Trusted OSS</span>
       </div>
-      <h2 class="display lg">AI Coding <span class="hl">Governance</span></h2>
-      <p class="lead">The policy existed. There was no way to enforce it.</p>
-      <p class="body">A self-certification kit for ISO/IEC 5230 and 18974. At its core is a 5-level maturity model built for AI-coding conditions.</p>
+      <h2 class="display lg">AI 코딩 <span class="hl">거버넌스</span></h2>
+      <p class="lead">정책은 있는데, 강제할 방법이 없었습니다.</p>
+      <p class="body">ISO/IEC 5230·18974 자가인증 킷입니다. 핵심은 AI 코딩 현장에 맞춘 5단계 성숙도 모델입니다.</p>
       <p class="small mono"><a href="https://trustedoss.github.io" target="_blank" rel="noopener">trustedoss.github.io</a></p>
     </div>
   </section>
 
-  <!-- 10. Five levels -->
+  <!-- 10. 다섯 단계 -->
   <section class="slide" data-section="Trusted OSS">
     <div class="coord">10<br>5 LEVELS</div>
     <div class="stack fill">
       <div class="stack tight">
         <div class="row" style="align-items:center;gap:10px">
           <svg class="logo-mark" width="24" height="24"><use href="#logo-trustedoss"/></svg>
-          <span class="eyebrow plain">The AI-coding maturity model</span>
+          <span class="eyebrow plain">AI 코딩 성숙도 모델</span>
         </div>
-        <h2 class="headline">Five Levels</h2>
-        <p class="lead">L1 and L2 are rules people follow. From L3 on, a tool enforces them instead.</p>
+        <h2 class="headline">다섯 단계</h2>
+        <p class="lead">L1·L2는 사람이 지키는 규칙이고, L3부터는 도구가 대신 막습니다.</p>
       </div>
       <div class="flow horizontal fill">
-        <div class="node"><span class="num">L1</span><div><div class="nt">Personal memory policy</div><div class="nd">A rule inside one person's head</div></div></div>
+        <div class="node"><span class="num">L1</span><div><div class="nt">개인 메모리 정책</div><div class="nd">한 사람의 머릿속 규칙</div></div></div>
         <div class="connector"></div>
-        <div class="node"><span class="num">L2</span><div><div class="nt">CLAUDE.md<br>AGENTS.md</div><div class="nd">A rules file the agent reads</div></div></div>
+        <div class="node"><span class="num">L2</span><div><div class="nt">CLAUDE.md<br>AGENTS.md</div><div class="nd">에이전트가 읽는 규칙 파일</div></div></div>
         <div class="connector is-accent"></div>
-        <div class="node is-accent"><span class="num">L3</span><div><div class="nt">CI/CD gate</div><div class="nd">gitleaks · semgrep · grype</div></div></div>
+        <div class="node is-accent"><span class="num">L3</span><div><div class="nt">CI/CD 게이트</div><div class="nd">gitleaks · semgrep · grype</div></div></div>
         <div class="connector is-accent"></div>
-        <div class="node is-accent"><span class="num">L4</span><div><div class="nt">AI defense layer</div><div class="nd">Review · fuzzing · MCP tool monitoring</div></div></div>
+        <div class="node is-accent"><span class="num">L4</span><div><div class="nt">AI 방어층</div><div class="nd">검토 · 퍼징 · MCP 도구 감시</div></div></div>
         <div class="connector is-accent"></div>
-        <div class="node is-accent"><span class="num">L5</span><div><div class="nt">Post-deployment monitoring</div><div class="nd">Dependabot · DAST</div></div></div>
+        <div class="node is-accent"><span class="num">L5</span><div><div class="nt">배포 후 모니터링</div><div class="nd">Dependabot · DAST</div></div></div>
       </div>
       <div class="foot">
-        <span><b>The line</b> L1 and L2 are documents and policy; from L3 on, a tool enforces them</span>
-        <span><b>Next</b> The tool category that actually enforces L3 and above: SCA</span>
+        <span><b>경계</b> L1·L2는 문서와 정책, L3부터는 도구가 강제합니다</span>
+        <span><b>다음</b> L3 이상을 실제로 집행하는 도구, SCA</span>
       </div>
     </div>
   </section>
 
-  <!-- 11. What is SCA -->
+  <!-- 11. SCA란 -->
   <section class="slide" data-section="TRUSCA">
     <div class="coord">11<br>SCA</div>
     <div class="stack fill">
       <div class="stack tight">
-        <span class="eyebrow">The tool that enforces L3 and above</span>
-        <h2 class="headline sm">What Is SCA?</h2>
-        <p class="lead">No one can check L3-and-above by hand every time — you need a tool to stand in.</p>
-        <p class="body muted">SCA (Software Composition Analysis): a category of tools that automatically finds open source components and checks their vulnerabilities and license obligations.</p>
+        <span class="eyebrow">L3 이상을 집행하는 도구</span>
+        <h2 class="headline sm">SCA란</h2>
+        <p class="lead">L3 이상은 사람이 매번 확인할 수 없어, 대신할 도구가 필요합니다.</p>
+        <p class="body muted">SCA(Software Composition Analysis). 오픈소스 컴포넌트를 자동으로 찾아 취약점과 라이선스 의무를 확인하는 도구 카테고리입니다.</p>
       </div>
       <div class="row stretch fill" style="gap:72px">
         <div class="grow stack tight">
           <hr class="divider accent">
-          <div class="title-sm">What SCA sees</div>
+          <div class="title-sm">SCA가 보는 것</div>
           <ul class="bullets">
-            <li>The list and version of every component pulled in</li>
-            <li>Known vulnerabilities attached to that version</li>
-            <li>The license and the notice obligations that follow from it</li>
+            <li>가져다 쓴 컴포넌트의 목록과 버전</li>
+            <li>그 버전에 붙은 알려진 취약점</li>
+            <li>라이선스와 그에 따르는 고지 의무</li>
           </ul>
         </div>
         <div class="grow stack tight">
           <hr class="divider short">
-          <div class="title-sm">What SCA doesn't see</div>
+          <div class="title-sm">SCA가 못 보는 것</div>
           <ul class="bullets">
-            <li>Logic defects in code you wrote yourself</li>
-            <li>Misconfiguration that only shows up at runtime</li>
-            <li>A code snippet pasted in with no declaration anywhere</li>
+            <li>직접 작성한 코드의 로직 결함</li>
+            <li>실행 중에만 드러나는 설정 오류</li>
+            <li>선언 없이 붙여 넣은 코드 조각</li>
           </ul>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- 12. Introducing TRUSCA -->
+  <!-- 12. TRUSCA 소개 -->
   <section class="slide" data-section="TRUSCA">
     <div class="coord">12<br>TRUSCA</div>
     <div class="stack fill">
@@ -1018,72 +1020,72 @@ body{
             <svg class="logo-mark" width="28" height="28"><use href="#logo-trusca"/></svg>
             <span class="eyebrow">Trusted SCA</span>
           </div>
-          <h2 class="headline">TRUSCA, an Open Source SCA</h2>
-          <p class="lead">A document doesn't execute. A tool enforces it instead.</p>
-          <p class="body muted">CVE tracking, license compliance, and SBOM management in one screen. It runs inside your own network, so neither code nor SBOMs ever leave it.</p>
+          <h2 class="headline">TRUSCA, 오픈소스 SCA</h2>
+          <p class="lead">문서는 실행되지 않습니다. 도구가 대신 집행합니다.</p>
+          <p class="body muted">CVE 추적, 라이선스 컴플라이언스, SBOM 관리를 한 화면에서 다룹니다. 사내 네트워크 안에서 작동하기 때문에 코드도 SBOM도 밖으로 나가지 않습니다.</p>
           <div class="row" style="gap:10px">
             <span class="badge acc">Apache-2.0</span>
-            <span class="badge">Self-hosted</span>
+            <span class="badge">셀프호스팅</span>
             <span class="badge">Docker Compose · Helm</span>
           </div>
         </div>
         <div class="col-5 stack tight">
-          <p class="body muted">cdxgen covers 30+ language ecosystems, so it sweeps through whatever mix of languages sits in your internal repositories in one pass.</p>
+          <p class="body muted">cdxgen이 30개 이상의 언어 생태계를 다룹니다. 사내 저장소에 섞여 있는 언어를 한 번에 훑습니다.</p>
           <p class="small mono"><a href="https://github.com/trustedoss/trusca" target="_blank" rel="noopener">github.com/trustedoss/trusca</a></p>
         </div>
       </div>
-      <div class="foot"><span><b>CVE sources</b> Trivy's aggregated DB · NVD · OSV · GHSA · EPSS · KEV</span><span><b>Name</b> Short for Trusted SCA</span></div>
+      <div class="foot"><span><b>CVE 소스</b> Trivy 통합 DB · NVD · OSV · GHSA · EPSS · KEV</span><span><b>이름</b> Trusted SCA의 줄임말</span></div>
     </div>
   </section>
 
-  <!-- 13. Detect to Enforce -->
+  <!-- 13. Detect에서 Enforce까지 -->
   <section class="slide" data-section="TRUSCA">
-    <div class="coord">13<br>Pipeline</div>
+    <div class="coord">13<br>파이프라인</div>
     <div class="stack fill">
       <div class="stack tight" style="margin-bottom:18px">
         <div class="row" style="align-items:center;gap:10px">
           <svg class="logo-mark" width="24" height="24"><use href="#logo-trusca"/></svg>
-          <span class="eyebrow plain">How it works</span>
+          <span class="eyebrow plain">동작</span>
         </div>
-        <h2 class="headline sm">From Detect to Enforce</h2>
+        <h2 class="headline sm">Detect에서 Enforce까지</h2>
       </div>
       <table class="matrix">
-        <thead><tr><th>Stage</th><th>What it does</th><th>With what</th></tr></thead>
+        <thead><tr><th>단계</th><th>하는 일</th><th>무엇으로</th></tr></thead>
         <tbody>
-          <tr><td class="lic">Detect<span class="tag">discovery</span></td><td>Finds the components that made it into the repository</td><td>cdxgen, 30+ language ecosystems</td></tr>
-          <tr><td class="lic">Match<span class="tag">matching</span></td><td>Attaches the CVEs tied to each component and version</td><td>Trivy's aggregated DB · NVD · OSV · GHSA · EPSS · KEV</td></tr>
-          <tr><td class="lic">Triage<span class="tag">judgment</span></td><td>Decides whether it's exploitable and records the reasoning</td><td>7-state VEX management</td></tr>
-          <tr class="is-focus"><td class="lic">Enforce<span class="tag">enforcement</span></td><td>Blocks the build on a critical vulnerability or a banned license</td><td>CI gate, automatic NOTICE generation</td></tr>
+          <tr><td class="lic">Detect<span class="tag">탐지</span></td><td>저장소에 들어간 컴포넌트를 찾습니다</td><td>cdxgen, 30개 이상 언어 생태계</td></tr>
+          <tr><td class="lic">Match<span class="tag">매칭</span></td><td>컴포넌트와 버전에 걸린 CVE를 붙입니다</td><td>Trivy 통합 DB · NVD · OSV · GHSA · EPSS · KEV</td></tr>
+          <tr><td class="lic">Triage<span class="tag">판단</span></td><td>영향 여부를 판정하고 근거를 남깁니다</td><td>VEX 7단계 상태 관리</td></tr>
+          <tr class="is-focus"><td class="lic">Enforce<span class="tag">집행</span></td><td>치명적 취약점이나 금지 라이선스가 나오면 빌드를 막습니다</td><td>CI 게이트, NOTICE 자동 생성</td></tr>
         </tbody>
       </table>
-      <div class="foot"><span><b>The split</b> The first two stages find things; the last two judge and block</span></div>
+      <div class="foot"><span><b>구분</b> 앞의 두 단계는 찾는 일, 뒤의 두 단계는 판단하고 막는 일입니다</span></div>
     </div>
   </section>
 
-  <!-- 14. TRUSCA demo -->
+  <!-- 14. TRUSCA 데모 -->
   <section class="slide center" data-section="TRUSCA" data-transition="rise">
     <div class="stack">
       <div class="row" style="align-items:center;gap:10px">
         <svg class="logo-mark" width="28" height="28"><use href="#logo-trusca"/></svg>
-        <span class="section-no tone-trusca">DEMO · 4 MIN</span>
+        <span class="section-no tone-trusca">DEMO · 4분</span>
       </div>
-      <h2 class="headline">Where Vulnerabilities Get Handled</h2>
+      <h2 class="headline">취약점을 다루는 화면</h2>
       <div class="decision">
-        <div class="dq"><span class="qn">01</span><div class="qbody"><div class="qt">Project list</div><div class="qd">Vulnerability count and top severity collapse to one line per repository</div></div><span class="ans">Risk roll-up</span></div>
+        <div class="dq"><span class="qn">01</span><div class="qbody"><div class="qt">프로젝트 목록</div><div class="qd">저장소마다 취약점 건수와 최고 심각도가 한 줄로 접혀 있습니다</div></div><span class="ans">리스크 롤업</span></div>
         <div class="dlink"></div>
-        <div class="dq"><span class="qn">02</span><div class="qbody"><div class="qt">Vulnerability list</div><div class="qd">The columns that tell you what to fix first</div></div><span class="ans">7-state VEX · EPSS · KEV</span></div>
+        <div class="dq"><span class="qn">02</span><div class="qbody"><div class="qt">취약점 리스트</div><div class="qd">어떤 것부터 손댈지 정하는 컬럼을 함께 봅니다</div></div><span class="ans">VEX 7단계 · EPSS · KEV</span></div>
         <div class="dlink"></div>
-        <div class="dq"><span class="qn">03</span><div class="qbody"><div class="qt">SBOM tab</div><div class="qd">Exports the exact list used for enforcement as a submission-ready format</div></div><span class="ans">CycloneDX · SPDX</span></div>
+        <div class="dq"><span class="qn">03</span><div class="qbody"><div class="qt">SBOM 탭</div><div class="qd">집행에 쓴 목록을 그대로 제출 형식으로 뽑습니다</div></div><span class="ans">CycloneDX · SPDX</span></div>
         <div class="dlink"></div>
-        <div class="dend">This walks through Match, Triage, and Enforce from the earlier table, live on screen</div>
+        <div class="dend">앞 장 표의 Match와 Triage, Enforce를 화면에서 그대로 따라갑니다</div>
       </div>
-      <p class="small mono"><a href="https://trusca-demo.duckdns.org" target="_blank" rel="noopener">trusca-demo.duckdns.org</a> · dev@demo.trustedoss.dev · read-only</p>
+      <p class="small mono"><a href="https://trusca-demo.duckdns.org" target="_blank" rel="noopener">trusca-demo.duckdns.org</a> · dev@demo.trustedoss.dev · 읽기 전용</p>
     </div>
   </section>
 
-  <!-- 15. Three-line install -->
+  <!-- 15. 설치 세 줄 -->
   <section class="slide" data-section="TRUSCA">
-    <div class="coord">15<br>Install</div>
+    <div class="coord">15<br>설치</div>
     <div class="stack fill">
       <div class="grid items-center fill">
         <div class="col-7">
@@ -1094,79 +1096,79 @@ body{
 <span class="ln"><span class="k">cd</span> <span class="s">trusca &amp;&amp; cp .env.example .env</span></span>
 <span class="ln hl"><span class="k">docker-compose</span> <span class="a">-f docker-compose.dev.yml up</span></span>
 <span class="ln"></span>
-<span class="ln"><span class="c"># 30 seconds later: postgres, redis, backend, celery-worker, frontend</span></span>
+<span class="ln"><span class="c"># 30초 뒤 postgres, redis, backend, celery-worker, frontend</span></span>
 <span class="ln"><span class="c"># http://localhost:5173</span></span></div>
           </div>
         </div>
         <div class="col-5 stack tight">
           <div class="row" style="align-items:center;gap:10px">
             <svg class="logo-mark" width="24" height="24"><use href="#logo-trusca"/></svg>
-            <span class="eyebrow plain">Try installing it yourself</span>
+            <span class="eyebrow plain">직접 설치해 보기</span>
           </div>
-          <h2 class="headline sm">Three-Line Install</h2>
-          <p class="body muted">An evaluation install takes 30 seconds — plenty to run before deciding whether to adopt it internally.</p>
-          <p class="body muted">Production deployments support Docker Compose and a Helm chart.</p>
+          <h2 class="headline sm">설치 세 줄</h2>
+          <p class="body muted">평가용으로 설치하는 데 걸리는 시간은 30초입니다. 사내 도입 판단을 위해 먼저 실행해 보기에 충분합니다.</p>
+          <p class="body muted">프로덕션은 Docker Compose와 Helm 차트를 지원합니다.</p>
         </div>
       </div>
-      <div class="foot"><span><b>Just want to look first?</b> The same screens are at <a href="https://trusca-demo.duckdns.org" target="_blank" rel="noopener">trusca-demo.duckdns.org</a>, no install needed</span></div>
+      <div class="foot"><span><b>먼저 둘러보려면</b> 설치 없이 <a href="https://trusca-demo.duckdns.org" target="_blank" rel="noopener">trusca-demo.duckdns.org</a>에서 같은 화면을 볼 수 있습니다</span></div>
     </div>
   </section>
 
-  <!-- 16. Generate locally, enforce centrally -->
-  <section class="slide" data-section="Wrap-Up">
-    <div class="coord">16<br>Wrap-Up</div>
+  <!-- 16. 로컬 생성, 중앙 집행 -->
+  <section class="slide" data-section="정리">
+    <div class="coord">16<br>정리</div>
     <div class="stack fill dist">
       <div class="stack tight">
-        <span class="eyebrow plain">Division of labor</span>
-        <h2 class="headline">BomLens and TRUSCA</h2>
-        <p class="lead">Not three tools used separately — each holds a different spot on the same supply-chain line.</p>
+        <span class="eyebrow plain">역할 분담</span>
+        <h2 class="headline">BomLens와 TRUSCA</h2>
+        <p class="lead">따로 쓰는 세 도구가 아니라, 공급망 한 줄기 위에서 각자 다른 자리를 맡습니다.</p>
       </div>
       <div class="route">
         <div class="rnode" style="flex:1">
-          <div class="rt"><svg class="logo-mark" width="20" height="20" style="vertical-align:-5px;margin-right:7px"><use href="#logo-bomlens"/></svg>Supplier · BomLens</div>
-          <div class="rd">Scans locally and produces the SBOM and notice file</div>
+          <div class="rt"><svg class="logo-mark" width="20" height="20" style="vertical-align:-5px;margin-right:7px"><use href="#logo-bomlens"/></svg>공급업체 · BomLens</div>
+          <div class="rd">로컬에서 스캔하고 SBOM과 고지문을 만듭니다</div>
         </div>
-        <div class="arrow"><span class="cap">CycloneDX SBOM submitted</span></div>
+        <div class="arrow"><span class="cap">CycloneDX SBOM 제출</span></div>
         <div class="rnode acc" style="flex:1">
           <div class="rt"><svg class="logo-mark" width="20" height="20" style="vertical-align:-5px;margin-right:7px"><use href="#logo-trusca"/></svg>TRUSCA</div>
-          <div class="rd">An open source SCA tool that detects CVEs and enforces license terms</div>
+          <div class="rd">오픈소스 SCA 도구로 CVE를 탐지하고 라이선스를 집행합니다</div>
         </div>
       </div>
       <div class="node">
-        <span class="num">Foundation</span>
-        <div><div class="nt"><svg class="logo-mark" width="20" height="20" style="vertical-align:-5px;margin-right:7px"><use href="#logo-trustedoss"/></svg>Trusted OSS</div><div class="nd">The ISO/IEC 5230 and 18974 self-certification kit, plus the 5-level AI-coding maturity model. This is the framework that decides what the two tools enforce and on what grounds</div></div>
+        <span class="num">기반</span>
+        <div><div class="nt"><svg class="logo-mark" width="20" height="20" style="vertical-align:-5px;margin-right:7px"><use href="#logo-trustedoss"/></svg>Trusted OSS</div><div class="nd">ISO/IEC 5230과 18974 자가인증 킷, 그리고 AI 코딩 5단계 성숙도 모델. 두 도구가 무엇을 근거로 무엇까지 막을지를 이 틀이 정합니다</div></div>
       </div>
-      <p class="body">The three tools we saw today answer, respectively: an <b>SBOM that gets rejected</b>, a <b>policy no one follows</b>, and a <b>gate that never enforces</b>.</p>
-      <div class="foot"><span><b>Takeaway</b> Both the side that produces and the side that receives need a tool, or SBOM submission stays paperwork</span></div>
+      <p class="body">오늘 본 세 도구는 각각 <b>반려되는 SBOM</b>, <b>지켜지지 않는 정책</b>, <b>집행되지 않는 게이트</b>에 대응합니다.</p>
+      <div class="foot"><span><b>가져갈 것</b> 만드는 쪽과 받는 쪽에 각각 도구가 있어야 SBOM 제출이 서류 작업으로 끝나지 않습니다</span></div>
     </div>
   </section>
 
-  <!-- 17. October 15 -->
-  <section class="slide" data-section="Wrap-Up">
-    <div class="coord">17<br>Next</div>
+  <!-- 17. 10월 15일 -->
+  <section class="slide" data-section="정리">
+    <div class="coord">17<br>다음</div>
     <div class="stack fill">
       <div class="stack tight">
-        <span class="eyebrow">What's next</span>
-        <h2 class="headline sm">October 15 — the Hands-On Session</h2>
-        <p class="lead">Today covered why these tools matter. Installing and actually running a scan is what the October 15 Tooling &amp; Legal Subgroup meeting covers.</p>
+        <span class="eyebrow">다음 순서</span>
+        <h2 class="headline sm">10월 15일, 심화 세션</h2>
+        <p class="lead">오늘은 왜 필요한지까지 다뤘습니다. 직접 설치하고 스캔을 실행하는 과정은 10월 15일 Tooling &amp; Legal Subgroup 미팅에서 다룹니다.</p>
       </div>
       <div class="gauge fill">
         <div class="track"></div>
         <div class="ms acc" style="left:16%"></div>
-        <div class="lbl up acc" style="left:16%"><div class="d">2026-09-08</div><div class="t">Today · KWG 31st Meeting, Session 3<br>Tool introduction and a demo</div></div>
+        <div class="lbl up acc" style="left:16%"><div class="d">2026-09-08</div><div class="t">오늘 · KWG 31차 Session 3<br>도구 소개와 데모 참관</div></div>
         <div class="ms acc" style="left:84%"></div>
-        <div class="lbl up acc" style="left:84%"><div class="d">2026-10-15 (Thu) 14:00</div><div class="t">Tooling &amp; Legal Subgroup, 30th Meeting<br>Open source management tools, in depth</div></div>
-        <div class="span" style="left:50%">Hands-on practice — install it and scan your own repository — starts October 15</div>
+        <div class="lbl up acc" style="left:84%"><div class="d">2026-10-15 (목) 14:00</div><div class="t">Tooling &amp; Legal Subgroup 30차<br>오픈소스 관리 도구 심화</div></div>
+        <div class="span" style="left:50%">직접 설치해 본인 저장소를 스캔하는 실습은 10월 15일부터</div>
       </div>
-      <div class="foot"><span><b>Covers</b> Both BomLens and TRUSCA</span><span><b>Announced on</b> the korea-sg-tooling-legal mailing list</span></div>
+      <div class="foot"><span><b>대상</b> BomLens와 TRUSCA 두 도구</span><span><b>공지</b> korea-sg-tooling-legal 메일링리스트</span></div>
     </div>
   </section>
 
   <!-- 18. Questions -->
-  <section class="slide center slide--dark" data-section="Wrap-Up" data-transition="rise">
+  <section class="slide center slide--dark" data-section="정리" data-transition="rise">
     <div class="stack">
       <span class="eyebrow">Questions</span>
-      <h2 class="display lg">Thank you.</h2>
+      <h2 class="display lg">감사합니다.</h2>
       <p class="small mono"><a href="https://github.com/sktelecom/bomlens" target="_blank" rel="noopener">github.com/sktelecom/bomlens</a> · <a href="https://github.com/trustedoss/trusca" target="_blank" rel="noopener">github.com/trustedoss/trusca</a> · <a href="https://trustedoss.github.io" target="_blank" rel="noopener">trustedoss.github.io</a></p>
     </div>
   </section>
