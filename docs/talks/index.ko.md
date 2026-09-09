@@ -32,12 +32,12 @@ BomLens로 SBOM을 만들고 결과를 읽는 방법을 처음부터 끝까지 �
 
 ## 오픈소스 공급망 보안 도구 — OpenChain Korea Work Group
 
-BomLens, Trusted OSS, TRUSCA: 반려되는 SBOM은 공급사 쪽에서 어떻게 고치고, AI 코딩 시대의 거버넌스는 받는 쪽에서 어떻게 집행하는지 다룹니다.
+BomLens, Trusted OSS, TRUSCA: 공급사 쪽에서 쓸 수 있는 SBOM을 만드는 방법과, AI 코딩 시대의 거버넌스를 받는 쪽에서 집행하는 방법을 다룹니다.
 
 - **행사:** [OpenChain Korea Work Group 31차 정기모임](https://openchain-project.github.io/OpenChain-KWG/)
 - **일자:** 2026년 9월 8일
 - **형식:** 25분 세션
 
-쓸 수 없는 SBOM은 BomLens로, 강제할 방법이 없던 정책은 Trusted OSS와 TRUSCA로 다룹니다.
+BomLens는 쓸 수 있는 SBOM을 만들고, Trusted OSS와 TRUSCA는 정책을 실제로 집행합니다.
 
 [슬라이드 보기](kwg-31-supply-chain-tools/slides.ko.html){ .md-button .md-button--primary target=_blank }

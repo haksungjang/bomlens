@@ -33,12 +33,12 @@ A start-to-finish walkthrough: turning a real Python project into an SBOM, readi
 
 ## Open Source Supply Chain Security Tools — OpenChain Korea Work Group
 
-BomLens, Trusted OSS, and TRUSCA: how a rejected SBOM gets fixed on the supplier side, and how AI-coding-era governance gets enforced on the receiving side.
+BomLens, Trusted OSS, and TRUSCA: how the supplier side produces a usable SBOM, and how the receiving side enforces AI-coding-era governance.
 
 - **Event:** [OpenChain Korea Work Group, 31st Meeting](https://openchain-project.github.io/OpenChain-KWG/)
 - **Date:** 8 September 2026
 - **Format:** 25-minute session
 
-BomLens fixes SBOMs you can't use. Trusted OSS and TRUSCA give policy a way to be enforced.
+BomLens generates SBOMs you can actually use. Trusted OSS and TRUSCA put policy into practice.
 
 [View slides](kwg-31-supply-chain-tools/slides.html){ .md-button .md-button--primary target=_blank }
