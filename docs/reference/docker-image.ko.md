@@ -41,10 +41,19 @@ docker pull ghcr.io/sktelecom/bomlens:latest
 
 ### Docker 이미지 분석
 
+Windows Git Bash에서는 MSYS가 `/var/run/docker.sock`과 컨테이너 쪽 경로인
+`/host-output`을 둘 다 Docker에 넘기기 전에 자기 마음대로 Windows 경로로
+바꿔버려서 두 마운트가 조용히 깨집니다. 아래 `MSYS_NO_PATHCONV`와
+`MSYS2_ARG_CONV_EXCL`은 그 변환을 끄고, `cygpath -m`으로 호스트 쪽 경로만
+직접 변환합니다(`scripts/scan-sbom.sh`도 같은 이유로 같은 조합을 씁니다).
+WSL2·macOS·Linux 셸은 경로를 바꾸지 않으므로 그냥 평범한 `docker run` 줄로
+바로 넘어갑니다.
+
 <!-- runnable -->
 ```bash
-docker run --rm \
-  -v "$(pwd)":/host-output \
+HOSTPATH="$(cygpath -m "$(pwd)" 2>/dev/null || pwd)"
+MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
+  -v "$HOSTPATH":/host-output \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -e MODE=IMAGE \
   -e TARGET_IMAGE="nginx:alpine" \
@@ -58,9 +67,10 @@ docker run --rm \
 ### 바이너리 파일 분석
 
 ```bash
-docker run --rm \
-  -v "$(pwd)":/target \
-  -v "$(pwd)":/host-output \
+HOSTPATH="$(cygpath -m "$(pwd)" 2>/dev/null || pwd)"
+MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
+  -v "$HOSTPATH":/target \
+  -v "$HOSTPATH":/host-output \
   -e MODE=BINARY \
   -e TARGET_FILE=/target/firmware.bin \
   -e UPLOAD_ENABLED=false \
@@ -74,9 +84,10 @@ docker run --rm \
 
 <!-- runnable -->
 ```bash
-docker run --rm \
-  -v "$(pwd)":/src \
-  -v "$(pwd)":/host-output \
+HOSTPATH="$(cygpath -m "$(pwd)" 2>/dev/null || pwd)"
+MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
+  -v "$HOSTPATH":/src \
+  -v "$HOSTPATH":/host-output \
   -e MODE=SOURCE \
   -e UPLOAD_ENABLED=false \
   -e HOST_OUTPUT_DIR=/host-output \
@@ -93,8 +104,9 @@ docker run --rm \
 
 <!-- runnable -->
 ```bash
-docker run --rm \
-  -v "$(pwd)":/host-output \
+HOSTPATH="$(cygpath -m "$(pwd)" 2>/dev/null || pwd)"
+MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
+  -v "$HOSTPATH":/host-output \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -e MODE=IMAGE \
   -e TARGET_IMAGE="nginx:alpine" \

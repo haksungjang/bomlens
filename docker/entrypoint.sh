@@ -638,6 +638,38 @@ fi
 # ========================================================
 ARTIFACTS=("$OUTPUT_FILE")
 
+# Copy every artifact accumulated in ARTIFACTS so far to HOST_OUTPUT_DIR.
+# Called after each pipeline stage below (not just once at the very end): a
+# scan can run for minutes (cdxgen, Trivy, an AI-model pull), and a kill,
+# an OOM, or a real power loss during any of them used to discard even a
+# fully-finished BOM, because nothing reached the host mount until the last
+# line of this script ran. Idempotent — re-copying an unchanged file is a
+# harmless no-op, and re-copying a file this stage just rewrote in place
+# (stamp/normalize/enrich all edit "$OUTPUT_FILE") picks up the latest content.
+sync_artifacts() {
+    if [ -n "$HOST_OUTPUT_DIR" ] && [ -d "$HOST_OUTPUT_DIR" ]; then
+        for art in "${ARTIFACTS[@]}"; do
+            [ -f "$art" ] || continue
+            dest="$HOST_OUTPUT_DIR/$(basename "$art")"
+            if [ "$art" -ef "$dest" ]; then
+                : # already the host path (e.g. POSTPROCESS writing in place)
+            elif cp "$art" "$HOST_OUTPUT_DIR/" 2>/dev/null; then
+                echo "[SUCCESS] copied: $dest"
+            else
+                echo "[WARN] copy failed for $art (available in container at: $art)"
+                continue
+            fi
+            if [[ "${HOST_UID:-}" =~ ^[0-9]+$ ]] && [[ "${HOST_GID:-}" =~ ^[0-9]+$ ]]; then
+                chown "${HOST_UID}:${HOST_GID}" "$dest" 2>/dev/null || true
+            fi
+        done
+    elif [ -z "${_WARNED_NO_HOST_OUTPUT:-}" ]; then
+        echo "[WARN] HOST_OUTPUT_DIR not set/accessible. Artifacts at: $(pwd)"
+        _WARNED_NO_HOST_OUTPUT=1
+    fi
+}
+sync_artifacts
+
 # Stamp the BOM's root component with the caller's --project/--version. ROOTFS is
 # stamped too: syft names a `dir:` scan's root component after the scan path
 # (/target), which is meaningless and leaks the container mount path — the same
@@ -920,12 +952,18 @@ fi
 # still unresolved.
 [ -f "${OUT_PREFIX}_yocto_vex.json" ] && ARTIFACTS+=("${OUT_PREFIX}_yocto_vex.json")
 
+# The BOM is fully enriched at this point (stamp/normalize/CPE/EOL/malicious/
+# vendored all done) and NOTICE/security below can each run for a while —
+# sync now so an interruption in either still leaves a complete, usable BOM.
+sync_artifacts
+
 if [ "${GENERATE_NOTICE:-false}" = "true" ]; then
     run_optional_step generate-notice bash "$LIBDIR/generate-notice.sh" "$OUTPUT_FILE" "$OUT_PREFIX" "$PROJECT_NAME"
     [ -f "${OUT_PREFIX}_NOTICE.txt" ] && ARTIFACTS+=("${OUT_PREFIX}_NOTICE.txt")
     [ -f "${OUT_PREFIX}_NOTICE.html" ] && ARTIFACTS+=("${OUT_PREFIX}_NOTICE.html")
     # PDF is produced only when a renderer is in the image (SBOM_PDF=true).
     [ -f "${OUT_PREFIX}_NOTICE.pdf" ] && ARTIFACTS+=("${OUT_PREFIX}_NOTICE.pdf")
+    sync_artifacts
 fi
 
 if [ "${GENERATE_SECURITY:-false}" = "true" ]; then
@@ -933,6 +971,7 @@ if [ "${GENERATE_SECURITY:-false}" = "true" ]; then
     [ -f "${OUT_PREFIX}_security.json" ] && ARTIFACTS+=("${OUT_PREFIX}_security.json")
     [ -f "${OUT_PREFIX}_security.md" ] && ARTIFACTS+=("${OUT_PREFIX}_security.md")
     [ -f "${OUT_PREFIX}_security.html" ] && ARTIFACTS+=("${OUT_PREFIX}_security.html")
+    sync_artifacts
 fi
 
 # Risk report (오픈소스위험분석보고서): always for ANALYZE, and for every other
@@ -1049,29 +1088,12 @@ if [ "$AI_MODEL_SCAN" = "true" ] || [ "$SCAN_MODE" = "ANALYZE" ]; then
 fi
 
 # ========================================================
-# Copy artifacts to host output (always)
+# Copy artifacts to host output (always) — final pass. sync_artifacts already
+# ran after the BOM was fully enriched and after NOTICE/security, so this
+# call's real job is the tail end: SPDX, signatures, conformance, risk-report
+# and the AI profile.
 # ========================================================
-if [ -n "$HOST_OUTPUT_DIR" ] && [ -d "$HOST_OUTPUT_DIR" ]; then
-    for art in "${ARTIFACTS[@]}"; do
-        [ -f "$art" ] || continue
-        dest="$HOST_OUTPUT_DIR/$(basename "$art")"
-        if [ "$art" -ef "$dest" ]; then
-            echo "[SUCCESS] saved (in-place): $art"
-        elif cp "$art" "$HOST_OUTPUT_DIR/" 2>/dev/null; then
-            echo "[SUCCESS] copied: $dest"
-        else
-            echo "[WARN] copy failed for $art (available in container at: $art)"
-            continue
-        fi
-        # Hand ownership back to the calling user so Linux hosts/CI runners can
-        # read the artifacts (the container runs as root). No-op/ignored on macOS.
-        if [[ "${HOST_UID:-}" =~ ^[0-9]+$ ]] && [[ "${HOST_GID:-}" =~ ^[0-9]+$ ]]; then
-            chown "${HOST_UID}:${HOST_GID}" "$dest" 2>/dev/null || true
-        fi
-    done
-else
-    echo "[WARN] HOST_OUTPUT_DIR not set/accessible. Artifacts at: $(pwd)"
-fi
+sync_artifacts
 
 # ========================================================
 # Upload handling (optional — Dependency-Track or TRUSCA)

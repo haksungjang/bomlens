@@ -35,7 +35,7 @@ cdxgen이 잠금 파일 없이 전이 의존성을 해석하지 못하는 생태
 `examples/` 디렉터리에 예제 프로젝트를 추가합니다.
 
 ```
-examples/kotlin/
+examples/<language>/
 ├── README.md              # 예제 설명
 ├── build.gradle.kts       # 빌드 파일
 ├── gradle.lockfile        # 잠금 파일 (필수!)
@@ -47,40 +47,9 @@ examples/kotlin/
 
 ### 4. 테스트 추가
 
-`tests/cases/test-{언어}.sh` 파일을 생성합니다. 자세한 작성법은 [테스트 가이드](testing.ko.md#테스트-작성)를 참고하세요.
+언어마다 따로 만들 테스트 파일은 없습니다. `tests/test-scan.sh`에 기존 블록의 형식을 따라 새 번호의 블록을 추가하세요(Java Maven 블록인 Test 3이 참고하기 좋은 예입니다). 픽스처 프로젝트를 만들고, `run_scan_with_logs`로 스캔을 실행하고, `find_bom_file`로 BOM을 찾은 뒤, `jq` 또는 `assert_bom_sane` / `assert_spdx_sane` / `assert_root_has_direct_deps`로 검증합니다. 각 블록의 `print_test` 레이블은 "Test N/15"처럼 번호가 손으로 적혀 있으므로, 블록을 추가한 뒤에는 레이블 번호를 다시 매기고 `--help` 문구와 요약 배너의 총 개수도 함께 갱신하세요.
 
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-source "$(dirname "$0")/../helpers/assert.sh"
-source "$(dirname "$0")/../helpers/setup.sh"
-
-TEST_NAME="Kotlin Gradle 소스 코드 분석"
-EXAMPLE_DIR="examples/kotlin"
-
-setup_test "$TEST_NAME"
-
-run_scan \
-  --project "KotlinExample" \
-  --version "1.0.0" \
-  --target "$EXAMPLE_DIR" \
-  --generate-only
-
-assert_file_exists "KotlinExample_1.0.0_bom.json"
-assert_json_field ".bomFormat" "CycloneDX"
-assert_json_field ".specVersion" "1.6"
-assert_components_count_gte 1
-assert_purl_prefix "pkg:maven/"
-
-teardown_test
-```
-
-그 다음, `tests/test-scan.sh`에 새 테스트를 등록합니다.
-
-```bash
-source "$(dirname "$0")/cases/test-kotlin.sh"
-```
+소스 스캔 패턴에 맞지 않는 경우라면 대신 독립된 `tests/test-<name>.sh` 스크립트를 새로 만들어 `ci.yml`(퍼 PR)이나 `nightly.yml`(느리거나 네트워크에 의존하는 검사)에 연결하세요. 두 경로에 대한 자세한 설명과 예시는 [테스트 가이드](testing.ko.md#테스트-작성)를 참고하세요.
 
 ### 5. 문서 업데이트
 
@@ -109,7 +78,7 @@ Kotlin은 Gradle 빌드 시스템을 사용하며 JVM 기반이므로, `detect_l
 ### Gradle 잠금 파일 생성 방법
 
 ```bash
-cd examples/kotlin
+cd examples/<language>
 
 # build.gradle.kts에 의존성 잠금 설정 추가
 cat >> build.gradle.kts << 'EOF'
@@ -147,8 +116,7 @@ Kotlin은 Maven 생태계를 공유하므로 PURL은 `pkg:maven/` 접두사를 �
 - [ ] 전이 의존성 보강이 필요하면 `docker/lib/build-prep.sh`에 반영되었습니다.
 - [ ] `examples/{언어}/` 예제 프로젝트가 있습니다.
 - [ ] 예제 프로젝트에 잠금 파일이 포함되어 있습니다.
-- [ ] `tests/cases/test-{언어}.sh` 테스트가 작성되었습니다.
-- [ ] `tests/test-scan.sh`에 테스트가 등록되었습니다.
+- [ ] `tests/test-scan.sh`에 테스트 블록이 추가되었습니다(소스 스캔 패턴에 맞지 않으면 독립된 `tests/test-<name>.sh`).
 - [ ] `./tests/test-scan.sh` 전체가 통과합니다.
 - [ ] `README.md` 지원 언어 목록이 업데이트되었습니다.
 - [ ] 예제 가이드에 예제 섹션이 추가되었습니다.

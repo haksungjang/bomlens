@@ -801,6 +801,44 @@ EOF
 fi
 
 # ========================================================
+# Test 11b: ZIP archive zip-slip guard — a traversal entry whose name has a
+# space before the ".." must still be rejected. The guard used to list
+# entries with `unzip -l` (a fixed-width table) and grab column 4 with awk,
+# which splits on whitespace same as the table itself: a name like
+# "evil name/../../etc/passwd" came back as just "evil", silently dropping
+# the traversal from what the regex ever saw. `python3 -c zipfile` builds the
+# entry directly (a real `mkdir`/`zip` cannot produce a literal ".." path
+# component), so this needs python3, same as the fixture below.
+# ========================================================
+print_test "Test 11b/15: ZIP zip-slip guard (space-in-name bypass)"
+
+if ! command -v python3 > /dev/null 2>&1; then
+    print_error "ZIP zip-slip guard (python3 unavailable to build the fixture)"
+    ((FAILED++))
+else
+    mkdir -p zipslip-src
+    python3 -c '
+import zipfile
+with zipfile.ZipFile("zipslip-src/evil.zip", "w") as z:
+    z.writestr("evil name/../../../etc/passwd", "pwned")
+'
+    cd zipslip-src || true
+    if run_scan_with_logs "test-zipslip" "TestZipSlip" "1.0.0" "--target evil.zip"; then
+        print_error "ZIP zip-slip guard (malicious archive was accepted, not rejected)"
+        show_failure_log "test-zipslip"
+        ((FAILED++))
+    elif grep -q "unsafe path in archive" "$LOG_DIR/test-zipslip.log" 2>/dev/null; then
+        print_success "ZIP zip-slip guard (traversal entry with a space in its name correctly rejected)"
+        ((PASSED++))
+    else
+        print_error "ZIP zip-slip guard (rejected, but not for the expected reason)"
+        show_failure_log "test-zipslip"
+        ((FAILED++))
+    fi
+    cd "$TEST_DIR" || true
+fi
+
+# ========================================================
 # Test 12: Python --byte-stable reproducibility + metadata/array sanity
 # Two scans of the same input must be byte-identical (B-1; python is the
 # language that builds a temp venv whose random name used to leak), and the

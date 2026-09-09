@@ -444,6 +444,166 @@ scan_in "$d" --project PT --version 1 --target app.out --generate-only \
   || { fail "pass-through flags reach the container"; show; }
 
 # --------------------------------------------------------
+section "Windows path & filesystem adversarial matrix"
+# --------------------------------------------------------
+# Windows path/filename grammar differs from Linux in ways "works in CI"
+# hides: reserved device names, case-insensitive-but-preserving comparison,
+# a 260-char default path ceiling, and characters cmd/PowerShell treat
+# specially. These cases were shaped from empirical probing on a real
+# Windows Git Bash shell (not assumption): mkdir/touch on CON, NUL.txt,
+# aux.js, COM1, a trailing-dot dir and a trailing-space dir all SUCCEED via
+# the MSYS POSIX layer here, even though Explorer/cmd would refuse them —
+# so a tree checked out or built by a POSIX-side tool can contain a name a
+# native Windows tool cannot even open. That mismatch, not the mkdir call
+# itself, is what these cases are really probing.
+#
+# Assertion contract (matches the adversarial-testing plan): every case
+# must land in one of three sane outcomes — succeeds with the SBOM on disk,
+# or fails with a readable message — never a silent empty "success", a raw
+# traceback, or a truncated/mangled artifact name. sane_outcome() below
+# encodes that contract once so each case only has to state the args.
+sane_outcome() {
+  # sane_outcome <label> [-- expect-in-out ...]
+  local label="$1"; shift
+  if [ "$RC" -eq 0 ]; then
+    if in_out "Analysis Complete"; then
+      local ok=1
+      for want in "$@"; do in_out "$want" || ok=0; done
+      [ "$ok" = 1 ] && pass "$label" || { fail "$label" "rc=0 but missing expected output"; show; }
+    else
+      fail "$label" "rc=0 but no 'Analysis Complete' — silent no-op success"; show
+    fi
+  else
+    if printf '%s' "$OUT" | grep -qiE 'traceback|unbound variable|line [0-9]+:.*(not found|syntax error)'; then
+      fail "$label" "rc=$RC but the failure looks like a raw crash, not a clean message"; show
+    else
+      pass "$label (failed closed with a message rather than crashing)"
+    fi
+  fi
+}
+
+# A1. Reserved device names as ordinary FILES inside an otherwise normal
+# project (not the project root itself) — a build tool or a Linux-authored
+# checkout can produce these; the scan must not choke walking past them.
+d="$(new_proj reserved_files)"
+printf '{"name":"a","dependencies":{"express":"^4"}}' > "$d/package.json"
+: > "$d/CON" 2>/dev/null; : > "$d/NUL.txt" 2>/dev/null
+: > "$d/aux.js" 2>/dev/null; mkdir -p "$d/COM1" 2>/dev/null
+scan_in "$d" --project ResFiles --version 1.0.0 --generate-only
+sane_outcome "reserved device names (CON/NUL.txt/aux.js/COM1) beside a real manifest don't break the scan" "Language: node"
+
+# A2. A reserved device name AS THE PROJECT DIRECTORY ITSELF.
+d="$WORK/aux"
+mkdir -p "$d" 2>/dev/null
+if [ -d "$d" ]; then
+  printf '{"name":"a"}' > "$d/package.json"
+  scan_in "$d" --project ResDir --version 1.0.0 --generate-only
+  sane_outcome "project directory literally named a reserved device name (aux/)" "Language: node"
+else
+  skip "project directory named a reserved device name (mkdir refused on this host)"
+fi
+
+# A3. Trailing dot / trailing space in the project directory name — Explorer
+# silently strips these on creation, but a POSIX-side tool can still produce
+# them, so the two spellings are NOT the same folder to the OS.
+for suffix in "." " "; do
+  label="trailing-$([ "$suffix" = "." ] && echo dot || echo space)"
+  d="$WORK/trail_proj$suffix"
+  mkdir -p "$d" 2>/dev/null
+  if [ -d "$d" ]; then
+    printf '{"name":"a"}' > "$d/package.json"
+    scan_in "$d" --project "Trail" --version 1.0.0 --generate-only
+    sane_outcome "project directory with a $label ('trail_proj$suffix')" "Language: node"
+  else
+    skip "project directory with a $label (mkdir refused on this host)"
+  fi
+done
+
+# A4. Two manifests differing only by case in the same directory. On a
+# case-insensitive-but-preserving filesystem these are ONE file on disk
+# (confirmed empirically: `mkdir CaseTest` then `mkdir CASETEST` fails with
+# "File exists"), so this checks the scan doesn't double-count or choke on
+# what it thinks are two distinct inputs.
+d="$(new_proj case_collide)"
+printf '{"name":"lower","dependencies":{"express":"^4"}}' > "$d/package.json"
+# On a case-preserving FS this silently overwrites the same inode; on a
+# genuinely case-sensitive one (e.g. this suite running on Linux CI) it is a
+# second, separate file — both are legitimate to exercise here.
+printf '{"name":"upper","dependencies":{"express":"^4"}}' > "$d/Package.json" 2>/dev/null
+scan_in "$d" --project CaseCollide --version 1.0.0 --generate-only
+sane_outcome "package.json / Package.json in the same directory" "Language: node"
+
+# A5. Shell-metacharacter and space-bearing directory names. These must
+# reach scan-sbom.sh's OWN bash quoting correctly — a separate concern from
+# scan-sbom.bat's cmd delayed-expansion handling of '!', which
+# test-bat-contract.ps1 already covers.
+for name in "has space" "a&b" "a(b)" "a!b" "café"; do
+  d="$WORK/meta_$(printf '%s' "$name" | tr -c 'A-Za-z0-9' '_')"
+  mkdir -p "$d" 2>/dev/null
+  if [ -d "$d" ]; then
+    printf '{"name":"a"}' > "$d/package.json"
+    scan_in "$d" --project "Meta" --version 1.0.0 --generate-only
+    sane_outcome "project directory containing '$name'" "Language: node"
+  else
+    skip "project directory containing '$name' (mkdir refused on this host)"
+  fi
+done
+
+# A6. A non-ASCII (Korean) project directory name. This product's own user
+# base is disproportionately Korean-language, so this is not an edge case
+# for them — it is Tuesday. --project/--version are passed explicitly, so
+# this isolates directory-name handling from the (separately documented)
+# web-upload filename sanitizer.
+d="$WORK/한글 프로젝트"
+mkdir -p "$d" 2>/dev/null
+if [ -d "$d" ]; then
+  printf '{"name":"a","dependencies":{"express":"^4"}}' > "$d/package.json"
+  scan_in "$d" --project "Hangul" --version 1.0.0 --generate-only
+  sane_outcome "Korean (non-ASCII) project directory name" "Language: node"
+else
+  skip "Korean project directory name (mkdir refused on this host)"
+fi
+
+# A7. Output-path length amplification: the INPUT path can be well within
+# any limit while the tool's own generated output path
+# (<dir>/<Project>_<Version>/<Project>_<Version>_bom.json) is not, because
+# nothing in scan-sbom.sh budgets for that expansion. Build a deep, long
+# tree under $WORK and pair it with a long --project/--version so the
+# constructed output path lands past Windows' classic 260-char MAX_PATH.
+# This only probes scan-sbom.sh's OWN bash-level path handling (mkdir/cd/
+# glob) — it says nothing about Docker Desktop's or cdxgen's own limits
+# when a real engine is involved; that needs windows-smoke.ps1 (real
+# engine) and is out of reach of this stub-docker harness.
+deep="$WORK/deep"
+seg="segment_of_reasonable_length"
+for _ in 1 2 3 4 5 6; do deep="$deep/$seg"; done
+mkdir -p "$deep" 2>/dev/null
+if [ -d "$deep" ]; then
+  printf '{"name":"a","dependencies":{"express":"^4"}}' > "$deep/package.json"
+  longname="LongProjectNameThatPushesTheGeneratedOutputPathPastTheClassicWindowsPathCeiling"
+  scan_in "$deep" --project "$longname" --version "1.0.0-a-fairly-long-version-suffix" --generate-only
+  sane_outcome "long project/version name under a deep path (output-path length stress)" "Language: node"
+  # Total path length actually produced, for triage context in -v runs.
+  if [ "$VERBOSE" = "true" ]; then
+    outpath="$deep/${longname}_1.0.0-a-fairly-long-version-suffix/${longname}_1.0.0-a-fairly-long-version-suffix_bom.json"
+    echo "        (constructed output path is ${#outpath} chars: $outpath)"
+  fi
+else
+  skip "output-path length stress (deep mkdir refused on this host)"
+fi
+
+# A8. A read-only source manifest. Scanning only needs to READ the source
+# tree, so a read-only file (chmod 444 -> the Windows read-only attribute
+# via Git Bash, confirmed empirically to actually block writes) must not be
+# treated as a failure.
+d="$(new_proj readonly_src)"
+printf '{"name":"a","dependencies":{"express":"^4"}}' > "$d/package.json"
+chmod 444 "$d/package.json" 2>/dev/null
+scan_in "$d" --project ReadOnly --version 1.0.0 --generate-only
+sane_outcome "read-only manifest file (source tree needs no write access)" "Language: node"
+chmod 644 "$d/package.json" 2>/dev/null
+
+# --------------------------------------------------------
 section "Windows wrappers (static checks)"
 # --------------------------------------------------------
 UI_BAT="$REPO/scripts/sbom-ui.bat"

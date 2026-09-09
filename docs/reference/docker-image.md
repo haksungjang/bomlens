@@ -41,10 +41,19 @@ Select the analysis mode with the `MODE` environment variable. All examples belo
 
 ### Analyze a Docker image
 
+On Git Bash (Windows), MSYS rewrites both `/var/run/docker.sock` and the
+container-side `/host-output` into Windows paths before Docker ever sees
+them, silently breaking both mounts. `MSYS_NO_PATHCONV` and
+`MSYS2_ARG_CONV_EXCL` below turn that rewriting off, and `cygpath -m`
+converts the host side back by hand instead (`scripts/scan-sbom.sh` uses the
+same pair for the same reason). WSL2, macOS and Linux shells don't rewrite
+paths and skip straight to the plain `docker run` line.
+
 <!-- runnable -->
 ```bash
-docker run --rm \
-  -v "$(pwd)":/host-output \
+HOSTPATH="$(cygpath -m "$(pwd)" 2>/dev/null || pwd)"
+MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
+  -v "$HOSTPATH":/host-output \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -e MODE=IMAGE \
   -e TARGET_IMAGE="nginx:alpine" \
@@ -58,9 +67,10 @@ docker run --rm \
 ### Analyze a binary file
 
 ```bash
-docker run --rm \
-  -v "$(pwd)":/target \
-  -v "$(pwd)":/host-output \
+HOSTPATH="$(cygpath -m "$(pwd)" 2>/dev/null || pwd)"
+MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
+  -v "$HOSTPATH":/target \
+  -v "$HOSTPATH":/host-output \
   -e MODE=BINARY \
   -e TARGET_FILE=/target/firmware.bin \
   -e UPLOAD_ENABLED=false \
@@ -74,9 +84,10 @@ docker run --rm \
 
 <!-- runnable -->
 ```bash
-docker run --rm \
-  -v "$(pwd)":/src \
-  -v "$(pwd)":/host-output \
+HOSTPATH="$(cygpath -m "$(pwd)" 2>/dev/null || pwd)"
+MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
+  -v "$HOSTPATH":/src \
+  -v "$HOSTPATH":/host-output \
   -e MODE=SOURCE \
   -e UPLOAD_ENABLED=false \
   -e HOST_OUTPUT_DIR=/host-output \
@@ -93,8 +104,9 @@ In direct runs, the notice and security reports are off by default. Turn on the 
 
 <!-- runnable -->
 ```bash
-docker run --rm \
-  -v "$(pwd)":/host-output \
+HOSTPATH="$(cygpath -m "$(pwd)" 2>/dev/null || pwd)"
+MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
+  -v "$HOSTPATH":/host-output \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -e MODE=IMAGE \
   -e TARGET_IMAGE="nginx:alpine" \

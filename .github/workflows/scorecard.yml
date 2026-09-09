@@ -4,24 +4,19 @@ name: Scorecard supply-chain security
 # (branch protection, pinned dependencies, signed releases, etc.) and uploads
 # the result to the Security tab.
 #
-# On demand only. Every other workflow here runs on self-hosted runners, and
-# this one cannot follow: the results API verifies the workflow file itself and
-# accepts a single `ubuntu-latest`-class runner label with no plain `run:`
-# steps, so a self-hosted label makes it reject the upload.
-#
-# This job already satisfies both conditions (runs-on: ubuntu-latest, every
-# step is `uses:`), so on paper the automatic triggers below could be restored
-# right now. Left as workflow_dispatch-only pending a manual dispatch to
-# confirm the publish actually succeeds end to end before turning on a
-# recurring schedule nobody is watching. Restore the automatic triggers below
-# once that's confirmed:
-#
-#   branch_protection_rule:
-#   schedule:
-#     - cron: '41 5 * * 1'   # weekly, Monday 05:41 UTC
-#   push:
-#     branches: [main]
+# Every other workflow here runs on self-hosted runners, but this one cannot
+# follow: the results API verifies the workflow file itself and accepts only a
+# single `ubuntu-latest`-class runner label with no plain `run:` steps, so a
+# self-hosted label makes it reject the upload. This job already satisfies
+# both conditions (runs-on: ubuntu-latest, every step is `uses:`), and the
+# automatic triggers below were confirmed to publish successfully end to end
+# before being turned on.
 on:
+  branch_protection_rule:
+  schedule:
+    - cron: '41 5 * * 1'   # weekly, Monday 05:41 UTC
+  push:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:

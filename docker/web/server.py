@@ -2264,14 +2264,37 @@ def extract_file_part(rfile, length, boundary, dest_path):
             pending += chunk
 
 
+# Characters Windows forbids in a filename/path component, plus backslash.
+# zipfile.namelist() always reports members with forward slashes (the ZIP
+# spec's own separator), so a member's zip-internal path never contains a
+# backslash on its own -- but nothing stops a member's NAME (a path
+# component between slashes) from containing one: extracting on Linux
+# treats it as a literal character, not a separator, so "..\\evil.txt" is
+# one harmless-looking filename here. It only becomes dangerous once this
+# tree is bind-mounted back onto a Windows host: verified end to end in this
+# session that Docker Desktop's Windows file-sharing silently DROPS these
+# characters rather than rejecting them, so two differently-named members
+# (e.g. "a:b.txt" and "ab.txt") can collide onto the same Windows filename
+# -- and instead of one cleanly overwriting the other, the host-visible file
+# ends up holding both members' content APPENDED together, silently, with
+# no error anywhere in the pipeline.
+_WINDOWS_ILLEGAL_PATH_CHARS = re.compile(r'[<>:"|?*\\\x00-\x1f]')
+
+
 def safe_extract_zip(zip_path, dest_dir):
-    """Extract a zip, rejecting absolute/traversal members (zip-slip)."""
+    """Extract a zip, rejecting absolute/traversal members (zip-slip) and
+    members whose name would collide once this tree reaches a Windows host."""
     dest_real = os.path.realpath(dest_dir)
     with zipfile.ZipFile(zip_path) as zf:
         for member in zf.namelist():
             target = os.path.realpath(os.path.join(dest_dir, member))
             if target != dest_real and not target.startswith(dest_real + os.sep):
                 raise ValueError("unsafe path in archive: %s" % member)
+            if _WINDOWS_ILLEGAL_PATH_CHARS.search(member):
+                raise ValueError(
+                    "archive member name is not Windows-safe: %s "
+                    "(contains a character Windows forbids in a path)" % member
+                )
         zf.extractall(dest_dir)
 
 
@@ -3660,7 +3683,15 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         safe_fn = os.path.basename(filename) or "upload.bin"
-        safe_fn = re.sub(r"[^A-Za-z0-9._-]", "_", safe_fn)
+        # Strip only what is genuinely unsafe: characters Windows forbids in a
+        # filename (this upload can be bind-mounted back onto a Windows host
+        # via Docker Desktop) and C0 control characters, plus trailing dots/
+        # spaces (Windows silently strips those, so keeping them invites a
+        # mismatch between what this server wrote and what a Windows-side
+        # tool sees). An ASCII-only allowlist used to sit here and collapsed
+        # any non-ASCII name (a Korean filename, the common case for this
+        # product's users, not an edge case) to a run of underscores.
+        safe_fn = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", safe_fn).strip(". ") or "upload.bin"
         lower = safe_fn.lower()
         if not lower.endswith(UPLOAD_EXTS[kind]):
             shutil.rmtree(dest_dir, ignore_errors=True)
@@ -4457,6 +4488,14 @@ class Handler(BaseHTTPRequestHandler):
                         listing = subprocess.run(["tar", "-tf", up], stdout=subprocess.PIPE, text=True)
                         if re.search(r"(^|\n)(/|.*\.\.(/|$))", listing.stdout or ""):
                             fail("unsafe path in archive"); return
+                        # Same Windows-safety check as safe_extract_zip: a tar
+                        # member name can carry a character Windows forbids in
+                        # a path (backslash, colon, ...) without tripping the
+                        # POSIX-style traversal check above.
+                        _bad = next((ln for ln in (listing.stdout or "").splitlines()
+                                     if _WINDOWS_ILLEGAL_PATH_CHARS.search(ln)), None)
+                        if _bad is not None:
+                            fail("archive member name is not Windows-safe: %s" % _bad); return
                         # Reject a symlink/hardlink member whose target escapes the
                         # extraction dir (a link "evil -> /etc" followed by "evil/x"
                         # writes through the link). The name guard above misses these

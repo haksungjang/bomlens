@@ -379,10 +379,167 @@ for f in "${DOCS[@]}"; do
     fi
 done
 
+# --- Check 11: repo-relative paths named in the docs must exist -------------
+# A guide routinely names a real file or directory for the reader to open, run
+# or diff against — a tree listing, a `path/to/file` in prose, a script the
+# reader is told to run. Every other check above compares the docs against a
+# *derived* fact (a flag, an env var, an image name); nothing anywhere checked
+# whether a path the docs simply assert exists actually does. That's how
+# docs/contribute/testing.md kept telling readers to run
+# `tests/cases/test-java.sh` for years after the layout it described was never
+# built (see docs/contribute/testing.md drift history).
+#
+# Scope mirrors scripts/ko-style/lint.mjs's SCOPE (the published doc surface):
+# docs/** (English and .ko.md), README.md, CONTRIBUTING(.ko).md,
+# SECURITY(.ko).md, CODE_OF_CONDUCT(.ko).md, SUPPORT.md, and the READMEs under
+# examples/, docker/, electron/. CHANGELOG.md and THIRD_PARTY_LICENSES*.md are
+# excluded, same as lint.mjs: a changelog entry or license inventory quotes
+# history, it isn't a walkthrough anyone follows path-by-path. docker/lib/notices
+# is a byte-identical vendored copy (tests/check-notice-sync.sh owns it).
+PATHDOCS=()
+while IFS= read -r f; do PATHDOCS+=("$f"); done \
+    < <(find docs examples docker electron -name '*.md' \
+        ! -path 'docker/lib/notices/*' ! -path '*/node_modules/*' 2>/dev/null | sort)
+for f in README.md CONTRIBUTING.md CONTRIBUTING.ko.md SECURITY.md SECURITY.ko.md \
+         CODE_OF_CONDUCT.md CODE_OF_CONDUCT.ko.md SUPPORT.md; do
+    [ -f "$f" ] && PATHDOCS+=("$f")
+done
+
+# A token "looks like" a repo-relative path if, once a leading `./` is
+# stripped, it starts with one of the repo's actual top-level directories (or
+# `.github/`) followed by `/`. That single condition does almost all of the
+# false-positive rejection for free, with no denylist needed: it excludes
+# absolute *container* paths (`/proc`, `/usr/local/lib/sbom/...`), API routes
+# (`GET /capabilities`, `/scan-stream`), git/HF model ids (`owner/name`), DOIs,
+# scan-output directory names (`GoExample_1.0.0/`), URLs, and flag examples
+# like `--target *.zip/*.tar.gz` or `MODE=IMAGE/BINARY/ROOTFS`.
+TOPDIRS='tests|scripts|docker|electron|examples|docs|overrides|\.github'
+
+# A directory this repo's own .gitignore says is scratch/build output (the
+# test workspace, a `dist/`, `.gradle/`, ...) legitimately doesn't exist in a
+# checked-out tree — the docs are describing where a *run* leaves it, not a
+# path in the repo. Read once from .gitignore's own directory patterns
+# (lines ending in `/`, skipping comments/blanks/negations `!...`) rather than
+# shelling out to `git check-ignore` per candidate: that command reports a
+# false "ignored" for any nonexistent path ending in `/` on this git build
+# (tested: git 2.55.0.windows.3), which would blind the whole check to every
+# missing-directory reference instead of just the gitignored ones.
+GITIGNORE_DIRS="$(grep -vE '^[[:space:]]*(#|!|$)' .gitignore 2>/dev/null \
+    | grep -E '/$' | sed 's#/$##')"
+is_ignored_dir() {
+    local p="${1%/}"
+    while IFS= read -r pat; do
+        [ -z "$pat" ] && continue
+        case "$p" in
+            "$pat" | "$pat"/*) return 0 ;;
+        esac
+    done <<<"$GITIGNORE_DIRS"
+    return 1
+}
+
+# A sentence can name a path specifically to say it *doesn't* exist ("There is
+# no `tests/cases/` directory.") — the exact idiom docs/contribute/testing.md
+# now uses to correct the bug this check exists to catch. Suppress a hit when
+# the doc line it came from reads as that kind of negation, in either
+# language; this is intentionally narrow (whole phrases, not bare "no") so it
+# doesn't blanket-suppress unrelated hits that happen to share a line with an
+# unrelated "no".
+NEG_RE='there is no|there are no|no such|does(n'"'"'t| not) exist|no longer exist|was removed|has been removed|were removed|없습니다|디렉터리는 없|더 이상 존재하지|삭제되었습니다|제거되었습니다'
+
+# Pull path-shaped tokens out of a doc, split on whitespace: inline
+# `single-backtick spans` (a span can hold a whole command line like
+# `./scripts/scan-sbom.sh --ui`, so it's split into words) and the raw
+# contents of fenced code blocks (a directory tree, a runnable snippet, a
+# config sample) — both are "backtick-delimited" in the markdown sense, one
+# vs. three backticks. Plain prose outside both is out of scope: this check
+# guards instructions a reader copies or a listing they compare against, not
+# a sentence that merely mentions a folder name.
+doc_path_tokens() {
+    awk '
+        /^[[:space:]]*```/ { infence = !infence; next }
+        infence { print NR":"$0; next }
+        {
+            line = $0
+            while (match(line, /`[^`]+`/)) {
+                print NR":" substr(line, RSTART + 1, RLENGTH - 2)
+                line = substr(line, RSTART + RLENGTH)
+            }
+        }
+    ' "$1"
+}
+
+for f in "${PATHDOCS[@]}"; do
+    while IFS= read -r rec; do
+        [ -z "$rec" ] && continue
+        ln="${rec%%:*}"
+        content="${rec#*:}"
+        read -ra toks <<<"$content"
+        for raw in "${toks[@]}"; do
+            [ -z "$raw" ] && continue
+            tok="${raw#./}"
+            # A placeholder (`<lang>`, `{language}`) or a glob (`*.txt`)
+            # illustrates a *pattern*, not a path anyone can open — skip it.
+            case "$tok" in
+                *'<'*'>'* | *'{'*'}'* | *'*'*) continue ;;
+            esac
+            [[ $tok =~ ^(${TOPDIRS})/ ]] || continue
+            # Keep only the leading run of real path characters. None of
+            # `#anchor`, `:line[-line]`, trailing punctuation from a
+            # shell/JSON/table context, or a Korean particle glued straight
+            # onto the path with no space (`tests/test-workspace/도`, a
+            # common construction the docs use — none of ".,;:)]#" or a
+            # Hangul syllable are ever legal in one of this repo's paths, so
+            # this one rule drops all of them at once. Pure bash (no
+            # grep/sed subshell per token): this loop runs over every
+            # code-span token in the whole doc tree, and process spawns are
+            # the dominant cost on Windows/Git Bash.
+            if [[ $tok =~ ^([A-Za-z0-9._/-]+) ]]; then
+                tok="${BASH_REMATCH[1]}"
+            else
+                continue
+            fi
+            [ -e "$tok" ] && continue
+            is_ignored_dir "$tok" && continue
+            docline="$(sed -n "${ln}p" "$f" 2>/dev/null)"
+            printf '%s' "$docline" | grep -qiE "$NEG_RE" && continue
+            echo "  DRIFT[path]: $f:$ln references '$tok', which does not exist in the repo"
+            FAIL=$((FAIL + 1))
+        done
+    done < <(doc_path_tokens "$f")
+done
+
+# --- Check 12: en/ko heading-structure parity (warning) ---------------------
+# A translated page that quietly drops, adds or reorders a whole section is
+# invisible to every check above — none of them look at anything but code
+# blocks and paths. This diffs just the heading *shape* (how many "#" each
+# heading line opens with, in order) so translated wording never trips it,
+# but a missing/extra/reordered/re-leveled section does. Code-fence content
+# is skipped so a "#" shell comment inside an example never counts as a
+# heading. A warning, not a hard failure: unlike a runnable command (Check
+# 10), a translator restructuring for readability is a legitimate reason for
+# the shape to differ, not necessarily drift.
+heading_levels() {
+    awk '
+        /^```/ { infence = !infence; next }
+        infence { next }
+        /^#{1,6}[[:space:]]/ { match($0, /^#+/); print RLENGTH }
+    ' "$1"
+}
+for f in "${DOCS[@]}"; do
+    case "$f" in *.ko.md) continue ;; esac
+    ko="${f%.md}.ko.md"
+    [ -f "$ko" ] || continue
+    if [ "$(heading_levels "$f")" != "$(heading_levels "$ko")" ]; then
+        echo "  WARN[i18n-structure]: $f and ${ko##*/} have different heading structure"
+        diff <(heading_levels "$f") <(heading_levels "$ko") | sed 's/^/      /' | head -8
+        WARN=$((WARN + 1))
+    fi
+done
+
 echo ""
 [ "$WARN" -gt 0 ] && echo "${WARN} i18n warning(s) (non-fatal)"
 if [ "$FAIL" -eq 0 ]; then
-    echo "OK: docs reference no unknown scan-sbom.sh flags, SBOM_* vars or images"
+    echo "OK: docs reference no unknown scan-sbom.sh flags, SBOM_* vars, images or missing paths"
 else
     echo "FAIL: ${FAIL} doc/tool drift(s) — fix the doc or the code so they agree"
     exit 1
