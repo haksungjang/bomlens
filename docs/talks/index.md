@@ -39,6 +39,6 @@ BomLens, Trusted OSS, and TRUSCA: how a rejected SBOM gets fixed on the supplier
 - **Date:** 8 September 2026
 - **Format:** 25-minute session
 
-Two problems, two answers: SBOMs that get rejected before they're even usable, met by BomLens; policies that never get enforced once AI agents start adding dependencies on their own, met by Trusted OSS and TRUSCA.
+BomLens fixes SBOMs you can't use. Trusted OSS and TRUSCA give policy a way to be enforced.
 
 [View slides](kwg-31-supply-chain-tools/slides.html){ .md-button .md-button--primary target=_blank }
