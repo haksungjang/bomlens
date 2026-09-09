@@ -1008,7 +1008,7 @@ if [ "$REPORT_LANG" = "ko" ]; then
     C_YES=$(kstr common.yes); C_NO=$(kstr common.no)
     C_REF=$(kstr conformance.reference); C_REF="${C_REF%% *}"   # "참고:" prefix
     C_TH_FRAMEWORK=$(kstr aiprofile.th_framework)
-    C_HTML_TITLE=$(tfmt conformance.html_title "$PROJECT")
+    C_HTML_TITLE=$(tfmt conformance.html_title "$PROJECT_ESC")
     C_KIND=$(kstr conformance.kind); C_H1=$(kstr conformance.h1)
     C_META="$(kstr conformance.meta_project): ${PROJECT_HTML} &middot; $(kstr conformance.meta_generated): ${GEN_AT} &middot; $(kstr conformance.meta_format): ${FORMAT}"
     C_PILL_RESULT="$(kstr conformance.pill_result) ${RESULT_UP}"
@@ -1040,7 +1040,7 @@ else
     C_YES="yes"; C_NO="no"
     C_REF="Reference:"
     C_TH_FRAMEWORK="Framework"
-    C_HTML_TITLE="SBOM Conformance — ${PROJECT}"
+    C_HTML_TITLE="SBOM Conformance — ${PROJECT_ESC}"
     C_KIND="Conformance"; C_H1="SBOM Conformance Report"
     C_META="Project: ${PROJECT_HTML} &middot; Generated: ${GEN_AT} &middot; Format: ${FORMAT}"
     C_PILL_RESULT="Result: ${RESULT_UP}"

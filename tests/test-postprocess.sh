@@ -239,6 +239,17 @@ bash "$LIB/stamp-document-metadata.sh" "$WORK/doc-merge.json" MERGE >/dev/null 2
 dm=$(jq -rc '"\(.metadata|has("lifecycles"))|\([.metadata.tools.components[]|.name]|join(","))"' "$WORK/doc-merge.json")
 [ "$dm" = 'false|cdxgen,BomLens' ] \
     && pass "a merged SBOM claims no lifecycle phase but still names the tool" || fail "merge document metadata: $dm"
+# DATASET describes a published research dataset, not software moving through a
+# build, so it must be routed the same as MERGE: no phase claimed, and no WARN
+# (a DATASET scan is not missing a classification, it genuinely has none).
+printf '%s' "$DOC" | jq 'del(.metadata.lifecycles)' > "$WORK/doc-dataset.json"
+dataset_err=$(bash "$LIB/stamp-document-metadata.sh" "$WORK/doc-dataset.json" DATASET 2>&1 1>/dev/null)
+dd=$(jq -rc '.metadata|has("lifecycles")' "$WORK/doc-dataset.json")
+[ "$dd" = "false" ] && pass "a DATASET SBOM claims no lifecycle phase" || fail "dataset document metadata: has(lifecycles)=$dd"
+case "$dataset_err" in
+    *"no lifecycle phase defined"*) fail "DATASET still logs the missing-lifecycle WARN" "$dataset_err" ;;
+    *) pass "DATASET logs no missing-lifecycle WARN" ;;
+esac
 # Invalid input is a defect, not a condition to tolerate: fail closed like stamp-metadata.
 printf 'not json{' > "$WORK/doc-bad.json"
 if bash "$LIB/stamp-document-metadata.sh" "$WORK/doc-bad.json" SOURCE >/dev/null 2>&1; then
@@ -4294,6 +4305,69 @@ if [ "$(jq '.components | length' "$MODIR/multiline/out.json" 2>/dev/null)" = "2
     pass "a uses() block split across lines still parses"
 else
     fail "multiline uses() was not parsed" "$(jq -c '.components' "$MODIR/multiline/out.json" 2>/dev/null)"
+fi
+
+echo "== \$PROJECT is escaped in generated HTML reports, not injected =="
+# Regression: generate-notice.sh, scan-security.sh, generate-risk-report.sh and
+# validate-sbom.sh all interpolate the project name into an HTML <title>/meta
+# line. In the web UI that name is prefilled from the uploaded SBOM's
+# metadata.component.name, so it is attacker-controlled input, and an unescaped
+# interpolation lets it inject markup into a report a reviewer opens in a browser.
+XSS_PROJECT='<script>alert(1)</script> & "quoted"'
+XSS_ESCAPED='&lt;script&gt;alert(1)&lt;/script&gt;'
+XSS_DIR="$WORK/xss"
+mkdir -p "$XSS_DIR"
+cp "$FIX/good-cyclonedx.json" "$XSS_DIR/proj_bom.json"
+
+bash "$LIB/generate-notice.sh" "$XSS_DIR/proj_bom.json" "$XSS_DIR/notice" "$XSS_PROJECT" >/dev/null 2>&1
+if grep -q '<script>alert' "$XSS_DIR/notice_NOTICE.html" 2>/dev/null; then
+    fail "generate-notice.sh: raw <script> made it into NOTICE.html"
+elif grep -qF "$XSS_ESCAPED" "$XSS_DIR/notice_NOTICE.html" 2>/dev/null; then
+    pass "generate-notice.sh escapes \$PROJECT in NOTICE.html"
+else
+    fail "generate-notice.sh: escaped project name not found in NOTICE.html"
+fi
+
+XSS_FAKEBIN="$WORK/xss/fakebin"
+mkdir -p "$XSS_FAKEBIN"
+cat > "$XSS_FAKEBIN/trivy" <<'SH'
+#!/bin/sh
+out=""
+while [ $# -gt 0 ]; do
+    [ "$1" = "--output" ] && { out="$2"; shift; }
+    shift
+done
+echo '{"SchemaVersion":2,"Results":[]}' > "$out"
+exit 0
+SH
+chmod +x "$XSS_FAKEBIN/trivy"
+PATH="$XSS_FAKEBIN:$PATH" SECURITY_ENRICH=false \
+    bash "$LIB/scan-security.sh" "$XSS_DIR/proj_bom.json" "$XSS_DIR/sec" "$XSS_PROJECT" >/dev/null 2>&1
+if grep -q '<script>alert' "$XSS_DIR/sec_security.html" 2>/dev/null; then
+    fail "scan-security.sh: raw <script> made it into security.html"
+elif grep -qF "$XSS_ESCAPED" "$XSS_DIR/sec_security.html" 2>/dev/null; then
+    pass "scan-security.sh escapes \$PROJECT in security.html"
+else
+    fail "scan-security.sh: escaped project name not found in security.html"
+fi
+
+cp "$XSS_DIR/proj_bom.json" "$XSS_DIR/riskproj_bom.json"
+( cd "$XSS_DIR" && bash "$LIB/generate-risk-report.sh" riskproj "$XSS_PROJECT" >/dev/null 2>&1 )
+if grep -q '<script>alert' "$XSS_DIR/riskproj_risk-report.html" 2>/dev/null; then
+    fail "generate-risk-report.sh: raw <script> made it into risk-report.html"
+elif grep -qF "$XSS_ESCAPED" "$XSS_DIR/riskproj_risk-report.html" 2>/dev/null; then
+    pass "generate-risk-report.sh escapes \$PROJECT in risk-report.html"
+else
+    fail "generate-risk-report.sh: escaped project name not found in risk-report.html"
+fi
+
+bash "$LIB/validate-sbom.sh" "$XSS_DIR/proj_bom.json" "$XSS_DIR/conf" "$XSS_PROJECT" >/dev/null 2>&1
+if grep -q '<script>alert' "$XSS_DIR/conf_conformance.html" 2>/dev/null; then
+    fail "validate-sbom.sh: raw <script> made it into conformance.html"
+elif grep -qF "$XSS_ESCAPED" "$XSS_DIR/conf_conformance.html" 2>/dev/null; then
+    pass "validate-sbom.sh escapes \$PROJECT in conformance.html"
+else
+    fail "validate-sbom.sh: escaped project name not found in conformance.html"
 fi
 
 echo ""
