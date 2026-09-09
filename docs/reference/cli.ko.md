@@ -32,20 +32,20 @@ BomLens의 전체 옵션과 분석 모드, CI/CD 통합 방법, 트러블슈팅�
 | `--license <spdx-id>` | — | 프로젝트를 배포하는 배포 라이선스(예: `Apache-2.0`). SBOM 루트 컴포넌트에 기록하고, 조건이 충돌하는 의존성을 표시하는 데 쓴다. 소스 스캔으로는 알아낼 수 없어(cdxgen이 maven과 gradle에서 루트 라이선스를 비워 둔다) 지정하지 않으면 충돌 판정을 내리지 않는다. SBOM에 이미 있는 루트 라이선스(공급사가 선언한 값)는 덮어쓰지 않는다 |
 | `--sbom-author <name>` | — | 이 SBOM을 생성한 주체. 스캔을 실행하는 조직이나 사람을 가리키며, 도구도 소프트웨어를 만든 쪽도 아니다. `metadata.authors`에 정식 명칭으로 기록하고 약어는 쓰지 않는다. 스캔으로는 알아낼 수 없는 값이라 지정하지 않으면 자리표시자를 채우지 않고 필드를 빼 둔다 |
 | `--usage <scenario>` | — | AI 모델 위험 판정을 사용 형태에 맞춘다(`--model`과 `--model-file`): `internal`, `product`, `redistribute`, `outputs-only`. 그 사용 형태에 적용되는 라이선스 조건만으로 판정하고, 보고서에 어떤 형태 기준인지 명시한다. 지정하지 않으면 전체 조건 기준으로 판정한다 |
-| `--merge <a.json> <b.json> …` | — | CycloneDX SBOM 두 개 이상을 하나로 병합하고 purl 기준으로 중복을 제거한 뒤, 최상위 컴포넌트를 `--project`/`--version`으로 기재. 선택 기능으로, 외부 시스템이 제품당 단일 BOM을 요구할 때 씁니다. 그 외에는 층별로 따로 둡니다([서버 SBOM 작성 가이드](../guides/server-delivery.md) 참고). `--target`/`--analyze`/`--git`와 배타 |
+| `--merge <a.json> <b.json> …` | — | CycloneDX SBOM 두 개 이상을 하나로 병합하고 purl 기준으로 중복을 제거한 뒤, 최상위 컴포넌트를 `--project`/`--version`으로 기재. 선택 기능으로, 외부 시스템이 제품당 단일 BOM을 요구할 때 씁니다. 그 외에는 층별로 따로 둡니다([서버 SBOM 작성 가이드](../guides/server-delivery.ko.md) 참고). `--target`/`--analyze`/`--git`와 배타 |
 | `--merge-root <file>` | — | `--merge`와 함께: 새 1.6 루트를 만드는 대신 이 입력 파일의 `specVersion`과 최상위 컴포넌트를 유지합니다(예: ML-BOM의 CycloneDX 1.7 루트와 모델 카드). `--merge` 입력 중 하나여야 하며, 유지된 루트의 이름과 버전은 `--project`/`--version`으로 바뀝니다 |
 | `--generate-only` | false | 업로드 없이 로컬에만 저장 |
 | `--upload-target <대상>` | `dependency-track` | 업로드 대상: `dependency-track`(DT 호환) 또는 `trusca`(네이티브 ingest) |
 | `--trusca <project_id>` | — | TRUSCA에 업로드(= `--upload-target trusca` + project id). `API_URL`과 Bearer `API_KEY` 필요 |
-| `--notice` | (기본 on) | 오픈소스 고지문(NOTICE, txt+html) 생성 |
-| `--security` | (기본 on) | Trivy 보안 보고서(json+md+html) 생성. CVSS, EPSS, CISA KEV 우선순위 신호 포함 |
+| `--notice` | 위험분석보고서 기본값에 딸려 켜짐 | 오픈소스 고지문(NOTICE, txt+html) 생성. 플래그 자체의 기본값은 꺼짐이며, 기본으로 켜진 위험분석보고서가 이를 켠다. 그래서 끄려면 `--notice`를 빼는 게 아니라 `--no-report`를 써야 한다 |
+| `--security` | 위험분석보고서 기본값에 딸려 켜짐 | Trivy 보안 보고서(json+md+html) 생성. CVSS, EPSS, CISA KEV 우선순위 신호 포함. `--notice`와 같은 구조로, `--no-report`가 꺼야 꺼지고 플래그만 빼서는 꺼지지 않는다 |
 | `--spdx` | false | 최종 CycloneDX 결과를 변환한 SPDX 2.3 JSON(`_bom.spdx.json`)을 함께 생성 |
 | `--all` | — | `--notice --security --spdx` |
 | `--no-report` | false | 오픈소스위험분석보고서(risk-report) 생략 (아래 참고) |
 | `--lang <en\|ko>` | `en` | 사람이 읽는 적합성·AI 준수 개요 보고서(`.md`/`.html`)의 언어. SBOM과 JSON 보고서는 언어와 무관하게 영어로 유지 |
 | `--deep-license` | false | scancode 정밀 라이선스 탐지 (opt-in 이미지) |
 | `--deep-cve` | false | grype의 NVD CPE 매칭으로 두 번째 대조를 더한다 (opt-in `bomlens-deep-cve` 이미지, 자동으로 내려받음). BomLens는 Maven 컴포넌트에만 NVD 대조가 가능한 CPE를 붙여 주므로, Trivy가 놓치는 NVD 전용 CVE는 대부분 오래된 Maven 라이브러리에서 나온다. `--security`를 자동으로 켠다. NVD 실시간 버전 범위로 확인하지 못한 결과는 보고서에 버전 미검증으로 표시된다 — [정밀 CVE 대조 가이드](../guides/reports.ko.md) 참고 |
-| `--identify-vendored` | false | 패키지 매니저가 없는 C/C++ 소스에 복사돼 들어간(vendored) 오픈소스를 식별. 파일 지문을 OSSKB 서비스와 대조 (발행 이미지에 포함; 소스가 아니라 해시 전송). [내장 오픈소스 식별 가이드](../guides/identify-vendored.md) 참고 |
+| `--identify-vendored` | false | 패키지 매니저가 없는 C/C++ 소스에 복사돼 들어간(vendored) 오픈소스를 식별. 파일 지문을 OSSKB 서비스와 대조 (발행 이미지에 포함; 소스가 아니라 해시 전송). [내장 오픈소스 식별 가이드](../guides/identify-vendored.ko.md) 참고 |
 | `--byte-stable` | false | 결정론적(재현 가능) SBOM 출력 |
 | `--sign` | false | cosign 서명 (`COSIGN_KEY` 필요) |
 | `--output-dir <dir>` | 현재 디렉터리 | 산출물 베이스 디렉터리 (별칭 `-o`). 스캔마다 그 아래 `{Project}_{Version}/` 하위 폴더에 묶여 저장되어 소스 트리를 오염시키지 않음 |
@@ -162,4 +162,4 @@ Rancher Desktop이나 Docker Desktop을 쓴다면 앱의 설정(Preferences) 화
 2. Docker 이미지를 최신 버전으로 업데이트합니다: `docker pull ghcr.io/sktelecom/bomlens:latest`
 3. 해결되지 않으면 [GitHub Issues](https://github.com/sktelecom/bomlens/issues)에 환경 정보와 로그를 첨부해 제보해 주세요.
 
-모드별 사용법은 [입력 시나리오 가이드](../guides/by-input.ko.md), 산출물 종류는 [산출물 레퍼런스](artifacts.ko.md), 언어 감지는 [지원 생태계](ecosystems.ko.md)를 참고하세요.
+모드별 사용법은 [입력 시나리오 가이드](../guides/by-input.ko.md), 산출물 종류는 [산출물 레퍼런스](artifacts.ko.md), 언어 감지는 [지원 생태계](ecosystems.ko.md), 파이프라인에서 실행하는 방법은 [CI/CD 연동](../guides/ci-cd.ko.md)을 참고하세요.

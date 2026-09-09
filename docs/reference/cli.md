@@ -37,8 +37,8 @@ Full options, analysis modes, CI/CD integration, and troubleshooting for BomLens
 | `--generate-only` | false | Save locally only, without uploading |
 | `--upload-target <target>` | `dependency-track` | Upload destination: `dependency-track` (DT-compatible) or `trusca` (native ingest) |
 | `--trusca <project_id>` | — | Upload to TRUSCA (= `--upload-target trusca` + project id). Needs `API_URL` and a Bearer `API_KEY` |
-| `--notice` | (on by default) | Generate the open-source notice (NOTICE, txt+html) |
-| `--security` | (on by default) | Generate the Trivy security report (json+md+html), including CVSS, EPSS, and CISA KEV priority signals |
+| `--notice` | forced on by the risk-report default | Generate the open-source notice (NOTICE, txt+html). The flag itself defaults to off; it is the risk report (on by default) that turns it on, so `--no-report`, not simply omitting `--notice`, is what skips it |
+| `--security` | forced on by the risk-report default | Generate the Trivy security report (json+md+html), including CVSS, EPSS, and CISA KEV priority signals. Same mechanism as `--notice`: `--no-report` skips it, omitting the flag alone does not |
 | `--spdx` | false | Also export the SBOM as SPDX 2.3 JSON (`_bom.spdx.json`), converted from the final CycloneDX output |
 | `--all` | — | `--notice --security --spdx` |
 | `--no-report` | false | Skip the open-source risk report (see below) |
@@ -163,4 +163,4 @@ With Rancher Desktop or Docker Desktop, the same cleanup is also available from 
 2. Update the Docker image: `docker pull ghcr.io/sktelecom/bomlens:latest`.
 3. If it still fails, open a [GitHub Issue](https://github.com/sktelecom/bomlens/issues) with your environment info and logs.
 
-For how to use each mode, see the [input scenarios guide](../guides/by-input.md); for the kinds of outputs, see the [artifacts reference](artifacts.md); for language detection, see [supported ecosystems](ecosystems.md).
+For how to use each mode, see the [input scenarios guide](../guides/by-input.md); for the kinds of outputs, see the [artifacts reference](artifacts.md); for language detection, see [supported ecosystems](ecosystems.md); to run scans in a pipeline, see [CI/CD integration](../guides/ci-cd.md).
