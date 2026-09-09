@@ -30,6 +30,8 @@ SRC="$1"
 OUTPUT="$2"
 VERSION="${3:-unknown}"
 SELFDIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# shellcheck source=docker/lib/cdx-version.sh
+. "$SELFDIR/cdx-version.sh"
 
 if [ -z "$SRC" ] || [ ! -d "$SRC" ]; then
     echo "[cocoapods] source directory not found: $SRC" >&2
@@ -47,9 +49,9 @@ GEN_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # "no-match" (Podfile.lock parsed, nothing to add), "unavailable" (syft/parse failed).
 write_empty() {
     local status="${1:-no-match}"
-    jq -n --arg version "$VERSION" --arg ts "$GEN_AT" --arg status "$status" '
+    jq -n --arg version "$VERSION" --arg ts "$GEN_AT" --arg status "$status" --arg spec "$CDX_SPEC_VERSION" '
     {
-      bomFormat: "CycloneDX", specVersion: "1.6", version: 1,
+      bomFormat: "CycloneDX", specVersion: $spec, version: 1,
       metadata: {
         timestamp: $ts,
         tools: { components: [ { type: "application", name: "syft" } ] },
@@ -93,7 +95,7 @@ while IFS= read -r lock; do
     [ -n "$lock" ] || continue
     dir=$(dirname "$lock")
     echo "[cocoapods] syft: parsing ${lock#"$SRC"/} (offline; no pod)..." >&2
-    if ! syft "dir:$dir" -o cyclonedx-json@1.6 > "$WORK/syft.json" 2>/dev/null; then
+    if ! syft "dir:$dir" -o "cyclonedx-json@$CDX_SPEC_VERSION" > "$WORK/syft.json" 2>/dev/null; then
         echo "[cocoapods] WARN: syft failed on $dir; skipping." >&2
         continue
     fi
@@ -168,10 +170,11 @@ jq -n \
     --slurpfile deps "$DEPS_FILE" \
     --arg version "$VERSION" \
     --arg ts "$GEN_AT" \
-    --arg status "$STATUS" '
+    --arg status "$STATUS" \
+    --arg spec "$CDX_SPEC_VERSION" '
 {
   bomFormat: "CycloneDX",
-  specVersion: "1.6",
+  specVersion: $spec,
   version: 1,
   metadata: {
     timestamp: $ts,

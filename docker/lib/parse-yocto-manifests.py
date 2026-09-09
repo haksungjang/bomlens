@@ -45,7 +45,7 @@ import os
 import re
 import sys
 
-CDX_VERSION = "1.6"
+CDX_SPEC_VERSION = "1.6"
 
 # Files that are not the image package manifest, though they end in .manifest.
 _NOT_IMAGE_MANIFEST = ("image_license.manifest",)
@@ -329,7 +329,7 @@ def build(build_dir):
 def write_cyclonedx(path, components, image_name):
     doc = {
         "bomFormat": "CycloneDX",
-        "specVersion": CDX_VERSION,
+        "specVersion": CDX_SPEC_VERSION,
         "version": 1,
         "metadata": {
             "tools": {"components": [{"type": "application", "name": "bomlens-yocto-manifest"}]},

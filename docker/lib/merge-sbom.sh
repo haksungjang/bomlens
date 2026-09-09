@@ -32,6 +32,10 @@
 # input flattening below (pass the ML-BOM as an input too).
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=docker/lib/cdx-version.sh
+. "$SCRIPT_DIR/cdx-version.sh"
+
 OUTPUT="$1"
 NAME="$2"
 VERSION="$3"
@@ -153,7 +157,7 @@ jq -n \
     --arg name "$NAME" \
     --arg version "$VERSION" \
     --arg ts "$GEN_AT" \
-    --arg spec "${PRESERVE_SPEC:-1.6}" '
+    --arg spec "${PRESERVE_SPEC:-$CDX_SPEC_VERSION}" '
 {
   bomFormat: "CycloneDX",
   specVersion: $spec,

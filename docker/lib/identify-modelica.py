@@ -33,6 +33,10 @@ from pathlib import Path
 SELFDIR = Path(__file__).resolve().parent
 LIBRARY_MAP_PATH = SELFDIR / "modelica-library-map.json"
 
+# Matches every other producer in docker/lib/ (see cdx-version.sh for the
+# bash side; nothing here can source that file, so it's restated).
+CDX_SPEC_VERSION = "1.6"
+
 # One level of nesting only: each entry inside uses(...) is `Name(version =
 # "X.Y.Z")` with no further parentheses of its own, so a single non-greedy
 # match per entry is enough -- no need to balance nested parens.
@@ -109,7 +113,7 @@ def component(name, version, library_map):
 def build(components, project_version):
     return {
         "bomFormat": "CycloneDX",
-        "specVersion": "1.6",
+        "specVersion": CDX_SPEC_VERSION,
         "version": 1,
         "metadata": {
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),

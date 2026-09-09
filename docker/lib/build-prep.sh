@@ -19,6 +19,11 @@ set +e
 
 SRC="${1:-/app}"
 OUT="${2:-$SRC/bom.json}"
+# 1.6 default: this file is bind-mounted alone into the cdxgen container
+# (isolated from the rest of docker/lib/), so it cannot source
+# docker/lib/cdx-version.sh -- kept in manual sync with CDX_SPEC_VERSION there.
+# Both real callers (docker/entrypoint.sh, scripts/scan-sbom.sh) pass it
+# explicitly as $3, so this default is a last resort, not the normal path.
 SPEC="${3:-1.6}"
 # Ensure HOME exists & is writable (maven/cargo/etc. caches) for any base user.
 mkdir -p "${HOME:-/tmp/sbomhome}" 2>/dev/null || true

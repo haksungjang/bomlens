@@ -17,7 +17,13 @@
 #   - a ghcr.io/sktelecom/* image referenced in the docs that the code/workflows
 #     never build or publish
 #   - a CycloneDX/specVersion literal that disagrees with the code's constants
-#     (1.6 from convert-to-cdx.sh; the ML-BOM 1.7 variant from scan-aibom.sh)
+#     (1.6 from docker/lib/cdx-version.sh; the AI/dataset 1.7 variant from the
+#     CDX_SPEC_VERSION constant restated in identify-model-file.py and
+#     scan-figshare.py, cross-checked against scan-aibom.sh's _1_7.json name)
+#   - a specVersion/cyclonedx-json@ literal anywhere under docker/lib/,
+#     docker/entrypoint.sh or scripts/scan-sbom.sh that does not read
+#     CDX_SPEC_VERSION (the two AI/dataset 1.7 producers and the two
+#     deliberately-different call sites below are the only exceptions)
 #   - a version-pinned ghcr.io/sktelecom/*:x.y.z example for a release that was
 #     never tagged
 #   - a docker-run example passing an env var the entrypoint/server never read,
@@ -164,13 +170,42 @@ fi
 # The docs promise concrete spec versions ("CycloneDX 1.6", ML-BOM "1.7",
 # "specVersion": "1.6"). When the tooling bumps, every stale literal must fail
 # here instead of quietly misinforming readers. Sources of truth in code:
-# convert-to-cdx.sh writes the SBOM specVersion; scan-aibom.sh keeps the
-# generator's _1_7.json variant for the ML-BOM.
-SPEC="$(grep -oE 'specVersion: "[0-9.]+"' docker/lib/convert-to-cdx.sh | head -1 | grep -oE '[0-9]+\.[0-9]+')"
+# docker/lib/cdx-version.sh's CDX_SPEC_VERSION for the SBOM; the CDX_SPEC_VERSION
+# constant restated in identify-model-file.py / scan-figshare.py for the
+# AI/dataset ML-BOM, cross-checked against scan-aibom.sh's kept _1_7.json variant.
+SPEC=""
+if [ -f docker/lib/cdx-version.sh ]; then
+    # shellcheck disable=SC1091
+    SPEC="$(. docker/lib/cdx-version.sh && echo "$CDX_SPEC_VERSION")"
+fi
 MLSPEC="$(grep -oE '_[0-9]_[0-9]\.json' docker/lib/scan-aibom.sh | head -1 | grep -oE '[0-9]_[0-9]' | tr '_' '.')"
-if [ -z "$SPEC" ] || [ -z "$MLSPEC" ]; then
-    echo "  DRIFT[spec]: cannot extract spec versions from code (convert-to-cdx.sh / scan-aibom.sh changed shape?)"
+PY_MLSPEC_MODEL="$(grep -oE '^CDX_SPEC_VERSION = "[0-9.]+"' docker/lib/identify-model-file.py | head -1 | grep -oE '[0-9]+\.[0-9]+')"
+PY_MLSPEC_FIGSHARE="$(grep -oE '^CDX_SPEC_VERSION = "[0-9.]+"' docker/lib/scan-figshare.py | head -1 | grep -oE '[0-9]+\.[0-9]+')"
+if [ -z "$SPEC" ] || [ -z "$MLSPEC" ] || [ -z "$PY_MLSPEC_MODEL" ] || [ -z "$PY_MLSPEC_FIGSHARE" ]; then
+    echo "  DRIFT[spec]: cannot extract spec versions from code (cdx-version.sh / scan-aibom.sh / identify-model-file.py / scan-figshare.py changed shape?)"
     FAIL=$((FAIL + 1))
+elif [ "$PY_MLSPEC_MODEL" != "$MLSPEC" ] || [ "$PY_MLSPEC_FIGSHARE" != "$MLSPEC" ]; then
+    echo "  DRIFT[spec]: AI/dataset CDX_SPEC_VERSION disagrees across producers (scan-aibom.sh: $MLSPEC, identify-model-file.py: $PY_MLSPEC_MODEL, scan-figshare.py: $PY_MLSPEC_FIGSHARE)"
+    FAIL=$((FAIL + 1))
+fi
+# The non-AI Python producers restate the BASH constant's value (1.6), not the
+# AI/dataset one -- nothing in Python can source cdx-version.sh, so each of
+# these three files carries its own CDX_SPEC_VERSION line that must still
+# agree with it, or a bash-side bump silently leaves these three behind.
+PY_SPEC_FAIL=0
+for pyf in docker/lib/identify-modelica.py docker/lib/parse-yocto-manifests.py docker/lib/parse-yocto-spdx.py; do
+    pyspec="$(grep -oE '^CDX_SPEC_VERSION = "[0-9.]+"' "$pyf" 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+')"
+    if [ -z "$pyspec" ]; then
+        echo "  DRIFT[spec]: cannot extract CDX_SPEC_VERSION from $pyf (changed shape?)"
+        FAIL=$((FAIL + 1)); PY_SPEC_FAIL=1
+    elif [ -n "$SPEC" ] && [ "$pyspec" != "$SPEC" ]; then
+        echo "  DRIFT[spec]: $pyf's CDX_SPEC_VERSION ($pyspec) disagrees with cdx-version.sh ($SPEC)"
+        FAIL=$((FAIL + 1)); PY_SPEC_FAIL=1
+    fi
+done
+if [ -z "$SPEC" ] || [ -z "$MLSPEC" ] || [ -z "$PY_MLSPEC_MODEL" ] || [ -z "$PY_MLSPEC_FIGSHARE" ] \
+    || [ "$PY_MLSPEC_MODEL" != "$MLSPEC" ] || [ "$PY_MLSPEC_FIGSHARE" != "$MLSPEC" ] || [ "$PY_SPEC_FAIL" = 1 ]; then
+    : # already reported above; skip the docs/code sweep below on bad input
 else
     for f in "${DOCS[@]}"; do
         while IFS=: read -r ln line; do
@@ -194,6 +229,49 @@ else
                 | grep -oE '[0-9]+\.[0-9]+')
         done < <(grep -nE "CycloneDX [0-9]+\.[0-9]+|specVersion.?.?[: ]+.?[0-9]+\.[0-9]+" "$f" 2>/dev/null)
     done
+
+    # A stray literal here means a bash producer stopped reading
+    # $CDX_SPEC_VERSION -- the same drift the docs loop above catches, but in
+    # the code instead of a guide. Derived from who actually sources
+    # cdx-version.sh (rather than hand-maintained) so a new sourcing call site
+    # is covered automatically. docker/lib/cdx-version.sh itself (the
+    # constant's definition) and scan-security.sh's Trivy-input-retry fallback
+    # (a different literal, never sourced, so it is not in this list at all)
+    # are the only exclusions; validate-sbom.sh IS included; see the regex
+    # note below for why that does not false-positive on its own
+    # `.specVersion != null` / `// ""`-style comparisons.
+    CDX_PRODUCERS=()
+    while IFS= read -r f; do
+        CDX_PRODUCERS+=("$f")
+    done < <(grep -rlE '\. "\$[A-Za-z_]+/(docker/lib/)?cdx-version\.sh"' docker/ scripts/ 2>/dev/null \
+        | grep -v '^docker/lib/cdx-version\.sh$' | sort)
+    if [ "${#CDX_PRODUCERS[@]}" -eq 0 ]; then
+        echo "  DRIFT[spec]: no file sources docker/lib/cdx-version.sh (source-line pattern changed, or the file was orphaned?)"
+        FAIL=$((FAIL + 1))
+    fi
+    for f in "${CDX_PRODUCERS[@]}"; do
+        [ -f "$f" ] || continue
+        while IFS=: read -r ln line; do
+            [ -z "$line" ] && continue
+            echo "  DRIFT[spec]: $f:$ln has a CycloneDX spec-version literal instead of reading \$CDX_SPEC_VERSION: $line"
+            FAIL=$((FAIL + 1))
+        done < <(grep -nE 'specVersion"?[[:space:]]*:[[:space:]]*"[0-9]+\.[0-9]+|cyclonedx-json@[0-9]+\.[0-9]+|--spec-version[[:space:]]+"?[0-9]+\.[0-9]+|--arg spec "[0-9]+\.[0-9]+"' "$f" 2>/dev/null)
+    done
+
+    # validate-sbom.sh's CYCLONEDX_SPEC_VERSIONS is an accepted-INPUT range for
+    # --analyze, deliberately independent of $CDX_SPEC_VERSION (a submission
+    # requirement, not what this pipeline itself produces) -- but if its upper
+    # bound ever falls below $SPEC, this pipeline's own dependency-SBOM output
+    # would fail the conformance check it runs against itself.
+    RANGE_LINE="$(grep -oE 'CYCLONEDX_SPEC_VERSIONS="\$\{CYCLONEDX_SPEC_VERSIONS:-[0-9. ]+\}"' docker/lib/validate-sbom.sh | head -1)"
+    RANGE_MAX="$(printf '%s' "$RANGE_LINE" | grep -oE '[0-9]+\.[0-9]+' | sort -V | tail -1)"
+    if [ -z "$RANGE_MAX" ]; then
+        echo "  DRIFT[spec]: cannot extract CYCLONEDX_SPEC_VERSIONS' range from docker/lib/validate-sbom.sh (changed shape?)"
+        FAIL=$((FAIL + 1))
+    elif [ -n "$SPEC" ] && [ "$(printf '%s\n%s\n' "$RANGE_MAX" "$SPEC" | sort -V | tail -1)" != "$RANGE_MAX" ]; then
+        echo "  DRIFT[spec]: validate-sbom.sh's CYCLONEDX_SPEC_VERSIONS tops out at $RANGE_MAX, below what this pipeline produces ($SPEC) -- our own SBOMs would fail --analyze"
+        FAIL=$((FAIL + 1))
+    fi
 fi
 
 # --- Check 8: version-pinned image-tag examples -------------------------------

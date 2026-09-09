@@ -1775,6 +1775,29 @@ else
 fi
 rm -f "$OUT"/deg_1.0_* "$OUT"/clean_1.0_*
 
+echo "== sbom-oversized property (sbom_summary) =="
+# When entrypoint.sh's size-cap check stamps bomlens:sbom-oversized, the
+# summary must surface it too; absent -> None.
+cat > "$OUT/big_1.0_bom.json" <<'JSON'
+{"bomFormat":"CycloneDX","metadata":{"component":{"name":"big","version":"1.0"},"properties":[{"name":"bomlens:sbom-oversized","value":"104857601 bytes"}]},"components":[{"name":"flask","version":"2.0","type":"library","purl":"pkg:pypi/flask@2.0"}]}
+JSON
+cat > "$OUT/small_1.0_bom.json" <<'JSON'
+{"bomFormat":"CycloneDX","metadata":{"component":{"name":"small","version":"1.0"}},"components":[{"name":"flask","version":"2.0","type":"library","purl":"pkg:pypi/flask@2.0"}]}
+JSON
+if SBOM_OUTPUT_DIR="$OUT" python3 - "$ROOT_DIR" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+assert server.sbom_summary("big_1.0")["sbomOversizedBytes"] == "104857601 bytes"
+assert server.sbom_summary("small_1.0")["sbomOversizedBytes"] is None
+PY
+then
+    pass "sbomOversizedBytes surfaced from metadata (None when absent)"
+else
+    fail "sbomOversizedBytes not surfaced correctly"
+fi
+rm -f "$OUT"/big_1.0_* "$OUT"/small_1.0_*
+
 echo "== direct/transitive scope with an empty root dependsOn (cdxgen quirk) =="
 # Regression: cdxgen sometimes emits the root component with an EMPTY dependsOn
 # and floats the real direct deps as nodes nothing depends on. sbom_summary must
