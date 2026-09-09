@@ -198,6 +198,25 @@ ARTIFACT_SUFFIXES = (
 # listed (the user deletes via the UI or the output folder).
 RECENT_SCANS_CAP = 20
 
+# list_scans() used to fully parse every past scan's SBOM (plus its security
+# report) on EVERY /scans call, then throw away all but the newest 20 -- a
+# directory with hundreds of old scans paid that cost on every poll. Each run's
+# computed row is cached here, keyed by (run_id, bom_path) -- not run_id alone,
+# since the legacy flat layout and the run-subfolder layout can both carry the
+# same id at once, and run_id-only would let one overwrite the other's slot --
+# invalidated by comparing (mtime_ns, size) for the BOM, .scanmeta.json and
+# _security.json: three cheap stat() calls, not a re-parse, at full precision
+# so two writes inside the same second can't produce a false cache hit. A
+# fresh scan, a re-scan of the same project/version, a warnings sidecar
+# written after the BOM, or Trivy finishing after the BOM's own last write
+# (all three files are read into the row) each change one of those signatures,
+# so the next call naturally recomputes just that one row instead of needing
+# an explicit invalidation hook wired into every place any of them can change.
+_scans_cache_lock = threading.Lock()
+_scans_cache = {}
+# (run_id, bom_path) -> ((bom_sig, meta_sig, sec_sig), row_dict); each sig is
+# (mtime_ns, size) or None. Treat row_dict as read-only.
+
 # Per-run scan-configuration sidecar (the inputs + toggles a scan was launched
 # with), saved in the run folder so the UI can offer "re-scan with the same
 # settings". The dot prefix keeps it out of list_results()/downloads and out of
@@ -1892,12 +1911,52 @@ def list_scans():
     prefix), so pre-upgrade scans don't disappear. The real project/version come
     from the SBOM's metadata.component. Local files only; no account, no db."""
     scans = []
+    seen_slots = set()
     if not os.path.isdir(OUTPUT_DIR):
         return scans
 
-    def add_scan(run_id, bom_path):
+    def _stat_sig(path):
+        """(mtime_ns, size) for a file, or None. Full precision (unlike a
+        1-second-truncated mtime) so two writes inside the same second can't
+        produce a false cache hit."""
         try:
-            mtime = int(os.path.getmtime(bom_path))
+            st = os.stat(path)
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
+
+    def add_scan(run_id, bom_path):
+        bom_sig = _stat_sig(bom_path)
+        if bom_sig is None:
+            return
+        # The row also reads the .scanmeta.json sidecar (inputSource below) and
+        # _security.json (maxSeverity, via security_summary below), and both
+        # can be written after the BOM's own last write -- a scan in progress
+        # is listed here too (list_scans walks the whole OUTPUT_DIR, not just
+        # finished runs), and Trivy finishes after the BOM's enrichment steps
+        # are already done, so a request landing in that gap would otherwise
+        # cache maxSeverity:null and never see the real verdict once it
+        # arrives, since nothing else is expected to touch the BOM again.
+        d = run_dir(run_id)
+        meta_sig = _stat_sig(os.path.join(d, SCANMETA_NAME)) if d else None
+        sec_path = run_file(run_id, "_security.json")
+        sec_sig = _stat_sig(sec_path) if sec_path else None
+        # Keyed by (run_id, bom_path), not run_id alone: the legacy flat layout
+        # (OUTPUT_DIR/foo_1.0_bom.json) and the run-subfolder layout
+        # (OUTPUT_DIR/foo_1.0/foo_1.0_bom.json) can both exist for the same id
+        # at once, and list_scans() lists both -- a run_id-only key would let
+        # one overwrite the other's cache slot and serve its row instead.
+        cache_key = (bom_sig, meta_sig, sec_sig)
+        cache_slot = (run_id, bom_path)
+        seen_slots.add(cache_slot)
+        with _scans_cache_lock:
+            cached = _scans_cache.get(cache_slot)
+        if cached is not None and cached[0] == cache_key:
+            # The cached dict itself, not a copy: cheap, but only safe because
+            # nothing downstream ever mutates a row. Keep it that way.
+            scans.append(cached[1])
+            return
+        try:
             with open(bom_path) as f:
                 data = json.load(f)
         except (OSError, json.JSONDecodeError):
@@ -1931,7 +1990,7 @@ def list_scans():
         else:
             project = meta.get("name") or run_id
             version = meta.get("version") or ""
-        scans.append({
+        row = {
             "id": run_id,
             "project": project,
             "version": version,
@@ -1948,8 +2007,11 @@ def list_scans():
             # SBOM was labelled Source. None for a pre-sidecar scan, where the
             # type falls back to the component type as before.
             "inputSource": (scanmeta(run_id) or {}).get("source"),
-            "generatedAt": mtime,
-        })
+            "generatedAt": bom_sig[0] // 1_000_000_000,
+        }
+        scans.append(row)
+        with _scans_cache_lock:
+            _scans_cache[cache_slot] = (cache_key, row)
 
     for entry in os.listdir(OUTPUT_DIR):
         if entry.startswith("."):  # .uploads and other dotfiles are not scans
@@ -1968,6 +2030,12 @@ def list_scans():
             add_scan(entry[: -len("_bom.json")], full)
 
     scans.sort(key=lambda s: s["generatedAt"], reverse=True)
+    # Drop any cache slot this walk did not encounter -- a scan removed
+    # outside the UI (rm -rf on the output folder) has no /scan-delete call
+    # to purge its slot otherwise, and it would sit in _scans_cache forever.
+    with _scans_cache_lock:
+        for slot in [k for k in _scans_cache if k not in seen_slots]:
+            del _scans_cache[slot]
     return scans[:RECENT_SCANS_CAP]
 
 
@@ -2025,6 +2093,106 @@ def resolve_upload(token):
         if os.path.isfile(p):
             return p
     return None
+
+
+# A token a scan launch is CURRENTLY reading from is always removed in that
+# scan's own `finally` block (above) the moment it ends, so it never needs a
+# TTL. What has no other cleanup path is a token nobody ever launched a scan
+# with -- the user uploaded a file, then closed the tab, picked a different
+# file, or never clicked scan at all. UPLOAD_TTL_HOURS is generous on purpose:
+# the only cost of leaving an abandoned upload around too long is disk space,
+# while sweeping something too early -- if the "active" tracking below ever
+# missed a case -- would delete a file mid-scan.
+def _upload_ttl_seconds():
+    """Hours from SBOM_UPLOAD_TTL_HOURS, clamped to at least 1 -- an empty,
+    non-numeric, zero or negative value falls back to the 24h default rather
+    than sweeping everything on the next call (0h) or crashing the server at
+    import (a bad int())."""
+    try:
+        hours = int(os.environ.get("SBOM_UPLOAD_TTL_HOURS", "24"))
+    except ValueError:
+        hours = 24
+    return max(hours, 1) * 3600
+
+
+UPLOAD_TTL_SECONDS = _upload_ttl_seconds()
+# Only entries shaped like something THIS server creates under UPLOAD_DIR are
+# ever swept: a 32-hex upload token, or a "git-"+16-hex clone scratch dir
+# (POST /scan-stream's git-url path, cleaned up in the same finally block as
+# uploads but included here too as a safety net for an abnormal exit; also
+# registered in _active_upload_tokens for the same reason a token is, so a
+# clone that outlives the TTL is not deleted out from under a running scan).
+# fullmatch, not match+$: match()+"$" still accepts a trailing newline.
+#
+# Deliberately out of scope: .srccopy-<8hex> (scan-target-src's deep-copy
+# scratch dir) lives directly under OUTPUT_DIR, not UPLOAD_DIR, so this sweep
+# never walks into it at all -- it has no TTL of its own, only the same
+# finally-block rmtree every cleanup_dir here relies on, so a process that
+# dies mid-scan can leave a full source-tree copy behind permanently. Not
+# folded into this sweep: reusing UPLOAD_TTL_SECONDS to walk OUTPUT_DIR
+# itself would put every real scan's own output folder one regex mismatch
+# away from the same delete path this function uses, which is a bigger risk
+# than the leak it would fix.
+_UPLOAD_ENTRY_RE = re.compile(r"(?:[0-9a-f]{32}|git-[0-9a-f]{16})")
+_UPLOAD_SWEEP_INTERVAL_SECONDS = 300  # don't walk UPLOAD_DIR more than every 5 min
+_upload_sweep_lock = threading.Lock()
+_last_upload_sweep = 0.0
+
+
+def _sweep_stale_uploads(now=None):
+    """Remove UPLOAD_DIR entries older than the TTL that no active scan owns.
+
+    Lazy rather than a background thread: this server is normally a single UI
+    session's lifetime, not a long-running daemon, so a sweep triggered by
+    real traffic (an upload, a /scans poll) is enough -- an idle process
+    burns no cycles on a timer nobody is watching. Throttled so a burst of
+    polling doesn't turn every request into a directory walk.
+
+    Best-effort per entry, like the rest of this server's housekeeping
+    (write_scanmeta, the SSE finally block's rmtree calls): a listing failure
+    is fatal to this call (nothing to sweep), but one entry vanishing or
+    becoming unreadable mid-loop must not abort the rest, and must not reset
+    the shared throttle for another 5 minutes -- since the caller here is
+    GET /scans and POST /upload, a request a user is actively waiting on, not
+    a background job.
+    """
+    global _last_upload_sweep
+    now = time.time() if now is None else now
+    with _upload_sweep_lock:
+        if now - _last_upload_sweep < _UPLOAD_SWEEP_INTERVAL_SECONDS:
+            return
+        _last_upload_sweep = now
+    try:
+        names = os.listdir(UPLOAD_DIR)
+    except OSError:
+        return  # UPLOAD_DIR missing/unreadable; nothing to sweep
+    for name in names:
+        if not _UPLOAD_ENTRY_RE.fullmatch(name):
+            continue
+        full = os.path.join(UPLOAD_DIR, name)
+        try:
+            if not os.path.isdir(full) or (now - os.path.getmtime(full)) <= UPLOAD_TTL_SECONDS:
+                continue
+            # Check-and-claim atomically under _scan_lock -- the same lock a
+            # scan takes to add its token to _active_upload_tokens -- rather
+            # than checking then releasing the lock before deleting: without
+            # this, a scan could claim the token in the gap between "found
+            # inactive" and "deleted", and lose the directory it just started
+            # reading. The rename is the hand-off point: it makes `name` stop
+            # matching _UPLOAD_ENTRY_RE and stop resolving via
+            # upload_token_dir(), so either this sweep wins (a concurrent
+            # claim then fails with a normal "uploaded file not found") or
+            # the claim's `_active_upload_tokens.add()` happens first and
+            # this check below sees it active and backs off -- never both.
+            renamed = full + ".gone-" + secrets.token_hex(4)
+            with _scan_lock:
+                if name in _active_upload_tokens:
+                    continue
+                os.rename(full, renamed)
+        except OSError:
+            continue  # this entry only; one vanished/unreadable path must not
+                       # abort the sweep (or reset the throttle) for the rest
+        shutil.rmtree(renamed, ignore_errors=True)
 
 
 def _parse_boundary(content_type):
@@ -2733,6 +2901,11 @@ _pull_active = set()
 # product decision rather than a correctness one.
 _scan_lock = threading.Lock()
 _scan_active = set()
+# Upload tokens a scan is currently reading from, so the stale-upload sweep
+# (below) can skip them regardless of age. Claimed/released alongside
+# _scan_active, under the same lock -- an upload token has no lifecycle of its
+# own outside of feeding exactly one scan launch.
+_active_upload_tokens = set()
 
 
 def claim_run_id(prefix, active, now=None, force_suffix=False):
@@ -3340,6 +3513,9 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_file(urllib.parse.parse_qs(parsed.query))
         elif path == "/scans":
             self._send(200, json.dumps(list_scans()))
+            # After the response: this is the Recent-scans sidebar's own poll,
+            # and an abandoned-upload rmtree can be large (an extracted tree).
+            _sweep_stale_uploads()
         elif path == "/scan":
             self._serve_scan(urllib.parse.parse_qs(parsed.query))
         elif path == "/scan-stream":
@@ -3413,6 +3589,11 @@ class Handler(BaseHTTPRequestHandler):
                         removed += 1
                     except OSError:
                         pass
+        with _scans_cache_lock:
+            # Keyed by (run_id, bom_path), so both layouts' slots for this id
+            # are dropped (harmless if only one ever existed).
+            for slot in [k for k in _scans_cache if k[0] == sid]:
+                del _scans_cache[slot]
         self._send(200, json.dumps({"deleted": sid, "removed": removed}))
 
     def _git_cred(self):
@@ -3490,6 +3671,10 @@ class Handler(BaseHTTPRequestHandler):
         final_path = os.path.join(dest_dir, safe_fn)
         os.replace(tmp_path, final_path)
         self._send(200, json.dumps({"token": token, "filename": safe_fn, "kind": kind}))
+        # After the response, not before: an abandoned-upload rmtree can be
+        # large (an extracted tree), and this request is the one the user is
+        # staring at a progress bar for.
+        _sweep_stale_uploads()
 
     def _serve_static(self, path):
         rel = path.lstrip("/") or "index.html"
@@ -3846,6 +4031,8 @@ class Handler(BaseHTTPRequestHandler):
             run_id = claim_run_id(prefix, _scan_active,
                                   force_suffix=g("timestamp") == "true")
             _scan_active.add(run_id)
+            if token:
+                _active_upload_tokens.add(token)
         scan_claimed = run_id
         # Route through run_dir so the same path-injection barrier the read side
         # uses (scan_id_ok allowlist + realpath boundary) gates makedirs. run_id
@@ -3857,58 +4044,73 @@ class Handler(BaseHTTPRequestHandler):
             # try/finally that would otherwise do it.
             with _scan_lock:
                 _scan_active.discard(scan_claimed)
+                _active_upload_tokens.discard(token)
             self._send(400, json.dumps({"error": "invalid run id"}))
             return
-        os.makedirs(run_out, exist_ok=True)
+        # Claimed above but the try/finally that normally releases both
+        # _scan_active and _active_upload_tokens does not start until the SSE
+        # loop below. A client that closes the connection during header write
+        # (BrokenPipeError) would otherwise leak the upload token as "active"
+        # forever, permanently exempting it from the stale-upload sweep --
+        # exactly the abandoned-tab case that sweep exists to catch. So this
+        # span gets its own release-then-reraise, same as the run_out is None
+        # branch above.
+        try:
+            os.makedirs(run_out, exist_ok=True)
 
-        # What to show as this scan's provenance when `target` cannot say it.
-        # An upload arrives as an opaque token, so the name the user picked is
-        # only knowable here; a folder scan has no target at all, so name the
-        # host folder it was launched from (or the mount it selected). Falls
-        # back to empty, which the UI reads as "nothing honest to show".
-        source_label = ""
-        if token:
-            uploaded = resolve_upload(token)
-            if uploaded:
-                source_label = os.path.basename(uploaded)
-        elif source == "current-dir":
-            source_label = os.environ.get("SBOM_UI_HOST_DIR", "")
-        elif source in ("rootfs-dir", "scan-target-src"):
-            source_label = next(
-                (r["hostPath"] for r in EXTRA_SCAN_ROOTS if r["path"] == target),
-                "",
-            )
+            # What to show as this scan's provenance when `target` cannot say it.
+            # An upload arrives as an opaque token, so the name the user picked is
+            # only knowable here; a folder scan has no target at all, so name the
+            # host folder it was launched from (or the mount it selected). Falls
+            # back to empty, which the UI reads as "nothing honest to show".
+            source_label = ""
+            if token:
+                uploaded = resolve_upload(token)
+                if uploaded:
+                    source_label = os.path.basename(uploaded)
+            elif source == "current-dir":
+                source_label = os.environ.get("SBOM_UI_HOST_DIR", "")
+            elif source in ("rootfs-dir", "scan-target-src"):
+                source_label = next(
+                    (r["hostPath"] for r in EXTRA_SCAN_ROOTS if r["path"] == target),
+                    "",
+                )
 
-        # Record how this scan was launched (source + non-secret feature toggles)
-        # so the UI can offer "re-scan with the same settings". Saved into the run
-        # folder as a dot-prefixed sidecar that stays out of the artifact listing
-        # and downloads. Tokens/credentials (token, cred, scanoss_cred, gitToken)
-        # are deliberately omitted — never persist secrets here.
-        scan_config = {
-            "source": source,
-            "target": target,
-            # What the user actually picked, when `target` cannot say it: the
-            # uploaded file's name, or the folder a mounted scan ran against.
-            # The Overview prints this as the scan's provenance. Kept out of
-            # `target` because "re-scan" refills the form from `target`, and an
-            # upload has to be chosen again rather than retyped.
-            "sourceLabel": source_label,
-            "project": project,
-            "version": version,
-            "notice": g("notice", "true") == "true",
-            "security": g("security", "true") == "true",
-            "deepLicense": g("deep_license") == "true",
-            "identifyVendored": g("identify_vendored") == "true",
-            "includeOsv": g("includeOsv") == "true",
-            "byteStable": g("byte_stable") == "true",
-            "deepCve": g("deep_cve") == "true",
-        }
-        write_scanmeta(run_out, scan_config)
+            # Record how this scan was launched (source + non-secret feature toggles)
+            # so the UI can offer "re-scan with the same settings". Saved into the run
+            # folder as a dot-prefixed sidecar that stays out of the artifact listing
+            # and downloads. Tokens/credentials (token, cred, scanoss_cred, gitToken)
+            # are deliberately omitted — never persist secrets here.
+            scan_config = {
+                "source": source,
+                "target": target,
+                # What the user actually picked, when `target` cannot say it: the
+                # uploaded file's name, or the folder a mounted scan ran against.
+                # The Overview prints this as the scan's provenance. Kept out of
+                # `target` because "re-scan" refills the form from `target`, and an
+                # upload has to be chosen again rather than retyped.
+                "sourceLabel": source_label,
+                "project": project,
+                "version": version,
+                "notice": g("notice", "true") == "true",
+                "security": g("security", "true") == "true",
+                "deepLicense": g("deep_license") == "true",
+                "identifyVendored": g("identify_vendored") == "true",
+                "includeOsv": g("includeOsv") == "true",
+                "byteStable": g("byte_stable") == "true",
+                "deepCve": g("deep_cve") == "true",
+            }
+            write_scanmeta(run_out, scan_config)
 
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache")
-        self.end_headers()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+        except Exception:
+            with _scan_lock:
+                _scan_active.discard(scan_claimed)
+                _active_upload_tokens.discard(token)
+            raise
 
         # Set when the client closes the stream (e.g. the UI's Cancel button), so
         # the scan loop can stop the subprocess instead of running it to the end.
@@ -4219,6 +4421,13 @@ class Handler(BaseHTTPRequestHandler):
                         clone_url = "https://x-access-token:%s@%s" % (tok, target[len("https://"):])
                 cleanup_dir = os.path.join(UPLOAD_DIR, "git-" + secrets.token_hex(8))
                 os.makedirs(cleanup_dir, exist_ok=True)
+                # This dir's name shape (git-<16 hex>) is exactly what the
+                # stale-upload sweep also targets under UPLOAD_DIR; without
+                # this it has no exemption, so a clone that runs longer than
+                # SBOM_UPLOAD_TTL_HOURS gets its whole source tree deleted by
+                # a /scans poll while the scan is still reading it.
+                with _scan_lock:
+                    _active_upload_tokens.add(os.path.basename(cleanup_dir))
                 clone_dest = os.path.join(cleanup_dir, "repo")
                 sse("log", json.dumps("▶ Cloning %s ..." % target))
                 cp = subprocess.run(
@@ -4579,6 +4788,15 @@ class Handler(BaseHTTPRequestHandler):
                 shutil.rmtree(token_dir, ignore_errors=True)
             if cleanup_dir and source in ("git-url", "scan-target-src"):
                 shutil.rmtree(cleanup_dir, ignore_errors=True)
+                if source == "git-url":
+                    with _scan_lock:
+                        _active_upload_tokens.discard(os.path.basename(cleanup_dir))
+            # Marked inactive only once its own directory is actually gone
+            # (or never existed), not before -- a stale-upload sweep racing
+            # this exact moment must never see the token as free to delete
+            # while this rmtree above might still be the one doing it.
+            with _scan_lock:
+                _active_upload_tokens.discard(token)
 
     def log_message(self, *args):
         pass

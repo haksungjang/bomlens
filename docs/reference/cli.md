@@ -91,6 +91,7 @@ Environment variables adjust the behavior.
 | `TRUSCA_REF` | `main` | Ingest ref label |
 | `TRUSCA_RELEASE` | `--version` value | Ingest release label |
 | `EXTERNAL_LOOKUP` | `true` | With `--ui`: enable the web UI's CVE/package lookup, which queries OSV.dev on demand. Set `false` for air-gapped runs |
+| `SBOM_UPLOAD_TTL_HOURS` | `24` | With `--ui`: how long an uploaded file is kept if no scan is ever started with it (a picked-then-abandoned upload). Clamped to at least 1 |
 
 On Windows, environment variables set in a command prompt do not survive a
 double-click. The launchers therefore also read `UI_PORT`, `SBOM_LANG`,
