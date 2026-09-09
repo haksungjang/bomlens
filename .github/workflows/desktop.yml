@@ -39,11 +39,14 @@ jobs:
   test:
     # container.mjs 순수 로직 단위 테스트(electron 불필요, 빠름).
     runs-on: ${{ fromJSON(vars.CI_LINUX_RUNNER || '["self-hosted","linux","bomlens-wsl"]') }}
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: electron
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
@@ -69,11 +72,14 @@ jobs:
     runs-on: ${{ matrix.os == 'windows-latest'
       && fromJSON(vars.CI_WINDOWS_RUNNER || '["self-hosted","windows","bomlens-win"]')
       || fromJSON(vars.CI_MACOS_RUNNER || '["self-hosted","macos","bomlens-macos-desktop"]') }}
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: electron
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20

@@ -2524,6 +2524,81 @@ else
     fail "git clone failure contract violated" "$events"
 fi
 
+echo "== zip-upload: hostile archives are rejected before extraction (zip-slip / tar traversal / tar symlink) =="
+# safe_extract_zip() and the zip-upload tar branch (server.py) are the only
+# things standing between an uploaded archive and the filesystem outside the
+# scan's own extraction directory. Exercise all three guards end to end
+# through the real upload + scan-stream endpoints, not just the function in
+# isolation, so a regression in the wiring (not just the check itself) fails
+# a test.
+python3 - "$WORK/slip.zip" <<'ZIPSLIP'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as z:
+    z.writestr("../../../../tmp/evil-zip-slip.txt", "pwned")
+ZIPSLIP
+ztoken=$(curl -fsS -F "kind=zip" -F "file=@$WORK/slip.zip" "$BASE2/upload?kind=zip" 2>/dev/null \
+         | python3 -c "import sys,json;print(json.load(sys.stdin).get('token',''))" 2>/dev/null)
+events=$(sse_events "project=zipslip&version=1.0&source=zip-upload&token=$ztoken")
+if echo "$events" | python3 -c "
+import sys, json
+evs = json.load(sys.stdin)
+errs = [e for e in evs if e['event'] == 'error']
+assert errs and 'unsafe path in archive' in str(errs[0]['data']), evs
+assert [e for e in evs if e['event'] == 'done'][0]['data']['ok'] is False
+"; then
+    pass "zip-slip member (../../../../tmp/...) is rejected, not extracted"
+else
+    fail "zip-slip contract violated" "$events"
+fi
+[ -e /tmp/evil-zip-slip.txt ] && fail "zip-slip actually wrote outside the extraction dir" || pass "zip-slip left no file outside the extraction dir"
+rm -f /tmp/evil-zip-slip.txt
+
+python3 - "$WORK/slip.tar" <<'TARSLIP'
+import sys, tarfile, io
+with tarfile.open(sys.argv[1], "w") as t:
+    data = b"pwned"
+    info = tarfile.TarInfo(name="../evil-tar-slip.txt")
+    info.size = len(data)
+    t.addfile(info, io.BytesIO(data))
+TARSLIP
+ttoken=$(curl -fsS -F "kind=zip" -F "file=@$WORK/slip.tar" "$BASE2/upload?kind=zip" 2>/dev/null \
+         | python3 -c "import sys,json;print(json.load(sys.stdin).get('token',''))" 2>/dev/null)
+events=$(sse_events "project=tarslip&version=1.0&source=zip-upload&token=$ttoken")
+if echo "$events" | python3 -c "
+import sys, json
+evs = json.load(sys.stdin)
+errs = [e for e in evs if e['event'] == 'error']
+assert errs and 'unsafe path in archive' in str(errs[0]['data']), evs
+assert [e for e in evs if e['event'] == 'done'][0]['data']['ok'] is False
+"; then
+    pass "tar member (../evil-tar-slip.txt) is rejected, not extracted"
+else
+    fail "tar path-traversal contract violated" "$events"
+fi
+
+python3 - "$WORK/symlink.tar" <<'TARSYM'
+import sys, tarfile
+with tarfile.open(sys.argv[1], "w") as t:
+    link = tarfile.TarInfo(name="escape")
+    link.type = tarfile.SYMTYPE
+    link.linkname = "/etc"
+    t.addfile(link)
+TARSYM
+stoken=$(curl -fsS -F "kind=zip" -F "file=@$WORK/symlink.tar" "$BASE2/upload?kind=zip" 2>/dev/null \
+         | python3 -c "import sys,json;print(json.load(sys.stdin).get('token',''))" 2>/dev/null)
+events=$(sse_events "project=tarsym&version=1.0&source=zip-upload&token=$stoken")
+if echo "$events" | python3 -c "
+import sys, json
+evs = json.load(sys.stdin)
+errs = [e for e in evs if e['event'] == 'error']
+assert errs and 'unsafe link in archive' in str(errs[0]['data']), evs
+assert [e for e in evs if e['event'] == 'done'][0]['data']['ok'] is False
+"; then
+    pass "tar symlink member pointing outside the archive is rejected"
+else
+    fail "tar symlink contract violated" "$events"
+fi
+
 echo hang > "$STUB_MODE_FILE"
 rm -f "$STUB_HEARTBEAT"
 curl -sN --max-time 2 "$BASE2/scan-stream?project=cancel&version=1.0&source=current-dir" >/dev/null 2>&1 || true
