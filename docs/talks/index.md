@@ -29,7 +29,7 @@ How to check the open source in your own output — from generating an SBOM with
 
 A start-to-finish walkthrough: turning a real Python project into an SBOM, reading license and vulnerability results, and covering AI model and dataset provenance with a live Cellpose example.
 
-[View slides](oss-check-training-2026-09/slides.en.html){ .md-button .md-button--primary target=_blank }
+[View slides](oss-check-training-2026-09/slides.html){ .md-button .md-button--primary target=_blank }
 
 ## Open Source Supply Chain Security Tools — OpenChain Korea Work Group
 
@@ -41,4 +41,4 @@ BomLens, Trusted OSS, and TRUSCA: how a rejected SBOM gets fixed on the supplier
 
 Two problems, two answers: SBOMs that get rejected before they're even usable, met by BomLens; policies that never get enforced once AI agents start adding dependencies on their own, met by Trusted OSS and TRUSCA.
 
-[View slides](kwg-31-supply-chain-tools/slides.en.html){ .md-button .md-button--primary target=_blank }
+[View slides](kwg-31-supply-chain-tools/slides.html){ .md-button .md-button--primary target=_blank }
