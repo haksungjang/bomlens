@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `--diff <old.json> <new.json>` compares two already-generated AI-model SBOMs and reports drift: a `bomlens:assessment:*` verdict that got worse, a changed declared license, or a SHA-256 weight-file hash that no longer matches under the same model name/purl/HuggingFace id. Needs no `--project`/`--version` or scan target; writes `<new>_model-diff.json`.
 - `--verify-weights`, opt-in with `--model`: downloads only the repo's pickle-format weight files (`.bin`/`.pt`/`.pth`/`.ckpt` — the ones that execute code on load) and runs the same local picklescan verification `--model-file` already runs, instead of only trusting HuggingFace's own scan. Stamps `bomlens:localscan:*` on the model component, worst-status-wins across files.
+- The model-file reader (`--model-file`) now recognizes Keras `.h5`/`.keras` files and checks them for a `Lambda` layer, the marshalled-code equivalent of a pickle-format risk; recognizes an ONNX external-data reference that escapes the model's own directory; and checks a GGUF chat template for known Jinja2 sandbox-escape gadget patterns. All three are static, header/config-only checks — no code is executed, unmarshalled, or rendered.
 
 ## [v1.11.9] - 2026-09-09
 
