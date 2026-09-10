@@ -370,6 +370,17 @@ EOF
         # Best-effort — a missing network or tool just leaves those fields unfilled,
         # and the G7 conformance step then reports them honestly as not present.
         run_optional_step enrich-aibom bash "$LIBDIR/enrich-aibom.sh" "$OUTPUT_FILE" "$MODEL_ID"
+        # --verify-weights (opt-in, off by default): download only the
+        # pickle-format weight files (.bin/.pt/.pth/.ckpt) and run the same
+        # local picklescan verification MODE=MODELFILE runs, instead of only
+        # trusting the Hub's own scan. Real network + disk cost, unlike the
+        # metadata-only enrich-aibom.sh step above, which is why it needs an
+        # explicit opt-in. Best-effort: a network failure or missing
+        # huggingface_hub degrades to "not verified" rather than failing the scan.
+        if [ "${VERIFY_MODEL_WEIGHTS:-false}" = "true" ]; then
+            run_optional_step verify-weights python3 "$LIBDIR/verify-model-weights.py" \
+                "$OUTPUT_FILE" "$MODEL_ID"
+        fi
         ;;
 
     DATASET)
