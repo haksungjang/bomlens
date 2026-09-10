@@ -28,16 +28,33 @@ set -e
 #   - MODELFILE   : read one AI model file's own header -> ML-BOM (offline)
 #   - ANALYZE     : validate + convert a supplier SBOM -> conformance + risk report
 #   - MERGE       : combine several CycloneDX SBOMs (layered server delivery)
+#   - DIFF        : compare two already-generated AI-model SBOMs (drift report)
 #   - POSTPROCESS : consume an already-generated SBOM
 # then runs the common pipeline: normalize -> notice -> security -> sign.
 # ========================================================
 
 SCAN_MODE="${MODE:-POSTPROCESS}"
+LIBDIR="/usr/local/lib/sbom"
 
 # --- UI mode: hand off to the web server, no project metadata needed ---
 if [ "$SCAN_MODE" = "UI" ]; then
     echo "[INFO] Starting BomLens Web UI on port ${UI_PORT:-8080}..."
     exec python3 /usr/local/lib/sbom-web/server.py
+fi
+
+# --- DIFF mode: compare two already-generated SBOMs, no project metadata or
+# common pipeline needed — it reads two files and writes one report. Kept out
+# of the shared PROJECT_NAME/VERSION pipeline below entirely: unlike MERGE (a
+# generator that produces a new SBOM under --project/--version), this produces
+# no SBOM at all, so there is nothing for normalize/notice/security/sign to do.
+if [ "$SCAN_MODE" = "DIFF" ]; then
+    if [ -z "$DIFF_OLD" ] || [ -z "$DIFF_NEW" ]; then
+        echo "[ERROR] DIFF_OLD and DIFF_NEW are required for DIFF mode."
+        exit 1
+    fi
+    OUT="/host-output/${DIFF_OUT_NAME:-model-diff.json}"
+    python3 "$LIBDIR/diff-ai-model.py" "$DIFF_OLD" "$DIFF_NEW" "$OUT"
+    exit $?
 fi
 
 if [ -z "$PROJECT_NAME" ] || [ -z "$PROJECT_VERSION" ]; then
@@ -49,7 +66,6 @@ SAFE_PROJECT=$(echo "${PROJECT_NAME}" | sed 's/[^a-zA-Z0-9.-]/_/g' | sed 's/__*/
 SAFE_VERSION=$(echo "${PROJECT_VERSION}" | sed 's/[^a-zA-Z0-9.-]/_/g' | sed 's/__*/_/g' | sed 's/^_//; s/_$//')
 OUTPUT_FILE="${SAFE_PROJECT}_${SAFE_VERSION}_bom.json"
 OUT_PREFIX="${SAFE_PROJECT}_${SAFE_VERSION}"
-LIBDIR="/usr/local/lib/sbom"
 
 # Report language for the human-facing conformance + AI-profile reports. Only
 # en (default) or ko; the report generators read REPORT_LANG directly, so export
@@ -498,7 +514,7 @@ EOF
         ;;
 
     *)
-        echo "[ERROR] Unknown MODE: $SCAN_MODE (expected SOURCE/IMAGE/BINARY/ROOTFS/FIRMWARE/AIBOM/MODELFILE/DATASET/ANALYZE/MERGE/POSTPROCESS/UI)"
+        echo "[ERROR] Unknown MODE: $SCAN_MODE (expected SOURCE/IMAGE/BINARY/ROOTFS/FIRMWARE/AIBOM/MODELFILE/DATASET/ANALYZE/MERGE/POSTPROCESS/UI/DIFF)"
         exit 1
         ;;
 esac

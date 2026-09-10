@@ -324,6 +324,13 @@ jobs:
           pip install --quiet "picklescan==1.0.5"
           bash tests/test-modelfile.sh
 
+      # No Docker: matches machine-learning-model components across two
+      # CycloneDX documents (HuggingFace id / purl name / plain name) and
+      # asserts what a matched pair's escalation/license/hash comparison
+      # reports, including the two exit-1 tool-error cases.
+      - name: Model diff/drift tests
+        run: bash tests/test-diff.sh
+
       - name: Vendored-OSS adversarial tests
         run: bash tests/test-vendored-adversarial.sh
 

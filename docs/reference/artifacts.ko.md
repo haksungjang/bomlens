@@ -28,6 +28,7 @@ description: BomLens가 생성하는 산출물 파일 목록과 생성 조건, �
 | `{Project}_{Version}_vendored.cdx.json` | 소스 스캔에서 `--identify-vendored`, opt-in SCANOSS 이미지 필요 | 소스 트리 안에서 식별한 번들 오픈소스 컴포넌트(SCANOSS) |
 | `{Project}_{Version}_security_epss.json` | 보안보고서를 생성할 때마다 | 취약점별 EPSS 점수와 KEV 여부(오프라인 생성 시 null/false), 보안보고서 우선순위 산정에 사용 |
 | `{Project}_{Version}_bom.json.sig` | `--sign` | cosign 서명 (`--spdx`와 함께 쓰면 `_bom.spdx.json.sig`도 생성) |
+| `{new}_model-diff.json` | `--diff <old.json> <new.json>` | 이미 생성한 SBOM 두 개를 비교한 AI 모델 변동 보고서. 매칭된 모델의 판정·라이선스·해시 변화와, 한쪽 파일에만 있는 컴포넌트를 담는다. 새 쪽 입력 파일 이름을 따르며(`<new>_bom.json` → `<new>_model-diff.json`), `{Project}_{Version}`이 아니다 — `--diff`는 프로젝트나 버전을 따로 받지 않는다 |
 
 `{P}`=프로젝트 이름, `{V}`=버전 (특수문자는 `_`로 정규화).
 

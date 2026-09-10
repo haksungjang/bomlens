@@ -57,7 +57,7 @@ case "${1:-}" in
     # /host-output (post-process / single-shot) or /out (source stage 1) — i.e.
     # the per-run subfolder scan-sbom.sh now creates. Falls back to cwd so the
     # legacy flat layout (SBOM_OUTPUT_FLAT) still works.
-    pn=""; pv=""; hostout=""; prev=""
+    pn=""; pv=""; hostout=""; mode=""; diffout=""; prev=""
     for a in "$@"; do
       case "$prev" in
         -v)
@@ -69,6 +69,8 @@ case "${1:-}" in
       case "$a" in
         PROJECT_NAME=*)    pn="${a#PROJECT_NAME=}" ;;
         PROJECT_VERSION=*) pv="${a#PROJECT_VERSION=}" ;;
+        MODE=*)            mode="${a#MODE=}" ;;
+        DIFF_OUT_NAME=*)   diffout="${a#DIFF_OUT_NAME=}" ;;
       esac
       prev="$a"
     done
@@ -79,6 +81,13 @@ case "${1:-}" in
       dest="${hostout:-.}"; mkdir -p "$dest" 2>/dev/null
       printf '{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"metadata":{"component":{"type":"application","name":"%s","version":"%s"}},"components":[]}\n' \
         "$pn" "$pv" > "$dest/${pn}_${pv}_bom.json"
+    fi
+    # MODE=DIFF carries no PROJECT_NAME/VERSION at all — it names its own
+    # output file (DIFF_OUT_NAME) instead, so it needs its own stub write.
+    if [ "$mode" = "DIFF" ] && [ -n "$diffout" ] && [ "${DOCKER_STUB_NOWRITE:-0}" != "1" ]; then
+      dest="${hostout:-.}"; mkdir -p "$dest" 2>/dev/null
+      printf '{"generatedAt":"stub","old":{},"new":{},"matched":[],"unmatched":[],"summary":{}}\n' \
+        > "$dest/$diffout"
     fi
     exit 0 ;;
   *) exit 0 ;;
@@ -119,7 +128,7 @@ for flag in --project --version --target --git --branch --firmware --analyze \
             --generate-only --notice --security --all --no-report --deep-license \
             --byte-stable --sign --output-dir --timestamp --ui \
             --license --sbom-author --model --model-file --usage --merge --merge-root \
-            --trusca --upload-target --deep-cve --identify-vendored --spdx --lang; do
+            --diff --trusca --upload-target --deep-cve --identify-vendored --spdx --lang; do
   if printf '%s' "$HELP" | grep -q -- "$flag"; then pass "help documents $flag"
   else fail "help documents $flag"; fi
 done
@@ -378,6 +387,31 @@ printf '%s' "$CDX" > "$d/b.json"
 scan_in "$d" --project MergedR --version 1.0.0 --merge a.json b.json --merge-root a.json --generate-only
 { in_out "Mode: MERGE" && [ "$RC" -eq 0 ]; } \
   && pass "--merge-root naming one of the --merge inputs succeeds" || { fail "--merge-root valid input"; show; }
+
+# --------------------------------------------------------
+section "Model diff mode (--diff)"
+# --------------------------------------------------------
+d="$(new_proj diff)"
+printf '%s' "$CDX" > "$d/old.json"
+printf '%s' "$CDX" > "$d/new.json"
+
+scan_in "$d" --diff old.json
+{ [ "$RC" -ne 0 ] && in_out "requires two files"; } \
+  && pass "--diff with only one file is rejected" || { fail "--diff one file"; show; }
+
+scan_in "$d" --diff missing.json new.json
+{ [ "$RC" -ne 0 ] && in_out "old SBOM not found"; } \
+  && pass "--diff rejects a missing old file" || { fail "--diff missing old file"; show; }
+
+scan_in "$d" --diff old.json missing.json
+{ [ "$RC" -ne 0 ] && in_out "new SBOM not found"; } \
+  && pass "--diff rejects a missing new file" || { fail "--diff missing new file"; show; }
+
+# No --project/--version at all: --diff only reads two files and writes a report.
+scan_in "$d" --diff old.json new.json
+{ [ "$RC" -eq 0 ] && in_log "MODE=DIFF" && [ -f "$d/new_model-diff.json" ]; } \
+  && pass "--diff old.json new.json -> DIFF mode writes a report with no --project/--version" \
+  || { fail "--diff -> DIFF mode"; show; }
 
 # --------------------------------------------------------
 section "Yocto build directory detection"
