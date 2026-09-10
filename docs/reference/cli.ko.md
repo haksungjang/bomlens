@@ -47,6 +47,7 @@ BomLens의 전체 옵션과 분석 모드, CI/CD 통합 방법, 트러블슈팅�
 | `--deep-license` | false | scancode 정밀 라이선스 탐지 (opt-in 이미지) |
 | `--deep-cve` | false | grype의 NVD CPE 매칭으로 두 번째 대조를 더한다 (opt-in `bomlens-deep-cve` 이미지, 자동으로 내려받음). BomLens는 Maven 컴포넌트에만 NVD 대조가 가능한 CPE를 붙여 주므로, Trivy가 놓치는 NVD 전용 CVE는 대부분 오래된 Maven 라이브러리에서 나온다. `--security`를 자동으로 켠다. NVD 실시간 버전 범위로 확인하지 못한 결과는 보고서에 버전 미검증으로 표시된다 — [정밀 CVE 대조 가이드](../guides/reports.ko.md) 참고 |
 | `--identify-vendored` | false | 패키지 매니저가 없는 C/C++ 소스에 복사돼 들어간(vendored) 오픈소스를 식별. 파일 지문을 OSSKB 서비스와 대조 (발행 이미지에 포함; 소스가 아니라 해시 전송). [내장 오픈소스 식별 가이드](../guides/identify-vendored.ko.md) 참고 |
+| `--verify-weights` | false | `--model`과 함께 쓰면 저장소의 pickle 계열 가중치 파일(`.bin`/`.pt`/`.pth`/`.ckpt`, 로드 시 코드를 실행할 수 있는 형식)을 내려받아 `--model-file`이 실행하는 것과 같은 로컬 picklescan 검증을 돌린다. HuggingFace 자체 스캔 결과(`bomlens:hf:scan:*`)만 믿는 대신 독립적으로 확인하는 것이다. safetensors·GGUF·ONNX 가중치는 내려받지 않는다. 로드 시 코드를 실행하지 않는 형식이라 picklescan으로 확인할 대상이 없기 때문이다. 실제 네트워크·디스크 비용이 들고(`AIBOM_VERIFY_MAX_FILES`/`AIBOM_VERIFY_MAX_BYTES`로 상한, 기본 5개 파일 · 각 2GiB) 메타데이터만 읽는 `ENRICH_HF_SECURITY` 조회와 달리 옵트인이다. AI 모델 스캔 전용 |
 | `--byte-stable` | false | 결정론적(재현 가능) SBOM 출력 |
 | `--sign` | false | cosign 서명 (`COSIGN_KEY` 필요) |
 | `--output-dir <dir>` | 현재 디렉터리 | 산출물 베이스 디렉터리 (별칭 `-o`). 스캔마다 그 아래 `{Project}_{Version}/` 하위 폴더에 묶여 저장되어 소스 트리를 오염시키지 않음 |
@@ -78,6 +79,8 @@ BomLens의 전체 옵션과 분석 모드, CI/CD 통합 방법, 트러블슈팅�
 | `GIT_TOKEN` | — | 비공개 git 저장소 클론에 쓰는 토큰 |
 | `HF_TOKEN` | — | `--model`과 AI SBOM 분석의 데이터셋 메타데이터 조회에 쓰는 HuggingFace read 토큰. 비공개·게이트 저장소에 필요하며, 모델을 공개하기 전 검토할 때 쓴다. `HUGGING_FACE_HUB_TOKEN`도 별칭으로 받는다 |
 | `ENRICH_HF_SECURITY` | `true` | `--model` 스캔에서 HuggingFace가 자체 실행한 파일 보안 스캔 결과(파일별 ClamAV·picklescan)를 읽어 ML-BOM에 기록한다. 메타데이터만 읽고 파일은 내려받지 않는다. `false`면 조회를 건너뛴다 |
+| `AIBOM_VERIFY_MAX_FILES` | `5` | `--verify-weights`에서 모델당 내려받아 스캔할 pickle 계열 가중치 파일의 최대 개수. 상한을 넘는 나머지 파일은 대기열에 넣지 않고 그냥 확인하지 않는다 |
+| `AIBOM_VERIFY_MAX_BYTES` | `2147483648`(2GiB) | `--verify-weights`에서 이 크기를 넘는 가중치 파일(저장소가 선언한 크기든 실제로 내려받은 크기든)은 내려받거나 스캔하지 않고 건너뛴다 |
 | `COSIGN_KEY` | — | `--sign`에 쓰는 서명 키 경로 |
 | `FETCH_LICENSE` | `true` | 소스 스캔 시 의존성 라이선스를 자동 조회. `false`면 조회를 생략해 속도를 높임 |
 | `PROJECT_LICENSE` | — | `--license`와 같다. 프로젝트의 배포 라이선스를 SPDX 식별자로 지정한다. `bomlens:licenseConflict` 판정과 위험 보고서의 충돌 절을 만든다 |

@@ -128,7 +128,7 @@ for flag in --project --version --target --git --branch --firmware --analyze \
             --generate-only --notice --security --all --no-report --deep-license \
             --byte-stable --sign --output-dir --timestamp --ui \
             --license --sbom-author --model --model-file --usage --merge --merge-root \
-            --diff --trusca --upload-target --deep-cve --identify-vendored --spdx --lang; do
+            --diff --trusca --upload-target --deep-cve --identify-vendored --verify-weights --spdx --lang; do
   if printf '%s' "$HELP" | grep -q -- "$flag"; then pass "help documents $flag"
   else fail "help documents $flag"; fi
 done
@@ -286,6 +286,7 @@ guard "--merge-root without --merge"    "only applies with --merge" --project p 
 guard "--merge-root not in --merge list" "must be one of the --merge input files" \
   --project p --version 1 --merge a.json b.json --merge-root c.json
 guard "--usage without --model/--model-file" "AI model and dataset scans only" --project p --version 1 --target x --usage internal
+guard "--verify-weights without --model" "AI model scans only" --project p --version 1 --target x --verify-weights
 
 # --------------------------------------------------------
 section "Archive ingestion (auto-extract → source scan)"
@@ -369,6 +370,12 @@ d="$(new_proj usage_bad)"; printf 'x' > "$d/w.gguf"
 scan_in "$d" --project MU --version 1 --model-file w.gguf --usage bogus --generate-only
 { [ "$RC" -ne 0 ] && in_out "internal, product, redistribute, outputs-only"; } \
   && pass "--usage rejects an unknown scenario" || { fail "--usage rejects unknown scenario"; show; }
+
+d="$(new_proj verify_weights)"
+scan_in "$d" --project MVW --version 1 --model owner/repo --verify-weights --generate-only
+{ in_out "Mode: AIBOM" && in_log "VERIFY_MODEL_WEIGHTS=true"; } \
+  && pass "--verify-weights (with --model) reaches the container" \
+  || { fail "--verify-weights reaches the container"; show; }
 
 # --------------------------------------------------------
 section "Merge mode (--merge)"

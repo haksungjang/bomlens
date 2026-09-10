@@ -91,6 +91,7 @@ FORCE_FIRMWARE="false"; ANALYZE_SBOM=""; MODEL=""; MODEL_FILE=""
 YOCTO_BUILD_DIR=""
 IDENTIFY_VENDORED="false"
 DEEP_CVE="false"
+VERIFY_WEIGHTS="false"
 SCANOSS_API_URL="${SCANOSS_API_URL:-}"; SCANOSS_API_KEY="${SCANOSS_API_KEY:-}"
 # HuggingFace read credential for --model (private/gated repos). Absorb the older
 # huggingface_hub name here so the container boundary carries one name only.
@@ -152,6 +153,7 @@ while [[ "$#" -gt 0 ]]; do
         --deep-license) DEEP_LICENSE="true" ;;
         --deep-cve) DEEP_CVE="true"; GENERATE_SECURITY="true"; SECURITY_REQUESTED="true" ;;
         --identify-vendored) IDENTIFY_VENDORED="true" ;;
+        --verify-weights) VERIFY_WEIGHTS="true" ;;
         --sign) SIGN_SBOM="true" ;;
         --byte-stable) BYTE_STABLE="true" ;;
         --lang) REPORT_LANG="$2"; shift ;;
@@ -274,6 +276,16 @@ Options:
                          that has no package manager. Matches file fingerprints
                          against the OSSKB service (opt-in image; sends hashes,
                          not source). See docs/guides/identify-vendored.md
+  --verify-weights       With --model: download the repo's pickle-format weight
+                         files (.bin/.pt/.pth/.ckpt — the ones that execute code
+                         on load) and run the same local picklescan verification
+                         --model-file runs on a supplied file, instead of only
+                         trusting HuggingFace's own scan (bomlens:hf:scan:*).
+                         safetensors/GGUF/ONNX weights are never downloaded: they
+                         cannot execute code on load. A real network/disk cost
+                         (bounded by AIBOM_VERIFY_MAX_FILES / AIBOM_VERIFY_MAX_BYTES,
+                         default 5 files / 2 GiB each), so this is opt-in, unlike
+                         the metadata-only file-security lookup.
   --byte-stable          Deterministic SBOM output
   --lang <en|ko>         Language for the human-facing conformance and AI-profile
                          reports (.md/.html). Default en. The SBOM and the JSON
@@ -626,8 +638,8 @@ pp_env() {
     # secret never lands on the `docker run` argv where a local `ps` could read
     # it. Their values ride the exported shell env (see the export before each
     # `docker run`), matching the web-server path. Non-secret fields keep =value.
-    printf ' -e GENERATE_NOTICE=%s -e GENERATE_SECURITY=%s -e GENERATE_SPDX=%s -e SECURITY_ENRICH=%s -e GENERATE_REPORT=%s -e DEEP_LICENSE=%s -e IDENTIFY_VENDORED=%s -e SCANOSS_API_URL=%q -e SCANOSS_API_KEY -e SIGN_SBOM=%s -e BYTE_STABLE=%s -e REPORT_LANG=%s -e UPLOAD_ENABLED=%s -e PROJECT_NAME=%q -e PROJECT_VERSION=%q -e HOST_OUTPUT_DIR=/host-output -e HOST_UID=%s -e HOST_GID=%s -e API_KEY -e API_URL=%q -e UPLOAD_TARGET=%q -e TRUSCA_PROJECT_ID=%q -e TRUSCA_REF=%q -e TRUSCA_RELEASE=%q -e ENRICH_CDXGEN=%s -e ENRICH_EOL=%s -e ENRICH_MALICIOUS=%s -e STALENESS_ENRICH=%s -e DEEP_CVE=%s -e SECURITY_NVD_VERIFY=%s -e ENRICH_HF_SECURITY=%s -e AI_USAGE_CONTEXT=%q -e PROJECT_LICENSE=%q -e SBOM_AUTHOR=%q -e SOURCE_TREE_MAX=%q -e SOURCE_SNAPSHOT_MAX_TOTAL=%q -e SOURCE_SNAPSHOT_MAX_FILE=%q -e SOURCE_SNAPSHOT_MAX_FILES=%q -e FW_VERSTR_MAX_FILES=%q -e FW_VERSTR_MAX_BYTES=%q -e FW_ELF_MAX_FILES=%q -e FW_KERNEL_MAX_FILES=%q -e FW_KERNEL_MAX_BYTES=%q -e FW_KERNEL_MAX_VERSIONS=%q -e FW_EXTRA_ROOTS=%q -e FW_MAX_EXTRA_ROOTS=%q -e FW_CONTAINER_MEMBERSHIP=%q' \
-        "$GENERATE_NOTICE" "$GENERATE_SECURITY" "$GENERATE_SPDX" "$SECURITY_ENRICH" "$GENERATE_REPORT" "$DEEP_LICENSE" "$IDENTIFY_VENDORED" "$SCANOSS_API_URL" "$SIGN_SBOM" "$BYTE_STABLE" "$REPORT_LANG" "$UPLOAD_VAR" "$PROJECT_NAME" "$PROJECT_VERSION" "$(id -u)" "$(id -g)" "$SERVER_URL" "$UPLOAD_TARGET" "$TRUSCA_PROJECT_ID" "$TRUSCA_REF" "$TRUSCA_RELEASE" "${ENRICH_CDXGEN:-true}" "${ENRICH_EOL:-true}" "${ENRICH_MALICIOUS:-true}" "${STALENESS_ENRICH:-false}" "$DEEP_CVE" "${SECURITY_NVD_VERIFY:-false}" "${ENRICH_HF_SECURITY:-true}" "${USAGE_CONTEXT:-${AI_USAGE_CONTEXT:-}}" "${PROJECT_LICENSE:-}" "${SBOM_AUTHOR:-}" \
+    printf ' -e GENERATE_NOTICE=%s -e GENERATE_SECURITY=%s -e GENERATE_SPDX=%s -e SECURITY_ENRICH=%s -e GENERATE_REPORT=%s -e DEEP_LICENSE=%s -e IDENTIFY_VENDORED=%s -e SCANOSS_API_URL=%q -e SCANOSS_API_KEY -e SIGN_SBOM=%s -e BYTE_STABLE=%s -e REPORT_LANG=%s -e UPLOAD_ENABLED=%s -e PROJECT_NAME=%q -e PROJECT_VERSION=%q -e HOST_OUTPUT_DIR=/host-output -e HOST_UID=%s -e HOST_GID=%s -e API_KEY -e API_URL=%q -e UPLOAD_TARGET=%q -e TRUSCA_PROJECT_ID=%q -e TRUSCA_REF=%q -e TRUSCA_RELEASE=%q -e ENRICH_CDXGEN=%s -e ENRICH_EOL=%s -e ENRICH_MALICIOUS=%s -e STALENESS_ENRICH=%s -e DEEP_CVE=%s -e SECURITY_NVD_VERIFY=%s -e ENRICH_HF_SECURITY=%s -e VERIFY_MODEL_WEIGHTS=%s -e AIBOM_VERIFY_MAX_FILES=%q -e AIBOM_VERIFY_MAX_BYTES=%q -e AI_USAGE_CONTEXT=%q -e PROJECT_LICENSE=%q -e SBOM_AUTHOR=%q -e SOURCE_TREE_MAX=%q -e SOURCE_SNAPSHOT_MAX_TOTAL=%q -e SOURCE_SNAPSHOT_MAX_FILE=%q -e SOURCE_SNAPSHOT_MAX_FILES=%q -e FW_VERSTR_MAX_FILES=%q -e FW_VERSTR_MAX_BYTES=%q -e FW_ELF_MAX_FILES=%q -e FW_KERNEL_MAX_FILES=%q -e FW_KERNEL_MAX_BYTES=%q -e FW_KERNEL_MAX_VERSIONS=%q -e FW_EXTRA_ROOTS=%q -e FW_MAX_EXTRA_ROOTS=%q -e FW_CONTAINER_MEMBERSHIP=%q' \
+        "$GENERATE_NOTICE" "$GENERATE_SECURITY" "$GENERATE_SPDX" "$SECURITY_ENRICH" "$GENERATE_REPORT" "$DEEP_LICENSE" "$IDENTIFY_VENDORED" "$SCANOSS_API_URL" "$SIGN_SBOM" "$BYTE_STABLE" "$REPORT_LANG" "$UPLOAD_VAR" "$PROJECT_NAME" "$PROJECT_VERSION" "$(id -u)" "$(id -g)" "$SERVER_URL" "$UPLOAD_TARGET" "$TRUSCA_PROJECT_ID" "$TRUSCA_REF" "$TRUSCA_RELEASE" "${ENRICH_CDXGEN:-true}" "${ENRICH_EOL:-true}" "${ENRICH_MALICIOUS:-true}" "${STALENESS_ENRICH:-false}" "$DEEP_CVE" "${SECURITY_NVD_VERIFY:-false}" "${ENRICH_HF_SECURITY:-true}" "$VERIFY_WEIGHTS" "${AIBOM_VERIFY_MAX_FILES:-}" "${AIBOM_VERIFY_MAX_BYTES:-}" "${USAGE_CONTEXT:-${AI_USAGE_CONTEXT:-}}" "${PROJECT_LICENSE:-}" "${SBOM_AUTHOR:-}" \
         "${SOURCE_TREE_MAX:-}" "${SOURCE_SNAPSHOT_MAX_TOTAL:-}" "${SOURCE_SNAPSHOT_MAX_FILE:-}" "${SOURCE_SNAPSHOT_MAX_FILES:-}" \
         "${FW_VERSTR_MAX_FILES:-}" "${FW_VERSTR_MAX_BYTES:-}" "${FW_ELF_MAX_FILES:-}" \
         "${FW_KERNEL_MAX_FILES:-}" "${FW_KERNEL_MAX_BYTES:-}" "${FW_KERNEL_MAX_VERSIONS:-}" \
@@ -1348,6 +1360,10 @@ fi
 
 if [ -n "${USAGE_CONTEXT:-}" ] && [ "$MODE" != "AIBOM" ] && [ "$MODE" != "MODELFILE" ] && [ "$MODE" != "DATASET" ]; then
     echo "[ERROR] --usage applies to AI model and dataset scans only (use it with --model or --model-file)."; exit 1
+fi
+
+if [ "$VERIFY_WEIGHTS" = "true" ] && [ "$MODE" != "AIBOM" ]; then
+    echo "[ERROR] --verify-weights applies to AI model scans only (use it with --model)."; exit 1
 fi
 
 if [ "$FORCE_FIRMWARE" = "true" ] && [ "$MODE" != "FIRMWARE" ]; then
