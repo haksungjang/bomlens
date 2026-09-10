@@ -34,6 +34,7 @@ Full options, analysis modes, CI/CD integration, and troubleshooting for BomLens
 | `--usage <scenario>` | — | Tailor the AI model risk assessment (`--model` and `--model-file`) to how the model will be used: `internal`, `product`, `redistribute` or `outputs-only`. Only the license conditions that bind that scenario decide the verdict, and the report states which scenario it was judged for. Unset judges against every condition |
 | `--merge <a.json> <b.json> …` | — | Merge two or more CycloneDX SBOMs into one, dedupe by purl, and stamp the root component with `--project`/`--version`. Optional — for a server SBOM when an external system needs a single product BOM; otherwise keep the layers separate (see the [server SBOM guide](../guides/server-delivery.md)). Mutually exclusive with `--target`/`--analyze`/`--git` |
 | `--merge-root <file>` | — | With `--merge`: keep this input's `specVersion` and root component (for example an ML-BOM's CycloneDX 1.7 root with its model card) instead of writing a fresh 1.6 root. Must be one of the `--merge` files; the preserved root is renamed to `--project`/`--version` |
+| `--diff <old.json> <new.json>` | — | Compare two already-generated AI-model SBOMs (`--model` or `--model-file` output) for drift: a `bomlens:assessment:*` verdict that got worse, a changed declared license, or a SHA-256 weight-file hash that no longer matches under the same model name/purl/HuggingFace id — the last one means the artifact behind a stable name silently changed. Needs neither `--project`/`--version` nor a scan target: it only reads the two files and writes `<new>_model-diff.json` next to the newer one (or under `--output-dir`) |
 | `--generate-only` | false | Save locally only, without uploading |
 | `--upload-target <target>` | `dependency-track` | Upload destination: `dependency-track` (DT-compatible) or `trusca` (native ingest) |
 | `--trusca <project_id>` | — | Upload to TRUSCA (= `--upload-target trusca` + project id). Needs `API_URL` and a Bearer `API_KEY` |
@@ -114,6 +115,8 @@ For `--git` or archive ingestion the clone or extract happens in a temp director
 A re-scan of the same project and version overwrites its subfolder by default, keeping just the latest result. Add `--timestamp` to keep each run instead: it appends `_YYYYMMDD-HHMMSS` to the folder name, for example `MyApp_1.0.0_20260626-143000/`. The flag changes the folder name only, not the SBOM file names or bytes, so it works together with `--byte-stable`.
 
 To restore the previous flat layout, where every file is written directly in the base with no per-run subfolder, set `SBOM_OUTPUT_FLAT=1`. This is meant for CI that expects the old paths.
+
+`--diff` has no project or version of its own, so it writes its report directly into the base directory (current directory, or `--output-dir`) rather than a per-run subfolder.
 
 ## Pin the scanner image version
 

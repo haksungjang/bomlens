@@ -101,6 +101,7 @@ GIT_URL=""; GIT_REF=""; NO_REPORT="false"; GENERATE_REPORT="false"
 INGEST_SOURCE="false"; INGEST_ROOTFS="false"; INGEST_ARCHIVE=""; SCAN_INPUT_DIR=""; CLEANUP_DIRS=()
 MERGE_FILES=()
 MERGE_ROOT=""
+DIFF_OLD=""; DIFF_NEW=""
 OUTPUT_BASE=""; TIMESTAMP="false"
 UI_MOUNTS=()
 
@@ -128,6 +129,15 @@ while [[ "$#" -gt 0 ]]; do
             done
             continue ;;   # we already consumed our args; skip the trailing shift
         --merge-root) MERGE_ROOT="$2"; shift ;;
+        --diff)
+            # Fixed 2-arg flag (not variadic like --merge): a drift comparison
+            # always has exactly one older and one newer SBOM. Checked here,
+            # before the shift, so a missing second file is a clear error
+            # instead of `shift 2` failing on too few remaining arguments.
+            DIFF_OLD="${2:-}"; DIFF_NEW="${3:-}"
+            [ -n "$DIFF_OLD" ] && [ -n "$DIFF_NEW" ] || {
+                echo "[ERROR] --diff requires two files: --diff <old.json> <new.json>"; exit 1; }
+            shift 2 ;;
         --git) GIT_URL="$2"; shift ;;
         --branch|--ref) GIT_REF="$2"; shift ;;
         --no-report) NO_REPORT="true" ;;
@@ -230,6 +240,16 @@ Options:
                          component (e.g. an ML-BOM's 1.7 + modelCard) instead of
                          writing a fresh 1.6 root. Must be one of the --merge
                          files; the root is renamed to --project/--version.
+  --diff <old.json> <new.json>
+                         Compare two already-generated AI-model SBOMs (--model
+                         or --model-file output) and report drift: a risk
+                         verdict that got worse, a changed declared license, or
+                         a SHA-256 weight-file hash that no longer matches under
+                         the same model name/purl/HuggingFace id — the last one
+                         means the artifact behind a stable name silently
+                         changed. No --project/--version or scan target needed;
+                         writes <new>_model-diff.json next to the newer file
+                         (or under --output-dir).
   --generate-only        Save locally without uploading
   --trusca <project_id>  Upload the SBOM to TRUSCA's native ingest endpoint
                          (shorthand for --upload-target trusca with the id).
@@ -482,6 +502,50 @@ if [ "$UI_MODE" = "true" ]; then
         "$POSTPROCESS_IMAGE"
 fi
 [ "${#UI_MOUNTS[@]}" -eq 0 ] || { echo "[ERROR] --mount requires --ui."; exit 1; }
+
+# ========================================================
+# Model drift/diff mode — reads two already-generated SBOMs and writes a
+# comparison report. No --project/--version and no scan target: there is
+# nothing to generate here, so this runs and exits before the requirement
+# check below (the same shape UI mode takes above).
+# ========================================================
+if [ -n "$DIFF_OLD" ]; then
+    docker_check
+    [ -f "$DIFF_OLD" ] || { echo "[ERROR] --diff: old SBOM not found: $DIFF_OLD"; exit 1; }
+    [ -f "$DIFF_NEW" ] || { echo "[ERROR] --diff: new SBOM not found: $DIFF_NEW"; exit 1; }
+    DIFF_OLD_DIR="$(cd "$(dirname "$DIFF_OLD")" && pwd)"; DIFF_OLD_FN="$(basename "$DIFF_OLD")"
+    DIFF_NEW_DIR="$(cd "$(dirname "$DIFF_NEW")" && pwd)"; DIFF_NEW_FN="$(basename "$DIFF_NEW")"
+    DIFF_OUT_DIR="${OUTPUT_BASE:-$(pwd)}"
+    mkdir -p "$DIFF_OUT_DIR"
+    # The report is named after the NEWER file, not --project/--version (there
+    # is none here): "<name>_bom.json" -> "<name>_model-diff.json", so a scan
+    # bundle's own naming carries over without inventing a second identity for
+    # the same artifact.
+    DIFF_REPORT_NAME="${DIFF_NEW_FN%.json}"
+    DIFF_REPORT_NAME="${DIFF_REPORT_NAME%_bom}_model-diff.json"
+    ensure_image_fresh "$POSTPROCESS_IMAGE"
+    "${DOCKER_ENV[@]}" docker run --rm \
+        -v "$(hostpath "$DIFF_OLD_DIR/$DIFF_OLD_FN")":/diff/old.json:ro \
+        -v "$(hostpath "$DIFF_NEW_DIR/$DIFF_NEW_FN")":/diff/new.json:ro \
+        -v "$(hostpath "$DIFF_OUT_DIR")":/host-output \
+        -e MODE=DIFF -e DIFF_OLD=/diff/old.json -e DIFF_NEW=/diff/new.json \
+        -e DIFF_OUT_NAME="$DIFF_REPORT_NAME" \
+        "$POSTPROCESS_IMAGE"
+    RC=$?
+    # diff-ai-model.py already reported its own reason on a real failure (bad
+    # file, unreadable JSON, nothing to compare); only an exit-0-but-no-file
+    # result means the /host-output mount itself did not reach the host.
+    if [ "$RC" -eq 0 ] && [ ! -f "$DIFF_OUT_DIR/$DIFF_REPORT_NAME" ]; then
+        echo "[ERROR] diff report not found on host: $DIFF_OUT_DIR/$DIFF_REPORT_NAME"
+        echo "  The container ran but no artifact reached this folder."
+        echo "  Likely cause: this folder is outside Docker Desktop file sharing"
+        echo "  (or Colima's home-only mount — /tmp is not shared to the VM)."
+        echo "  Run from a shared path (e.g. under your home directory) and retry."
+        exit 1
+    fi
+    [ "$RC" -eq 0 ] && echo "[INFO] Model diff report: $DIFF_OUT_DIR/$DIFF_REPORT_NAME"
+    exit "$RC"
+fi
 
 # ========================================================
 # Validate

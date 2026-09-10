@@ -34,6 +34,7 @@ BomLens의 전체 옵션과 분석 모드, CI/CD 통합 방법, 트러블슈팅�
 | `--usage <scenario>` | — | AI 모델 위험 판정을 사용 형태에 맞춘다(`--model`과 `--model-file`): `internal`, `product`, `redistribute`, `outputs-only`. 그 사용 형태에 적용되는 라이선스 조건만으로 판정하고, 보고서에 어떤 형태 기준인지 명시한다. 지정하지 않으면 전체 조건 기준으로 판정한다 |
 | `--merge <a.json> <b.json> …` | — | CycloneDX SBOM 두 개 이상을 하나로 병합하고 purl 기준으로 중복을 제거한 뒤, 최상위 컴포넌트를 `--project`/`--version`으로 기재. 선택 기능으로, 외부 시스템이 제품당 단일 BOM을 요구할 때 씁니다. 그 외에는 층별로 따로 둡니다([서버 SBOM 작성 가이드](../guides/server-delivery.ko.md) 참고). `--target`/`--analyze`/`--git`와 배타 |
 | `--merge-root <file>` | — | `--merge`와 함께: 새 1.6 루트를 만드는 대신 이 입력 파일의 `specVersion`과 최상위 컴포넌트를 유지합니다(예: ML-BOM의 CycloneDX 1.7 루트와 모델 카드). `--merge` 입력 중 하나여야 하며, 유지된 루트의 이름과 버전은 `--project`/`--version`으로 바뀝니다 |
+| `--diff <old.json> <new.json>` | — | 이미 생성한 AI 모델 SBOM 두 개(`--model` 또는 `--model-file` 결과물)를 비교해 변동을 찾는다. `bomlens:assessment:*` 판정이 이전보다 나빠졌는지, 선언된 라이선스가 바뀌었는지, 그리고 같은 모델 이름·purl·HuggingFace ID인데 가중치 파일의 SHA-256 해시가 달라졌는지를 본다. 마지막 항목이 가장 중요한 신호로, 이름은 그대로인데 그 뒤의 실제 파일이 조용히 바뀌었다는 뜻이다. `--project`/`--version`도 스캔 대상도 필요 없으며, 새 쪽 파일 이름을 따서 `<new>_model-diff.json`을 만든다(위치는 현재 디렉터리, `--output-dir` 지정 시 그 아래) |
 | `--generate-only` | false | 업로드 없이 로컬에만 저장 |
 | `--upload-target <대상>` | `dependency-track` | 업로드 대상: `dependency-track`(DT 호환) 또는 `trusca`(네이티브 ingest) |
 | `--trusca <project_id>` | — | TRUSCA에 업로드(= `--upload-target trusca` + project id). `API_URL`과 Bearer `API_KEY` 필요 |
@@ -113,6 +114,8 @@ Windows에서는 명령 프롬프트에서 설정한 환경변수가 더블클�
 같은 프로젝트와 버전을 다시 스캔하면 기본적으로 그 하위 폴더를 덮어써 최신 결과만 남깁니다. 매번 따로 보관하려면 `--timestamp`를 붙입니다. 폴더 이름에 `_YYYYMMDD-HHMMSS`가 덧붙어, 예를 들어 `MyApp_1.0.0_20260626-143000/`가 됩니다. 이 옵션은 폴더 이름만 바꿀 뿐 SBOM 파일 이름과 내용은 그대로라서 `--byte-stable`과 함께 쓸 수 있습니다.
 
 이전의 평면 배치, 즉 하위 폴더 없이 베이스에 파일을 바로 저장하던 방식으로 되돌리려면 `SBOM_OUTPUT_FLAT=1`을 설정합니다. 옛 경로를 기대하는 CI를 위한 옵션입니다.
+
+`--diff`는 프로젝트와 버전이 따로 없으므로 실행별 하위 폴더가 아니라 베이스 디렉터리(현재 디렉터리, 또는 `--output-dir`)에 바로 보고서를 씁니다.
 
 ## 특정 버전의 스캐너 이미지 사용
 

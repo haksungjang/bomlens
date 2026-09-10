@@ -28,6 +28,7 @@ The filename is `{Project}_{Version}_bom.json` (e.g. `MyApp_1.0.0_bom.json`).
 | `{Project}_{Version}_vendored.cdx.json` | `--identify-vendored` on a source scan, with the opt-in SCANOSS image | vendored open-source components identified inside the source tree (SCANOSS) |
 | `{Project}_{Version}_security_epss.json` | whenever the security report is generated | EPSS score and KEV status per vulnerability (null/false when generated offline), used to prioritize the security report |
 | `{Project}_{Version}_bom.json.sig` | `--sign` | cosign signature (with `--spdx`, a `_bom.spdx.json.sig` is produced too) |
+| `{new}_model-diff.json` | `--diff <old.json> <new.json>` | AI-model drift report comparing two already-generated SBOMs: matched model verdict/license/hash changes, plus any component present in only one of the two files. Named after the newer input (`<new>_bom.json` → `<new>_model-diff.json`), not `{Project}_{Version}` — `--diff` takes no project or version of its own |
 
 `{P}` = project name, `{V}` = version (special characters are normalized to `_`).
 

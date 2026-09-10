@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `--diff <old.json> <new.json>` compares two already-generated AI-model SBOMs and reports drift: a `bomlens:assessment:*` verdict that got worse, a changed declared license, or a SHA-256 weight-file hash that no longer matches under the same model name/purl/HuggingFace id. Needs no `--project`/`--version` or scan target; writes `<new>_model-diff.json`.
+
 ## [v1.11.9] - 2026-09-09
 
 ### Added
