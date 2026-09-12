@@ -149,9 +149,15 @@ generate_sbom_cdxgen() {
     fi
     # Capture the sibling output for diagnosis while still streaming it live, so
     # an out-of-disk extraction failure can be reported specifically (rather than
-    # a bare rc=125) and recorded for the UI.
-    local logf; logf=$(mktemp)
-    docker run --rm -u 0:0 \
+    # a bare rc=125) and recorded for the UI. --rm is dropped in favor of an
+    # explicit --cidfile + docker rm below: an out-of-memory kill (rc=137) needs
+    # `docker inspect`'s own OOMKilled flag to confirm, which --rm's automatic
+    # cleanup would remove before we could read it — guessing from rc=137 alone
+    # would misreport a plain `kill -9` or an OOM on a different process in the
+    # same container as memory exhaustion.
+    local logf cidf; logf=$(mktemp); cidf=$(mktemp); rm -f "$cidf"
+    docker run -u 0:0 \
+        --cidfile "$cidf" \
         --volumes-from "$self" \
         -e HOME=/tmp/sbomhome \
         -e MAVEN_OPTS=-Dmaven.repo.local=/tmp/sbomhome/.m2 \
@@ -161,18 +167,32 @@ generate_sbom_cdxgen() {
         --entrypoint sh "$img" \
         -c "$prep" _ "$src" "$bom_path" "$CDX_SPEC_VERSION" 2>&1 | tee "$logf"
     rc=${PIPESTATUS[0]}
+    local cid=""
+    [ -s "$cidf" ] && cid=$(cat "$cidf")
     if [ "$rc" -ne 0 ]; then
-        if grep -qi "no space left on device" "$logf"; then
+        if [ -n "$cid" ] && [ "$(docker inspect -f '{{.State.OOMKilled}}' "$cid" 2>/dev/null)" = "true" ]; then
+            CDXGEN_FAIL_REASON="oom"
+            echo "[WARN] cdxgen was killed for running out of memory (rc=$rc). Give the Docker engine more memory — Docker Desktop: Settings > Resources; Colima: 'colima start --memory N' — and re-scan for full transitive dependencies."
+        elif grep -qi "no space left on device" "$logf"; then
             CDXGEN_FAIL_REASON="disk-space"
             echo "[WARN] cdxgen failed: Docker is out of disk space (rc=$rc). Free space (e.g. 'docker system prune') and re-scan for full transitive dependencies."
+        elif grep -qEi "temporary failure in name resolution|could not resolve host|network is unreachable|connection timed out|connect timed out|no route to host|ENOTFOUND|ETIMEDOUT" "$logf"; then
+            # Build tools resolve the real dependency tree by reaching Maven
+            # Central / npmjs / PyPI etc. from inside the sibling container;
+            # a proxy, firewall or offline host breaks that even though the
+            # scan's own network access (cloning the repo) already worked.
+            CDXGEN_FAIL_REASON="network"
+            echo "[WARN] cdxgen couldn't reach the network while resolving dependencies (rc=$rc). Check proxy/firewall access to the package registries from the Docker engine and re-scan for full transitive dependencies."
         else
             CDXGEN_FAIL_REASON="cdxgen-unavailable"
             echo "[WARN] cdxgen sibling container failed (rc=$rc)."
         fi
-        rm -f "$logf"
+        [ -n "$cid" ] && docker rm -f "$cid" >/dev/null 2>&1
+        rm -f "$logf" "$cidf"
         return 1
     fi
-    rm -f "$logf"
+    [ -n "$cid" ] && docker rm -f "$cid" >/dev/null 2>&1
+    rm -f "$logf" "$cidf"
     if [ "$bom_path" != "$outdir/$out" ] && [ -f "$bom_path" ]; then
         mv "$bom_path" "$outdir/$out"
     fi
