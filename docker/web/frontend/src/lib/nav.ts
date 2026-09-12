@@ -144,14 +144,35 @@ export const NAV_GROUPS: NavGroup[] = [
     labelKey: "nav.group.compliance",
     sections: [
       { id: "licenses", labelKey: "nav.licenses", icon: ScrollText },
-      // Supplier-SBOM conformance: shown whenever an ANALYZE produced a
-      // conformance report, regardless of AI content. The G7 AI minimum-element
-      // checks (when present) render as a sub-block inside this section.
+      // A conformance report now exists for every mode (a mandatory checklist
+      // run against whatever SBOM the scan ends with), but it is only a
+      // verdict a reader should see as a screen when the document being
+      // graded was actually submitted by someone (hasInputSbom — ANALYZE on
+      // a supplier's SBOM, AI SBOM included). For a plain generated SBOM the
+      // same report stays a file in Artifacts — mandatory checks like
+      // "transitive edges present" or "PURL coverage" are real data-quality
+      // signals, but tautological ones (spec-version, timestamp, tool info)
+      // will pass on any healthy pipeline run, and a binary-derived scan
+      // (ROOTFS/IMAGE/FIRMWARE) can fail name-version permanently for reasons
+      // that are not a defect — none of that belongs in the same sidebar list
+      // as facts about the scanned software. A self-generated AI SBOM's G7
+      // minimum-element rollup is the one exception worth surfacing on its
+      // own: it grades the model PUBLISHER's own disclosure (BomLens only
+      // transcribes the model card), a real finding rather than a self-grade
+      // — but it lives on Models & datasets (AiSummaryCard + this section's
+      // own CheckGroup rendering, reused there), not here.
+      //
+      // Deliberately NOT `mode === "ANALYZE"`: ScanContext.mode only reflects
+      // the run that is currently streaming (server.py's scan_detail() sends
+      // "mode": None for a re-opened past scan), so gating on it would hide
+      // this section for a supplier's ANALYZE scan the moment it's reopened
+      // from Recent, refreshed, or viewed on the published demo site.
+      // hasInputSbom is derived from an artifact file and survives re-open.
       {
         id: "conformance",
         labelKey: "nav.conformance",
         icon: FileCheck2,
-        requires: (c) => c.hasConformance,
+        requires: (c) => c.hasConformance && c.hasInputSbom,
       },
     ],
   },
