@@ -17,6 +17,8 @@ An open-source compliance manager receives deliverables from many teams in diffe
 | Open-source risk report | `{Project}_{Version}_risk-report.{md,html}` | aggregated license + vulnerability risk (with deadlines) |
 | Conformance report | `{Project}_{Version}_conformance.{json,md,html}` | whether the SBOM meets the submission quality criteria, and what is missing |
 
+The conformance report's file is always produced, but the web UI only shows it as a dedicated pass/fail screen when the input being checked is a supplied SBOM (the `--analyze` path); a self-generated SBOM grading itself is not a meaningful pass/fail signal for most of its checks. For a self-generated scan, open the file directly, or feed the output back in with `--analyze` to see it on screen. See [Reading the conformance report](supplier-sbom.md#reading-the-conformance-report).
+
 For any input form, adding `--all --generate-only` produces all four at once (they are on by default and are only turned off with `--no-report`).
 
 ## Common setup
@@ -215,7 +217,7 @@ $SBOM --project internal-llm --version 1.0.0 \
 - **Notice (NOTICE)**: components grouped by license. Use it to satisfy the obligation to include or disclose notices when distributing.
 - **SBOM**: CycloneDX 1.6. The artifact you upload to a vulnerability-management system.
 - **Open-source risk report**: aggregates vulnerabilities by severity with recommended deadlines (Critical 7 days, High 30 days). Includes a license summary and the format conformance result.
-- **Conformance report**: the per-item check of whether the SBOM meets the submission quality criteria (required fields, PURL coverage, transitive dependencies, and more). Produced by default alongside the other three; see [Reading the conformance report](supplier-sbom.md#reading-the-conformance-report) in the supplier SBOM guide.
+- **Conformance report**: the per-item check of whether the SBOM meets the submission quality criteria (required fields, PURL coverage, transitive dependencies, and more). The file is produced by default alongside the other three; the web UI shows it as a screen only on the `--analyze` path (see above). See [Reading the conformance report](supplier-sbom.md#reading-the-conformance-report) in the supplier SBOM guide.
 
 ## All at once in the web UI
 
@@ -250,7 +252,7 @@ For source-code scans (current folder, GitHub URL, ZIP upload), an **Advanced sc
 
 Both are slow and off by default, so enable them only when needed. ScanCode is available only in an image built with `--build-arg SBOM_DEEP_LICENSE=true`. For the full list of toggles and per-target availability, see the [Web UI reference](../reference/ui.md).
 
-As it runs, logs stream live; when done you can view or download the notice, SBOM, risk report, and conformance report. The conformance result (pass/fail) is shown as a card at the top.
+As it runs, logs stream live; when done you can view or download the notice, SBOM, and risk report. The conformance report file is downloadable too; its pass/fail screen only appears when the input was an uploaded SBOM (`--analyze`) rather than a fresh scan.
 
 > The firmware upload tab appears automatically whenever the Docker engine is running. See the
 > [firmware guide](firmware.md) for how it works and how to point it at a different image tag.
