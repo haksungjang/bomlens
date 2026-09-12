@@ -798,7 +798,7 @@ cat > "$atmp/rr_security.json" <<'EOF'
 ]}]}
 EOF
 printf 'License: MIT\n' > "$atmp/rr_NOTICE.txt"
-bash "$LIB/generate-risk-report.sh" "$atmp/rr" "demo" >/dev/null 2>&1
+bash "$LIB/generate-risk-report.sh" "$atmp/rr" "demo" ANALYZE >/dev/null 2>&1
 if grep -q "7 days" "$atmp/rr_risk-report.md" && grep -q "30 days" "$atmp/rr_risk-report.md"; then
     pass "risk report: Critical-7d / High-30d deadlines present (md, en default)"
 else
@@ -820,7 +820,7 @@ else
     fail "risk report: surfaces unmet conformance items (en default)"
 fi
 # REPORT_LANG=ko renders the same report in Korean (deadlines + unmet-items note).
-REPORT_LANG=ko bash "$LIB/generate-risk-report.sh" "$atmp/rr" "demo" >/dev/null 2>&1
+REPORT_LANG=ko bash "$LIB/generate-risk-report.sh" "$atmp/rr" "demo" ANALYZE >/dev/null 2>&1
 if grep -q "7일 이내" "$atmp/rr_risk-report.md" && grep -q "30일 이내" "$atmp/rr_risk-report.md" \
    && grep -q "포맷 검증 미충족 항목" "$atmp/rr_risk-report.md" && grep -q 'lang="ko"' "$atmp/rr_risk-report.html"; then
     pass "risk report (ko): deadlines + unmet-items note localized"
