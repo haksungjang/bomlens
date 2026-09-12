@@ -1099,8 +1099,8 @@
   "conf": {
     "kind": {
       "pass": "충족",
-      "actionable": "조치 가능",
-      "review": "사람이 확인",
+      "actionable": "채울 수 있음",
+      "review": "판단 필요",
       "na": "해당 없음"
     },
     "searchPlaceholder": "검사 항목과 참조 규정 검색",
