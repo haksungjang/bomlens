@@ -1,0 +1,42 @@
+name: SBOM (ci-cd.md dogfooding repro)
+
+# Verbatim reproduction of docs/guides/ci-cd.md's GitHub Actions example, for
+# manual dogfooding of the doc's own gate step (BUG-002 in
+# docs/internal/dogfooding-2026-09-10.md). workflow_dispatch is added so this
+# can be fired by hand instead of on every push/PR; everything below the
+# trigger is copied from the doc as-is.
+on:
+  workflow_dispatch:
+
+jobs:
+  # main/release: full generation + vulnerability gate (doc's sbom-full job)
+  sbom-full:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker pull ghcr.io/sktelecom/bomlens:latest
+      - name: Generate SBOM + reports
+        run: |
+          ./scripts/scan-sbom.sh \
+            --project "${{ github.event.repository.name }}" \
+            --version "${{ github.sha }}" \
+            --all --generate-only
+
+      # The scanner is report-only and always succeeds. Fail the build here if Critical exists.
+      - name: Fail on Critical vulnerabilities
+        run: |
+          CRIT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' *_security.json)
+          echo "Critical vulnerabilities: $CRIT"
+          if [ "$CRIT" -gt 0 ]; then
+            echo "::error::$CRIT critical vulnerability(ies) found"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()   # keep reports even when the gate fails
+        with:
+          name: sbom
+          path: |
+            *_bom.json
+            *_security.*
+            *_risk-report.*
