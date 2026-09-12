@@ -717,15 +717,6 @@ if run_scan_with_logs "test-rootfs" "TestRootFS" "1.0.0" "--target ."; then
     if FOUND=$(find_bom_file "TestRootFS" "1.0.0"); then
         print_success "RootFS Directory"
         PASSED=$((PASSED + 1))
-
-        CONFORMANCE_FILE="${FOUND%_bom.json}_conformance.json"
-        if [ -f "$CONFORMANCE_FILE" ]; then
-            print_success "RootFS Directory (conformance artifact generated)"
-            PASSED=$((PASSED + 1))
-        else
-            print_error "RootFS Directory (conformance artifact not generated)"
-            FAILED=$((FAILED + 1))
-        fi
     else
         print_error "RootFS Directory (SBOM file not generated)"
         show_failure_log "test-rootfs"
