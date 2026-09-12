@@ -873,13 +873,22 @@ if [ "$AI_MODEL_SCAN" = "true" ] || [ "$SCAN_MODE" = "ANALYZE" ]; then
     run_optional_step assess-ai-risk bash "$LIBDIR/assess-ai-risk.sh" "$OUTPUT_FILE"
 fi
 
-# AI SBOM: G7 minimum-element conformance on the generated SBOM. validate-sbom.sh
-# detects the machine-learning-model component and appends the G7 checks (model
-# id/license/card/integrity, datasets, openness — all advisory). Best-effort
-# (exit 0); the resulting _conformance.* files are collected by the [ -f ] guard
-# in the risk-report block below.
+# Conformance check on the generated SBOM. For AI SBOM modes this is the G7
+# minimum-element checklist (validate-sbom.sh detects the machine-learning-model
+# component and appends those checks — model id/license/card/integrity, datasets,
+# openness, all advisory). For the other generation modes it is the same SKT
+# submission format check ANALYZE already runs on a supplied SBOM, so a scan's
+# own output can be self-checked before submission instead of requiring a
+# separate --analyze pass. Best-effort (exit 0); the resulting _conformance.*
+# files are collected by the [ -f ] guard in the risk-report block below.
+case "$SCAN_MODE" in
+    SOURCE|POSTPROCESS|ROOTFS|IMAGE|BINARY|FIRMWARE|MERGE) CONFORMANCE_GEN_MODE=true ;;
+    *) CONFORMANCE_GEN_MODE=false ;;
+esac
 if [ "$AI_MODEL_SCAN" = "true" ]; then
     echo "[2/2] ai: G7 minimum-element conformance"
+    run_optional_step conformance bash "$LIBDIR/validate-sbom.sh" "$OUTPUT_FILE" "$OUT_PREFIX" "$PROJECT_NAME"
+elif [ "$CONFORMANCE_GEN_MODE" = "true" ]; then
     run_optional_step conformance bash "$LIBDIR/validate-sbom.sh" "$OUTPUT_FILE" "$OUT_PREFIX" "$PROJECT_NAME"
 fi
 
@@ -1004,8 +1013,10 @@ fi
 # Risk report (오픈소스위험분석보고서): always for ANALYZE, and for every other
 # mode when GENERATE_REPORT=true (the CLI/UI default, opt-out via --no-report).
 # It re-aggregates the notice + security artifacts already produced above.
-# Conformance artifacts exist in ANALYZE and AIBOM; the [ -f ] guard skips them
-# in other modes, and generate-risk-report.sh drops the 포맷 검증 section accordingly.
+# Conformance artifacts now exist in every generation mode (ANALYZE, the AI SBOM
+# modes, and SOURCE/POSTPROCESS/ROOTFS/IMAGE/BINARY/FIRMWARE/MERGE); the [ -f ]
+# guard only matters for the remaining modes (UI/DIFF), where generate-risk-report.sh
+# drops the 포맷 검증 section accordingly.
 # Placed before SPDX export/signing below: on failure, run_optional_step stamps
 # $OUTPUT_FILE, and a stamp written after cosign has already signed it would
 # invalidate that signature (the .sig would no longer verify against the

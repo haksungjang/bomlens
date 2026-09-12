@@ -905,6 +905,8 @@ else
         else
             fail "nodejs SOURCE: Open-source risk analysis report generated (all-modes default)"
         fi
+        # Conformance check now runs on generation modes too (not only ANALYZE/AI SBOM).
+        [ -f "$w/testapp_1.0_conformance.json" ] && pass "nodejs SOURCE: conformance artifact generated" || fail "nodejs SOURCE: conformance artifact generated"
         rm -rf "$w"
     else
         skip "nodejs example not found"
@@ -1026,6 +1028,7 @@ else
         fail "alpine image scan: valid SBOM" "$(tail -3 "$w/_scan.log" 2>/dev/null)"; [ "$VERBOSE" = true ] && sed 's/^/        /' "$w/_scan.log"
     fi
     [ -f "$w/alpinetest_3.19_NOTICE.txt" ] && pass "alpine image scan: notice produced" || fail "alpine image scan: notice produced"
+    [ -f "$w/alpinetest_3.19_conformance.json" ] && pass "alpine image scan: conformance artifact produced" || fail "alpine image scan: conformance artifact produced"
     rm -rf "$w"
 fi
 
