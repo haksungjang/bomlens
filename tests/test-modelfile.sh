@@ -398,7 +398,7 @@ esac
 echo "== the status vocabulary is the same on both sides =="
 py_states=$(grep -oE '^#   (clean|suspicious|unsafe|not-applicable|error)' "$LIB/scan-model-file-security.py" \
             | awk '{print $2}' | sort | tr '\n' ' ')
-ts_states=$(sed -n '/LOCAL_SCAN_STATUSES/,/\]/p' "$ROOT_DIR/docker/web/frontend/src/lib/models.ts" \
+ts_states=$(sed -n '/LOCAL_SCAN_STATUSES/,/\]/p' "$ROOT_DIR/docker/web/frontend/src/lib/models.tsx" \
             | grep -oE '"[a-z-]+"' | tr -d '"' | sort | tr '\n' ' ')
 [ "$py_states" = "$ts_states" ] && pass "scanner and web UI agree on the status values" \
     || fail "status vocabulary drifted" "scanner: $py_states / ui: $ts_states"
