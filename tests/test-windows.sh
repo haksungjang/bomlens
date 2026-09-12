@@ -256,7 +256,7 @@ d="$(new_proj fw)"; printf 'blob\n' > "$d/dev.bin"
 scan_in "$d" --project Fw --version 1 --target dev.bin --generate-only
 in_out "Mode: FIRMWARE" && pass "--target *.bin → FIRMWARE mode (extension)" || { fail "--target .bin → FIRMWARE" "rc=$RC"; show; }
 
-d="$(new_proj rootfs)"; mkdir -p "$d/rootfs/usr/bin"; printf 'x' > "$d/rootfs/usr/bin/f"
+d="$(new_proj rootfs)"; mkdir -p "$d/rootfs/etc" "$d/rootfs/usr/bin" "$d/rootfs/var"; printf 'x' > "$d/rootfs/usr/bin/f"
 scan_in "$d" --project Root --version 1 --target rootfs --generate-only
 in_out "Mode: ROOTFS" && pass "--target directory → ROOTFS mode" || { fail "--target dir → ROOTFS" "rc=$RC"; show; }
 
