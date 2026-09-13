@@ -1972,6 +1972,41 @@ bash "$LIB/validate-sbom.sh" "$FIX/good-spdx3-jsonld.json" "$WORK/spdx3-cf" "sup
 [ -f "$WORK/spdx3-cf_conformance.json" ] && jq -e '.checks|length>0' "$WORK/spdx3-cf_conformance.json" >/dev/null 2>&1 \
     && pass "SPDX 3.0 produces a conformance report" || fail "SPDX 3.0 conformance not produced"
 
+echo "== input-format: an XML SBOM is refused by name, not as 'unrecognized' =="
+# The pipeline reads JSON only. An XML CycloneDX used to fall into the generic
+# "unrecognized SBOM format" branch, which sends the user looking for a corrupt
+# file instead of for a format conversion. It is recognized in order to be
+# refused with what to do next; parsing XML is still out of scope.
+cat > "$WORK/supplier-bom.xml" <<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<bom xmlns="http://cyclonedx.org/schema/bom/1.6" version="1">
+  <components>
+    <component type="library"><name>openssl</name><version>3.0.2</version></component>
+  </components>
+</bom>
+XML
+xml_out=$(bash "$LIB/convert-to-cdx.sh" "$WORK/supplier-bom.xml" "$WORK/xml-out.json" 2>&1); xml_rc=$?
+[ "$xml_rc" != "0" ] && pass "CycloneDX XML input fails (exit $xml_rc)" || fail "convert-to-cdx.sh accepted XML input (exit 0)"
+echo "$xml_out" | grep -q 'not supported yet' \
+    && pass "the XML error names the format instead of 'unrecognized SBOM format'" || fail "XML error text unexpected" "$xml_out"
+echo "$xml_out" | grep -qi 'json' \
+    && pass "the XML error tells the user to convert to JSON" || fail "XML error gives no next step" "$xml_out"
+echo "$xml_out" | grep -q 'unrecognized SBOM format' \
+    && fail "XML still falls through to the generic unknown-format branch" "$xml_out" || pass "XML does not reach the generic unknown-format branch"
+# SPDX RDF/XML lands in the same branch (no <bom> root, but it is still XML).
+cat > "$WORK/supplier-rdf.xml" <<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><spdx:SpdxDocument/></rdf:RDF>
+XML
+rdf_out=$(bash "$LIB/convert-to-cdx.sh" "$WORK/supplier-rdf.xml" "$WORK/rdf-out.json" 2>&1 || true)
+echo "$rdf_out" | grep -q 'not supported yet' \
+    && pass "SPDX RDF/XML gets the same named error" || fail "SPDX RDF/XML error text unexpected" "$rdf_out"
+# A genuinely unknown (non-XML, non-SBOM) input keeps the original message.
+printf 'this is not an SBOM at all\n' > "$WORK/notsbom.txt"
+txt_out=$(bash "$LIB/convert-to-cdx.sh" "$WORK/notsbom.txt" "$WORK/notsbom-out.json" 2>&1 || true)
+echo "$txt_out" | grep -q 'unrecognized SBOM format' \
+    && pass "a non-XML unknown input still reports 'unrecognized SBOM format'" || fail "unknown-format branch changed" "$txt_out"
+
 echo "== UNKNOWN is not carried as if it were a version =="
 
 # syft writes `UNKNOWN` where it recognised a component but could not read what
