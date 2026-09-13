@@ -499,14 +499,14 @@ export function ConformancePanel({
               ))
             : null}
         </div>
-        {/* Says what "conformance" here measures — SBOM format/submission
-            requirements, not regulatory compliance — so the section title is not
-            read as a compliance verdict. This panel is only reachable when the
-            SBOM was actually submitted for review (nav.ts gates the section on
-            hasInputSbom) — a self-generated SBOM's own conformance report lives
-            in Artifacts instead, and a self-generated AI SBOM's G7 rollup lives
-            in Models & datasets, so there is no "whose document" ambiguity to
-            resolve here. */}
+        {/* Says what "conformance" here measures — this SBOM's own fields
+            against format and regulatory requirements, not a judgment of the
+            scanned software or (for a self-generated SBOM) a verdict BomLens
+            passes on its own document — so the section title and its "SBOM
+            Validation" name are not read as a compliance verdict on the
+            scanned software. Reachable for every scan except a self-generated
+            AI SBOM, whose G7 rollup lives on Models & datasets instead (see
+            nav.ts) to avoid showing it twice. */}
         <p className="max-w-3xl text-sm text-muted-foreground">{t("g7.panelIntro")}</p>
         <p className="text-sm text-foreground">
           <span className="font-medium">

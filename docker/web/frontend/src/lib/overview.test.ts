@@ -111,10 +111,9 @@ describe("needsAttention", () => {
     expect(items).toEqual([]);
   });
 
-  it("does not flag a failed conformance on a plain generated SBOM", () => {
-    // No _input.json (not a submitted document under review) and no AI
-    // component — nav.ts does not show a Conformance section for this scan
-    // at all, so there is nowhere for the item to send the reader.
+  it("flags a failed conformance on a plain generated SBOM too", () => {
+    // No _input.json and no AI component, but the Conformance section still
+    // shows for this scan (nav.ts), so the target is a real destination.
     const items = needsAttention(
       result({
         conformance: {
@@ -126,10 +125,10 @@ describe("needsAttention", () => {
         security: sev({ CRITICAL: 1, TOTAL: 1 }),
       }),
     );
-    expect(items.map((i) => i.id)).toEqual(["vulns"]);
+    expect(items.map((i) => i.id)).toEqual(["conformance", "vulns"]);
   });
 
-  it("does not offer a conformance gap on a plain generated SBOM", () => {
+  it("offers a conformance gap on a plain generated SBOM too", () => {
     const items = needsAttention(
       result({
         conformance: {
@@ -140,6 +139,22 @@ describe("needsAttention", () => {
         },
       }),
     );
+    expect(items.map((i) => i.id)).toContain("conformanceGap");
+  });
+
+  it("still excludes both for a self-generated AI SBOM (its rollup lives on Models & datasets)", () => {
+    const items = needsAttention(
+      result({
+        sbom: { components: 1, componentList: [comp({ type: "machine-learning-model" })] },
+        conformance: {
+          result: "fail",
+          checks: [
+            { id: "a", label: "a", detail: "", required: true, status: "fail", source: "auto" },
+          ],
+        },
+      }),
+    );
+    expect(items.map((i) => i.id)).not.toContain("conformance");
     expect(items.map((i) => i.id)).not.toContain("conformanceGap");
   });
 
