@@ -262,7 +262,7 @@ Options:
   --spdx                 Also export the SBOM as SPDX 2.3 JSON (converted from
                          the CycloneDX output; CycloneDX stays the primary format)
   --all                  --notice --security --spdx
-  --no-report            Skip the 오픈소스위험분석보고서 (risk-report). By default
+  --no-report            Skip the open-source risk report (risk-report). By default
                          the risk report (+notice+security) is generated in
                          every mode; --no-report opts out.
   --deep-license         scancode deep license (opt-in image)

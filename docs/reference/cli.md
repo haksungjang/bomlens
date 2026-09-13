@@ -70,11 +70,12 @@ Environment variables adjust the behavior.
 | `SBOM_OUTPUT_DIR` | `~/sbom-output` | Output base for the desktop app and web UI (the CLI uses `--output-dir` instead). Each scan still lands in a `{Project}_{Version}/` subfolder under it |
 | `SBOM_UI_MOUNT_DIR` | — | For the Windows launcher `sbom-ui.bat`, which takes no CLI arguments: one extra folder to expose to the web UI as a read-only Directory path target (the double-click counterpart of `--ui --mount`). Use a path without `& ^ | < >` — the launcher rejects those rather than passing a mangled mount to Docker |
 | `SBOM_LANG` | system locale | `en` or `ko`, for the Windows launchers and the desktop app. Anything that is not Korean gets English |
+| `SBOM_BASH` | auto-detected | For `scan-sbom.bat`: explicit path to Git Bash's `bash.exe` (e.g. `C:\Program Files\Git\bin\bash.exe`), when the launcher's own detection (deriving it from `git` on PATH) fails to find one that is not WSL's or a WindowsApps alias |
 | `SBOM_PULL` | `missing` | Scanner image download policy, honored by both `scan-sbom.sh` and the Windows launcher. `missing` (default) pulls only when the image is absent, and otherwise quietly refreshes an already-present `:latest` in the background (bounded, best-effort — a stalled or offline check gives up and the run proceeds with the local image either way). `always` blocks and re-pulls every run, failing the run if the pull fails. `never` never touches the network, failing the run if the image is absent |
 | `SBOM_IMAGE_TAR` | — | Path to an image tar from `docker save`. The Windows launcher loads it instead of pulling; a file named `bomlens-image.tar` next to the scripts is picked up automatically. Combined with `SBOM_PULL=never` this gives a fully offline install |
 | `CVE_BIN_TOOL_MODE` | `auto` | Firmware CVE matching. `auto` uses the bundled CVE database if present, otherwise downloads from NVD when the network is reachable. `offline` matches only against the bundled database. `online` always updates from the network. `components-only` skips CVE matching and emits a component-only SBOM |
 | `CVE_BIN_TOOL_HOME` | `/opt/cve-bin-tool-home` | Location of the bundled cve-bin-tool CVE database. cve-bin-tool reads `$CVE_BIN_TOOL_HOME/.cache/cve-bin-tool/cve.db` (it keys the cache off `HOME`) |
-| `CVE_BIN_TOOL_DISABLE_SOURCES` | `GAD` | cve-bin-tool data sources to disable during a firmware scan. `GAD` (GitLab Advisory) is disabled by default because it crashes the bundled cve-bin-tool on fetch |
+| `CVE_BIN_TOOL_DISABLE_SOURCES` | `GAD,OSV` | cve-bin-tool data sources to disable during a firmware scan. GAD (GitLab Advisory) and OSV are disabled by default so identification does not reach out over the network |
 | `SCANOSS_API_URL` | OSSKB free API | Endpoint for `--identify-vendored`. Point at a SCANOSS commercial or self-hosted endpoint for air-gapped or high-volume use |
 | `SCANOSS_API_KEY` | — | Credential for `SCANOSS_API_URL`, if the endpoint requires one |
 | `SCANOSS_MIN_FILES` | `2` | Minimum number of files that must match a library before it is reported, to drop one-off downstream-fork noise. Set `1` to keep every single-file match |
@@ -130,7 +131,7 @@ To restore the previous flat layout, where every file is written directly in the
 Override the scanner image with `SBOM_SCANNER_IMAGE`.
 
 ```bash
-SBOM_SCANNER_IMAGE="ghcr.io/sktelecom/bomlens:1.11.8" \
+SBOM_SCANNER_IMAGE="ghcr.io/sktelecom/bomlens:<version>" \
   ./scripts/scan-sbom.sh --project "MyApp" --version "1.0.0" --generate-only
 ```
 
