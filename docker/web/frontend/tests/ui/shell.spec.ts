@@ -1773,6 +1773,59 @@ test("Vulnerabilities table shows the disposition status and NVD severity, when 
   expect(results.violations).toEqual([]);
 });
 
+// Two CVEs on the same installed package that share the same fixed version
+// look, in the table alone, like two unrelated rows: the reader has to notice
+// the coincidence by comparing the Fixed column by hand. The bundle summary
+// should say so up front and let a click filter straight to them.
+const UPGRADE_DONE = {
+  ok: true,
+  mode: "SOURCE",
+  id: "upgrade_1.0",
+  results: [{ name: "upgrade_1.0_bom.json", size: 100 }],
+  security: {
+    CRITICAL: 1, HIGH: 2, MEDIUM: 0, LOW: 0, UNKNOWN: 0, TOTAL: 3,
+    vulnerabilities: [
+      { id: "CVE-2024-3001", severity: "CRITICAL", pkg: "qs", installed: "6.15.3", fixed: "6.16.0", title: "prototype pollution" },
+      { id: "CVE-2024-3002", severity: "HIGH", pkg: "qs", installed: "6.15.3", fixed: "6.16.0", title: "array limit bypass" },
+      // Different package, own single CVE: not part of any bundle (a group of
+      // one is not a "bundle") and must not appear in the summary.
+      { id: "CVE-2024-3003", severity: "HIGH", pkg: "lodash", installed: "4.17.20", fixed: "4.17.21", title: "prototype pollution" },
+    ],
+  },
+  conformance: null,
+  sbom: { components: 2, componentList: [] },
+};
+
+async function stubUpgradeAndRun(page: Page) {
+  await page.route("**/capabilities", (r) =>
+    r.fulfill({ contentType: "application/json", body: JSON.stringify({ firmware: false, scanoss: false, docker: true }) }),
+  );
+  await page.route("**/results", (r) => r.fulfill({ contentType: "application/json", body: "[]" }));
+  await page.route("**/scan-stream**", (r) =>
+    r.fulfill({ contentType: "text/event-stream", body: `event: done\ndata: ${JSON.stringify(UPGRADE_DONE)}\n\n` }),
+  );
+  await page.goto("/?ui=next#/new");
+  await page.fill("#project", "upgrade");
+  await page.fill("#version", "1.0");
+  await page.getByTestId("run-scan").click();
+}
+
+test("Vulnerabilities table bundles CVEs one upgrade resolves together", async ({ page }) => {
+  await stubUpgradeAndRun(page);
+  await page.getByRole("link", { name: /^Vulnerabilities/ }).first().click();
+
+  const bundle = page.getByRole("button", { name: "Upgrade qs to 6.16.0 to resolve 2 CVEs" });
+  await expect(bundle).toBeVisible();
+  // lodash's single CVE is not a bundle and must not appear in the summary.
+  await expect(page.getByText(/Upgrade lodash/)).toHaveCount(0);
+
+  // Clicking the bundle filters the table down to just its two rows.
+  await bundle.click();
+  await expect(page.getByText("CVE-2024-3001")).toBeVisible();
+  await expect(page.getByText("CVE-2024-3002")).toBeVisible();
+  await expect(page.getByText("CVE-2024-3003")).toHaveCount(0);
+});
+
 for (const { theme, lang } of COMBOS) {
   test(`vulnerabilities section matches baseline — ${theme}/${lang} @visual`, async ({ page }) => {
     await stubAndRun(page, theme, lang);

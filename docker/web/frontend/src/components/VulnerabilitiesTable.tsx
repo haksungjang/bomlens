@@ -21,7 +21,7 @@ import { csvFilename, downloadCsv, toCsv, vulnCsvRows } from "@/lib/csv";
 import { buildQuery, parseQuery, type RouteQuery, scanHash } from "@/lib/route";
 import { vulnsFromQuery, vulnsToQuery } from "@/lib/section-query";
 import { severityTone } from "@/lib/severity";
-import { compareVulns, type SortDir, type VulnSortKey } from "@/lib/vulns";
+import { compareVulns, groupByUpgrade, type SortDir, type VulnSortKey } from "@/lib/vulns";
 import { cn } from "@/lib/utils";
 
 import { SeverityBar } from "./SeverityBar";
@@ -310,6 +310,10 @@ export function VulnerabilitiesTable({
     () => [...items].sort((a, b) => compareVulns(a, b, sort.key, sort.dir)),
     [items, sort],
   );
+  // Which CVEs a single upgrade would resolve together, worst-severity-first.
+  // Answers "what should I fix first" before the reader has to notice the
+  // pattern by comparing Fixed-column values across separate rows.
+  const upgradeGroups = useMemo(() => groupByUpgrade(items), [items]);
   const onSort = (key: VulnSortKey) =>
     setSort((s) =>
       s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "desc" },
@@ -377,6 +381,35 @@ export function VulnerabilitiesTable({
           {t("result.kernelAdvisories", { count: security.kernelCount })}
         </p>
       ) : null}
+      {upgradeGroups.length > 0 && (
+        <div className="space-y-1.5 rounded-md border bg-muted/30 px-3 py-2">
+          <div className="text-xs font-medium text-foreground">
+            {t("result.upgradeBundlesTitle")}
+          </div>
+          <ul className="space-y-1">
+            {upgradeGroups.slice(0, 5).map((g) => (
+              <li key={`${g.pkg}::${g.installed}::${g.fixed}`}>
+                <button
+                  type="button"
+                  onClick={() => setQuery(g.pkg)}
+                  className="rounded text-xs text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {t("result.upgradeBundleLine", {
+                    pkg: g.pkg,
+                    fixed: g.fixed,
+                    count: g.vulnIds.length,
+                  })}
+                </button>
+              </li>
+            ))}
+          </ul>
+          {upgradeGroups.length > 5 && (
+            <p className="text-xs text-muted-foreground">
+              {t("result.upgradeBundlesMore", { count: upgradeGroups.length - 5 })}
+            </p>
+          )}
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         <Input
           value={query}
