@@ -144,35 +144,31 @@ export const NAV_GROUPS: NavGroup[] = [
     labelKey: "nav.group.compliance",
     sections: [
       { id: "licenses", labelKey: "nav.licenses", icon: ScrollText },
-      // A conformance report now exists for every mode (a mandatory checklist
-      // run against whatever SBOM the scan ends with), but it is only a
-      // verdict a reader should see as a screen when the document being
-      // graded was actually submitted by someone (hasInputSbom — ANALYZE on
-      // a supplier's SBOM, AI SBOM included). For a plain generated SBOM the
-      // same report stays a file in Artifacts — mandatory checks like
-      // "transitive edges present" or "PURL coverage" are real data-quality
-      // signals, but tautological ones (spec-version, timestamp, tool info)
-      // will pass on any healthy pipeline run, and a binary-derived scan
-      // (ROOTFS/IMAGE/FIRMWARE) can fail name-version permanently for reasons
-      // that are not a defect — none of that belongs in the same sidebar list
-      // as facts about the scanned software. A self-generated AI SBOM's G7
-      // minimum-element rollup is the one exception worth surfacing on its
-      // own: it grades the model PUBLISHER's own disclosure (BomLens only
-      // transcribes the model card), a real finding rather than a self-grade
-      // — but it lives on Models & datasets (AiSummaryCard + this section's
-      // own CheckGroup rendering, reused there), not here.
+      // A conformance report exists for every mode (a mandatory checklist run
+      // against whatever SBOM the scan ends with) and the section shows it
+      // for every one of them — a self-generated SBOM's own checklist is a
+      // real thing to show a reader, not a verdict BomLens passes on itself:
+      // the self-grading confusion an earlier design tried to solve by
+      // hiding the section here is instead solved by the section's own
+      // label and intro line naming what is actually being checked (the
+      // document's own fields, not the scanned software or a submission
+      // review) — see nav.conformance and g7.panelIntro.
       //
-      // Deliberately NOT `mode === "ANALYZE"`: ScanContext.mode only reflects
-      // the run that is currently streaming (server.py's scan_detail() sends
-      // "mode": None for a re-opened past scan), so gating on it would hide
-      // this section for a supplier's ANALYZE scan the moment it's reopened
-      // from Recent, refreshed, or viewed on the published demo site.
-      // hasInputSbom is derived from an artifact file and survives re-open.
+      // The one case still routed elsewhere: a self-generated AI SBOM's G7
+      // minimum-element rollup. That grades the model PUBLISHER's own
+      // disclosure (BomLens only transcribes the model card), a real finding
+      // rather than a self-grade either way, but showing it a second time
+      // here would duplicate what Models & datasets already carries
+      // (AiSummaryCard + this section's own CheckGroup rendering, reused
+      // there) — so hasInputSbom still gates it for that one case.
+      // nav.conformance ("SBOM Validation" in English) is close to the rail's
+      // per-row width budget — see the RAIL_ROW comment in Sidebar.tsx —
+      // check the rendered rail before lengthening it further.
       {
         id: "conformance",
         labelKey: "nav.conformance",
         icon: FileCheck2,
-        requires: (c) => c.hasConformance && c.hasInputSbom,
+        requires: (c) => c.hasConformance && (c.hasInputSbom || !c.isAiScan),
       },
     ],
   },

@@ -235,9 +235,11 @@ export function Overview({
   // Mirrors nav.ts's gate on the Conformance section itself: a jump card that
   // opened a section the sidebar doesn't show would be a dead end. A
   // self-generated AI SBOM's G7 rollup has its own entry points instead
-  // (AiSummaryCard above, and the "models" jump card below).
+  // (AiSummaryCard above, and the "models" jump card below) — every other
+  // scan, supplied or self-generated software, shows the section.
   const hasConformance =
-    Boolean(result.conformance?.checks?.length) && Boolean(inputSbomFileName(result));
+    Boolean(result.conformance?.checks?.length) &&
+    (Boolean(inputSbomFileName(result)) || !ai);
   const comparison = scanId ? scanComparison(recent, scanId) : null;
   const provenance = provenanceOf(result.scanConfig);
 
@@ -389,15 +391,16 @@ export function Overview({
         </div>
       )}
 
-      {/* An empty dependency graph on a generated SBOM (not one under
-          submission review, not an AI SBOM's G7 rollup — see hasConformance
-          above) is a real pipeline defect: cdxgen ran, but a later step
-          dropped the graph before it reached the SBOM (the failure mode
-          carry-dependencies.py exists to prevent for firmware merges). It is
-          not shown as a conformance verdict — there is no Conformance screen
-          to send the reader to here — but it is exactly the kind of thing
-          sbomToolDegraded already reports for a different cause, so it gets
-          the same causal banner treatment instead of being silently absent. */}
+      {/* An empty dependency graph is a real pipeline defect: cdxgen ran, but
+          a later step dropped the graph before it reached the SBOM (the
+          failure mode carry-dependencies.py exists to prevent for firmware
+          merges) — the same causal-banner treatment sbomToolDegraded already
+          gives a different cause, rather than leaving it to the Conformance
+          screen's own "transitive" row alone. hasConformance is false only
+          for a self-generated AI SBOM (its G7 rollup lives on Models &
+          datasets instead, with no "transitive" check to speak of), so this
+          is effectively dormant there and never fires for the software scans
+          it was written for now that the Conformance screen shows for them. */}
       {!hasConformance &&
         result.conformance?.checks?.some(
           (c) => c.id === "transitive" && c.status === "fail",

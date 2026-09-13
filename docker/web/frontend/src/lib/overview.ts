@@ -10,7 +10,7 @@ import type { ComponentItem, DoneEvent } from "./api";
 import { riskRank } from "./components";
 import { baseTally, kindTally, splitChecks } from "./conformance";
 import type { SectionId } from "./nav";
-import { inputSbomFileName } from "./results";
+import { inputSbomFileName, isAiScan } from "./results";
 
 export interface AttentionItem {
   id: "malicious" | "conformance" | "vulns" | "review" | "modelRisk" | "conformanceGap";
@@ -39,20 +39,16 @@ export function needsAttention(result: DoneEvent): AttentionItem[] {
     items.push({ id: "malicious", count: malicious, tone: "critical", target: "components" });
   }
 
-  // Supplier-SBOM review: a failed format conformance leads the list — an
-  // incomplete or non-conformant SBOM makes the vuln and license findings below
-  // unreliable, so it should be fixed first. This only applies when the
-  // Conformance section itself is reachable (a submitted SBOM under review) —
-  // see nav.ts's gate. A self-generated AI SBOM's G7 rollup lives on Models &
-  // datasets instead (a real finding about the model publisher's disclosure,
-  // not a self-grade — but not this list's business either). For a plain
-  // generated software SBOM there is no "conformance" screen to send the
-  // reader to, and the checklist mixes tautological checks (pass by
-  // construction on a healthy pipeline) with at least one that fails
-  // permanently and correctly on a binary-derived scan (name-version on
-  // ROOTFS/IMAGE/FIRMWARE) — neither belongs ahead of real vulnerabilities.
+  // A failed format conformance leads the list — an incomplete or
+  // non-conformant SBOM makes the vuln and license findings below unreliable,
+  // so it should be fixed first. This mirrors nav.ts's gate on the
+  // Conformance section itself: a self-generated AI SBOM's G7 rollup lives on
+  // Models & datasets instead (see that file), so it is excluded here too to
+  // avoid pointing at a section that isn't shown; every other scan (supplied
+  // or self-generated software) shows the section, so its findings belong
+  // here just as much as a supplier's.
   const conf = result.conformance;
-  const conformanceVisible = Boolean(inputSbomFileName(result));
+  const conformanceVisible = Boolean(inputSbomFileName(result)) || !isAiScan(result);
   if (conformanceVisible && conf && conf.result === "fail") {
     const failed = baseTally(splitChecks(conf.checks ?? []).base).failed;
     if (failed > 0) {

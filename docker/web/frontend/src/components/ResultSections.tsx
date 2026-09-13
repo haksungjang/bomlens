@@ -192,11 +192,9 @@ export function ResultSection({
     }
 
     case "conformance":
-      // nav.ts only shows this section when the SBOM was actually submitted
-      // for review (hasInputSbom) — a self-generated SBOM's own report lives
-      // in Artifacts, and a self-generated AI SBOM's G7 rollup lives in
-      // Models & datasets above, so this panel is always reviewing someone
-      // else's document.
+      // nav.ts shows this section for every scan except a self-generated AI
+      // SBOM, whose G7 rollup lives in Models & datasets above instead (to
+      // avoid showing it twice) — see that file for the full gate.
       return result.conformance ? (
         <ConformancePanel
           conformance={result.conformance}
