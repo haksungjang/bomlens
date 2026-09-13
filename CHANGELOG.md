@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `BOMLENS_MAVEN_FULL_GRAPH`, `BOMLENS_NODE_FULL_GRAPH`, `BOMLENS_ANDROID_FULL_GRAPH` and `BOMLENS_KEEP_BUILD_OUTPUT` are passed to dependency resolution from the CLI and the web UI, and count as set only for `1` or `true`.
 - A Go source scan could not resolve dependencies when `go.mod` required a newer Go than the cdxgen Go image carries (for example `go 1.26.0`): `go list` failed, leaving only the modules named in `go.mod`, or no SBOM. The required toolchain is now downloaded (`GOTOOLCHAIN=auto`), the host's `GOTOOLCHAIN`, `GOPROXY` and `GOSUMDB` are passed to dependency resolution, and a failed toolchain download is reported in the scan log.
 - A scan's run log could show a literal, unrendered ANSI color code (`[1;35m...[0m`) instead of stripping it.
 - A failed git clone showed the raw git error to the user; the web UI now classifies a missing/private repository or a network failure into a plain-language message, with the raw detail still available behind "Show detail".

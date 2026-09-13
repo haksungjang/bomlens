@@ -908,6 +908,18 @@ else
         # Conformance check now runs on generation modes too (not only ANALYZE/AI SBOM).
         [ -f "$w/testapp_1.0_conformance.json" ] && pass "nodejs SOURCE: conformance artifact generated" || fail "nodejs SOURCE: conformance artifact generated"
         rm -rf "$w"
+
+        # 3a2: BOMLENS_NODE_FULL_GRAPH=1 set on the host reaches build-prep.sh in the
+        # cdxgen container, so the production-only filter is skipped and the
+        # dev-plus-production graph is larger than the default one above.
+        w="$(BOMLENS_NODE_FULL_GRAPH=1 run_source_scan "$nodesrc")"
+        nfull=$(jq '[.components[]?]|length' "$w/testapp_1.0_bom.json" 2>/dev/null || echo 0)
+        if [ "${ncomp:-0}" -gt 0 ] && [ "${nfull:-0}" -gt "$ncomp" ]; then
+            pass "nodejs BOMLENS_NODE_FULL_GRAPH=1 keeps the full graph ($nfull > $ncomp)"
+        else
+            fail "nodejs BOMLENS_NODE_FULL_GRAPH=1 keeps the full graph" "full=$nfull default=$ncomp"; show_log_if_verbose "$w"
+        fi
+        rm -rf "$w"
     else
         skip "nodejs example not found"
     fi
