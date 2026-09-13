@@ -9,13 +9,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# check-doc-image-version-coverage.sh — guard against the Docker image
+# check-doc-image-version-coverage.sh: guard against the Docker image
 # reference going stale when Renovate bumps a tool version.
 #
 # docs/reference/docker-image.md is the canonical place for the versions
 # users see (docker/README.md and docs/concepts/architecture.md link to it
 # instead of repeating numbers). Renovate bumps docker/Dockerfile's ARGs on
-# its own schedule, so nothing forces this page to follow — this script does.
+# its own schedule. Nothing else forces this page to follow; this script does.
 #
 # Only the tools this page's table already documents are checked; adding a
 # new tool to the table is a separate editorial decision, not something this
