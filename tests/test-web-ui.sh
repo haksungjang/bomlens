@@ -574,6 +574,43 @@ else
     fail "sibling dispatch guard failed (see assertion above)"
 fi
 
+echo "== scan-stream log/error cleanup: ANSI stripped, git failures classified =="
+if SBOM_OUTPUT_DIR="$OUT" python3 - "$ROOT_DIR" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+
+# A colored notice (cdxgen and friends) must reach on_log with the CSI
+# sequences gone, not just the ESC byte: this codebase saw a real case where
+# only the ESC byte was dropped upstream, leaving literal "[1;35m...[0m".
+logs = []
+server._emit_or_log("\x1b[1;35mNotice: something\x1b[0m", logs.append)
+assert logs == ["Notice: something"], logs
+server._emit_or_log("plain line, no color", logs.append)
+assert logs[-1] == "plain line, no color", logs
+
+# git failure classification: only the two patterns this codebase has actually
+# confirmed (missing/private repo, network) get a key; anything else is None,
+# and the caller then falls back to showing the raw text unclassified.
+assert server._classify_git_failure(
+    "fatal: could not read Username for 'https://github.com': terminal prompts disabled"
+) == "run.errorGitNotFoundOrPrivate"
+assert server._classify_git_failure(
+    "remote: Repository not found."
+) == "run.errorGitNotFoundOrPrivate"
+assert server._classify_git_failure(
+    "fatal: unable to access '...': Could not resolve host: github.com"
+) == "run.errorGitNetwork"
+assert server._classify_git_failure("fatal: some other git error entirely") is None
+assert server._classify_git_failure("") is None
+assert server._classify_git_failure(None) is None
+PY
+then
+    pass "ANSI stripped from scan log lines, git failures classified into i18n keys"
+else
+    fail "scan-stream log/error cleanup failed (see assertion above)"
+fi
+
 echo "== safe_extract_zip rejects members that are unsafe once bind-mounted onto Windows =="
 # safe_extract_zip already rejected zip-slip (absolute/../ paths). It did NOT
 # reject a member name containing a character Windows forbids in a path
@@ -2886,7 +2923,7 @@ import sys, json
 evs = json.load(sys.stdin)
 errs = [e for e in evs if e['event'] == 'error']
 dones = [e for e in evs if e['event'] == 'done']
-assert errs and 'Docker socket' in errs[0]['data'], evs
+assert errs and 'Docker socket' in errs[0]['data']['detail'], evs
 assert len(dones) == 1, evs
 d = dones[0]['data']
 assert d['ok'] is False and d['sbom'] is None and isinstance(d['results'], list), d
@@ -2900,7 +2937,7 @@ events=$(sse_events "project=weird&version=1.0&source=carrier-pigeon")
 if echo "$events" | python3 -c "
 import sys, json
 evs = json.load(sys.stdin)
-assert any(e['event'] == 'error' and 'unknown input type' in e['data'] for e in evs), evs
+assert any(e['event'] == 'error' and 'unknown input type' in e['data']['detail'] for e in evs), evs
 assert [e for e in evs if e['event'] == 'done'][0]['data']['ok'] is False
 "; then
     pass "unknown source is rejected in-stream"
@@ -2912,7 +2949,7 @@ events=$(sse_events "project=gitfail&version=1.0&source=git-url&target=file:///n
 if echo "$events" | python3 -c "
 import sys, json
 evs = json.load(sys.stdin)
-assert any(e['event'] == 'error' and 'git clone failed' in str(e['data']) for e in evs), evs
+assert any(e['event'] == 'error' and 'git clone failed' in e['data']['detail'] for e in evs), evs
 assert [e for e in evs if e['event'] == 'done'][0]['data']['ok'] is False
 "; then
     pass "failed git clone reports error + done ok:false"
@@ -2939,7 +2976,7 @@ if echo "$events" | python3 -c "
 import sys, json
 evs = json.load(sys.stdin)
 errs = [e for e in evs if e['event'] == 'error']
-assert errs and 'unsafe path in archive' in str(errs[0]['data']), evs
+assert errs and 'unsafe path in archive' in errs[0]['data']['detail'], evs
 assert [e for e in evs if e['event'] == 'done'][0]['data']['ok'] is False
 "; then
     pass "zip-slip member (../../../../tmp/...) is rejected, not extracted"
@@ -2964,7 +3001,7 @@ if echo "$events" | python3 -c "
 import sys, json
 evs = json.load(sys.stdin)
 errs = [e for e in evs if e['event'] == 'error']
-assert errs and 'unsafe path in archive' in str(errs[0]['data']), evs
+assert errs and 'unsafe path in archive' in errs[0]['data']['detail'], evs
 assert [e for e in evs if e['event'] == 'done'][0]['data']['ok'] is False
 "; then
     pass "tar member (../evil-tar-slip.txt) is rejected, not extracted"
@@ -2987,7 +3024,7 @@ if echo "$events" | python3 -c "
 import sys, json
 evs = json.load(sys.stdin)
 errs = [e for e in evs if e['event'] == 'error']
-assert errs and 'unsafe link in archive' in str(errs[0]['data']), evs
+assert errs and 'unsafe link in archive' in errs[0]['data']['detail'], evs
 assert [e for e in evs if e['event'] == 'done'][0]['data']['ok'] is False
 "; then
     pass "tar symlink member pointing outside the archive is rejected"
@@ -3302,7 +3339,7 @@ nev=$(sse_events "project=nosbom&version=1.0&source=rootfs-dir&target=$NOSBOMROO
 if echo "$nev" | python3 -c "
 import sys, json
 evs = json.load(sys.stdin)
-errs = [e['data'] for e in evs if e['event'] == 'error']
+errs = [e['data']['detail'] for e in evs if e['event'] == 'error']
 done = [e['data'] for e in evs if e['event'] == 'done']
 assert errs and 'neither an SPDX SBOM' in errs[0], evs
 assert 'create-spdx-3.0' in errs[0], errs

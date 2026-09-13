@@ -137,6 +137,7 @@
     "vendoredHintBody": "Open source is often copied (vendored) into C/C++ sources that have no package manager, where a normal scan can't see it. Turn on \"Detect copied-in open source\" under Advanced scan options and run again. Only file fingerprints are sent — your source stays local.",
     "zeroComponentsTitle": "No components were found",
     "zeroComponentsBody": "This is a warning, not a clean result. A scan finds nothing when it has nothing to read: no dependency manifest at the top of the folder (requirements.txt, package.json, pom.xml and the like), or a scan path that points somewhere else. Check the manifest and the path, then scan again.",
+    "zeroComponentsBodyDegraded": "This is a warning, not a clean result. A scan finds nothing when it has nothing to read: no dependency manifest at the top of the folder (requirements.txt, package.json, pom.xml and the like), or a scan path that points somewhere else. Check the manifest and the path, then scan again. The transitive-dependency analyzer (cdxgen) also couldn't run, so even direct dependencies could not be resolved this time.",
     "unpinnedTitle": "Versions were resolved at scan time",
     "unpinnedBody": "This project states version ranges and ships no lock file, so the versions listed here are what a fresh install would fetch today — not necessarily what is installed on your machine. The vulnerability result was measured against these versions. To see the risk in your own environment, scan a manifest that pins exact versions.",
     "scanWarningsTitle": "The scan reported these while it ran",
@@ -528,6 +529,9 @@
     "stageReport": "Report",
     "failedTitle": "The scan didn't finish",
     "failedBody": "Something went wrong before the scan could complete. Check the run log below for details, then try again.",
+    "errorGitNotFoundOrPrivate": "The repository could not be found, or it's private. Check the URL, or add a token if it's private.",
+    "errorGitNetwork": "The repository host could not be reached. Check the network connection and try again.",
+    "showDetail": "Show detail",
     "retry": "Retry",
     "cancel": "Cancel"
   },
