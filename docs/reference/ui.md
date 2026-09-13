@@ -6,7 +6,7 @@ description: Reference for the BomLens web UI and desktop app — how to launch 
 
 Scan from a browser without the CLI. The UI server is built into the scanner image, so no extra install is needed.
 
-![The BomLens New scan screen](../images/web-ui.png)
+![The BomLens New scan screen](../images/web-ui-en.png)
 
 **macOS / Linux:**
 ```bash
@@ -136,7 +136,7 @@ This is the one feature that reaches outside the machine on its own initiative r
 > The firmware upload tile appears automatically whenever the Docker engine is running. See the
 > [firmware guide](../guides/firmware.md) for how it works and how to point it at a different image tag.
 >
-> **Note:** the UI's source scan (current folder / ZIP / GitHub) analyzes the directory with syft inside the container. Components are captured only when there is a lock file (`package-lock.json`, `go.sum`, and so on) or installed dependencies. If you only have a manifest and need deeper resolution, use the CLI source mode (cdxgen).
+> **Note:** the UI's source scan (current folder / ZIP / GitHub) analyzes the directory with cdxgen inside the container, the same engine the CLI's source mode uses. A lock file is not required — cdxgen resolves dependencies itself when one is missing (running `npm install`, `cargo generate-lockfile`, and the equivalent for other ecosystems) — but it does need network access to fetch packages during that resolution.
 
 **Changing the port / on a conflict:** if the default port (8080) is taken by another service, specify a different port:
 ```bash
