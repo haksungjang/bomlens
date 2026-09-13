@@ -793,6 +793,82 @@ else
     fail "malicious properties duplicated on re-run" "$(jq -c '.components[0].properties' "$WORK/mal.json")"
 fi
 
+echo "== malicious packages: a range-limited advisory is compared against the component's own version =="
+# Real case: OSV MAL-2023-462 names no explicit versions for pkg:npm/fsevents,
+# only a SEMVER range (introduced 1.0.0, fixed 1.2.11). Before this fix, the
+# absence of an explicit version list made every fsevents version malicious,
+# including 2.3.3, released years after the fix. fsevents is pulled in widely
+# by JS build tooling, so that false positive reached a lot of scans.
+cat > "$WORK/mal-range-index.json" <<'MALRANGEJSON'
+{
+  "_snapshot": "2026-09-14",
+  "_ecosystems": ["npm"],
+  "packages": {
+    "pkg:npm/fsevents": "MAL-2023-462",
+    "pkg:npm/unparseable-range": "MAL-0000-3"
+  },
+  "versions": {},
+  "ranges": {
+    "pkg:npm/fsevents": [[{"introduced": "1.0.0"}, {"fixed": "1.2.11"}]],
+    "pkg:npm/unparseable-range": [[{"introduced": "1.0.0"}, {"fixed": "2.0.0"}]]
+  }
+}
+MALRANGEJSON
+cat > "$WORK/mal-range.json" <<'MALRANGESBOM'
+{
+  "bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1,
+  "components": [
+    { "type": "library", "name": "fsevents", "version": "1.2.10", "purl": "pkg:npm/fsevents@1.2.10" },
+    { "type": "library", "name": "fsevents", "version": "2.3.3", "purl": "pkg:npm/fsevents@2.3.3" },
+    { "type": "library", "name": "fsevents", "version": "1.2.11", "purl": "pkg:npm/fsevents@1.2.11" },
+    { "type": "library", "name": "fsevents", "version": "1.2.11-beta", "purl": "pkg:npm/fsevents@1.2.11-beta" },
+    { "type": "library", "name": "unparseable-range", "version": "v1.5.0", "purl": "pkg:npm/unparseable-range@v1.5.0" }
+  ]
+}
+MALRANGESBOM
+MALICIOUS_DATA_FILE="$WORK/mal-range-index.json" bash "$LIB/enrich-malicious.sh" "$WORK/mal-range.json" >/dev/null 2>&1
+mal_range_of() { jq -r --arg n "$1" --arg v "$2" --arg p "$3" '[.components[] | select(.name==$n and .version==$v)
+    | ((.properties // [])[] | select(.name==$p) | .value)] | first // "none"' "$WORK/mal-range.json"; }
+# fsevents 1.2.10: inside the malicious window (>= introduced, < fixed).
+if [ "$(mal_range_of fsevents 1.2.10 bomlens:malicious)" = "true" ]; then
+    pass "malicious range: fsevents 1.2.10 (before the fix) -> malicious"
+else
+    fail "fsevents 1.2.10 not flagged" "$(jq -c '.components[0].properties' "$WORK/mal-range.json")"
+fi
+# fsevents 2.3.3: released long after 1.2.11 fixed it. This is the false
+# positive the fix exists to close.
+if [ "$(mal_range_of fsevents 2.3.3 bomlens:malicious)" = "none" ]; then
+    pass "malicious range: fsevents 2.3.3 (after the fix) -> not malicious"
+else
+    fail "fsevents 2.3.3 was still flagged malicious" "$(jq -c '.components[1].properties' "$WORK/mal-range.json")"
+fi
+# fsevents 1.2.11: the fixed version itself is already clean.
+if [ "$(mal_range_of fsevents 1.2.11 bomlens:malicious)" = "none" ]; then
+    pass "malicious range: fsevents 1.2.11 (the fix itself) -> not malicious"
+else
+    fail "fsevents 1.2.11 was flagged malicious" "$(jq -c '.components[2].properties' "$WORK/mal-range.json")"
+fi
+# fsevents 1.2.11-beta: stripped to its numeric core this ties the "fixed"
+# boundary, but semver orders a pre-release before the release it precedes,
+# so this version is still inside the affected window. The stripped
+# comparison cannot see that, so it must not guess "clean" here either.
+if [ "$(mal_range_of fsevents 1.2.11-beta bomlens:malicious)" = "none" ] \
+   && [ "$(mal_range_of fsevents 1.2.11-beta bomlens:malicious:rangeUnknown)" = "true" ]; then
+    pass "malicious range: fsevents 1.2.11-beta (ties the fixed boundary) -> rangeUnknown, not clean"
+else
+    fail "fsevents 1.2.11-beta boundary tie not handled as rangeUnknown" "$(jq -c '.components[3].properties' "$WORK/mal-range.json")"
+fi
+# A version the comparator cannot parse as plain dotted digits (a "v" prefix,
+# a Go pseudo-version, ...) is never guessed at either way: not flagged
+# malicious, but marked so a reader knows the advisory could not be ruled
+# out either.
+if [ "$(mal_range_of unparseable-range v1.5.0 bomlens:malicious)" = "none" ] \
+   && [ "$(mal_range_of unparseable-range v1.5.0 bomlens:malicious:rangeUnknown)" = "true" ]; then
+    pass "malicious range: an unparseable version is left unflagged and marked rangeUnknown"
+else
+    fail "unparseable-range version not handled as rangeUnknown" "$(jq -c '.components[4].properties' "$WORK/mal-range.json")"
+fi
+
 echo "== license-conflict: expression parsing and outbound-license verdicts =="
 # The conflict check needs an OUTBOUND license on metadata.component. Every
 # expression below was measured in a real BomLens SBOM, so this pins the cases
