@@ -6,7 +6,7 @@ This example builds a multi-stage Docker image for a Node.js application and sca
 
 ## Project Structure
 
-- `Dockerfile`: a two-stage build; the builder stage runs `npm ci --only=production`, and the runtime stage copies only `node_modules`, `package*.json`, and `index.js` onto a fresh `node:18-alpine` base
+- `Dockerfile`: a two-stage build; the builder stage runs `npm install --omit=dev`, and the runtime stage copies only `node_modules`, `package*.json`, and `index.js` onto a fresh `node:18-alpine` base
 - `package.json` and `index.js`: not committed here; they are copied in from `../nodejs` before building
 
 ## Dependencies
@@ -14,18 +14,16 @@ This example builds a multi-stage Docker image for a Node.js application and sca
 The image combines two layers, and the SBOM covers both:
 
 - Alpine Linux OS packages from the `node:18-alpine` base image
-- The production npm dependencies from `../nodejs` (Express, Helmet, CORS, Morgan, Lodash, Moment, Winston, and others); `--only=production` in the Dockerfile excludes devDependencies such as Jest and ESLint
+- The production npm dependencies from `../nodejs` (Express, Helmet, CORS, Morgan, Lodash, Moment, Winston, and others); `--omit=dev` in the Dockerfile excludes devDependencies such as Jest and ESLint
 
 ## Generate SBOM
 
 > **Windows**: run `..\..\scripts\scan-sbom.bat` instead of `scan-sbom.sh` (Git Bash required). For no command line, double-click `scripts\sbom-ui.bat`; see [getting started](../../docs/start/first-scan.md).
 
-Build the image first, since this example scans a built image rather than a source folder. `npm ci` needs a lock file, so generate one in `../nodejs` before copying:
+Build the image first, since this example scans a built image rather than a source folder:
 
 ```bash
-cd examples/nodejs
-npm install --package-lock-only
-cd ../docker
+cd examples/docker
 cp ../nodejs/package*.json ../nodejs/index.js .
 docker build -t sbom-example:latest .
 ```
@@ -79,12 +77,6 @@ jq -r '.components[] | select(.purl | contains("npm")) | "\(.name)@\(.version)"'
 ```
 
 ## Common Issues
-
-### `npm ci` fails while building the image
-
-`npm ci --only=production` requires a `package-lock.json`; `../nodejs` does not commit one, so a fresh checkout has none yet.
-
-**Solution:** run `npm install --package-lock-only` in `../nodejs` before copying its files in, as shown above.
 
 ### Image not found
 
