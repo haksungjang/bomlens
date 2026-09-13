@@ -172,6 +172,21 @@ detect_case rust   Cargo.toml       '[package]\nname="x"\nversion="0.1.0"'      
 detect_case ruby   Gemfile          "source 'https://rubygems.org'\ngem 'rack'"     ruby   cdxgen-debian-ruby34
 detect_case php    composer.json    '{"require":{"monolog/monolog":"^3"}}'          php    cdxgen-debian-php84
 
+# Go toolchain settings reach the cdxgen container. The Go image pins
+# GOTOOLCHAIN=local, so the host value travels as HOST_GOTOOLCHAIN.
+d="$(new_proj gotoolchain)"; printf 'module x\n\ngo 1.26.0\n' > "$d/go.mod"
+GOTOOLCHAIN=local GOPROXY=https://goproxy.example scan_in "$d" --project Pgotc --version 1.0.0 --generate-only
+{ in_log "HOST_GOTOOLCHAIN=local" && in_log "-e GOPROXY" && in_log "-e GOSUMDB"; } \
+  && pass "GOTOOLCHAIN/GOPROXY/GOSUMDB passed to the cdxgen container" \
+  || { fail "GOTOOLCHAIN/GOPROXY/GOSUMDB passed to the cdxgen container" "rc=$RC"; show; }
+
+# The value goes through eval, so anything but a toolchain name is dropped.
+d="$(new_proj gotoolchainbad)"; printf 'module x\n\ngo 1.26.0\n' > "$d/go.mod"
+GOTOOLCHAIN='go1.26.0;touch x' scan_in "$d" --project Pgotcbad --version 1.0.0 --generate-only
+{ in_out "Ignoring GOTOOLCHAIN" && in_log "HOST_GOTOOLCHAIN= " && ! in_log "touch x"; } \
+  && pass "GOTOOLCHAIN that is not a toolchain name is not passed on" \
+  || { fail "GOTOOLCHAIN that is not a toolchain name is not passed on" "rc=$RC"; show; }
+
 # .NET needs a *.csproj glob, swift needs Package.swift — handled specially.
 d="$(new_proj dotnet)"; printf '<Project></Project>' > "$d/app.csproj"
 scan_in "$d" --project Pdotnet --version 1.0.0 --generate-only

@@ -83,6 +83,8 @@ BomLens의 전체 옵션과 분석 모드, CI/CD 통합 방법, 트러블슈팅�
 | `AIBOM_VERIFY_MAX_BYTES` | `2147483648`(2GiB) | `--verify-weights`에서 이 크기를 넘는 가중치 파일(저장소가 선언한 크기든 실제로 내려받은 크기든)은 내려받거나 스캔하지 않고 건너뛴다 |
 | `COSIGN_KEY` | — | `--sign`에 쓰는 서명 키 경로 |
 | `FETCH_LICENSE` | `true` | 소스 스캔 시 의존성 라이선스를 자동 조회. `false`면 조회를 생략해 속도를 높임 |
+| `GOTOOLCHAIN` | `auto` | Go 소스 스캔에서 모듈을 해석할 Go 툴체인. 기본값에서는 `go.mod`가 스캐너 이미지보다 새 Go를 요구하면 그 버전을 내려받는다. `local`이면 이미지에 든 Go만 쓰고, 이런 프로젝트는 의존성 해석이 실패한다 |
+| `GOPROXY` | `https://proxy.golang.org,direct` | Go 소스 스캔에서 모듈과 툴체인을 내려받을 프록시. `proxy.golang.org`에 접근할 수 없는 사내망에서 지정한다. `GOSUMDB`도 같은 방식으로 전달된다 |
 | `PROJECT_LICENSE` | — | `--license`와 같다. 프로젝트의 배포 라이선스를 SPDX 식별자로 지정한다. `bomlens:licenseConflict` 판정과 위험 보고서의 충돌 절을 만든다 |
 | `SBOM_AUTHOR` | — | `--sbom-author`와 같다. SBOM을 생성한 주체를 `metadata.authors`에 기록한다 |
 | `SECURITY_ENRICH` | `true` | 보안 보고서에 EPSS와 CISA KEV 신호를 보강. 폐쇄망에서는 `false`로 외부 조회 생략 |
