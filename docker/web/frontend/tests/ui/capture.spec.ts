@@ -487,18 +487,24 @@ const CONFORMANCE_DONE = {
   conformance: {
     result: "pass",
     format: "CycloneDX",
+    // labelKo/detailKo mirror what the real pipeline ships: g7-* labels come
+    // from docker/lib/g7-registry.json's label_ko (verified present for every
+    // element there); detailKo for the base checks and the "N found" / "N/N
+    // model component(s)" shapes matches docker/lib/i18n/report-strings.ko.json's
+    // ldetail() vocabulary in validate-sbom.sh. Without these two fields the KO
+    // capture would render this section in English, same as EN.
     checks: [
-      { id: "timestamp", label: "Timestamp present", required: true, status: "pass", detail: "1 found" },
-      { id: "license", label: "License coverage (recommended)", required: false, status: "warn", detail: "0%" },
-      { id: "g7-meta-author", label: "SBOM author", required: false, status: "pass", detail: "author present", cluster: "metadata", source: "auto" },
-      { id: "g7-meta-timestamp", label: "SBOM timestamp", required: false, status: "pass", detail: "1 found", cluster: "metadata", source: "auto" },
-      { id: "g7-slp-data-flow", label: "System data flow", required: false, status: "warn", detail: "no automated source", cluster: "slp", source: "na" },
-      { id: "g7-model-id", label: "Model identifier", required: false, status: "pass", detail: "1/1 model component(s)", cluster: "models", source: "auto", evidence: ["pkg:huggingface/google-bert/bert-base-uncased@86b5e093"] },
-      { id: "g7-model-license", label: "Model license", required: false, status: "pass", detail: "1/1 model component(s)", cluster: "models", source: "auto", evidence: ["Apache-2.0"] },
-      { id: "g7-model-card", label: "Model properties (model card)", required: false, status: "pass", detail: "1/1 model component(s)", cluster: "models", source: "auto" },
-      { id: "g7-model-hash-value", label: "Model hash value", required: false, status: "warn", detail: "0/1 model component(s)", cluster: "models", source: "auto" },
-      { id: "g7-model-openness", label: "Model license — openness (weight/architecture/data/training)", required: false, status: "warn", detail: "not declared in the SBOM", cluster: "models", source: "inferred" },
-      { id: "g7-ds-name", label: "Dataset name", required: false, status: "pass", detail: "2 dataset reference(s)", cluster: "dp", source: "auto" },
+      { id: "timestamp", label: "Timestamp present", labelKo: "타임스탬프 있음", required: true, status: "pass", detail: "1 found", detailKo: "1개 발견" },
+      { id: "license", label: "License coverage (recommended)", labelKo: "라이선스 포함률 (권장)", required: false, status: "warn", detail: "0%" },
+      { id: "g7-meta-author", label: "SBOM author", labelKo: "SBOM 작성자", required: false, status: "pass", detail: "author present", detailKo: "작성자 있음", cluster: "metadata", source: "auto" },
+      { id: "g7-meta-timestamp", label: "SBOM timestamp", labelKo: "SBOM 타임스탬프", required: false, status: "pass", detail: "1 found", detailKo: "1개 발견", cluster: "metadata", source: "auto" },
+      { id: "g7-slp-data-flow", label: "System data flow", labelKo: "시스템 데이터 흐름", required: false, status: "warn", detail: "no automated source", detailKo: "자동 확인 수단 없음", cluster: "slp", source: "na" },
+      { id: "g7-model-id", label: "Model identifier", labelKo: "모델 식별자", required: false, status: "pass", detail: "1/1 model component(s)", detailKo: "모델 구성요소 1/1개", cluster: "models", source: "auto", evidence: ["pkg:huggingface/google-bert/bert-base-uncased@86b5e093"] },
+      { id: "g7-model-license", label: "Model license", labelKo: "모델 라이선스", required: false, status: "pass", detail: "1/1 model component(s)", detailKo: "모델 구성요소 1/1개", cluster: "models", source: "auto", evidence: ["Apache-2.0"] },
+      { id: "g7-model-card", label: "Model properties (model card)", labelKo: "모델 속성 (모델 카드)", required: false, status: "pass", detail: "1/1 model component(s)", detailKo: "모델 구성요소 1/1개", cluster: "models", source: "auto" },
+      { id: "g7-model-hash-value", label: "Model hash value", labelKo: "모델 해시 값", required: false, status: "warn", detail: "0/1 model component(s)", detailKo: "모델 구성요소 0/1개", cluster: "models", source: "auto" },
+      { id: "g7-model-openness", label: "Model license — openness (weight/architecture/data/training)", labelKo: "모델 라이선스 — 공개성 (가중치/구조/데이터/학습)", required: false, status: "warn", detail: "not declared in the SBOM", detailKo: "SBOM에 선언되지 않음", cluster: "models", source: "inferred" },
+      { id: "g7-ds-name", label: "Dataset name", labelKo: "데이터셋 이름", required: false, status: "pass", detail: "2 dataset reference(s)", detailKo: "데이터셋 참조 2개", cluster: "dp", source: "auto" },
     ],
   },
   sbom: {
@@ -509,6 +515,11 @@ const CONFORMANCE_DONE = {
   },
 };
 
+// The G7 label/detail text this section renders (label/detail vs. labelKo/
+// detailKo, per ConformancePanel.tsx) so each locale's capture waits for the
+// text that will actually be on screen instead of an English-only string.
+const G7_WAIT: Record<Lang, string> = { en: "SBOM author", ko: "SBOM 작성자" };
+
 for (const lang of ["en", "ko"] as Lang[]) {
   test(`@capture conformance section - ${lang}`, async ({ page }) => {
     await page.setViewportSize({ width: 1040, height: 664 });
@@ -516,12 +527,7 @@ for (const lang of ["en", "ko"] as Lang[]) {
     await stub(page, { firmware: false, scanoss: false, docker: true }, { done: CONFORMANCE_DONE });
     await runScan(page, "model", "1.0");
     await NAV(page, "conformance").click();
-    // check.label/detail fall back to English whenever labelKo/detailKo is
-    // absent (ConformancePanel.tsx), and this stub's checks (like the
-    // registry's own g7-registry.json) set neither, so this text renders in
-    // English in both locales today. Not something to fix here; flagged to
-    // the team as an existing i18n gap outside this task's scope.
-    await page.getByText(/present/).first().waitFor({ state: "visible" });
+    await page.getByText(G7_WAIT[lang]).first().waitFor({ state: "visible" });
     await killAnim(page);
     await settleMain(page);
     await page.screenshot({ path: `${IMAGES}/${withLang("web-ui-g7.png", lang)}` });
