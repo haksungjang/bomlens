@@ -83,8 +83,17 @@ jobs:
           node-version: 20
       - name: Generate lock file
         run: npm install --package-lock-only
+      # --package-lock-only writes the lock without touching node_modules, so
+      # `npm list` (which reads node_modules) sees nothing installed and exits
+      # non-zero. Read the versions the lock actually resolved to instead.
       - name: Resolved versions
-        run: npm list electron electron-builder
+        run: |
+          node -e '
+            const lock = require("./package-lock.json");
+            for (const name of ["electron", "electron-builder"]) {
+              console.log(name, lock.packages["node_modules/" + name].version);
+            }
+          '
       # Informational: audits the lock just generated, dev dependencies
       # included (npm audit's default scope). Not a gate, since this job only
       # runs on demand, but its output is what a reviewer checks instead of
