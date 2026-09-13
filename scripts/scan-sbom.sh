@@ -1503,10 +1503,10 @@ echo "=========================================="
 
 # A "current folder" scan (no --output-dir) lands OUTPUT_HOST_DIR inside
 # SCAN_INPUT_DIR itself (the base for outputs defaults to the directory being
-# scanned — see "Where outputs go" in cli.md), so this run's own output
+# scanned, see "Where outputs go" in cli.md), so this run's own output
 # subfolder is a real child of the tree /src mounts in SOURCE mode. Detected
-# here as a plain host-side path check — both are already resolved absolute
-# paths — and passed to the container so source-file-tree.sh can leave that
+# here as a plain host-side path check (both are already resolved absolute
+# paths), and passed to the container so source-file-tree.sh can leave that
 # one subfolder out, instead of listing the scan's own output as part of what
 # it scanned. RUN_NAME (not OUT_PREFIX) is the actual folder name on disk: it
 # alone carries the --timestamp suffix.
@@ -1738,7 +1738,7 @@ if [ "$GENERATE_ONLY" = "true" ]; then
     # either: a Yocto build directory with no SPDX document, read from its own
     # manifests instead (entrypoint.sh's ANALYZE case, same YOCTO_BUILD_DIR +
     # empty ANALYZE_SBOM test). There is no submitted document to measure
-    # conformance against there, so it is not a missing artifact — announcing it
+    # conformance against there, so it is not a missing artifact: announcing it
     # anyway told a fully successful Yocto scan "requested but not produced:
     # conformance report" and pointed at `docker pull`/a log warning that never
     # existed.

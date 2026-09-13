@@ -3998,6 +3998,28 @@ got=$(jq -r '[.files[].path] | join(",")' "$link_dir/out/link_source.json" 2>/de
     && pass "no symlink was followed for its content" \
     || fail "snapshot captured content through a link: '$got'"
 
+echo "== source tree: a named exclude directory is left out (BUG-005) =="
+# A "current folder" scan can end up with its own output subfolder sitting
+# inside the tree being walked (see entrypoint.sh's SRC_TREE_EXCLUDE
+# detection). source-file-tree.sh's own part of that fix is simple: when the
+# caller names a directory, prune it like the built-in noise list, whatever
+# its position or depth.
+excl_dir="$WORK/exclude"
+rm -rf "$excl_dir"; mkdir -p "$excl_dir/tree/MyApp_1.0.0" "$excl_dir/out"
+echo 'console.log(1)' > "$excl_dir/tree/index.js"
+echo '{}' > "$excl_dir/tree/MyApp_1.0.0/MyApp_1.0.0_bom.json"
+bash "$LIB/source-file-tree.sh" "$excl_dir/tree" "$excl_dir/out/excl_files.json" "MyApp_1.0.0" >/dev/null 2>&1
+got=$(jq -r '[.files[].path] | sort | join(",")' "$excl_dir/out/excl_files.json" 2>/dev/null)
+[ "$got" = "index.js" ] \
+    && pass "the named directory and its contents are pruned from the tree" \
+    || fail "tree with an exclude name was '$got'"
+# Without a third argument, nothing new is pruned: the exclude is opt-in.
+bash "$LIB/source-file-tree.sh" "$excl_dir/tree" "$excl_dir/out/noexcl_files.json" >/dev/null 2>&1
+got=$(jq -r '[.files[].path] | sort | join(",")' "$excl_dir/out/noexcl_files.json" 2>/dev/null)
+[ "$got" = "MyApp_1.0.0,MyApp_1.0.0/MyApp_1.0.0_bom.json,index.js" ] \
+    && pass "no exclude argument leaves the directory in the tree" \
+    || fail "tree with no exclude was '$got'"
+
 echo "== unpack-scan-target: open an archive, refuse what is not one =="
 # A build artifact is one packed file, so without unpacking there is nothing to
 # show. Archives are opened; an ELF binary is refused with a reason rather than

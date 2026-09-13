@@ -9,7 +9,7 @@
 #
 # exclude_dir_name is the run's own output subfolder name (e.g. "MyApp_1.0.0"),
 # passed only when the caller (scan-sbom.sh, via entrypoint.sh) has established
-# that the output base sits inside the directory being scanned — a "current
+# that the output base sits inside the directory being scanned: a "current
 # folder" scan whose output base defaults to the folder being scanned. Without
 # this, that subfolder is a real child of SRC by the time this script runs
 # (earlier post-processing steps already wrote into it), so the source view
