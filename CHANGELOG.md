@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The Overview screen now shows when a best-effort post-process step (CPE/EOL/malicious enrichment, conformance validation, notice generation, and the like) failed during a scan, naming which one, instead of a valid but silently incomplete SBOM giving no visible sign of it.
 
+### Changed
+
+- A source scan leaves out the manifests under test, fixture, example, benchmark and demo folders and the GitHub Actions workflows in `.github/workflows` by default, and records the patterns and the files it left out in the `bomlens:excluded-paths` and `bomlens:excluded-manifests` properties. `BOMLENS_INCLUDE_NON_SHIPPED=1` keeps them.
+
 ### Fixed
 
 - The desktop app's declared minimum `electron` and `electron-builder` versions fell inside ranges with known vulnerabilities (a critical Electron advisory, high-severity advisories in electron-builder's dependencies). Both are now pinned to exact versions past their fixed versions.
@@ -26,10 +30,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Vulnerabilities screen now shows a bundle summary when two or more CVEs on the same installed package share the same fixed version, naming the single upgrade that resolves all of them, instead of leaving the reader to notice the coincidence by comparing the Fixed column row by row.
 - The Overview comparison against the previous scan of the same project now names what changed (components added/removed/version-changed, vulnerabilities new/resolved), instead of only a net component-count delta and a worst-severity direction that a like-for-like swap could leave looking unchanged.
 - `--conformance-profile` (`CONFORMANCE_PROFILE`) selects `default` or `skt-submission`. `skt-submission` requires 100% PURL coverage and fails on any `pkg:generic` purl. The conformance report records the profile, and the web UI's New Scan advanced options can set it. Operating-system components no longer count toward the PURL and name-version coverage denominator.
-
-### Changed
-
-- A source scan leaves out the manifests under test, fixture, example, benchmark and demo folders and the GitHub Actions workflows in `.github/workflows` by default, and records the patterns and the files it left out in the `bomlens:excluded-paths` and `bomlens:excluded-manifests` properties. `BOMLENS_INCLUDE_NON_SHIPPED=1` keeps them.
 
 ### Fixed
 
