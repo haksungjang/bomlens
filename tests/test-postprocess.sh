@@ -1283,6 +1283,47 @@ JSON
 python3 "$OSCTX" "$WORK/osc-owrt.json" >/dev/null 2>&1
 osc_on=$(jq '[.components[]|select(.type=="operating-system")]|length' "$WORK/osc-owrt.json")
 [ "$osc_on" = "0" ] && pass "OpenWRT SBOM gets no synthesized OS (Trivy has no OpenWRT advisories)" || fail "OpenWRT SBOM gained $osc_on OS component(s)"
+# (f) two distros in one SBOM: the majority still becomes the OS component, but
+# the packages voted down are matched against the wrong advisory DB — say so
+# instead of dropping them silently.
+osc_prop() { jq -r --arg n "$1" '[.metadata.properties[]?|select(.name==$n)]|.[0].value // "NONE"' "$2"; }
+cat > "$WORK/osc-mixed.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6","components":[
+ {"type":"library","name":"openssl","version":"3.0.2","purl":"pkg:deb/ubuntu/openssl@3.0.2-0ubuntu1?arch=amd64&distro=ubuntu-22.04"},
+ {"type":"library","name":"bash","version":"5.1-6","purl":"pkg:deb/ubuntu/bash@5.1-6ubuntu1?arch=amd64&distro=ubuntu-22.04"},
+ {"type":"library","name":"zlib1g","version":"1.2.13","purl":"pkg:deb/debian/zlib1g@1.2.13-1?arch=amd64&distro=debian-12"}]}
+JSON
+python3 "$OSCTX" "$WORK/osc-mixed.json" >/dev/null 2>&1
+[ "$(osc_of "$WORK/osc-mixed.json")" = "ubuntu 22.04" ] && pass "mixed-distro SBOM still synthesizes the majority OS (ubuntu 22.04)" || fail "mixed OS='$(osc_of "$WORK/osc-mixed.json")', expected 'ubuntu 22.04'"
+osc_amb=$(osc_prop "bomlens:os-context-ambiguous" "$WORK/osc-mixed.json")
+case "$osc_amb" in
+  *ubuntu:22.04*debian:12*) pass "mixed-distro SBOM carries bomlens:os-context-ambiguous with the vote tally" ;;
+  *) fail "bomlens:os-context-ambiguous missing/unexpected" "got '$osc_amb'" ;;
+esac
+# Re-running replaces the property instead of appending a second copy.
+python3 "$OSCTX" "$WORK/osc-mixed.json" >/dev/null 2>&1
+osc_ambn=$(jq '[.metadata.properties[]?|select(.name=="bomlens:os-context-ambiguous")]|length' "$WORK/osc-mixed.json")
+[ "$osc_ambn" = "1" ] && pass "os-context-ambiguous is stamped once on re-run" || fail "ambiguous property count=$osc_ambn after second run, expected 1"
+# (g) OS packages present but none carries a distro version: nothing can be
+# matched at all, which is worth a signal — unlike a source SBOM, where there is
+# nothing to match in the first place (that one must stay silent).
+python3 "$OSCTX" "$WORK/osc-deb.json" >/dev/null 2>&1
+osc_unm=$(osc_prop "bomlens:os-context-unmatched" "$WORK/osc-deb.json")
+[ "$osc_unm" != "NONE" ] && pass "deb PURLs with no distro version carry bomlens:os-context-unmatched ($osc_unm)" || fail "bomlens:os-context-unmatched missing on version-less deb SBOM"
+cat > "$WORK/osc-bare-deb.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6","components":[
+ {"type":"library","name":"openssl","version":"1.1.1","purl":"pkg:deb/openssl@1.1.1"}]}
+JSON
+python3 "$OSCTX" "$WORK/osc-bare-deb.json" >/dev/null 2>&1
+osc_bare=$(osc_prop "bomlens:os-context-unmatched" "$WORK/osc-bare-deb.json")
+[ "$osc_bare" != "NONE" ] && pass "namespace-less deb PURL carries bomlens:os-context-unmatched ($osc_bare)" || fail "bomlens:os-context-unmatched missing on namespace-less deb SBOM"
+# (h) the plain cases stay clean: no distro packages at all, and a single distro.
+osc_mvn_u=$(osc_prop "bomlens:os-context-unmatched" "$WORK/osc-maven.json")
+[ "$osc_mvn_u" = "NONE" ] && pass "maven-only SBOM gets no os-context-unmatched (no noise on source scans)" || fail "maven-only SBOM was marked unmatched: '$osc_mvn_u'"
+for _p in bomlens:os-context-ambiguous bomlens:os-context-unmatched; do
+  _v=$(osc_prop "$_p" "$WORK/osc-centos.json")
+  [ "$_v" = "NONE" ] && pass "single-distro SBOM carries no $_p" || fail "$_p present on a single-distro SBOM: '$_v'"
+done
 echo "== F-1c: maven CPE enrichment — groupId-derived NVD cpe:2.3 =="
 MVNCPE="$LIB/enrich-maven-cpe.py"
 cat > "$WORK/mvn.json" <<'JSON'
