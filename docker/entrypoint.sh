@@ -350,12 +350,20 @@ EOF
         # into submounts), and walking them is slow and can error out. They
         # never hold packages, so excluding them is safe for extracted
         # rootfs trees too.
+        # Capture stderr to a temp file instead of discarding it: on failure the
+        # cause (permission denied, unreadable path, ...) is otherwise invisible.
+        # It must stay off stdout, which carries the SBOM JSON on success.
+        ROOTFS_SYFT_LOG=$(mktemp)
         if ! syft "dir:$TARGET_DIR" -o "cyclonedx-json@$CDX_SPEC_VERSION" \
                 --exclude './proc/**' --exclude './sys/**' \
                 --exclude './dev/**' --exclude './run/**' \
-                > "$OUTPUT_FILE" 2>/dev/null; then
-            echo "[ERROR] syft directory scan failed."; exit 1
+                > "$OUTPUT_FILE" 2>"$ROOTFS_SYFT_LOG"; then
+            echo "[ERROR] syft directory scan failed."
+            [ -s "$ROOTFS_SYFT_LOG" ] && cat "$ROOTFS_SYFT_LOG" >&2
+            rm -f "$ROOTFS_SYFT_LOG"
+            exit 1
         fi
+        rm -f "$ROOTFS_SYFT_LOG"
         ;;
 
     FIRMWARE)
