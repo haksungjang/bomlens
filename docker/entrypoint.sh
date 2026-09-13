@@ -969,8 +969,30 @@ esac
 # structure only, no licenses. When ScanCode already produced a _scancode.json,
 # that one wins (it carries licenses), so we skip this fallback. Best-effort:
 # never aborts.
+#
+# A "current folder" scan writes this run's own output subfolder
+# (${OUT_PREFIX}/) inside the very directory being scanned, so it is a real
+# child of SRC_TREE_DIR by the time this runs — earlier steps already wrote
+# into it. Two different launch shapes hit this, detected two different ways:
+#   - CLI, no --output-dir: OUTPUT_HOST_DIR ends up NESTED under SCAN_INPUT_DIR
+#     (a subfolder, not the same directory) — scan-sbom.sh knows both as plain
+#     host strings and sets SRC_TREE_EXCLUDE itself when that is the case.
+#   - Web UI, Current folder target: /src and /host-output are two bind mounts
+#     of the IDENTICAL host directory (server.py launches with
+#     `-v $(pwd):/src -v $(pwd):/host-output`), which two different container
+#     paths can't reveal — so when the host did not already set
+#     SRC_TREE_EXCLUDE, fall back to comparing device+inode, which is exactly
+#     the same location in that shape (and reliably different in the CLI's
+#     nested one, where this fallback correctly finds nothing to do).
+if [ -z "${SRC_TREE_EXCLUDE:-}" ] && [ -n "$SRC_TREE_DIR" ] && [ -d /host-output ]; then
+    src_dev_ino="$(stat -c '%d:%i' "$SRC_TREE_DIR" 2>/dev/null)"
+    out_dev_ino="$(stat -c '%d:%i' /host-output 2>/dev/null)"
+    if [ -n "$src_dev_ino" ] && [ "$src_dev_ino" = "$out_dev_ino" ]; then
+        SRC_TREE_EXCLUDE="$OUT_PREFIX"
+    fi
+fi
 if [ ! -f "${OUT_PREFIX}_scancode.json" ] && [ -n "$SRC_TREE_DIR" ]; then
-    run_optional_step source-file-tree bash "$LIBDIR/source-file-tree.sh" "$SRC_TREE_DIR" "${OUT_PREFIX}_files.json"
+    run_optional_step source-file-tree bash "$LIBDIR/source-file-tree.sh" "$SRC_TREE_DIR" "${OUT_PREFIX}_files.json" "${SRC_TREE_EXCLUDE:-}"
 fi
 
 # Whether the tree pinned the versions its SBOM reports. Source scans only: an
