@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The desktop app's declared minimum `electron` and `electron-builder` versions fell inside ranges with known vulnerabilities (a critical Electron advisory, high-severity advisories in electron-builder's dependencies). Both are now pinned to exact versions past their fixed versions.
+- The desktop app's Docker-missing screen ran shell commands into plain sentences instead of showing them as code.
 
 ## [v1.11.11] - 2026-09-14
 
