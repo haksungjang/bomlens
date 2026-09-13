@@ -494,6 +494,9 @@ export interface ScanConfig {
   identifyVendored: boolean;
   includeOsv: boolean;
   byteStable: boolean;
+  /** Conformance check strictness this scan actually ran with ("default" or
+   *  "skt-submission"). Absent on scans that predate the profile. */
+  conformanceProfile?: string;
   /** The outbound license declared for this scan (SPDX id), which switches the
    *  license-conflict check on. Empty or absent means it stayed off. */
   license?: string;
@@ -604,6 +607,18 @@ export const USAGE_CONTEXTS: UsageContext[] = [
   "outputs-only",
 ];
 
+/** Conformance check strictness. "default" is the ordinary 90%-PURL /
+ *  advisory-pkg:generic thresholds; "skt-submission" is the SKT supplier
+ *  submission review (100% PURL, pkg:generic required). Kept as a named
+ *  profile rather than a boolean so a later addition (e.g. an EU CRA
+ *  profile) is a third option here, not a rewrite of the contract. */
+export type ConformanceProfile = "default" | "skt-submission";
+
+export const CONFORMANCE_PROFILES: ConformanceProfile[] = [
+  "default",
+  "skt-submission",
+];
+
 export interface ScanParams {
   project: string;
   version: string;
@@ -622,6 +637,10 @@ export interface ScanParams {
    *  the exact `includeOsv` flag. */
   includeOsv: boolean;
   byteStable: boolean;
+  /** Conformance check strictness. Read server-side as the exact
+   *  `conformance_profile` parameter; omitted (sent empty) lets the server pick
+   *  the per-mode default ("skt-submission" for ANALYZE, "default" otherwise). */
+  conformanceProfile?: ConformanceProfile;
   /** Outbound license (SPDX id) the project ships under. Read server-side as the
    *  exact `license` parameter; empty leaves the license-conflict check off. */
   license?: string;
@@ -1071,6 +1090,7 @@ export function startScan(params: ScanParams, handlers: ScanHandlers): EventSour
     identify_vendored: String(params.identifyVendored),
     includeOsv: String(params.includeOsv),
     byte_stable: String(params.byteStable),
+    conformance_profile: params.conformanceProfile ?? "",
     license: params.license ?? "",
     usage: params.usage ?? "",
     deep_cve: String(params.deepCve),
