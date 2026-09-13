@@ -130,10 +130,136 @@ guard_restore() {
     return 0
 }
 
+# ---------------------------------------------------------------------------
+# Supervised execution — run a resolver command so an interrupt can actually
+# stop it, instead of the interrupt being deferred until the command finishes
+# on its own.
+#
+# A shell only runs a trap once it regains control; while it is blocked
+# waiting on a foreground command, a caught signal does not preempt that wait
+# (confirmed by measurement: `docker stop` with a 5-minute grace never let
+# INT/TERM-based cleanup run against a plain foreground cdxgen invocation).
+# Backgrounding the command and waiting on it explicitly changes that: the
+# `wait` returns as soon as the signal arrives, so the trap can act right
+# away — it just has to stop the command itself first.
+#
+# setsid gives the command its own process group (pgid == its own pid), so
+# stopping it reaches the whole subtree it spawns (language tool -> package
+# manager -> git clone, etc.) with one signal instead of depending on each
+# level to forward it to the next. Confirmed present in every cdxgen image
+# build-prep.sh runs in (debian-rust/golang124/ruby34/php84/dotnet9/swift,
+# temurin-java21, python312, node20, the all-in-one image). Where it is
+# missing, falls back to a /proc-based tree walk.
+#
+# _cg_pid / _cg_pgid track whatever is currently supervised, so stop_supervised
+# and a trap can act on it without either needing to be passed the details.
+_cg_pid=""
+_cg_pgid=""
+_have_setsid=0
+command -v setsid >/dev/null 2>&1 && _have_setsid=1
+
+_proc_kill_tree() {
+    _pkt_root="$1"; _pkt_sig="$2"
+    for _pkt_p in /proc/[0-9]*; do
+        _pkt_pid=${_pkt_p#/proc/}
+        [ -r "$_pkt_p/stat" ] || continue
+        _pkt_ppid=$(awk '{print $4}' "$_pkt_p/stat" 2>/dev/null)
+        [ "$_pkt_ppid" = "$_pkt_root" ] && _proc_kill_tree "$_pkt_pid" "$_pkt_sig"
+    done
+    kill "-$_pkt_sig" "$_pkt_root" 2>/dev/null
+}
+
+_supervised_alive() {
+    if [ -n "$_cg_pgid" ]; then
+        kill -0 "-$_cg_pgid" 2>/dev/null
+    else
+        kill -0 "$_cg_pid" 2>/dev/null
+    fi
+}
+
+# Run CMD... in the background (its own process group via setsid when
+# available) and block until it finishes, returning its exit code. Sets
+# _cg_pid/_cg_pgid so stop_supervised (from a trap, or a caller's own
+# deadline) can stop it.
+run_supervised() {
+    if [ "$_have_setsid" = 1 ]; then
+        setsid "$@" &
+        _cg_pid=$!
+        _cg_pgid="$_cg_pid"
+    else
+        "$@" &
+        _cg_pid=$!
+        _cg_pgid=""
+    fi
+    wait "$_cg_pid"
+    return $?
+}
+
+# Same as run_supervised, but returns 124 (matching the `timeout` command's
+# convention) and stops the command itself if it is still running after
+# TIMEOUT_SECONDS, instead of waiting for it indefinitely. Does not exit the
+# script and does not touch GUARD_DIR — a caller times out one step and keeps
+# going, distinct from the whole-script abort the INT/TERM traps below do.
+run_supervised_timeout() {
+    _rst_timeout="$1"; shift
+    if [ "$_have_setsid" = 1 ]; then
+        setsid "$@" &
+        _cg_pid=$!
+        _cg_pgid="$_cg_pid"
+    else
+        "$@" &
+        _cg_pid=$!
+        _cg_pgid=""
+    fi
+    _rst_n=0
+    while kill -0 "$_cg_pid" 2>/dev/null; do
+        if [ "$_rst_n" -ge "$_rst_timeout" ]; then
+            stop_supervised
+            return 124
+        fi
+        sleep 1
+        _rst_n=$((_rst_n + 1))
+    done
+    wait "$_cg_pid"
+    return $?
+}
+
+# Stop whatever run_supervised/run_supervised_timeout is currently tracking:
+# TERM, wait for it to actually exit (not just accept that we asked), then
+# KILL if it hasn't. Blocks (bounded) until the whole tree is confirmed gone,
+# so a caller running guard_restore right after is not racing a resolver
+# process still writing files. Idempotent; a no-op when nothing is tracked.
+stop_supervised() {
+    [ -n "$_cg_pid" ] || return 0
+    if [ -n "$_cg_pgid" ]; then
+        kill -TERM "-$_cg_pgid" 2>/dev/null
+    else
+        _proc_kill_tree "$_cg_pid" TERM
+    fi
+    _ss_n=0
+    while [ "$_ss_n" -lt 50 ] && _supervised_alive; do
+        sleep 0.2
+        _ss_n=$((_ss_n + 1))
+    done
+    if _supervised_alive; then
+        if [ -n "$_cg_pgid" ]; then
+            kill -KILL "-$_cg_pgid" 2>/dev/null
+        else
+            _proc_kill_tree "$_cg_pid" KILL
+        fi
+        _ss_n=0
+        while [ "$_ss_n" -lt 25 ] && _supervised_alive; do
+            sleep 0.2
+            _ss_n=$((_ss_n + 1))
+        done
+    fi
+    _cg_pid=""; _cg_pgid=""
+}
+
 guard_snapshot
-trap 'guard_restore' EXIT
-trap 'guard_restore; exit 130' INT
-trap 'guard_restore; exit 143' TERM
+trap 'stop_supervised; guard_restore' EXIT
+trap 'stop_supervised; guard_restore; exit 130' INT
+trap 'stop_supervised; guard_restore; exit 143' TERM
 
 # Rust — cdxgen does NOT auto-run cargo; lockfile is essential for transitive deps
 if [ -f Cargo.toml ] && command -v cargo >/dev/null 2>&1; then
@@ -544,15 +670,15 @@ fix_lic_mapping
 # --- locate cdxgen (path differs per image) and generate the SBOM ---
 if command -v cdxgen >/dev/null 2>&1; then
     log "cdxgen (PATH)"
-    cdxgen "$@"
+    run_supervised cdxgen "$@"
     rc=$?
 elif [ -f /opt/cdxgen/bin/cdxgen.js ]; then
     log "cdxgen (/opt/cdxgen/bin/cdxgen.js)"
-    node /opt/cdxgen/bin/cdxgen.js "$@"
+    run_supervised node /opt/cdxgen/bin/cdxgen.js "$@"
     rc=$?
 elif [ -f /opt/bin/cdxgen ]; then
     log "cdxgen (/opt/bin/cdxgen)"
-    /opt/bin/cdxgen "$@"
+    run_supervised /opt/bin/cdxgen "$@"
     rc=$?
 else
     echo "[build-prep] ERROR: cdxgen not found in image" >&2
