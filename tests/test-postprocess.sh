@@ -127,7 +127,15 @@ fi
 # it was found in. The fixture has: a .so (basename kept), a .jar (kept), a GitHub
 # Action found in ci.yml (skipped — .yml is not an artifact), an npm dep found in
 # package-lock.json (skipped), a component that already has the field (untouched),
-# and one with no location property (nothing to take).
+# and one with no location property and no ecosystem fallback (nothing to take).
+#
+# cdxgen never sets a syft:location property at all (it is a syft-only field), so
+# a cdxgen-backed source scan (Maven, npm, PyPI, ...) always falls into the "no
+# location" branch above. For those, a second fallback derives the filename from
+# the purl itself, but only where the ecosystem's packaging convention makes it a
+# fact rather than a guess: Maven's repository layout names the file
+# <artifact>-<version>[-<classifier>].<type> (type defaults to "jar"); an npm
+# install is a directory, not a single file, so npm stays unfilled on purpose.
 fnf() { jq -r --arg n "$1" '[.components[]|select(.name==$n)][0] | ([.properties[]?|select(.name=="bsi:component:filename").value] | .[0] // "")' "$WORK/fn.json"; }
 cp "$FIX/syft-location-filenames.json" "$WORK/fn.json"
 bash "$LIB/normalize-sbom.sh" "$WORK/fn.json" >/dev/null 2>&1
@@ -136,7 +144,11 @@ bash "$LIB/normalize-sbom.sh" "$WORK/fn.json" >/dev/null 2>&1
 [ -z "$(fnf actions/checkout)" ] && pass "a manifest path (ci.yml) is NOT taken as a filename" || fail "actions/checkout wrongly filled with '$(fnf actions/checkout)'"
 [ -z "$(fnf left-pad)" ] && pass "a lockfile path (package-lock.json) is NOT taken as a filename" || fail "left-pad wrongly filled with '$(fnf left-pad)'"
 [ "$(fnf already-named)" = "custom-name.so" ] && pass "an existing bsi:component:filename is never overwritten" || fail "already-named filename='$(fnf already-named)', expected custom-name.so"
-[ -z "$(fnf no-location)" ] && pass "no location property -> no filename invented" || fail "no-location wrongly filled with '$(fnf no-location)'"
+[ -z "$(fnf no-location)" ] && pass "no location property and no ecosystem fallback -> no filename invented" || fail "no-location wrongly filled with '$(fnf no-location)'"
+[ "$(fnf maven-no-location)" = "maven-no-location-1.2.3.jar" ] && pass "a Maven purl with no syft:location falls back to <artifact>-<version>.jar" || fail "maven-no-location filename='$(fnf maven-no-location)', expected maven-no-location-1.2.3.jar"
+[ "$(fnf maven-war-no-location)" = "maven-war-no-location-4.5.6.war" ] && pass "the purl's own ?type= qualifier picks the extension over the jar default" || fail "maven-war-no-location filename='$(fnf maven-war-no-location)', expected maven-war-no-location-4.5.6.war"
+[ "$(fnf maven-classifier-no-location)" = "maven-classifier-no-location-7.8.9-sources.jar" ] && pass "a ?classifier= qualifier is inserted between version and extension" || fail "maven-classifier-no-location filename='$(fnf maven-classifier-no-location)', expected maven-classifier-no-location-7.8.9-sources.jar"
+[ -z "$(fnf npm-no-location)" ] && pass "an npm purl with no syft:location is NOT guessed (an install is a directory, not a file)" || fail "npm-no-location wrongly filled with '$(fnf npm-no-location)'"
 # The property the field rides on must be singular — a second run must not append a
 # duplicate bsi:component:filename (idempotence, like enrich-staleness).
 bash "$LIB/normalize-sbom.sh" "$WORK/fn.json" >/dev/null 2>&1
@@ -2740,6 +2752,34 @@ grep -q "detached signature" "$WORK/sg_conformance.md" \
 REPORT_LANG=ko bash "$LIB/validate-sbom.sh" "$FIX/good-cyclonedx.json" "$WORK/sgk" "supplier" >/dev/null 2>&1
 grep -q "^## 사람이 확인할 항목" "$WORK/sgk_conformance.md" \
     && pass "the Korean report renders the section too" || fail "ko markdown has no review section"
+
+# A detached signature IS visible when it follows cosign's own convention: a
+# "<sbom-filename>.sig" file sitting right next to the SBOM this run is looking
+# at. This is what ANALYZE sees for a supplier submission that shipped its .sig
+# alongside the SBOM, and what a same-run --sign scan sees on its own re-check
+# after signing (entrypoint.sh calls validate-sbom.sh a second time then).
+cp "$FIX/good-cyclonedx.json" "$WORK/sg-adjacent.json"
+: > "$WORK/sg-adjacent.json.sig"
+bash "$LIB/validate-sbom.sh" "$WORK/sg-adjacent.json" "$WORK/sga" "supplier" >/dev/null 2>&1
+sga=$(jq -r '.checks[] | select(.id=="cisa-sbom-author-signature") | .status' "$WORK/sga_conformance.json")
+[ "$sga" = "pass" ] && pass "an adjacent <sbom>.sig file is credited without an embedded .signature" || fail "adjacent .sig: '$sga'"
+
+# A same-run signing attempt that fails must not read the same as "signing was
+# never asked for": the supplier asked for one and it did not happen.
+SIGN_SBOM=true SIGN_FAILED=1 bash "$LIB/validate-sbom.sh" "$FIX/good-cyclonedx.json" "$WORK/sgf" "supplier" >/dev/null 2>&1
+sgf=$(jq -r '.checks[] | select(.id=="cisa-sbom-author-signature") | "\(.status)|\(.detail)|\(.detail_ko)"' "$WORK/sgf_conformance.json")
+[ "$sgf" = "warn|signature requested but failed|서명 요청됨, 서명 실패" ] \
+    && pass "a failed signing attempt is distinguished from 'never asked for one'" || fail "sign-failed row: '$sgf'"
+REPORT_LANG=ko SIGN_SBOM=true SIGN_FAILED=1 bash "$LIB/validate-sbom.sh" "$FIX/good-cyclonedx.json" "$WORK/sgfk" "supplier" >/dev/null 2>&1
+grep -q "서명 요청됨, 서명 실패" "$WORK/sgfk_conformance.md" \
+    && pass "the sign-failed wording renders in the Korean markdown report" || fail "ko markdown missing the sign-failed detail"
+# A successful same-run signing attempt (SIGN_FAILED=0, no .sig at this call
+# since it is the pre-signing pass) must still read as the plain "not present"
+# gap, not as a failure. The row only turns pass/fail once the post-signing
+# re-check (with the adjacent .sig or its absence) runs.
+SIGN_SBOM=true SIGN_FAILED=0 bash "$LIB/validate-sbom.sh" "$FIX/good-cyclonedx.json" "$WORK/sgp" "supplier" >/dev/null 2>&1
+sgp=$(jq -r '.checks[] | select(.id=="cisa-sbom-author-signature") | .detail' "$WORK/sgp_conformance.json")
+[ "$sgp" = "not present in the SBOM" ] && pass "SIGN_FAILED=0 before the .sig exists reads as the ordinary gap, not a false pass" || fail "pre-signing pass detail: '$sgp'"
 
 echo "== conformance: the 2026 SBOM minimum elements are measured on every SBOM =="
 # The baseline applies to all software, not to a subset, so its registry declares

@@ -1438,6 +1438,19 @@ else
             else
                 fail "cosign verify-blob succeeds"
             fi
+            # entrypoint.sh re-runs validate-sbom.sh once signing finishes, so the
+            # conformance report this SOURCE scan generated before signing (SOURCE
+            # is in CONFORMANCE_GEN_MODE) should end up crediting the signature:
+            # proof the re-check ran, and proof it did not touch the just-signed
+            # SBOM (verify-blob above already confirms that independently).
+            sig_conf="$w/signtest_1.0_conformance.json"
+            if [ -f "$sig_conf" ]; then
+                sig_status="$(jq -r '.checks[] | select(.id=="cisa-sbom-author-signature") | .status' "$sig_conf" 2>/dev/null)"
+                [ "$sig_status" = "pass" ] && pass "conformance report credits the signature after the post-sign re-check" \
+                    || fail "conformance report credits the signature after the post-sign re-check" "status='$sig_status'"
+            else
+                fail "conformance report credits the signature after the post-sign re-check" "no conformance report produced"
+            fi
         else
             fail "cosign produced detached signature" "$(tail -3 "$w/_scan.log" 2>/dev/null)"; show_log_if_verbose "$w"
         fi

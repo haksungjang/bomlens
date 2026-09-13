@@ -1150,11 +1150,33 @@ if [ "${SIGN_SBOM:-false}" = "true" ]; then
                 echo "[ERROR] cosign could not sign the SPDX SBOM."; SIGN_FAILED=1
             fi
         fi
+        # The conformance sidecar files (generated earlier, before signing could
+        # run at all) still say the SBOM author signature element is missing.
+        # That was true then, but the signing outcome above is the fact that
+        # actually matters now. Re-run validate-sbom.sh so the report reflects
+        # it: the script only ever reads $OUTPUT_FILE and writes the
+        # ${OUT_PREFIX}_conformance.* sidecar files, so re-running it after
+        # signing cannot touch the just-signed SBOM, which would invalidate the
+        # signature. Unlike run_optional_step, whose failure path stamps
+        # $OUTPUT_FILE, this call is unwrapped so a failure here cannot do that
+        # either. Skipped when this mode never produced a conformance report.
+        if [ -f "${OUT_PREFIX}_conformance.json" ]; then
+            SIGN_FAILED="$SIGN_FAILED" bash "$LIBDIR/validate-sbom.sh" "$OUTPUT_FILE" "$OUT_PREFIX" "$PROJECT_NAME" \
+                || echo "[WARN] could not refresh the conformance report's signature status after signing." >&2
+        fi
         # A requested signature that was not produced is a failure on a
-        # supply-chain tool — do not exit 0 leaving the user to believe their
+        # supply-chain tool. Do not exit 0 leaving the user to believe their
         # SBOM is signed when no .sig exists.
         if [ "$SIGN_FAILED" != "0" ]; then
             echo "[ERROR] --sign was requested but a signature could not be produced. The SBOM and other artifacts were still written."
+            # The refreshed conformance report above only lives in the container;
+            # the next sync_artifacts pass (near the end of this script) is what
+            # copies it to the host, and exit below skips straight past that.
+            # Run it here too so a supplier reading the failure still gets the
+            # accurate report, not the pre-signing snapshot. Re-copying files
+            # this run already sent to the host (the SBOM, NOTICE, ...) is a
+            # harmless no-op (see sync_artifacts's own comment).
+            sync_artifacts
             exit 1
         fi
     else

@@ -35,6 +35,20 @@ SBOM="$1"
 OUT_PREFIX="$2"
 PROJECT="${3:-project}"
 
+# cosign (--sign) writes a DETACHED signature next to the SBOM ("$SBOM.sig"),
+# not an embedded CycloneDX .signature field (see entrypoint.sh's cosign
+# invocation). The cisa-sbom-author-signature element only ever looked at
+# .signature, so a signed submission never satisfied it. Checked once here so
+# the ANALYZE path (a supplier's own submission, .sig already sitting next to
+# it) and the generation path (this scan's own re-run after signing, see
+# entrypoint.sh) share the same signal.
+if [ -f "${SBOM}.sig" ]; then HAS_SIG_FILE=true; else HAS_SIG_FILE=false; fi
+# Set by entrypoint.sh only on the post-signing re-run, to phrase the gap
+# accurately when a requested signature failed rather than reporting it the
+# same as "signing was never asked for".
+SIGN_REQUESTED="${SIGN_SBOM:-false}"
+SIGN_ATTEMPT_FAILED="${SIGN_FAILED:-0}"
+
 # Coverage thresholds (percent). Override via env to tune strictness.
 PURL_MIN_PCT="${PURL_MIN_PCT:-90}"      # mandatory
 LICENSE_MIN_PCT="${LICENSE_MIN_PCT:-80}" # recommended (warn)
@@ -423,7 +437,10 @@ registry_checks() {
                 elif $m==0 then {status:"pass", detail:"\($t)/\($t) \(._slabel)(s)", missing:[]}
                 else {status:$unmet, detail:"\($t - $m)/\($t) \(._slabel)(s)", missing:(._missing[0:$cap])} end)
              elif ._present==true then {status:"pass", detail:"present", missing:[]}
-             elif ._present==false then {status:$unmet, detail:"not present in the SBOM", missing:[]}
+             elif ._present==false then
+               (if .id=="cisa-sbom-author-signature" and $signRequested and ($signFailed=="1")
+                then {status:$unmet, detail:"signature requested but failed", missing:[]}
+                else {status:$unmet, detail:"not present in the SBOM", missing:[]} end)
              else {status:"warn", detail:"requires human review (no automated source)", missing:[]} end) as $s
             | {id, label, label_ko, required, status:$s.status, detail:$s.detail,
                missing:$s.missing,
@@ -431,7 +448,9 @@ registry_checks() {
                cluster, source, role}
         )'
     local out
-    if ! out=$(jq -c --argjson cap "$MISSING_CAP" "${prog}${fold}" "$SBOM" 2>&1); then
+    if ! out=$(jq -c --argjson cap "$MISSING_CAP" --argjson hasSigFile "$HAS_SIG_FILE" \
+            --argjson signRequested "$SIGN_REQUESTED" --arg signFailed "$SIGN_ATTEMPT_FAILED" \
+            "${prog}${fold}" "$SBOM" 2>&1); then
         echo "[validate] WARN: $what registry evaluation failed; $what checks skipped this run." >&2
         echo "[validate]   $out" >&2
         echo "[]"
@@ -775,6 +794,7 @@ if [ -f "$KO_CATALOG" ] && [ -f "$KO_REG" ]; then
         def ldetail($d):
           if $d=="present" then $C["conformance.detail.present"]
           elif $d=="not present in the SBOM" then $C["conformance.detail.not_present"]
+          elif $d=="signature requested but failed" then $C["conformance.detail.sign_requested_failed"]
           elif $d=="requires human review (no automated source)" then $C["conformance.detail.review"]
           elif $d=="no packages to measure" then $C["conformance.detail.no_packages"]
           elif $d=="no package components (file inventory only)" then $C["conformance.detail.files_only"]
