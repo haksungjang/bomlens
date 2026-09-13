@@ -480,6 +480,27 @@ rc = server.run_sibling_scan(
 assert rc == 0, rc
 assert not any(a.startswith("AI_USAGE_CONTEXT") for a in captured["args"]), captured["args"]
 
+# CONFORMANCE_PROFILE reaches the deep-cve sibling ANALYZE runs on when the base
+# image lacks grype: a missed forward would silently re-grade a submission
+# under review against the wrong thresholds. Forwarded only as one of the two
+# recognized values, same allowlist rule as AI_USAGE_CONTEXT above.
+captured.clear()
+rc = server.run_sibling_scan(
+    "ghcr.io/sktelecom/bomlens-deep-cve:1.5.0", "ANALYZE", run_out,
+    lambda ln: None, upload_file=up_file,
+    extra_env={"CONFORMANCE_PROFILE": "skt-submission"},
+)
+assert rc == 0, rc
+assert "CONFORMANCE_PROFILE=skt-submission" in captured["args"], captured["args"]
+captured.clear()
+rc = server.run_sibling_scan(
+    "ghcr.io/sktelecom/bomlens-deep-cve:1.5.0", "ANALYZE", run_out,
+    lambda ln: None, upload_file=up_file,
+    extra_env={"CONFORMANCE_PROFILE": "bogus; rm -rf /"},
+)
+assert rc == 0, rc
+assert not any(a.startswith("CONFORMANCE_PROFILE") for a in captured["args"]), captured["args"]
+
 # HF_TOKEN: inherited from THIS container's environment (never posted to the UI)
 # and forwarded by name only, so the secret stays out of the docker-run argv.
 HF_SENTINEL = "hf_sentinel_do_not_leak_9f3a"
@@ -2747,6 +2768,7 @@ echo "[stub] scanning ${PROJECT_NAME} ${PROJECT_VERSION} (mode=$mode)"
   echo "API_KEY=${API_KEY:-}"
   echo "TRUSCA_PROJECT_ID=${TRUSCA_PROJECT_ID:-}"
   echo "AI_USAGE_CONTEXT=${AI_USAGE_CONTEXT:-}"
+  echo "CONFORMANCE_PROFILE=${CONFORMANCE_PROFILE:-}"
   echo "PROJECT_LICENSE=${PROJECT_LICENSE:-}"
   echo "MODE=${MODE:-}"
   echo "TARGET_FILE=${TARGET_FILE:-}"
@@ -3313,6 +3335,46 @@ if grep -q '^MODE=ANALYZE$' "$WORK/stub-env" \
     pass "the scanner is handed the image SBOM (ANALYZE_SBOM), not the build tree"
 else
     fail "wrong scan environment for a Yocto build directory" "$(cat "$WORK/stub-env")"
+fi
+# ANALYZE with no explicit conformance_profile defaults to skt-submission (a
+# document under submission review), not the "default" a generated SBOM gets.
+if grep -q '^CONFORMANCE_PROFILE=skt-submission$' "$WORK/stub-env"; then
+    pass "ANALYZE defaults the conformance profile to skt-submission"
+else
+    fail "ANALYZE conformance profile default" "$(cat "$WORK/stub-env")"
+fi
+
+echo "== conformance_profile param (-> CONFORMANCE_PROFILE) =="
+echo ok > "$STUB_MODE_FILE"
+# No param, not ANALYZE -> the "default" profile (matches the CLI's default).
+rm -f "$WORK/stub-env"
+sse_events "project=cp1&version=1.0&source=current-dir" >/dev/null
+if grep -q '^CONFORMANCE_PROFILE=default$' "$WORK/stub-env"; then
+    pass "no conformance_profile param -> default profile for a generated SBOM"
+else
+    fail "conformance profile default for a generated SBOM" "$(cat "$WORK/stub-env")"
+fi
+# An explicit choice is honored regardless of mode.
+rm -f "$WORK/stub-env"
+sse_events "project=cp2&version=1.0&source=current-dir&conformance_profile=skt-submission" >/dev/null
+if grep -q '^CONFORMANCE_PROFILE=skt-submission$' "$WORK/stub-env"; then
+    pass "an explicit conformance_profile is honored"
+else
+    fail "explicit conformance_profile" "$(cat "$WORK/stub-env")"
+fi
+# An unrecognized value is not a client error (unlike usage=): it warns and
+# falls back to the per-mode default, same rule scan-sbom.sh applies to an
+# unknown --conformance-profile.
+rm -f "$WORK/stub-env"
+events=$(sse_events "project=cp3&version=1.0&source=current-dir&conformance_profile=bogus")
+if echo "$events" | python3 -c "
+import sys, json
+evs = json.load(sys.stdin)
+assert [e for e in evs if e['event'] == 'done'][0]['data']['ok'] is True, evs
+" && grep -q '^CONFORMANCE_PROFILE=default$' "$WORK/stub-env"; then
+    pass "an unrecognized conformance_profile falls back to default, scan still runs"
+else
+    fail "unrecognized conformance_profile handling" "$events / $(cat "$WORK/stub-env" 2>/dev/null)"
 fi
 
 # A picked folder that is not a Yocto build must still be a directory scan —

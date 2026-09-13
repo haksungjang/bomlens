@@ -2444,6 +2444,7 @@ _SIBLING_MODES = ("FIRMWARE", "AIBOM", "ANALYZE", "SOURCE", "IMAGE", "ROOTFS", "
 # only one of these exact literals — never the request string — reaches the scan
 # environment or a docker-run argv.
 _USAGE_CONTEXTS = ("internal", "product", "redistribute", "outputs-only")
+_CONFORMANCE_PROFILES = ("default", "skt-submission")
 
 
 def _valid_image_ref(ref):
@@ -2653,6 +2654,15 @@ def run_sibling_scan(image, mode, out_dir, on_log, *, upload_file=None, model_id
         # (convert_bom_to_spdx), so the sibling never produces it.
         "-e", "GENERATE_REPORT=%s" % _bool_env("GENERATE_REPORT"),
     ]
+    # The profile the caller resolved (see the main handler's per-mode default),
+    # re-derived from a closed allowlist like AI_USAGE_CONTEXT below, never the
+    # env string itself, so an unrecognized value cannot reach the docker-run
+    # argv. ANALYZE with --deep-cve on a grype-less base image runs here, and a
+    # missed forward would silently re-grade a submission-review scan against
+    # the wrong thresholds instead of the skt-submission default it was launched
+    # with.
+    if env.get("CONFORMANCE_PROFILE") in _CONFORMANCE_PROFILES:
+        args += ["-e", "CONFORMANCE_PROFILE=%s" % env["CONFORMANCE_PROFILE"]]
     # Opt-in OSV advisories for firmware: forward only the two fixed control
     # values the UI may have set on the firmware path. We re-derive each from a
     # closed allowlist (never the env string itself) so no user-influenced text
@@ -4087,6 +4097,16 @@ class Handler(BaseHTTPRequestHandler):
                 return
             usage = _USAGE_CONTEXTS[_USAGE_CONTEXTS.index(usage)]
 
+        # Conformance profile: "" means the caller did not choose one (the
+        # per-mode default below applies). An unrecognized value is a client
+        # bug, not a reason to fail the scan. Warn and fall back to "", the same
+        # rule scan-sbom.sh applies to an unknown --conformance-profile.
+        conformance_profile = g("conformance_profile").strip()
+        if conformance_profile and conformance_profile not in _CONFORMANCE_PROFILES:
+            print(f"[WARN] conformance_profile '{conformance_profile}' not "
+                  f"recognized; using the per-mode default.", file=sys.stderr)
+            conformance_profile = ""
+
         # Per-run output folder OUTPUT_DIR/<run_id>/ (matches scan-sbom.sh). The
         # default run_id is the {prefix}; with ?timestamp=true the folder name
         # gets a _{YYYYMMDD-HHMMSS} suffix so repeat scans don't overwrite each
@@ -4746,6 +4766,14 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 if route:
                     sibling = route
+
+            # Conformance profile the scan actually runs with: the user's explicit
+            # choice if they made one, otherwise skt-submission for a document
+            # under review (ANALYZE) and default for everything that generates one.
+            env["CONFORMANCE_PROFILE"] = conformance_profile or (
+                "skt-submission" if mode == "ANALYZE" else "default")
+            scan_config["conformanceProfile"] = env["CONFORMANCE_PROFILE"]
+            write_scanmeta(run_out, scan_config)
 
             sse("log", json.dumps("▶ Starting %s scan: %s %s" % (mode.lower(), project, version)))
             ok = False

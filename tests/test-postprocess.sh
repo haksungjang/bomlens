@@ -2625,6 +2625,97 @@ jq -e '.checks[] | select(.id=="purl-syntax") | .missing | index("commons-lang3:
 pb_cov=$(jq -r '.checks[] | select(.id=="purl") | .status' "$WORK/pbad_conformance.json")
 [ "$pb_cov" = "pass" ] && pass "PURL coverage stays green (syntax is a separate check)" || fail "purl coverage='$pb_cov', expected pass"
 
+echo "== CONFORMANCE_PROFILE: skt-submission tightens PURL/no-generic; default stays as before =="
+
+# A pkg:generic component under the default profile: no-generic warns, does
+# not fail the SBOM, and the label stays "advisory".
+jq '.components += [{"type":"library","name":"mystery","version":"1.0","purl":"pkg:generic/mystery@1.0"}]' \
+    "$FIX/good-cyclonedx.json" > "$WORK/prof-generic.json"
+bash "$LIB/validate-sbom.sh" "$WORK/prof-generic.json" "$WORK/profd" "supplier" >/dev/null 2>&1
+profd=$(jq -r '"\(.result)|\(.checks[]|select(.id=="no-generic")|"\(.required)|\(.status)|\(.label)")"' "$WORK/profd_conformance.json")
+[ "$profd" = 'pass|false|warn|Traceable PURL (no pkg:generic, advisory)' ] \
+    && pass "default profile: pkg:generic warns, advisory, overall pass" \
+    || fail "default profile no-generic: '$profd'"
+
+# The same SBOM under skt-submission: no-generic becomes required and fails
+# the SBOM. PURL coverage itself stays "pass" (every component, including the
+# generic one, carries a purl); pkg:generic is a traceability defect the
+# no-generic check owns, not an absence purl coverage measures.
+CONFORMANCE_PROFILE=skt-submission bash "$LIB/validate-sbom.sh" "$WORK/prof-generic.json" "$WORK/profs" "supplier" >/dev/null 2>&1
+profs=$(jq -r '"\(.result)|\(.checks[]|select(.id=="no-generic")|"\(.required)|\(.status)|\(.label)")|\(.checks[]|select(.id=="purl")|.status)"' "$WORK/profs_conformance.json")
+[ "$profs" = 'fail|true|fail|Traceable PURL (no pkg:generic)|pass' ] \
+    && pass "skt-submission profile: pkg:generic fails (required), overall fail" \
+    || fail "skt-submission profile no-generic/purl: '$profs'"
+
+# The report records which profile it was graded against, in the machine JSON
+# and in the human-readable header (md), so a reviewer can tell a "pass" from
+# the default 90% floor apart from a "pass" against the 100% submission bar.
+profd_field=$(jq -r '.profile' "$WORK/profd_conformance.json")
+profs_field=$(jq -r '.profile' "$WORK/profs_conformance.json")
+[ "$profd_field" = "default" ] && [ "$profs_field" = "skt-submission" ] \
+    && pass "the conformance JSON records the profile it was graded against" \
+    || fail "conformance JSON profile field" "default='$profd_field' skt-submission='$profs_field'"
+grep -q '^- Profile: default$' "$WORK/profd_conformance.md" \
+    && grep -q '^- Profile: skt-submission$' "$WORK/profs_conformance.md" \
+    && pass "the conformance markdown header records the profile" \
+    || fail "conformance markdown profile line" \
+         "$(grep '^- Profile:' "$WORK/profd_conformance.md" "$WORK/profs_conformance.md")"
+
+# PURL_MIN_PCT itself: 9 of 10 extra package components carry a purl (91%,
+# rounded), clearing the default 90% floor but not skt-submission's 100%.
+jq --argjson extra '[
+    {"type":"library","name":"p1","version":"1","purl":"pkg:npm/p1@1"},
+    {"type":"library","name":"p2","version":"1","purl":"pkg:npm/p2@1"},
+    {"type":"library","name":"p3","version":"1","purl":"pkg:npm/p3@1"},
+    {"type":"library","name":"p4","version":"1","purl":"pkg:npm/p4@1"},
+    {"type":"library","name":"p5","version":"1","purl":"pkg:npm/p5@1"},
+    {"type":"library","name":"p6","version":"1","purl":"pkg:npm/p6@1"},
+    {"type":"library","name":"p7","version":"1","purl":"pkg:npm/p7@1"},
+    {"type":"library","name":"p8","version":"1","purl":"pkg:npm/p8@1"},
+    {"type":"library","name":"p9","version":"1","purl":"pkg:npm/p9@1"},
+    {"type":"library","name":"p10","version":"1"}
+  ]' '.components += $extra' "$FIX/good-cyclonedx.json" > "$WORK/prof-threshold.json"
+bash "$LIB/validate-sbom.sh" "$WORK/prof-threshold.json" "$WORK/proftd" "supplier" >/dev/null 2>&1
+proftd=$(jq -r '.checks[]|select(.id=="purl")|.status' "$WORK/proftd_conformance.json")
+[ "$proftd" = "pass" ] && pass "default profile: 91% PURL coverage clears the 90% floor" || fail "default profile PURL coverage: $proftd"
+CONFORMANCE_PROFILE=skt-submission bash "$LIB/validate-sbom.sh" "$WORK/prof-threshold.json" "$WORK/profts" "supplier" >/dev/null 2>&1
+profts=$(jq -r '"\(.result)|\(.checks[]|select(.id=="purl")|.status)"' "$WORK/profts_conformance.json")
+[ "$profts" = "fail|fail" ] && pass "skt-submission profile: the same 91% fails the 100% floor" || fail "skt-submission profile PURL coverage: $profts"
+
+# A clean SBOM (no pkg:generic, full PURL coverage) still passes skt-submission.
+CONFORMANCE_PROFILE=skt-submission bash "$LIB/validate-sbom.sh" "$FIX/good-cyclonedx.json" "$WORK/profc" "supplier" >/dev/null 2>&1
+profc=$(jq -r '.result' "$WORK/profc_conformance.json")
+[ "$profc" = "pass" ] && pass "skt-submission profile: a clean SBOM still passes" || fail "clean SBOM under skt-submission: result=$profc"
+
+# An unknown profile value warns on stderr and falls back to the default
+# thresholds rather than aborting.
+prof_unknown_err=$(CONFORMANCE_PROFILE=bogus bash "$LIB/validate-sbom.sh" "$FIX/good-cyclonedx.json" "$WORK/profu" "supplier" 2>&1 >/dev/null)
+prof_unknown_res=$(jq -r '.result' "$WORK/profu_conformance.json")
+if printf '%s' "$prof_unknown_err" | grep -q "unknown CONFORMANCE_PROFILE 'bogus'" && [ "$prof_unknown_res" = "pass" ]; then
+    pass "an unknown CONFORMANCE_PROFILE warns and falls back to default"
+else
+    fail "unknown CONFORMANCE_PROFILE handling" "stderr='$prof_unknown_err' result=$prof_unknown_res"
+fi
+
+# operating-system components (distribution-identity, not an installable
+# package) are excluded from the PURL/name-version denominator, in both
+# profiles. A rootfs/image scan's mandatory distro-identity component has
+# no purl scheme to carry and must not by itself cap coverage below 100%,
+# checked here at literal 100% (not just "pass", which the default profile's
+# 90% floor could clear without excluding the OS component at all).
+jq '.components += [{"type":"operating-system","name":"debian","version":"12.15"}]' \
+    "$FIX/good-cyclonedx.json" > "$WORK/prof-os.json"
+bash "$LIB/validate-sbom.sh" "$WORK/prof-os.json" "$WORK/profosd" "supplier" >/dev/null 2>&1
+profosd=$(jq -r '"\(.checks[]|select(.id=="purl")|.detail)|\(.checks[]|select(.id=="name-version")|.detail)"' "$WORK/profosd_conformance.json")
+[ "$profosd" = "100% (2/2)|2/2" ] \
+    && pass "default profile: operating-system component excluded, PURL/name-version both 100%" \
+    || fail "default profile operating-system-component exclusion" "$profosd"
+CONFORMANCE_PROFILE=skt-submission bash "$LIB/validate-sbom.sh" "$WORK/prof-os.json" "$WORK/profos" "supplier" >/dev/null 2>&1
+profos=$(jq -r '"\(.checks[]|select(.id=="purl")|.detail)|\(.checks[]|select(.id=="name-version")|.detail)"' "$WORK/profos_conformance.json")
+[ "$profos" = "100% (2/2)|2/2" ] \
+    && pass "skt-submission profile: operating-system component excluded, PURL/name-version both 100%" \
+    || fail "skt-submission profile operating-system-component exclusion" "$profos"
+
 # SPDX JSON: version range + purl syntax over externalRefs locators.
 jq '.spdxVersion="SPDX-2.1"' "$FIX/good-spdx.json" > "$WORK/spdx-old.json"
 bash "$LIB/validate-sbom.sh" "$WORK/spdx-old.json" "$WORK/sdo" "supplier" >/dev/null 2>&1

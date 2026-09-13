@@ -128,7 +128,8 @@ for flag in --project --version --target --git --branch --firmware --analyze \
             --generate-only --notice --security --all --no-report --deep-license \
             --byte-stable --sign --output-dir --timestamp --ui \
             --license --sbom-author --model --model-file --usage --merge --merge-root \
-            --diff --trusca --upload-target --deep-cve --identify-vendored --verify-weights --spdx --lang; do
+            --diff --trusca --upload-target --deep-cve --identify-vendored --verify-weights --spdx --lang \
+            --conformance-profile; do
   if printf '%s' "$HELP" | grep -q -- "$flag"; then pass "help documents $flag"
   else fail "help documents $flag"; fi
 done
@@ -498,6 +499,28 @@ scan_in "$d" --project PT --version 1 --target app.out --generate-only \
     && in_log "TRUSCA_PROJECT_ID=proj-123" && in_log "bomlens-deep-cve"; } \
   && pass "--license/--sbom-author/--identify-vendored/--trusca/--deep-cve reach the container" \
   || { fail "pass-through flags reach the container"; show; }
+
+# No flag -> the container sees the default profile.
+d="$(new_proj profdefault)"; printf 'ELFish\n' > "$d/app.out"
+scan_in "$d" --project PD --version 1 --target app.out --generate-only
+in_log "CONFORMANCE_PROFILE=default" \
+  && pass "no --conformance-profile -> CONFORMANCE_PROFILE=default reaches the container" \
+  || { fail "conformance profile default pass-through"; show; }
+
+d="$(new_proj profskt)"; printf 'ELFish\n' > "$d/app.out"
+scan_in "$d" --project PS --version 1 --target app.out --generate-only \
+  --conformance-profile skt-submission
+in_log "CONFORMANCE_PROFILE=skt-submission" \
+  && pass "--conformance-profile skt-submission reaches the container" \
+  || { fail "--conformance-profile skt-submission pass-through"; show; }
+
+# An unknown profile warns and falls back to default rather than failing the scan.
+d="$(new_proj profbad)"; printf 'ELFish\n' > "$d/app.out"
+scan_in "$d" --project PB --version 1 --target app.out --generate-only \
+  --conformance-profile bogus
+{ in_out "not supported" && in_log "CONFORMANCE_PROFILE=default"; } \
+  && pass "an unknown --conformance-profile warns and falls back to default" \
+  || { fail "unknown --conformance-profile handling"; show; }
 
 # --------------------------------------------------------
 section "Windows path & filesystem adversarial matrix"
