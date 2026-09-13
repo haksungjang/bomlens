@@ -504,10 +504,13 @@ if [ "$UI_MODE" = "true" ]; then
     # to keep a secret, so it comes from the environment that launched the tool.
     HF_FLAGS=()
     if [ -n "$HF_TOKEN" ]; then HF_FLAGS=(-e HF_TOKEN); fi
+    # Go toolchain and module proxy settings for Go dependency resolution. A
+    # name-only -e is skipped by docker when the variable is unset.
+    GO_ENV_FLAGS=(-e GOTOOLCHAIN -e GOPROXY -e GOSUMDB)
     ensure_image_fresh "$POSTPROCESS_IMAGE"
     exec "${DOCKER_ENV[@]}" docker run --rm "${TTY_FLAGS[@]}" -p "${UI_BIND_ADDRESS}:${UI_PORT}:8080" \
         -v "$(hostpath "$UI_BASE")":/src -v "$(hostpath "$UI_BASE")":/host-output \
-        "${MOUNT_FLAGS[@]}" "${HF_FLAGS[@]}" \
+        "${MOUNT_FLAGS[@]}" "${HF_FLAGS[@]}" "${GO_ENV_FLAGS[@]}" \
         -v /var/run/docker.sock:/var/run/docker.sock \
         -e MODE=UI -e UI_PORT=8080 -e SBOM_UI_HOST_DIR="$(hostpath "$UI_BASE")" \
         -e SBOM_UI_SCAN_ROOTS="$SCAN_ROOTS" -e EXTERNAL_LOOKUP="$EXTERNAL_LOOKUP" \
@@ -1572,6 +1575,13 @@ if [ "$MODE" = "SOURCE" ]; then
     # -u 0:0: the all-in-one fallback image runs as a non-root user and could not
     # write the host-owned /app on Linux (EACCES). Per-language images are already
     # root (no-op); the resulting bom is chown'd back to the host user in stage 2.
+    # GOTOOLCHAIN goes through eval below, so only a Go toolchain name is passed on.
+    HOST_GOTOOLCHAIN="${GOTOOLCHAIN:-}"
+    case "$HOST_GOTOOLCHAIN" in
+        *[!A-Za-z0-9.+_-]*)
+            echo "[WARN] Ignoring GOTOOLCHAIN: not a Go toolchain name (e.g. auto, local, go1.26.0)."
+            HOST_GOTOOLCHAIN="" ;;
+    esac
     eval "$DOCKER_MSYS"docker run --rm -u 0:0 \
         -v "\"$(hostpath "$SCAN_INPUT_DIR")\"":/app \
         -v "\"$(hostpath "$OUTPUT_HOST_DIR")\"":/out \
@@ -1583,6 +1593,7 @@ if [ "$MODE" = "SOURCE" ]; then
         -e PROJECT_NAME="\"$PROJECT_NAME\"" \
         -e PROJECT_VERSION="\"$PROJECT_VERSION\"" \
         -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+        -e HOST_GOTOOLCHAIN="\"$HOST_GOTOOLCHAIN\"" -e GOPROXY -e GOSUMDB \
         --entrypoint sh "\"$CDX_IMG\"" \
         -c "'sh /tmp/build-prep.sh /app \"/out/$OUTPUT_FILE\" $CDX_SPEC_VERSION'" \
         || { echo "[ERROR] SBOM generation failed (stage 1)"; exit 1; }

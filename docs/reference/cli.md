@@ -85,6 +85,8 @@ Environment variables adjust the behavior.
 | `AIBOM_VERIFY_MAX_BYTES` | `2147483648` (2 GiB) | With `--verify-weights`: a weight file larger than this (by the repo's declared size, or by its actual downloaded size if that differs) is skipped rather than downloaded/scanned |
 | `COSIGN_KEY` | — | Path to the signing key used by `--sign` |
 | `FETCH_LICENSE` | `true` | Resolve dependency licenses during source scans. Set `false` to skip the lookup and run faster |
+| `GOTOOLCHAIN` | `auto` | Go source scans: which Go toolchain resolves the modules. By default, when `go.mod` asks for a newer Go than the scanner image carries, that version is downloaded. Set `local` to use only the image's own Go; dependency resolution then fails for such a project |
+| `GOPROXY` | `https://proxy.golang.org,direct` | Go source scans: proxy for module and toolchain downloads, for a network that cannot reach `proxy.golang.org`. `GOSUMDB` is passed on the same way |
 | `PROJECT_LICENSE` | — | Same as `--license`. The outbound license the project is distributed under, as an SPDX id. Drives the `bomlens:licenseConflict` verdicts and the risk report's conflict section |
 | `SBOM_AUTHOR` | — | Same as `--sbom-author`. The entity that generated the SBOM, recorded in `metadata.authors` |
 | `SECURITY_ENRICH` | `true` | Enrich the security report with EPSS and CISA KEV signals. Set `false` on air-gapped networks to skip the external lookups |

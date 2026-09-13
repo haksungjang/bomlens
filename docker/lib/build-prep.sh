@@ -143,7 +143,21 @@ fi
 # that readonly `go list` requires (it then fails and cdxgen falls back to parsing
 # go.mod = direct deps only). `go mod tidy` populates go.sum fully; fall back to
 # download if tidy can't run (e.g. no network to fix an inconsistent go.mod).
+#
+# The cdxgen Go image pins GOTOOLCHAIN=local, so a go.mod that asks for a newer
+# Go than the image carries fails every go command, cdxgen's `go list` included.
+# Exported (not per-command) so cdxgen, started later from this shell, inherits
+# it. `auto` fetches the requested toolchain through the module proxy, the same
+# network path the module downloads already use. The caller passes the host's
+# GOTOOLCHAIN as HOST_GOTOOLCHAIN: inside the image GOTOOLCHAIN is always set, so
+# a user's own `local` could not be told apart from the image default.
 if [ -f go.mod ] && command -v go >/dev/null 2>&1; then
+    export GOTOOLCHAIN="${HOST_GOTOOLCHAIN:-auto}"
+    if ! _gv=$(go version 2>&1); then
+        echo "[build-prep] go: could not get the Go toolchain go.mod requires; dependency resolution will be incomplete." >&2
+        echo "[build-prep] go: $(printf '%s\n' "$_gv" | tail -1)" >&2
+        echo "[build-prep] go: allow access to proxy.golang.org (or your GOPROXY) from the Docker engine and re-scan." >&2
+    fi
     log "go mod tidy"
     GOFLAGS="-mod=mod" go mod tidy 2>/dev/null || GOFLAGS="-mod=mod" go mod download 2>/dev/null
 fi

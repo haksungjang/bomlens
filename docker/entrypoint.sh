@@ -164,6 +164,7 @@ generate_sbom_cdxgen() {
         -e FETCH_LICENSE="$FETCH_LICENSE" \
         -e PROJECT_NAME="$PROJECT_NAME" \
         -e PROJECT_VERSION="$PROJECT_VERSION" \
+        -e HOST_GOTOOLCHAIN="${GOTOOLCHAIN:-}" -e GOPROXY -e GOSUMDB \
         --entrypoint sh "$img" \
         -c "$prep" _ "$src" "$bom_path" "$CDX_SPEC_VERSION" 2>&1 | tee "$logf"
     rc=${PIPESTATUS[0]}

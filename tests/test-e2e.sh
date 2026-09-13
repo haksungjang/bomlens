@@ -947,6 +947,23 @@ else
     else
         skip "go example not found"
     fi
+
+    # 3d: go.mod requiring a newer Go than the cdxgen Go image carries. The image
+    # pins GOTOOLCHAIN=local, so without a toolchain download `go list` fails and
+    # the transitive dependency (spf13/pflag, pulled in by cobra) is missing.
+    gotc="$REPO/tests/fixtures/go-newer-toolchain"
+    if [ -d "$gotc" ]; then
+        w="$(run_source_scan "$gotc")"
+        if jq -e '[.components[]?.purl // empty] | any(startswith("pkg:golang/github.com/spf13/pflag@"))' \
+               "$w/testapp_1.0_bom.json" >/dev/null 2>&1; then
+            pass "go newer toolchain: transitive dependency resolved (spf13/pflag)"
+        else
+            fail "go newer toolchain: transitive dependency resolved (spf13/pflag)" "$(tail -3 "$w/_scan.log" 2>/dev/null)"; show_log_if_verbose "$w"
+        fi
+        rm -rf "$w"
+    else
+        skip "go-newer-toolchain fixture not found"
+    fi
 fi
 
 # --------------------------------------------------------
