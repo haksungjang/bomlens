@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The model-file reader (`--model-file`) now recognizes Keras `.h5`/`.keras` files and checks them for a `Lambda` layer, the marshalled-code equivalent of a pickle-format risk; recognizes an ONNX external-data reference that escapes the model's own directory; and checks a GGUF chat template for known Jinja2 sandbox-escape gadget patterns. All three are static, header/config-only checks — no code is executed, unmarshalled, or rendered.
 - The submission-format conformance check now also runs on the SBOM a scan itself generates (SOURCE, POSTPROCESS, ROOTFS, IMAGE, BINARY, FIRMWARE, MERGE), not only when validating an already-supplied document with `--analyze`. A scan's own output can now be checked before submission without a separate `--analyze` pass.
 
+### Fixed
+
+- The top-bar External lookup icon did not respond while a scan was running, because the hash router ignores navigation during a run the same way it does for New scan.
+
 ## [v1.11.9] - 2026-09-09
 
 ### Added
