@@ -1010,6 +1010,30 @@ else
     else
         skip "git ingestion (git command or nodejs example unavailable)"
     fi
+
+    # GIT + commit SHA: `clone --branch` only resolves a branch or tag on the
+    # remote, so a commit SHA (documented as accepted alongside them, cli.md:27)
+    # failed every time before the fix. Same offline bare-repo fixture as above,
+    # --branch given the commit's own SHA instead of a branch name.
+    if command -v git >/dev/null 2>&1 && [ -d "$EXAMPLES/nodejs" ]; then
+        gc="$(mktemp -d "$WORK_ROOT/gitsha.XXXXXX")"
+        ( cd "$gc" && git init -q proj && cp -R "$EXAMPLES/nodejs/." proj/ \
+          && cd proj && git config user.email t@t && git config user.name t \
+          && git add -A && git commit -qm init )
+        sha="$(git -C "$gc/proj" rev-parse HEAD)"
+        ( cd "$gc" && git clone -q --bare proj fixture.git )
+        ( cd "$gc" && SBOM_SCANNER_IMAGE="$SCANNER_IMG" bash "$SCAN" \
+            --project gitsha --version 1.0 --git "file://$gc/fixture.git" \
+            --branch "$sha" --all --generate-only ) > "$gc/_scan.log" 2>&1
+        if [ -f "$gc/gitsha_1.0_bom.json" ] && jq -e '.bomFormat=="CycloneDX"' "$gc/gitsha_1.0_bom.json" >/dev/null 2>&1; then
+            pass "git ingestion: --branch resolves a commit SHA"
+        else
+            fail "git ingestion: --branch resolves a commit SHA" "$(tail -5 "$gc/_scan.log" 2>/dev/null)"; show_log_if_verbose "$gc"
+        fi
+        rm -rf "$gc"
+    else
+        skip "git ingestion with a commit SHA (git command or nodejs example unavailable)"
+    fi
 fi
 
 # --------------------------------------------------------
