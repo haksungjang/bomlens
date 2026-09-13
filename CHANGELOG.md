@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The Dependencies tree now has a search box, and a vulnerable package's row in Vulnerabilities/Components carries a "View in Dependencies" link that jumps straight to it in the tree, ancestors already expanded, instead of leaving the reader to hand-expand branches looking for it.
+
 ### Fixed
 
 - A scan's run log could show a literal, unrendered ANSI color code (`[1;35m...[0m`) instead of stripping it.

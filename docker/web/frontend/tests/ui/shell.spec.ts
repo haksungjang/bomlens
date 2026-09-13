@@ -1645,6 +1645,39 @@ test("Dependencies tree marks vulnerable packages and direct deps", async ({ pag
   expect(results.violations).toEqual([]);
 });
 
+// finding-1: a vulnerable transitive package's row in Vulnerabilities/
+// Components had no way to reach its position in the dependency tree. The
+// reader had to hand-expand branches hunting for it. "View in Dependencies"
+// closes that loop: it should land on the exact row, its ancestors already
+// open, not just "somewhere in the Dependencies section".
+test("View zlib in Dependencies jumps to its row, openssl already expanded", async ({ page }) => {
+  await stubAndRun(page);
+  await page.getByRole("link", { name: /^Vulnerabilities/ }).first().click();
+  // zlib (root -> openssl -> zlib in SBOM above) is the transitive case; the
+  // link lives in the expanded row detail, same as View in Components.
+  await page.getByText("CVE-2024-0002").click();
+  await page.getByRole("button", { name: "View zlib in Dependencies" }).click();
+
+  await expect(page).toHaveURL(/#\/scan\/.*\/dependencies\?q=zlib&version=1\.2\.0/);
+  const zlibRow = page.locator('li[role="treeitem"]', { hasText: "zlib" });
+  await expect(zlibRow).toBeVisible();
+  await expect(zlibRow).toBeFocused();
+});
+
+test("Dependencies tree search box jumps to a match and reports a miss", async ({ page }) => {
+  await stubAndRun(page);
+  await page.getByRole("link", { name: /^Dependencies/ }).first().click();
+  await page.getByRole("button", { name: "Tree", exact: true }).click();
+
+  const search = page.getByRole("textbox", { name: /Search packages/i });
+  await search.fill("zlib");
+  const zlibRow = page.locator('li[role="treeitem"]', { hasText: "zlib" });
+  await expect(zlibRow).toBeFocused();
+
+  await search.fill("no-such-package");
+  await expect(page.getByText(/No package matches/i)).toBeVisible();
+});
+
 for (const { theme, lang } of COMBOS) {
   test(`dependencies tree matches baseline — ${theme}/${lang} @visual`, async ({ page }) => {
     await stubAndRun(page, theme, lang);
