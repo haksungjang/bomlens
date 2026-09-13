@@ -79,6 +79,7 @@
   "conformance.detail.nothing": "측정할 대상 없음",
   "conformance.detail.file_props_review": "배포 파일을 직접 확인해야 함 (이번 스캔에는 자동 수집 경로 없음)",
   "conformance.detail.not_present": "SBOM에 없음",
+  "conformance.detail.sign_requested_failed": "서명 요청됨, 서명 실패",
   "conformance.detail.review": "사람 검토 필요 (자동 확인 불가)",
   "conformance.detail.no_models": "머신러닝 모델 구성요소 없음",
   "conformance.detail.no_subject_components": "구성요소 없음",
