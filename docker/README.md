@@ -8,7 +8,7 @@ If you only want to use the image, see the site's [Use the Docker image directly
 
 ## Image information
 
-- Canonical name: `ghcr.io/sktelecom/bomlens` (aliases `sbom-generator`, `sbom-scanner` — same digest)
+- Canonical name: `ghcr.io/sktelecom/bomlens` (aliases `sbom-generator`, `sbom-scanner`, same digest)
 - Firmware analysis: `ghcr.io/sktelecom/bomlens-firmware` (opt-in) (legacy alias: sbom-scanner-firmware)
 - Platforms: `linux/amd64`, `linux/arm64`
 - Base: `python:3.12-slim`. It is a lightweight post-processing image with no language toolchain, and the bundled tools and their versions are pinned as `ARG`s in the `Dockerfile` (syft, Trivy, cosign, scancode, and more).
@@ -35,7 +35,7 @@ docker build -t sbom-scanner:local .
 
 ### Verifying the build
 
-Check with tools that are actually in the image. cdxgen is not in this image — for source scans, `scan-sbom.sh` pulls the per-language official cdxgen images separately when it needs one.
+Check with tools that are actually in the image. cdxgen is not in this image; for source scans, `scan-sbom.sh` pulls the per-language official cdxgen images separately when it needs one.
 
 ```bash
 # Check the image
@@ -84,7 +84,7 @@ docker build --platform linux/arm64 -t sbom-scanner:arm64 .
 
 ## Multi-platform builds
 
-The official release is not done by hand. `.github/workflows/docker-publish.yml` builds for multiple platforms and publishes under three names (bomlens, sbom-generator, sbom-scanner) on every push to `main` and on release tags. The steps below are for the exceptional cases where you need to bypass the workflow — recovering from a registry outage, or a pre-release check, for example.
+The official release is not done by hand. `.github/workflows/docker-publish.yml` builds for multiple platforms and publishes under three names (bomlens, sbom-generator, sbom-scanner) on every push to `main` and on release tags. The steps below are for the exceptional cases where you need to bypass the workflow: recovering from a registry outage, or a pre-release check, for example.
 
 ### Setting up buildx
 
@@ -165,7 +165,7 @@ Packages are Private by default. To change to Public:
 
 ### Dockerfile structure
 
-It is a two-stage build. No language toolchain goes into it — for source code, `scan-sbom.sh` delegates SBOM generation to the per-language official cdxgen images it pulls on demand, and this image handles post-processing and scanning.
+It is a two-stage build. No language toolchain goes into it: for source code, `scan-sbom.sh` delegates SBOM generation to the per-language official cdxgen images it pulls on demand, and this image handles post-processing and scanning.
 
 - Stage 1 (`node:26-alpine`): builds the web UI (React SPA). Node exists only in this stage; only the `dist/` build output is copied into the runtime image.
 - Stage 2 (`python:3.12-slim`): the runtime image. It carries syft (image/binary/RootFS scanning), Trivy (security reports), cosign (signing), the docker CLI (used when the web UI's source scan starts a sibling cdxgen container), and the entrypoint and post-processing scripts.
