@@ -89,6 +89,22 @@ self_container_id() {
     echo "$id"
 }
 
+# How long a cancel gives the cdxgen sibling (below) to stop gracefully before
+# the docker engine's own SIGKILL fallback takes over. server.py sets the same
+# value as the env var when it launches this script, so both sides of a cancel
+# (this trap, and server.py's own escalation from proc.terminate() to a hard
+# kill) share one number.
+BOMLENS_CANCEL_GRACE="${BOMLENS_CANCEL_GRACE:-30}"
+
+# SIBLING_CID: the cdxgen sibling container id while generate_sbom_cdxgen is
+# waiting on it, empty otherwise. Read by stop_sibling (below), called from
+# the INT/TERM trap generate_sbom_cdxgen sets while it runs.
+SIBLING_CID=""
+stop_sibling() {
+    [ -n "$SIBLING_CID" ] || return 0
+    docker stop -t "$BOMLENS_CANCEL_GRACE" "$SIBLING_CID" >/dev/null 2>&1 || true
+}
+
 # generate_sbom_cdxgen: run a cdxgen language image as a SIBLING container (via the
 # mounted host Docker socket) so a web-UI source scan resolves transitive deps,
 # matching the CLI. The sibling reaches the scanned tree by inheriting THIS container's
@@ -155,9 +171,17 @@ generate_sbom_cdxgen() {
     # cleanup would remove before we could read it — guessing from rc=137 alone
     # would misreport a plain `kill -9` or an OOM on a different process in the
     # same container as memory exhaustion.
-    local logf cidf; logf=$(mktemp); cidf=$(mktemp); rm -f "$cidf"
+    #
+    # Run in the background and wait explicitly, instead of foreground, so a
+    # cancel (server.py's proc.terminate()) is handled the moment it arrives:
+    # a shell only acts on a trap once it regains control, and while blocked on
+    # a foreground command that does not happen until the command finishes on
+    # its own (measured — see G-16/G-18). `wait` returns as soon as the signal
+    # arrives, so the trap below can stop the sibling right away instead of
+    # leaving it to run to completion unsupervised.
+    local logf cidf rcf; logf=$(mktemp); cidf=$(mktemp); rcf=$(mktemp); rm -f "$cidf"
     local prep_env; read -ra prep_env <<< "$(build_prep_env_args)"
-    docker run -u 0:0 \
+    ( docker run -u 0:0 \
         --cidfile "$cidf" \
         --volumes-from "$self" \
         -e HOME=/tmp/sbomhome \
@@ -168,10 +192,24 @@ generate_sbom_cdxgen() {
         -e HOST_GOTOOLCHAIN="${GOTOOLCHAIN:-}" -e GOPROXY -e GOSUMDB \
         "${prep_env[@]}" \
         --entrypoint sh "$img" \
-        -c "$prep" _ "$src" "$bom_path" "$CDX_SPEC_VERSION" 2>&1 | tee "$logf"
-    rc=${PIPESTATUS[0]}
-    local cid=""
-    [ -s "$cidf" ] && cid=$(cat "$cidf")
+        -c "$prep" _ "$src" "$bom_path" "$CDX_SPEC_VERSION"; echo $? > "$rcf" ) 2>&1 | tee "$logf" &
+    local pipe_pid=$!
+    # The cidfile appears as soon as the container is created, well before it
+    # finishes, so a cancel arriving during the run still has a container id
+    # to stop.
+    local cid="" _n=0
+    while [ -z "$cid" ] && [ "$_n" -lt 50 ] && kill -0 "$pipe_pid" 2>/dev/null; do
+        [ -s "$cidf" ] && cid=$(cat "$cidf")
+        [ -n "$cid" ] || { sleep 0.1; _n=$((_n + 1)); }
+    done
+    SIBLING_CID="$cid"
+    trap 'stop_sibling; exit 130' INT
+    trap 'stop_sibling; exit 143' TERM
+    wait "$pipe_pid" || true
+    trap - INT TERM
+    rc=$(cat "$rcf" 2>/dev/null || echo 1)
+    rm -f "$rcf"
+    SIBLING_CID=""
     if [ "$rc" -ne 0 ]; then
         if [ -n "$cid" ] && [ "$(docker inspect -f '{{.State.OOMKilled}}' "$cid" 2>/dev/null)" = "true" ]; then
             CDXGEN_FAIL_REASON="oom"
