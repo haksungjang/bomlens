@@ -206,6 +206,17 @@ done
 [ "$ok" = 1 ] && pass "BOMLENS_* source-scan options passed to the cdxgen container by name" \
   || { fail "BOMLENS_* source-scan options passed to the cdxgen container by name" "rc=$RC"; show; }
 
+# A host override of the scan-cancel grace period reaches the web UI
+# container: server.py (which runs inside it) reads BOMLENS_CANCEL_GRACE
+# itself, so a value set only on the host would otherwise never be seen
+# there. --ui execs docker run in place of this process, so scan_in's own
+# subshell IS that docker run (stubbed) — nothing further to await.
+d="$(new_proj uicancelgrace)"
+BOMLENS_CANCEL_GRACE=45 scan_in "$d" --ui --output-dir "$d"
+in_log "-e BOMLENS_CANCEL_GRACE" \
+  && pass "BOMLENS_CANCEL_GRACE passed to the web UI container" \
+  || { fail "BOMLENS_CANCEL_GRACE passed to the web UI container" "rc=$RC"; show; }
+
 # .NET needs a *.csproj glob, swift needs Package.swift — handled specially.
 d="$(new_proj dotnet)"; printf '<Project></Project>' > "$d/app.csproj"
 scan_in "$d" --project Pdotnet --version 1.0.0 --generate-only

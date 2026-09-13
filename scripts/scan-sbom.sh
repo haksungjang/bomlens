@@ -530,10 +530,14 @@ if [ "$UI_MODE" = "true" ]; then
     # Source-scan options for build-prep.sh; the UI container's entrypoint passes
     # them on to the cdxgen container.
     read -ra PREP_ENV_FLAGS <<< "$(build_prep_env_args)"
+    # Name-only, same reason: a host override of the scan-cancel grace period
+    # must reach server.py inside the UI container (it reads the env var
+    # itself; a host-side default here would never be seen there).
+    CANCEL_ENV_FLAGS=(-e BOMLENS_CANCEL_GRACE)
     ensure_image_fresh "$POSTPROCESS_IMAGE"
     exec "${DOCKER_ENV[@]}" docker run --rm "${TTY_FLAGS[@]}" -p "${UI_BIND_ADDRESS}:${UI_PORT}:8080" \
         -v "$(hostpath "$UI_BASE")":/src -v "$(hostpath "$UI_BASE")":/host-output \
-        "${MOUNT_FLAGS[@]}" "${HF_FLAGS[@]}" "${GO_ENV_FLAGS[@]}" "${PREP_ENV_FLAGS[@]}" \
+        "${MOUNT_FLAGS[@]}" "${HF_FLAGS[@]}" "${GO_ENV_FLAGS[@]}" "${PREP_ENV_FLAGS[@]}" "${CANCEL_ENV_FLAGS[@]}" \
         -v /var/run/docker.sock:/var/run/docker.sock \
         -e MODE=UI -e UI_PORT=8080 -e SBOM_UI_HOST_DIR="$(hostpath "$UI_BASE")" \
         -e SBOM_UI_SCAN_ROOTS="$SCAN_ROOTS" -e EXTERNAL_LOOKUP="$EXTERNAL_LOOKUP" \
