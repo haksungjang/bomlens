@@ -392,6 +392,26 @@ def _origin_allowed(origin_header):
     return hostname is not None and hostname.lower() in _ALLOWED_HOSTS
 
 
+def _classify_git_failure(text):
+    """Turn `git clone`'s raw stderr into a translation key a non-developer can
+    act on, or None when the text does not match a known pattern (the caller
+    then falls back to showing the raw text, same as before this existed).
+
+    Only classifies patterns confirmed by hand: a nonexistent-or-private
+    repository (git tries to prompt for credentials it cannot show, since
+    GIT_TERMINAL_PROMPT=0) and a DNS/network failure. Both wordings come from
+    git itself, not from this codebase, so they are matched loosely."""
+    if not text:
+        return None
+    if "could not read username" in text.lower() or "terminal prompts disabled" in text.lower() \
+            or "authentication failed" in text.lower() or "repository not found" in text.lower():
+        return "run.errorGitNotFoundOrPrivate"
+    if "could not resolve host" in text.lower() or "could not connect" in text.lower() \
+            or "network is unreachable" in text.lower():
+        return "run.errorGitNetwork"
+    return None
+
+
 def safe_scan_dir(rel):
     """Resolve a user-supplied directory path strictly inside an allowed scan
     root (block path traversal and symlink escape). Returns the real path on
@@ -2383,6 +2403,12 @@ _CVEDB_PROGRESS_RE = re.compile(r"^\[firmware-cvedb-progress\]\s+(\d+)%\s*$")
 # marker above: turned into an SSE `progress` event instead of a plain log line.
 _DEEPCVE_PROGRESS_RE = re.compile(r"^\[deep-cve-progress\]\s+(\d+)%\s*$")
 
+# Some pipeline tools (cdxgen's own notices, among others) color their stdout.
+# The SSE log is plain text end to end, so a raw escape sequence survives as
+# literal "[1;35m...[0m" once the terminal-only ESC byte is dropped somewhere
+# upstream. Strip the whole CSI sequence before a line ever reaches on_log.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+
 
 def _emit_or_log(line, on_log, on_progress=None, on_deepcve_progress=None):
     """Route a captured child-process line to the right SSE channel.
@@ -2393,7 +2419,8 @@ def _emit_or_log(line, on_log, on_progress=None, on_deepcve_progress=None):
     instead — a separate channel, since the two markers mean different things
     and the caller needs to label each with its own SSE `phase`. Any other line
     passes through to on_log unchanged (preserving the existing log
-    behaviour)."""
+    behaviour), with any ANSI color codes stripped first."""
+    line = _ANSI_RE.sub("", line)
     m = _CVEDB_PROGRESS_RE.match(line) if on_progress is not None else None
     if m is not None:
         on_progress(max(0, min(100, int(m.group(1)))))
@@ -4168,8 +4195,12 @@ class Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 disconnected[0] = True
 
-        def fail(msg):
-            sse("error", json.dumps(msg))
+        def fail(msg, key=None):
+            # `key`, when set, names an i18n key the frontend can show as a
+            # friendly headline (msg stays available as the collapsible raw
+            # detail); every other caller passes only msg, so `key` is null
+            # and the frontend falls back to showing msg exactly as before.
+            sse("error", json.dumps({"detail": msg, "key": key}))
             sse("done", json.dumps({"ok": False, "id": run_id, "results": list_results(run_id),
                                     "sbom": None, "security": None, "conformance": None}))
 
@@ -4482,7 +4513,7 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 if cp.returncode != 0:
                     out = re.sub(r"x-access-token:[^@]*@", "x-access-token:***@", (cp.stdout or "").strip()[-500:])
-                    fail("git clone failed: %s" % out); return
+                    fail("git clone failed: %s" % out, _classify_git_failure(out)); return
                 mode = "SOURCE"
                 env["MODE"] = "SOURCE"
                 env["SOURCE_ROOT"] = scan_root_of(clone_dest)
@@ -4763,7 +4794,10 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 ok = rc == 0
                 if rc == -1:
-                    sse("error", json.dumps("Failed to launch the %s sibling container." % mode.lower()))
+                    sse("error", json.dumps({
+                        "detail": "Failed to launch the %s sibling container." % mode.lower(),
+                        "key": None,
+                    }))
             else:
                 try:
                     proc = subprocess.Popen(
@@ -4788,7 +4822,7 @@ class Handler(BaseHTTPRequestHandler):
                     proc.wait()
                     ok = proc.returncode == 0
                 except Exception as exc:  # noqa: BLE001
-                    sse("error", json.dumps("Failed to launch scan: %s" % exc))
+                    sse("error", json.dumps({"detail": "Failed to launch scan: %s" % exc, "key": None}))
 
             # Artifacts landed in run_out (the run folder named run_id); the
             # summary helpers glob it by suffix. The done event carries id=run_id
@@ -4823,7 +4857,10 @@ class Handler(BaseHTTPRequestHandler):
             # terminal event, so never let an exception leave the SSE stream open.
             # Emit an error + a fail-shaped done so the UI stops waiting instead of
             # hanging on "scan in progress" forever.
-            sse("error", json.dumps("Scan finished but the summary could not be built: %s" % exc))
+            sse("error", json.dumps({
+                "detail": "Scan finished but the summary could not be built: %s" % exc,
+                "key": None,
+            }))
             sse("done", json.dumps({"ok": False, "id": run_id,
                                     "results": list_results(run_id),
                                     "sbom": None, "security": None,

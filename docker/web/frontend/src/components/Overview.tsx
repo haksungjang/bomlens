@@ -338,7 +338,13 @@ export function Overview({
           data-testid="zero-components"
         >
           <div className="text-sm font-medium">{t("result.zeroComponentsTitle")}</div>
-          <p className="mt-1 text-xs">{t("result.zeroComponentsBody")}</p>
+          <p className="mt-1 text-xs">
+            {t(
+              result.sbom.sbomToolDegraded
+                ? "result.zeroComponentsBodyDegraded"
+                : "result.zeroComponentsBody",
+            )}
+          </p>
         </div>
       )}
 
@@ -384,7 +390,13 @@ export function Overview({
         </div>
       )}
 
-      {result.sbom?.sbomToolDegraded && (
+      {/* Gated on components > 0: at 0 components this banner's own claim
+          ("direct dependencies only") would contradict the zero-components
+          banner above ("nothing was found"). That banner already covers a
+          fully failed scan, folding in the degraded cause via
+          zeroComponentsBodyDegraded, so this one steps aside rather than
+          repeat a claim that isn't true here. */}
+      {result.sbom?.sbomToolDegraded && result.sbom.components > 0 && (
         <div className="rounded-md border border-warning-border/60 bg-warning-surface px-4 py-3 text-warning dark:border-warning-border/20 dark:bg-warning-surface/30">
           <div className="text-sm font-medium">{t("result.sbomDegradedTitle")}</div>
           <p className="mt-1 text-xs">{t(sbomDegradedBodyKey(result.sbom.sbomToolDegraded))}</p>

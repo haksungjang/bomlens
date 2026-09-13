@@ -108,6 +108,10 @@ export function NextApp() {
   // The failure message surfaced on the Scan-running screen when a scan can't
   // run (stream/launch error), so it isn't buried in the log.
   const [scanError, setScanError] = useState<string | null>(null);
+  // Set alongside scanError when the server could classify the failure (e.g.
+  // a git clone that failed because the repo is missing or private): an i18n
+  // key for a friendlier headline, with scanError kept as the raw detail.
+  const [scanErrorKey, setScanErrorKey] = useState<string | null>(null);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [result, setResult] = useState<DoneEvent | null>(null);
   const [projectInfo, setProjectInfo] = useState<{
@@ -378,6 +382,7 @@ export function NextApp() {
     setStatus("running");
     setLogs([]);
     setScanError(null);
+    setScanErrorKey(null);
     setProgress(null);
     setResult(null);
     setActiveSection("overview");
@@ -402,10 +407,11 @@ export function NextApp() {
           window.history.replaceState(null, "", scanHash(id));
         }
       },
-      onError: (message) => {
+      onError: (message, key) => {
         if (message) {
           setLogs((prev) => [...prev, `✖ ${message}`]);
           setScanError(message);
+          setScanErrorKey(key ?? null);
         }
         setStatus((s) => (s === "running" ? "error" : s));
       },
@@ -560,6 +566,7 @@ export function NextApp() {
                 : projectInfo.name)
             }
             errorMessage={scanError}
+            errorKey={scanErrorKey}
             newScanHref={newHash()}
             onNewScan={goToNewScan}
             deepCveEnabled={retryParams?.deepCve}

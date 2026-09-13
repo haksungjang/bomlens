@@ -656,7 +656,11 @@ export interface ScanProgress {
 export interface ScanHandlers {
   onLog: (line: string) => void;
   onDone: (done: DoneEvent) => void;
-  onError: (message?: string) => void;
+  /** `key`, when present, names an i18n key for a friendlier headline than
+   *  `message` (the server's raw detail, still shown as a collapsible
+   *  "show detail"). Absent for the connection-dropped case (neither arg) and
+   *  for any server failure the server could not classify. */
+  onError: (message?: string, key?: string | null) => void;
   /** Optional determinate progress (e.g. firmware CVE DB download). */
   onProgress?: (p: ScanProgress) => void;
 }
@@ -1106,11 +1110,15 @@ export function startScan(params: ScanParams, handlers: ScanHandlers): EventSour
   });
 
   es.addEventListener("error", (e) => {
-    // Backend-emitted structured error (clone failed, bad upload, no socket…).
+    // Backend-emitted structured error (clone failed, bad upload, no socket…):
+    // always `{detail, key}` now, since every server-side sender was moved
+    // onto that shape together with this handler, so there is no bare-string
+    // case left to fall back to.
     const data = (e as MessageEvent).data;
     if (!data) return; // native EventSource error has no data; handled by onerror
     try {
-      handlers.onError(String(JSON.parse(data)));
+      const parsed = JSON.parse(data) as { detail?: string; key?: string | null };
+      handlers.onError(parsed.detail, parsed.key ?? null);
     } catch {
       handlers.onError(String(data));
     }
