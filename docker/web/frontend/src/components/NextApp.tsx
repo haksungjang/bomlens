@@ -459,6 +459,7 @@ export function NextApp() {
       tier?: LicenseRiskTier;
       license?: string;
       term?: string;
+      version?: string;
     },
   ) => {
     if (!loadedIdRef.current) return;
@@ -467,6 +468,10 @@ export function NextApp() {
     if (filter.severity) query.severity = filter.severity;
     if (filter.tier) query.tier = filter.tier;
     if (filter.license) query.license = filter.license;
+    // Disambiguates a "View in Dependencies" jump when the same package name
+    // resolves to two different versions in the tree (findPathToRef then
+    // requires the exact version instead of landing on the first name match).
+    if (filter.version) query.version = filter.version;
     window.location.hash = scanHash(loadedIdRef.current, section, query);
   };
 
