@@ -556,6 +556,23 @@ set -- -r --spec-version "$SPEC" -o "$OUT"
 if find . -name Podfile -type f 2>/dev/null | grep -q .; then
     set -- "$@" --exclude-type cocoapods
 fi
+# Non-shipped trees: manifests under test, fixture, example, benchmark and demo
+# folders, and the GitHub Actions workflows, are left out of the SBOM because
+# none of it ships with the product. The two lists below are copies of the ones
+# in source-detect.sh (this file runs alone in the cdxgen container);
+# tests/test-postprocess.sh checks they stay equal.
+# BOMLENS_INCLUDE_NON_SHIPPED=1 (or true) keeps everything.
+NON_SHIPPED_DIRS="test tests spec fixtures testdata __tests__ e2e example examples benches benchmarks playground samples"
+NON_SHIPPED_MANIFEST_RE='(^|/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|uv\.lock|Pipfile|Pipfile\.lock|setup\.py|setup\.cfg|environment\.ya?ml|pom\.xml|build\.gradle(\.kts)?|settings\.gradle(\.kts)?|gradle\.lockfile|go\.mod|go\.sum|Cargo\.toml|Cargo\.lock|Gemfile|Gemfile\.lock|[^/]+\.gemspec|composer\.json|composer\.lock|[^/]+\.(cs|fs|vb)proj|packages\.config|packages\.lock\.json|Directory\.Packages\.props|Package\.swift|Package\.resolved|Podfile|Podfile\.lock|conanfile\.txt|conanfile\.py|vcpkg\.json|METADATA|PKG-INFO)$'
+EXCLUDE_NON_SHIPPED=1
+if opted_out "${BOMLENS_INCLUDE_NON_SHIPPED:-}"; then
+    EXCLUDE_NON_SHIPPED=""
+    log "non-shipped trees kept (BOMLENS_INCLUDE_NON_SHIPPED)"
+fi
+if [ -n "$EXCLUDE_NON_SHIPPED" ]; then
+    for _d in $NON_SHIPPED_DIRS; do set -- "$@" --exclude "**/$_d/**"; done
+    set -- "$@" --exclude "**/.github/workflows/**"
+fi
 set -- "$@" "$SRC"
 
 # --- correct the BSD license-name aliases cdxgen resolves against ---
@@ -1220,6 +1237,46 @@ if missing:
 PY_LIC
     python3 "$_pylic" "$OUT" || log "python: license evidence pass skipped (non-fatal)"
     rm -f "$_pylic"
+fi
+
+# Record what the non-shipped exclusion left out: the patterns in
+# bomlens:excluded-paths and the manifest files, capped at 50, in
+# bomlens:excluded-manifests.
+if [ "${rc:-1}" -eq 0 ] && [ -n "$EXCLUDE_NON_SHIPPED" ] && [ -f "$OUT" ] && command -v node >/dev/null 2>&1; then
+    _globs=""
+    _re=""
+    for _d in $NON_SHIPPED_DIRS; do _globs="$_globs, **/$_d/**"; _re="$_re|$_d"; done
+    _globs="${_globs#, }, **/.github/workflows/**"
+    _re="(^|/)(${_re#|})/"
+    _excl=$(mktemp)
+    find . \( -name node_modules -o -name .git \) -prune -o -type f -print 2>/dev/null \
+        | sed 's#^\./##' \
+        | { grep -E "^\.github/workflows/[^/]+\.ya?ml$|$_re" || true; } \
+        | { grep -E "^\.github/workflows/|$NON_SHIPPED_MANIFEST_RE" || true; } \
+        | LC_ALL=C sort > "$_excl"
+    _js=$(mktemp).js
+    cat > "$_js" <<'EXCL_JS'
+const fs = require('fs');
+const [bomPath, listPath, globs] = process.argv.slice(2);
+let bom;
+try { bom = JSON.parse(fs.readFileSync(bomPath, 'utf8')); } catch (e) { process.exit(0); }
+const files = fs.readFileSync(listPath, 'utf8').split('\n').filter(Boolean);
+const LIMIT = 50;
+bom.metadata = bom.metadata || {};
+const props = (bom.metadata.properties || []).filter(
+  p => p.name !== 'bomlens:excluded-paths' && p.name !== 'bomlens:excluded-manifests');
+props.push({ name: 'bomlens:excluded-paths', value: globs });
+if (files.length) {
+  let v = files.slice(0, LIMIT).join(', ');
+  if (files.length > LIMIT) v += ` (+${files.length - LIMIT} more)`;
+  props.push({ name: 'bomlens:excluded-manifests', value: v });
+}
+bom.metadata.properties = props;
+fs.writeFileSync(bomPath, JSON.stringify(bom, null, 2));
+process.stderr.write('[build-prep] non-shipped: left out ' + files.length + ' manifest file(s)\n');
+EXCL_JS
+    node "$_js" "$OUT" "$_excl" "$_globs" || log "non-shipped: recording skipped (non-fatal)"
+    rm -f "$_js" "$_excl"
 fi
 
 # Put the scanned tree back before the ownership fix below, so anything we

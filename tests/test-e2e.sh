@@ -1053,6 +1053,35 @@ else
     else
         skip "swift example not found"
     fi
+
+    # 3f: manifests under tests/ and examples/ and the .github/workflows actions
+    # are left out by default and listed in the SBOM; the root requirements.txt
+    # still counts. BOMLENS_INCLUDE_NON_SHIPPED=1 keeps them.
+    nsm="$REPO/tests/fixtures/non-shipped-manifests"
+    if [ -d "$nsm" ]; then
+        w="$(run_source_scan "$nsm")"
+        if jq -e '([.components[]?.purl // empty]) as $p
+                  | ($p | any(startswith("pkg:pypi/six@")))
+                    and (($p | any(test("bomlens-test-fixture-only|bomlens-example-only|pkg:github/actions/checkout"))) | not)
+                    and (([.metadata.properties[]? | select(.name=="bomlens:excluded-manifests") | .value][0] // "")
+                         | contains("tests/fixtures/requirements.txt"))' \
+               "$w/testapp_1.0_bom.json" >/dev/null 2>&1; then
+            pass "non-shipped manifests and workflows left out and recorded"
+        else
+            fail "non-shipped manifests and workflows left out and recorded" "$(tail -3 "$w/_scan.log" 2>/dev/null)"; show_log_if_verbose "$w"
+        fi
+        rm -rf "$w"
+        w="$(BOMLENS_INCLUDE_NON_SHIPPED=1 run_source_scan "$nsm")"
+        if jq -e '[.components[]?.purl // empty] | any(startswith("pkg:pypi/bomlens-test-fixture-only@"))' \
+               "$w/testapp_1.0_bom.json" >/dev/null 2>&1; then
+            pass "BOMLENS_INCLUDE_NON_SHIPPED=1 keeps the non-shipped manifests"
+        else
+            fail "BOMLENS_INCLUDE_NON_SHIPPED=1 keeps the non-shipped manifests" "$(tail -3 "$w/_scan.log" 2>/dev/null)"; show_log_if_verbose "$w"
+        fi
+        rm -rf "$w"
+    else
+        skip "non-shipped-manifests fixture not found"
+    fi
 fi
 
 # --------------------------------------------------------

@@ -37,6 +37,8 @@ examples/
 jq '.components | length' NodeExample_1.0.0/NodeExample_1.0.0_bom.json
 ```
 
+소스 스캔은 기본으로 테스트, 테스트 데이터, 예제, 벤치마크, 데모 폴더(`test`, `tests`, `spec`, `fixtures`, `testdata`, `__tests__`, `e2e`, `example`, `examples`, `benches`, `benchmarks`, `playground`, `samples`) 아래의 매니페스트와 `.github/workflows`의 GitHub Actions 워크플로를 제외합니다. 모두 제품과 함께 배포되지 않기 때문입니다. SBOM에는 적용한 패턴이 `bomlens:excluded-paths` 속성에, 제외한 매니페스트 파일이 `bomlens:excluded-manifests` 속성에 기록됩니다. 포함하려면 `BOMLENS_INCLUDE_NON_SHIPPED=1`을 설정하세요([Docker 이미지 환경 변수](docker-image.ko.md#환경-변수)).
+
 아래 언어별 절에 그대로 붙여넣을 수 있는 명령을 정리했습니다.
 
 ---

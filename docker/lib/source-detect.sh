@@ -34,7 +34,7 @@ FETCH_LICENSE="${FETCH_LICENSE:-true}"
 # container, so every path that starts it (scan-sbom.sh stage 1, the web UI
 # container, generate_sbom_cdxgen in entrypoint.sh) passes these on by name.
 # docker skips a name-only -e whose variable is unset.
-BUILD_PREP_ENV_NAMES="BOMLENS_KEEP_BUILD_OUTPUT BOMLENS_MAVEN_FULL_GRAPH BOMLENS_ANDROID_FULL_GRAPH BOMLENS_NODE_FULL_GRAPH"
+BUILD_PREP_ENV_NAMES="BOMLENS_KEEP_BUILD_OUTPUT BOMLENS_MAVEN_FULL_GRAPH BOMLENS_ANDROID_FULL_GRAPH BOMLENS_NODE_FULL_GRAPH BOMLENS_INCLUDE_NON_SHIPPED"
 
 # Prints "-e NAME" for each name above. Names only, never values, so the output
 # is safe to splice into the eval'd docker command in scan-sbom.sh.
@@ -42,6 +42,76 @@ build_prep_env_args() {
     local n out=""
     for n in $BUILD_PREP_ENV_NAMES; do out="$out -e $n"; done
     printf '%s' "${out# }"
+}
+
+# Folders whose manifests a source scan leaves out by default: test suites and
+# their fixtures, examples, benchmarks and demo playgrounds. The GitHub Actions
+# workflows under .github/workflows are left out too. None of it ships with the
+# product. build-prep.sh runs alone in the cdxgen container and keeps its own
+# copy of both lists; tests/test-postprocess.sh checks the copies stay equal.
+# BOMLENS_INCLUDE_NON_SHIPPED=1 (or true) keeps everything.
+NON_SHIPPED_DIRS="test tests spec fixtures testdata __tests__ e2e example examples benches benchmarks playground samples"
+NON_SHIPPED_MANIFEST_RE='(^|/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|uv\.lock|Pipfile|Pipfile\.lock|setup\.py|setup\.cfg|environment\.ya?ml|pom\.xml|build\.gradle(\.kts)?|settings\.gradle(\.kts)?|gradle\.lockfile|go\.mod|go\.sum|Cargo\.toml|Cargo\.lock|Gemfile|Gemfile\.lock|[^/]+\.gemspec|composer\.json|composer\.lock|[^/]+\.(cs|fs|vb)proj|packages\.config|packages\.lock\.json|Directory\.Packages\.props|Package\.swift|Package\.resolved|Podfile|Podfile\.lock|conanfile\.txt|conanfile\.py|vcpkg\.json|METADATA|PKG-INFO)$'
+
+# True unless BOMLENS_INCLUDE_NON_SHIPPED asks to keep the non-shipped trees.
+non_shipped_enabled() {
+    case "${BOMLENS_INCLUDE_NON_SHIPPED:-}" in 1|true) return 1 ;; esac
+    return 0
+}
+
+# The glob patterns applied, relative to the scan root, joined with ", ".
+non_shipped_globs() {
+    local d out=""
+    for d in $NON_SHIPPED_DIRS; do out="$out, **/$d/**"; done
+    printf '%s' "${out#, }, **/.github/workflows/**"
+}
+
+# syft --exclude flags for the same patterns; empty when the option keeps them.
+# Read the output with `read -ra`, which does not expand the globs.
+non_shipped_syft_args() {
+    non_shipped_enabled || return 0
+    local d out=""
+    for d in $NON_SHIPPED_DIRS; do out="$out --exclude ./**/$d/**"; done
+    printf '%s' "${out# } --exclude ./**/.github/workflows/**"
+}
+
+# Manifest files under the non-shipped folders, and workflow files, relative to
+# the scan root and sorted.
+non_shipped_manifests() {
+    local root="$1" d re=""
+    for d in $NON_SHIPPED_DIRS; do re="$re|$d"; done
+    re="(^|/)(${re#|})/"
+    (cd "$root" 2>/dev/null && find . \( -name node_modules -o -name .git \) -prune -o -type f -print 2>/dev/null) \
+        | sed 's#^\./##' \
+        | { grep -E "^\.github/workflows/[^/]+\.ya?ml$|$re" || true; } \
+        | { grep -E "^\.github/workflows/|$NON_SHIPPED_MANIFEST_RE" || true; } \
+        | LC_ALL=C sort
+}
+
+# Record the patterns and the manifest files left out, in the two properties
+# build-prep.sh writes on the cdxgen path. The file list is capped at 50.
+mark_sbom_excluded() {
+    local file="$1" root="$2" list tmp
+    [ -f "$file" ] || return 0
+    non_shipped_enabled || return 0
+    command -v jq >/dev/null 2>&1 || return 0
+    list=$(non_shipped_manifests "$root")
+    tmp="${file}.excluded.tmp"
+    if jq --arg globs "$(non_shipped_globs)" --arg list "$list" '
+        ($list | split("\n") | map(select(length > 0))) as $f
+        | .metadata = (.metadata // {})
+        | .metadata.properties = (((.metadata.properties // [])
+              | map(select(.name != "bomlens:excluded-paths" and .name != "bomlens:excluded-manifests")))
+            + [{name: "bomlens:excluded-paths", value: $globs}]
+            + (if ($f | length) > 0
+               then [{name: "bomlens:excluded-manifests",
+                      value: (($f[0:50] | join(", "))
+                              + (if ($f | length) > 50 then " (+\(($f | length) - 50) more)" else "" end))}]
+               else [] end))' "$file" > "$tmp" 2>/dev/null; then
+        mv "$tmp" "$file"
+    else
+        rm -f "$tmp"
+    fi
 }
 
 detect_lang() {

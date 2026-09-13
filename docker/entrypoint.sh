@@ -311,6 +311,9 @@ case "$SCAN_MODE" in
         SRC_ROOT="${SOURCE_ROOT:-/src}"
         if [ ! -d "$SRC_ROOT" ]; then echo "[ERROR] source dir not found: $SRC_ROOT"; exit 1; fi
         if [ -z "$(ls -A "$SRC_ROOT" 2>/dev/null)" ]; then echo "[ERROR] source dir is empty: $SRC_ROOT"; exit 1; fi
+        # The syft fallback leaves out the same non-shipped trees as the cdxgen
+        # path (see NON_SHIPPED_DIRS in source-detect.sh).
+        read -ra SYFT_EXCLUDE <<< "$(non_shipped_syft_args)"
         if [ -S /var/run/docker.sock ] && command -v docker >/dev/null 2>&1 && [ -n "$SOURCE_ROOT_HOST" ]; then
             # Best-effort low-disk warning: cdxgen pulls/extracts a language image
             # via the host Docker, which fails if space is tight. We only see this
@@ -324,15 +327,17 @@ case "$SCAN_MODE" in
             echo "[1/2] cdxgen: source dir $SRC_ROOT (transitive resolution)"
             if ! generate_sbom_cdxgen "$SRC_ROOT" "$OUTPUT_FILE"; then
                 echo "[WARN] cdxgen path failed; falling back to syft (direct deps only)."
-                syft "dir:$SRC_ROOT" -o "cyclonedx-json@$CDX_SPEC_VERSION" > "$OUTPUT_FILE" 2>/dev/null \
+                syft "dir:$SRC_ROOT" "${SYFT_EXCLUDE[@]}" -o "cyclonedx-json@$CDX_SPEC_VERSION" > "$OUTPUT_FILE" 2>/dev/null \
                     || { echo "[ERROR] syft source scan failed."; exit 1; }
                 mark_sbom_degraded "$OUTPUT_FILE" "${CDXGEN_FAIL_REASON:-cdxgen-unavailable}"
+                mark_sbom_excluded "$OUTPUT_FILE" "$SRC_ROOT"
             fi
         else
             echo "[1/2] syft: source dir $SRC_ROOT (manifest-only; docker.sock/CLI/host-path unavailable)"
-            syft "dir:$SRC_ROOT" -o "cyclonedx-json@$CDX_SPEC_VERSION" > "$OUTPUT_FILE" 2>/dev/null \
+            syft "dir:$SRC_ROOT" "${SYFT_EXCLUDE[@]}" -o "cyclonedx-json@$CDX_SPEC_VERSION" > "$OUTPUT_FILE" 2>/dev/null \
                 || { echo "[ERROR] syft source scan failed."; exit 1; }
             mark_sbom_degraded "$OUTPUT_FILE" "cdxgen-unavailable"
+            mark_sbom_excluded "$OUTPUT_FILE" "$SRC_ROOT"
         fi
         # Normalize the root component type for a source scan. cdxgen sets
         # application/library/framework, but a syft `dir:` (fallback / no-Docker)

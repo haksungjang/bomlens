@@ -37,6 +37,8 @@ Every source-code example runs the same way from the repository root: point `--t
 jq '.components | length' NodeExample_1.0.0/NodeExample_1.0.0_bom.json
 ```
 
+By default a source scan leaves out the manifests under test, fixture, example, benchmark and demo folders (`test`, `tests`, `spec`, `fixtures`, `testdata`, `__tests__`, `e2e`, `example`, `examples`, `benches`, `benchmarks`, `playground`, `samples`) and the GitHub Actions workflows in `.github/workflows`, because none of them ship with the product. The SBOM records the patterns in the `bomlens:excluded-paths` property and the manifest files it left out in `bomlens:excluded-manifests`. To include them, set `BOMLENS_INCLUDE_NON_SHIPPED=1` ([Docker image environment variables](docker-image.md#environment-variables)).
+
 The sections below give the ready-to-paste command for each language.
 
 ---

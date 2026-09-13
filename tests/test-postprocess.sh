@@ -5023,6 +5023,64 @@ _on=""; for v in 1 true 0 false ""; do bash -c "$_opt; opted_out \"\$1\"" _ "$v"
     && pass "an opt-out switch counts as set only for 1 or true" \
     || fail "opt-out switch values treated as set: $_on"
 
+echo "== non-shipped trees: test/example/benchmark manifests and workflows are left out and recorded =="
+PREP="$ROOT_DIR/docker/lib/build-prep.sh"
+DETECT="$ROOT_DIR/docker/lib/source-detect.sh"
+NSM="$ROOT_DIR/tests/fixtures/non-shipped-manifests"
+# build-prep.sh keeps copies of both lists; a drift would make the cdxgen and
+# syft paths leave out different things.
+_bp=$(grep -m1 '^NON_SHIPPED_DIRS=' "$PREP"); _sd=$(grep -m1 '^NON_SHIPPED_DIRS=' "$DETECT")
+[ -n "$_bp" ] && [ "$_bp" = "$_sd" ] \
+    && pass "NON_SHIPPED_DIRS is the same in build-prep.sh and source-detect.sh" \
+    || fail "NON_SHIPPED_DIRS differs" "build-prep [$_bp] source-detect [$_sd]"
+_bp=$(grep -m1 '^NON_SHIPPED_MANIFEST_RE=' "$PREP"); _sd=$(grep -m1 '^NON_SHIPPED_MANIFEST_RE=' "$DETECT")
+[ -n "$_bp" ] && [ "$_bp" = "$_sd" ] \
+    && pass "NON_SHIPPED_MANIFEST_RE is the same in build-prep.sh and source-detect.sh" \
+    || fail "NON_SHIPPED_MANIFEST_RE differs"
+_list=$(bash -c '. "$1"; non_shipped_manifests "$2"' _ "$DETECT" "$NSM" | tr '\n' ' ')
+[ "$_list" = ".github/workflows/ci.yml examples/demo/requirements.txt tests/fixtures/requirements.txt " ] \
+    && pass "non_shipped_manifests lists the fixture's workflow, example and test manifests only" \
+    || fail "non_shipped_manifests output unexpected" "got [$_list]"
+_sargs=$(bash -c '. "$1"; non_shipped_syft_args' _ "$DETECT")
+case "$_sargs" in
+    *"--exclude ./**/tests/**"*"--exclude ./**/.github/workflows/**") pass "non_shipped_syft_args builds syft --exclude flags" ;;
+    *) fail "non_shipped_syft_args output unexpected" "got [$_sargs]" ;;
+esac
+_off=$(BOMLENS_INCLUDE_NON_SHIPPED=true bash -c '. "$1"; non_shipped_syft_args' _ "$DETECT")
+[ -z "$_off" ] && pass "BOMLENS_INCLUDE_NON_SHIPPED=true turns the syft excludes off" \
+    || fail "syft excludes still set with BOMLENS_INCLUDE_NON_SHIPPED=true" "got [$_off]"
+# The syft path's recorder, on a small SBOM whose root is the fixture.
+printf '%s\n' '{"bomFormat":"CycloneDX","metadata":{"properties":[{"name":"keep","value":"1"}]},"components":[]}' > "$WORK/excl-syft.json"
+bash -c '. "$1"; mark_sbom_excluded "$2" "$3"' _ "$DETECT" "$WORK/excl-syft.json" "$NSM"
+if jq -e '(.metadata.properties | map(select(.name=="keep")) | length == 1)
+          and ([.metadata.properties[] | select(.name=="bomlens:excluded-paths") | .value][0] | contains("**/tests/**"))
+          and ([.metadata.properties[] | select(.name=="bomlens:excluded-manifests") | .value][0]
+               == ".github/workflows/ci.yml, examples/demo/requirements.txt, tests/fixtures/requirements.txt")' \
+       "$WORK/excl-syft.json" >/dev/null 2>&1; then
+    pass "mark_sbom_excluded records the patterns and the files left out"
+else
+    fail "mark_sbom_excluded did not record the expected properties" "$(jq -c '.metadata.properties' "$WORK/excl-syft.json" 2>&1)"
+fi
+# The cdxgen path's recorder in build-prep.sh, with a list over the 50-file cap.
+if command -v node >/dev/null 2>&1; then
+    sed -n "/<<'EXCL_JS'/,/^EXCL_JS\$/p" "$PREP" | sed '1d;$d' > "$WORK/excl.js"
+    printf '%s\n' '{"bomFormat":"CycloneDX","metadata":{"properties":[{"name":"keep","value":"1"}]},"components":[]}' > "$WORK/excl-cdx.json"
+    : > "$WORK/excl-list.txt"
+    for i in $(seq 1 55); do echo "tests/f$i/package.json" >> "$WORK/excl-list.txt"; done
+    node "$WORK/excl.js" "$WORK/excl-cdx.json" "$WORK/excl-list.txt" "**/tests/**" 2>/dev/null
+    if jq -e '(.metadata.properties | map(select(.name=="keep")) | length == 1)
+              and ([.metadata.properties[] | select(.name=="bomlens:excluded-paths") | .value][0] == "**/tests/**")
+              and ([.metadata.properties[] | select(.name=="bomlens:excluded-manifests") | .value][0]
+                   | contains("tests/f50/package.json") and (contains("tests/f51/package.json") | not) and endswith("(+5 more)"))' \
+           "$WORK/excl-cdx.json" >/dev/null 2>&1; then
+        pass "build-prep.sh records the excluded manifests, capped at 50"
+    else
+        fail "build-prep.sh recorder output unexpected" "$(jq -c '.metadata.properties' "$WORK/excl-cdx.json" 2>&1)"
+    fi
+else
+    echo "  SKIP: node not installed; build-prep.sh recorder not exercised"
+fi
+
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

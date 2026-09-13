@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Overview comparison against the previous scan of the same project now names what changed (components added/removed/version-changed, vulnerabilities new/resolved), instead of only a net component-count delta and a worst-severity direction that a like-for-like swap could leave looking unchanged.
 - `--conformance-profile` (`CONFORMANCE_PROFILE`) selects `default` or `skt-submission`. `skt-submission` requires 100% PURL coverage and fails on any `pkg:generic` purl. The conformance report records the profile, and the web UI's New Scan advanced options can set it. Operating-system components no longer count toward the PURL and name-version coverage denominator.
 
+### Changed
+
+- A source scan leaves out the manifests under test, fixture, example, benchmark and demo folders and the GitHub Actions workflows in `.github/workflows` by default, and records the patterns and the files it left out in the `bomlens:excluded-paths` and `bomlens:excluded-manifests` properties. `BOMLENS_INCLUDE_NON_SHIPPED=1` keeps them.
+
 ### Fixed
 
 - `BOMLENS_MAVEN_FULL_GRAPH`, `BOMLENS_NODE_FULL_GRAPH`, `BOMLENS_ANDROID_FULL_GRAPH` and `BOMLENS_KEEP_BUILD_OUTPUT` are passed to dependency resolution from the CLI and the web UI, and count as set only for `1` or `true`.
