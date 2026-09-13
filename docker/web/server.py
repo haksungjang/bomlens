@@ -77,6 +77,12 @@ LIB_DIR = os.environ.get("SBOM_LIB_DIR") or next(
     (d for d in ("/usr/local/lib/sbom", os.path.join(os.path.dirname(WEB_DIR), "lib"))
      if os.path.isdir(d)), "/usr/local/lib/sbom"
 )
+# How long a cancel gives a scan a chance to stop gracefully before this
+# server escalates to a hard kill. Shared by every cancel path (the local
+# run-scan subprocess below, and the firmware/AI sibling container in
+# _stream_cmd) and passed to run-scan as BOMLENS_CANCEL_GRACE so entrypoint.sh
+# uses the same number for its own sibling container's `docker stop`.
+CANCEL_GRACE_SECONDS = int(os.environ.get("BOMLENS_CANCEL_GRACE", "30"))
 
 # Per-kind upload size caps (bytes).
 #
@@ -3223,8 +3229,11 @@ def _stream_cmd(args, on_log, on_progress=None, cancel=None, container=None, env
     each non-empty piece through _emit_or_log so progress markers are caught.
 
     When `cancel()` turns true mid-stream (the client closed the SSE), stop the
-    named sibling container with `docker kill` and terminate the local docker-run
-    process, so a cancelled firmware/AI scan doesn't keep running detached."""
+    named sibling container with `docker stop` (giving its own cleanup a
+    CANCEL_GRACE_SECONDS grace period, same as every other cancel path) and
+    terminate the local docker-run process, escalating to a hard kill if
+    either one is still around once that grace period elapses, so a
+    cancelled firmware/AI scan doesn't keep running detached."""
     try:
         proc = subprocess.Popen(
             args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -3240,11 +3249,15 @@ def _stream_cmd(args, on_log, on_progress=None, cancel=None, container=None, env
         if cancel and cancel():
             if container:
                 try:
-                    subprocess.run(["docker", "kill", container],
+                    subprocess.run(["docker", "stop", "-t", str(CANCEL_GRACE_SECONDS), container],
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 except OSError:
                     pass
             proc.terminate()
+            try:
+                proc.wait(timeout=CANCEL_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                proc.kill()
             break
     proc.wait()
     return proc.returncode
@@ -4281,6 +4294,11 @@ class Handler(BaseHTTPRequestHandler):
             "PROJECT_LICENSE": outbound_license,
             "UPLOAD_ENABLED": "false",
             "HOST_OUTPUT_DIR": run_out,
+            # entrypoint.sh's own cdxgen-sibling cancel handler uses the same
+            # grace as this server's cancel paths below, so a cancel behaves
+            # consistently whether the SSE stream reads it out of run-scan's
+            # child (this branch) or a firmware/AI sibling container.
+            "BOMLENS_CANCEL_GRACE": str(CANCEL_GRACE_SECONDS),
             "GENERATE_NOTICE": "true" if g("notice", "true") == "true" else "false",
             "GENERATE_SECURITY": "true" if g("security", "true") == "true" else "false",
             # No GENERATE_SPDX: the UI exports SPDX on demand from the results
@@ -4871,8 +4889,16 @@ class Handler(BaseHTTPRequestHandler):
                                 )
                         # Client cancelled (the SSE write broke): stop the scan
                         # instead of running it to completion on a dead stream.
+                        # entrypoint.sh's own trap stops its cdxgen sibling on
+                        # this SIGTERM; escalate to a hard kill if run-scan is
+                        # still around once that has had CANCEL_GRACE_SECONDS
+                        # to happen, rather than waiting on it indefinitely.
                         if disconnected[0]:
                             proc.terminate()
+                            try:
+                                proc.wait(timeout=CANCEL_GRACE_SECONDS)
+                            except subprocess.TimeoutExpired:
+                                proc.kill()
                             break
                     proc.wait()
                     ok = proc.returncode == 0
