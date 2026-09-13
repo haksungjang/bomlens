@@ -124,7 +124,7 @@ MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
 
 | 환경 변수 | 필수 | 기본값 | 설명 |
 |-----------|------|--------|------|
-| `MODE` | O | `POSTPROCESS` | 분석 모드: `SOURCE`, `IMAGE`, `BINARY`, `ROOTFS`, `FIRMWARE`, `ANALYZE` |
+| `MODE` | X | `POSTPROCESS` | 분석 모드: `SOURCE`, `IMAGE`, `BINARY`, `ROOTFS`, `FIRMWARE`, `ANALYZE`. 지정하지 않으면 출력 디렉터리에 이미 있는 SBOM을 후처리만 한다 — 실제로 무언가를 스캔하려면 명시적으로 지정해야 한다. |
 | `PROJECT_NAME` | O | — | 프로젝트 이름 |
 | `PROJECT_VERSION` | O | — | 프로젝트 버전 |
 | `TARGET_IMAGE` | 모드별 | — | `IMAGE` 모드의 이미지명 (docker.sock 마운트 필요) |

@@ -54,6 +54,8 @@ Full options, analysis modes, CI/CD integration, and troubleshooting for BomLens
 | `--mount <dir>` | — | With `--ui`: expose an extra host directory to the web UI as a read-only target for the **Directory path** input (repeatable). Lets the UI scan an OS tree outside the launch folder — including the running host OS with `--mount /`. Results still save under the launch folder |
 | `--help` | — | Print help |
 
+**ANALYZE mode (`--analyze`) is an exception to five of these.** `--project`/`--version`/`--license`/`--sbom-author` never overwrite what a supplier's own SBOM already declares — its existing name, version, root license, and authorship are a fact about the document, not something this run has the authority to replace — and `--no-report` has no effect because the risk report is always generated for a supplier SBOM under review. When the submitted SBOM is missing one of these fields outright (no root license, no `metadata.authors`), the flag still cannot fill it in; the field stays empty and the conformance check judges accordingly.
+
 Environment variables adjust the behavior.
 
 | Variable | Default | Description |

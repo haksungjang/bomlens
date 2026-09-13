@@ -64,13 +64,14 @@ A team handed you a GitHub repository. Pass the URL directly, no manual `git clo
 <!-- runnable -->
 ```bash
 $SBOM --project team1-app --version 1.0.0 \
-  --git "https://github.com/sktelecom/bomlens" \
+  --git "https://github.com/docker/getting-started-app" \
   --all --generate-only
 ```
 
 - Specific branch/tag: `--branch v1.2.3`
 - Private repository: `GIT_TOKEN=ghp_xxx $SBOM ... --git https://github.com/org/private ...` (the token never appears in logs)
 - A shallow clone (`--depth 1`) is fetched to a temp directory and analyzed; only the deliverables remain, in a `{Project}_{Version}/` subfolder under the current directory.
+- A monorepo with its own `examples/`, `fixtures/`, or `test-data/` subfolders can pull in components that never ship in the product, because there is no option yet to scope the scan to one subfolder. Point `--git` at the specific app repository rather than an umbrella repository when that distinction matters — a component list padded with unrelated demo dependencies (and, in the worst case, one of them flagged as malicious by osv.dev when it is really just an unused dev dependency of an unrelated example) undermines the notice and risk report for everyone downstream.
 
 **Deliverables**: `team1-app_1.0.0_NOTICE.{txt,html}`, `team1-app_1.0.0_bom.json`, `team1-app_1.0.0_risk-report.{md,html}`
 
@@ -100,7 +101,7 @@ $SBOM --project team3-dev --version 1.0.0 --all --deep-license --generate-only
 ```
 
 - With a package manager (Conan `conanfile.txt` / vcpkg `vcpkg.json`), dependencies resolve and appear in the SBOM.
-- Pure CMake/Make sources have no manager metadata, so the SBOM can be sparse. Enrich first-party license headers with `--deep-license`, and analyze build output (a staging/rootfs with installed libraries) separately with `$SBOM --target <build-dir> --all --generate-only` (syft). For a full server SBOM workflow — OS rootfs, application, and static-link dependencies as separate layers — see the [server SBOM guide](server-delivery.md). In the web UI, `--deep-license` is the **License scan (ScanCode)** toggle under Advanced scan options; it scans your own source files (`/src`), not the declared dependencies, and is slow, so turn it on only when you need per-file license detection.
+- Pure CMake/Make sources have no manager metadata, so the SBOM can be sparse. Enrich first-party license headers with `--deep-license` (needs an image built with `--build-arg SBOM_DEEP_LICENSE=true` — the default published image does not carry ScanCode, and `--deep-license` is silently skipped without it), and analyze build output (a staging/rootfs with installed libraries) separately with `$SBOM --target <build-dir> --all --generate-only` (syft). For a full server SBOM workflow — OS rootfs, application, and static-link dependencies as separate layers — see the [server SBOM guide](server-delivery.md). In the web UI, `--deep-license` is the **License scan (ScanCode)** toggle under Advanced scan options; it scans your own source files (`/src`), not the declared dependencies, and is slow, so turn it on only when you need per-file license detection.
 - When the source has no package manager (plain Make/CMake) and bundles open source copied straight into the tree — common for embedded and firmware sources — `--identify-vendored` is strongly recommended. Without it the SBOM stays sparse and misses the bundled libraries; with it they are detected as named components with CPEs, so the risk report can match CVEs. See [Identify bundled open source](identify-vendored.md). BomLens also nudges you toward this option automatically when it detects this situation.
 - Even without a package manager, the risk report is still generated, aggregating licenses and vulnerabilities of detected components.
 

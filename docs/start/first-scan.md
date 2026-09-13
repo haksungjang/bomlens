@@ -28,7 +28,7 @@ git clone https://github.com/sktelecom/bomlens.git && cd bomlens
 #   Windows: double-click scripts\sbom-ui.bat
 ```
 
-The folder you run from is the output base — each scan saves to a `{Project}_{Version}/` subfolder under it (details in [Where outputs go](../reference/cli.md#where-outputs-go)). If the port is taken, prefix `UI_PORT=9090`. To scan the current folder as the source, run from that project folder; for a GitHub URL, ZIP, SBOM, firmware, or Docker image you supply the input in the UI, so any folder works.
+The folder you run from is the output base — each scan saves to a `{Project}_{Version}/` subfolder under it (details in [Where outputs go](../reference/cli.md#where-outputs-go)). If the port is taken, prefix `UI_PORT=9090` (bash only — on Windows, put `UI_PORT=9090` in `scripts\bomlens.settings.txt` next to `sbom-ui.bat` instead; see [Settings file](no-cli.md#settings-file-no-command-line-needed)). To scan the current folder as the source, run from that project folder; for a GitHub URL, ZIP, SBOM, firmware, or Docker image you supply the input in the UI, so any folder works.
 
 ![BomLens web UI — name a project, pick a scan target, and choose what to generate](../images/web-ui-en.png)
 

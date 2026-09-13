@@ -28,7 +28,7 @@ git clone https://github.com/sktelecom/bomlens.git && cd bomlens
 #   Windows: scripts\sbom-ui.bat 더블클릭
 ```
 
-실행한 폴더가 산출물 베이스이고, 스캔마다 그 아래 `{Project}_{Version}/` 하위 폴더에 저장됩니다(자세한 규칙은 [산출물 위치](../reference/cli.ko.md#산출물-위치) 참고). 포트가 충돌하면 `UI_PORT=9090`을 앞에 붙입니다. 현재 폴더 소스를 스캔하려면 그 프로젝트 폴더에서 실행하고, GitHub URL이나 ZIP, SBOM, 펌웨어, Docker 이미지는 UI에서 입력을 직접 주므로 아무 폴더에서나 실행해도 됩니다.
+실행한 폴더가 산출물 베이스이고, 스캔마다 그 아래 `{Project}_{Version}/` 하위 폴더에 저장됩니다(자세한 규칙은 [산출물 위치](../reference/cli.ko.md#산출물-위치) 참고). 포트가 충돌하면 `UI_PORT=9090`을 앞에 붙입니다(bash 전용 — Windows에서는 `sbom-ui.bat` 옆의 `scripts\bomlens.settings.txt`에 `UI_PORT=9090`을 적으세요. [설정 파일](no-cli.ko.md#설정-파일-명령줄-불필요) 참고). 현재 폴더 소스를 스캔하려면 그 프로젝트 폴더에서 실행하고, GitHub URL이나 ZIP, SBOM, 펌웨어, Docker 이미지는 UI에서 입력을 직접 주므로 아무 폴더에서나 실행해도 됩니다.
 
 ![BomLens 웹 UI](../images/web-ui.png)
 

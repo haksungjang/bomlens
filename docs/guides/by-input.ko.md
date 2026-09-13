@@ -64,13 +64,14 @@ SBOM=/path/to/bomlens/scripts/scan-sbom.sh
 <!-- runnable -->
 ```bash
 $SBOM --project team1-app --version 1.0.0 \
-  --git "https://github.com/sktelecom/bomlens" \
+  --git "https://github.com/docker/getting-started-app" \
   --all --generate-only
 ```
 
 - 특정 브랜치/태그: `--branch v1.2.3`
 - 비공개 저장소: `GIT_TOKEN=ghp_xxx $SBOM ... --git https://github.com/org/private ...` (토큰은 로그에 남지 않음)
 - 얕은 클론(`--depth 1`)으로 임시 디렉터리에 받은 뒤 분석하고, 산출물만 현재 디렉터리 아래 `{Project}_{Version}/` 하위 폴더에 남깁니다.
+- `examples/`, `fixtures/`, `test-data/` 같은 하위 폴더를 자체적으로 가진 모노레포는, 스캔 범위를 특정 하위 폴더로 좁히는 옵션이 아직 없어서 제품에 실제로 포함되지 않는 컴포넌트까지 섞여 들어올 수 있습니다. 이런 구분이 중요하다면 여러 프로젝트를 한데 묶은 저장소 대신 실제 앱 저장소를 `--git`으로 바로 가리키세요 — 무관한 데모 의존성으로 부풀려진 컴포넌트 목록은(최악의 경우 실제로는 무관한 예제의 안 쓰이는 개발 의존성 하나가 osv.dev에 악성으로 플래그된 경우까지 포함해) 이후 이 결과를 받아 보는 모두에게 고지문과 위험 보고서의 신뢰도를 떨어뜨립니다.
 
 **산출물**: `team1-app_1.0.0_NOTICE.{txt,html}`, `team1-app_1.0.0_bom.json`, `team1-app_1.0.0_risk-report.{md,html}`
 
@@ -100,7 +101,7 @@ $SBOM --project team3-dev --version 1.0.0 --all --deep-license --generate-only
 ```
 
 - 패키지 매니저가 있으면(Conan `conanfile.txt` / vcpkg `vcpkg.json`) 의존성이 해석되어 SBOM에 반영됩니다.
-- 순수 CMake/Make 소스는 매니저 메타데이터가 없어 SBOM이 희소할 수 있습니다. 이때는 `--deep-license`로 1st-party 소스의 라이선스 헤더를 보강하고, 빌드 산출물(설치된 라이브러리가 있는 staging/rootfs)은 별도로 `$SBOM --target <build-dir> --all --generate-only`(syft)로 분석합니다. OS rootfs와 애플리케이션, 정적 링크 의존성을 층별로 나눠 만드는 서버 SBOM 전체 흐름은 [서버 SBOM 작성 가이드](server-delivery.ko.md)를 참고하세요. 웹 UI에서는 `--deep-license`가 고급 스캔 옵션의 **라이선스 스캔 (ScanCode)** 토글에 대응합니다. 선언된 의존성이 아니라 내 소스 파일(`/src`)을 스캔하며 느리므로, 파일 단위 라이선스 탐지가 필요할 때만 켜세요.
+- 순수 CMake/Make 소스는 매니저 메타데이터가 없어 SBOM이 희소할 수 있습니다. 이때는 `--deep-license`로 1st-party 소스의 라이선스 헤더를 보강하는데(`--build-arg SBOM_DEEP_LICENSE=true`로 빌드한 이미지가 있어야 하며, 기본 공개 이미지에는 ScanCode가 없어 `--deep-license`가 조용히 건너뛰어집니다), 빌드 산출물(설치된 라이브러리가 있는 staging/rootfs)은 별도로 `$SBOM --target <build-dir> --all --generate-only`(syft)로 분석합니다. OS rootfs와 애플리케이션, 정적 링크 의존성을 층별로 나눠 만드는 서버 SBOM 전체 흐름은 [서버 SBOM 작성 가이드](server-delivery.ko.md)를 참고하세요. 웹 UI에서는 `--deep-license`가 고급 스캔 옵션의 **라이선스 스캔 (ScanCode)** 토글에 대응합니다. 선언된 의존성이 아니라 내 소스 파일(`/src`)을 스캔하며 느리므로, 파일 단위 라이선스 탐지가 필요할 때만 켜세요.
 - 패키지 매니저 없이(순수 Make/CMake) 오픈소스를 소스 트리에 통째로 복사(vendored)해 쓰는 경우 — 임베디드와 펌웨어 소스에서 흔합니다 — `--identify-vendored`를 강력히 권장합니다. 이 옵션이 없으면 SBOM이 희소해 내장 라이브러리를 놓치고, 켜면 이들을 CPE가 붙은 이름 있는 구성요소로 탐지해 위험분석보고서가 CVE를 연결할 수 있습니다. [내장 오픈소스 식별](identify-vendored.ko.md)을 참고하세요. BomLens는 이 상황을 감지하면 자동으로 이 옵션을 안내하기도 합니다.
 - 패키지 매니저가 없어도 위험분석보고서는 생성되며, 탐지된 구성요소의 라이선스와 취약점을 집계합니다.
 

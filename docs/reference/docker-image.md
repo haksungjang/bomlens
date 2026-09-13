@@ -124,7 +124,7 @@ MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
 
 | Variable | Required | Default | Description |
 |-----------|------|--------|------|
-| `MODE` | Yes | `POSTPROCESS` | Analysis mode: `SOURCE`, `IMAGE`, `BINARY`, `ROOTFS`, `FIRMWARE`, `ANALYZE` |
+| `MODE` | No | `POSTPROCESS` | Analysis mode: `SOURCE`, `IMAGE`, `BINARY`, `ROOTFS`, `FIRMWARE`, `ANALYZE`. Left unset, the container only post-processes an SBOM already sitting in the output directory — set it explicitly to actually scan something. |
 | `PROJECT_NAME` | Yes | — | Project name |
 | `PROJECT_VERSION` | Yes | — | Project version |
 | `TARGET_IMAGE` | Per mode | — | Image name for `IMAGE` mode (requires the docker.sock mount) |
