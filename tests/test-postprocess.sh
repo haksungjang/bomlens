@@ -5043,12 +5043,26 @@ _list=$(bash -c '. "$1"; non_shipped_manifests "$2"' _ "$DETECT" "$NSM" | tr '\n
     || fail "non_shipped_manifests output unexpected" "got [$_list]"
 _sargs=$(bash -c '. "$1"; non_shipped_syft_args' _ "$DETECT")
 case "$_sargs" in
-    *"--exclude ./**/tests/**"*"--exclude ./**/.github/workflows/**") pass "non_shipped_syft_args builds syft --exclude flags" ;;
+    *"--exclude ./**/[tT][eE][sS][tT][sS]/**"*"--exclude ./**/.github/workflows/**") pass "non_shipped_syft_args builds syft --exclude flags" ;;
     *) fail "non_shipped_syft_args output unexpected" "got [$_sargs]" ;;
 esac
 _off=$(BOMLENS_INCLUDE_NON_SHIPPED=true bash -c '. "$1"; non_shipped_syft_args' _ "$DETECT")
 [ -z "$_off" ] && pass "BOMLENS_INCLUDE_NON_SHIPPED=true turns the syft excludes off" \
     || fail "syft excludes still set with BOMLENS_INCLUDE_NON_SHIPPED=true" "got [$_off]"
+# Folder names match in any letter case, as cdxgen's glob does (Tests/, Benchmarks/).
+mkdir -p "$WORK/nscase/Tests" "$WORK/nscase/Benchmarks/bench" "$WORK/nscase/src"
+: > "$WORK/nscase/Tests/requirements.txt"
+: > "$WORK/nscase/Benchmarks/bench/Package.swift"
+: > "$WORK/nscase/src/requirements.txt"
+_list=$(bash -c '. "$1"; non_shipped_manifests "$2"' _ "$DETECT" "$WORK/nscase" | tr '\n' ' ')
+[ "$_list" = "Benchmarks/bench/Package.swift Tests/requirements.txt " ] \
+    && pass "non_shipped_manifests matches Tests/ and Benchmarks/ in any letter case" \
+    || fail "non_shipped_manifests missed an upper-case folder" "got [$_list]"
+case "$_sargs" in
+    *"--exclude ./**/__[tT][eE][sS][tT][sS]__/**"*"--exclude ./**/[bB][eE][nN][cC][hH][mM][aA][rR][kK][sS]/**"*)
+        pass "syft excludes spell folder names as any-case character classes" ;;
+    *) fail "syft excludes are not case-insensitive" "got [$_sargs]" ;;
+esac
 # The syft path's recorder, on a small SBOM whose root is the fixture.
 printf '%s\n' '{"bomFormat":"CycloneDX","metadata":{"properties":[{"name":"keep","value":"1"}]},"components":[]}' > "$WORK/excl-syft.json"
 bash -c '. "$1"; mark_sbom_excluded "$2" "$3"' _ "$DETECT" "$WORK/excl-syft.json" "$NSM"

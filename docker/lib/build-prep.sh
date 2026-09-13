@@ -1251,8 +1251,8 @@ if [ "${rc:-1}" -eq 0 ] && [ -n "$EXCLUDE_NON_SHIPPED" ] && [ -f "$OUT" ] && com
     _excl=$(mktemp)
     find . \( -name node_modules -o -name .git \) -prune -o -type f -print 2>/dev/null \
         | sed 's#^\./##' \
-        | { grep -E "^\.github/workflows/[^/]+\.ya?ml$|$_re" || true; } \
-        | { grep -E "^\.github/workflows/|$NON_SHIPPED_MANIFEST_RE" || true; } \
+        | { grep -Ei "^\.github/workflows/[^/]+\.ya?ml$|$_re" || true; } \
+        | { grep -Ei "^\.github/workflows/|$NON_SHIPPED_MANIFEST_RE" || true; } \
         | LC_ALL=C sort > "$_excl"
     _js=$(mktemp).js
     cat > "$_js" <<'EXCL_JS'

@@ -66,25 +66,37 @@ non_shipped_globs() {
     printf '%s' "${out#, }, **/.github/workflows/**"
 }
 
+# Prints $1 with every letter as a two-case character class ([tT]), so a glob
+# matches the name in any letter case the way cdxgen's ignore list does.
+non_shipped_any_case() {
+    local s="$1" out="" c i
+    for ((i = 0; i < ${#s}; i++)); do
+        c="${s:i:1}"
+        if [[ "$c" == [[:lower:]] ]]; then out="${out}[$c$(printf '%s' "$c" | tr '[:lower:]' '[:upper:]')]"; else out="$out$c"; fi
+    done
+    printf '%s' "$out"
+}
+
 # syft --exclude flags for the same patterns; empty when the option keeps them.
-# Read the output with `read -ra`, which does not expand the globs.
+# syft's globs are case-sensitive, so the folder names go in as character
+# classes. Read the output with `read -ra`, which does not expand the globs.
 non_shipped_syft_args() {
     non_shipped_enabled || return 0
     local d out=""
-    for d in $NON_SHIPPED_DIRS; do out="$out --exclude ./**/$d/**"; done
+    for d in $NON_SHIPPED_DIRS; do out="$out --exclude ./**/$(non_shipped_any_case "$d")/**"; done
     printf '%s' "${out# } --exclude ./**/.github/workflows/**"
 }
 
 # Manifest files under the non-shipped folders, and workflow files, relative to
-# the scan root and sorted.
+# the scan root and sorted. Names match in any letter case, as in cdxgen.
 non_shipped_manifests() {
     local root="$1" d re=""
     for d in $NON_SHIPPED_DIRS; do re="$re|$d"; done
     re="(^|/)(${re#|})/"
     (cd "$root" 2>/dev/null && find . \( -name node_modules -o -name .git \) -prune -o -type f -print 2>/dev/null) \
         | sed 's#^\./##' \
-        | { grep -E "^\.github/workflows/[^/]+\.ya?ml$|$re" || true; } \
-        | { grep -E "^\.github/workflows/|$NON_SHIPPED_MANIFEST_RE" || true; } \
+        | { grep -Ei "^\.github/workflows/[^/]+\.ya?ml$|$re" || true; } \
+        | { grep -Ei "^\.github/workflows/|$NON_SHIPPED_MANIFEST_RE" || true; } \
         | LC_ALL=C sort
 }
 
