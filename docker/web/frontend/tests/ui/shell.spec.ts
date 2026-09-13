@@ -940,9 +940,9 @@ test("overview has no axe violations", async ({ page }) => {
 
 // A second scan of the same project ("demo"), earlier than DONE, with a
 // smaller and different component/vulnerability set: curl is gone in DONE
-// (removed), openssl and readline are new to DONE (added), zlib carries the
-// same version in both (no change), and the one CVE here (curl) isn't in
-// DONE's list (resolved) while DONE's two CVEs aren't in this one (new).
+// (removed), openssl and readline are new to DONE (added), zlib moved from
+// 1.1.0 to DONE's 1.2.0 (version-changed), and the one CVE here (curl) isn't
+// in DONE's list (resolved) while DONE's two CVEs aren't in this one (new).
 const PREV_DONE = {
   ok: true,
   mode: "SOURCE",
@@ -958,7 +958,7 @@ const PREV_DONE = {
   sbom: {
     components: 2,
     componentList: [
-      { name: "zlib", version: "1.2.0", group: "", purl: "pkg:github/madler/zlib", type: "library", licenses: ["Zlib"] },
+      { name: "zlib", version: "1.1.0", group: "", purl: "pkg:github/madler/zlib", type: "library", licenses: ["Zlib"] },
       { name: "curl", version: "7.80.0", group: "", purl: "pkg:generic/curl@7.80.0", type: "library", licenses: ["MIT"] },
     ],
   },
@@ -1005,8 +1005,23 @@ test("Overview shows what changed since the previous scan of the same project", 
   await expect(compSummary).toContainText("·");
   await expect(vulnSummary).toContainText("·");
 
-  await expect(compSummary).toHaveText("2 new · 1 removed · 0 updated");
+  await expect(compSummary).toHaveText("2 new · 1 removed · 1 updated");
   await expect(vulnSummary).toHaveText("2 new · 1 resolved");
+
+  // The counts alone don't say which components or CVEs moved; opening each
+  // disclosure names them.
+  await compSummary.click();
+  await expect(page.getByText("openssl@3.0.0", { exact: true })).toBeVisible();
+  await expect(page.getByText("readline@8.2", { exact: true })).toBeVisible();
+  await expect(page.getByText("curl@7.80.0", { exact: true })).toBeVisible();
+  await expect(page.getByText("zlib moved from 1.1.0 to 1.2.0", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("comp-diff-all-link")).toBeVisible();
+
+  await vulnSummary.click();
+  await expect(page.getByText("CVE-2024-0001 (openssl)", { exact: true })).toBeVisible();
+  await expect(page.getByText("CVE-2024-0002 (zlib)", { exact: true })).toBeVisible();
+  await expect(page.getByText("CVE-2024-0003 (curl)", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("vuln-diff-all-link")).toBeVisible();
 });
 
 test("Overview warns when the SBOM degraded to syft (disk space)", async ({ page }) => {
@@ -1044,7 +1059,13 @@ for (const { theme, lang } of COMBOS) {
   test(`overview comparison card matches baseline: ${theme}/${lang} @visual`, async ({ page }) => {
     await stubAndRunWithPreviousScan(page, theme, lang);
     await expect(page.locator("main h1")).toBeVisible();
-    await expect(page.getByTestId("comp-change-summary")).toContainText("·");
+    const compSummary = page.getByTestId("comp-change-summary");
+    const vulnSummary = page.getByTestId("vuln-change-summary");
+    await expect(compSummary).toContainText("·");
+    // Captured open: the names are the point of this card, not just the counts.
+    await compSummary.click();
+    await vulnSummary.click();
+    await expect(page.getByTestId("comp-diff-all-link")).toBeVisible();
     await captureMain(page, "overview-comparison", theme, lang);
   });
 }
