@@ -1385,7 +1385,10 @@ for (const { theme, lang } of COMBOS) {
     await page.getByRole("navigation").locator('a[href$="/conformance"]').first().click();
     // "6/8" and the CycloneDX label are the same in every locale. Scoped to
     // <main> — the rail's conformance badge carries the same 6/8 figure.
-    await expect(page.getByText("CycloneDX")).toBeVisible();
+    // Exact: the panel's intro line also contains "CycloneDX" as a substring
+    // (it names the format the checks are against), so a loose match resolves
+    // to both and violates strict mode.
+    await expect(page.getByText("CycloneDX", { exact: true })).toBeVisible();
     await expect(page.locator("main").getByText(/6\s*\/\s*8/)).toBeVisible();
     // <main> mounts with `animate-fade-in` (translateY(4px) -> 0) on every section
     // switch. With `animations: "disabled"`, Playwright freezes the transform to a
