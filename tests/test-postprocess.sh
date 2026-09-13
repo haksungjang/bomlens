@@ -4749,6 +4749,36 @@ else
     fail "normalize-sbom.sh dropped or added components on a real document"
 fi
 
+echo "== build-prep options: every BOMLENS_* switch it reads is passed on by each launch path =="
+PREP="$ROOT_DIR/docker/lib/build-prep.sh"
+DETECT="$ROOT_DIR/docker/lib/source-detect.sh"
+# The list in source-detect.sh must name exactly the switches build-prep.sh reads,
+# or a new switch silently never reaches the cdxgen container.
+_read=$(grep -oE 'BOMLENS_[A-Z_]+:-' "$PREP" | sed 's/:-$//' | sort -u | tr '\n' ' ')
+_listed=$(bash -c '. "$1"; printf "%s\n" $BUILD_PREP_ENV_NAMES' _ "$DETECT" | sort -u | tr '\n' ' ')
+[ -n "$_read" ] && [ "$_read" = "$_listed" ] \
+    && pass "BUILD_PREP_ENV_NAMES matches the BOMLENS_* switches build-prep.sh reads" \
+    || fail "BUILD_PREP_ENV_NAMES is out of sync with build-prep.sh" "reads [$_read], listed [$_listed]"
+_args=$(bash -c '. "$1"; build_prep_env_args' _ "$DETECT")
+case "$_args" in
+    *=*) fail "build_prep_env_args put a value on the docker command" "got [$_args]" ;;
+    "-e BOMLENS_"*) pass "build_prep_env_args passes names only" ;;
+    *) fail "build_prep_env_args output unexpected" "got [$_args]" ;;
+esac
+grep -q '"${prep_env\[@\]}"' "$ROOT_DIR/docker/entrypoint.sh" \
+    && pass "entrypoint.sh passes the build-prep options to the cdxgen container" \
+    || fail "entrypoint.sh no longer passes the build-prep options"
+grep -q '"${PREP_ENV_FLAGS\[@\]}"' "$ROOT_DIR/scripts/scan-sbom.sh" \
+    && grep -q '^        \$PREP_ENV_ARGS \\$' "$ROOT_DIR/scripts/scan-sbom.sh" \
+    && pass "scan-sbom.sh passes the build-prep options on the --ui and stage-1 paths" \
+    || fail "scan-sbom.sh no longer passes the build-prep options on both paths"
+# Documented as "set 1": only 1 or true switch an option on.
+_opt=$(sed -n '/^opted_out() /p' "$PREP")
+_on=""; for v in 1 true 0 false ""; do bash -c "$_opt; opted_out \"\$1\"" _ "$v" && _on="${_on}[$v]"; done
+[ "$_on" = "[1][true]" ] \
+    && pass "an opt-out switch counts as set only for 1 or true" \
+    || fail "opt-out switch values treated as set: $_on"
+
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

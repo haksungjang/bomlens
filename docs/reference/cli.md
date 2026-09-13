@@ -102,6 +102,8 @@ Environment variables adjust the behavior.
 | `EXTERNAL_LOOKUP` | `true` | With `--ui`: enable the web UI's CVE/package lookup, which queries OSV.dev on demand. Set `false` for air-gapped runs |
 | `SBOM_UPLOAD_TTL_HOURS` | `24` | With `--ui`: how long an uploaded file is kept if no scan is ever started with it (a picked-then-abandoned upload). Clamped to at least 1 |
 
+Source-scan resolver options such as `BOMLENS_MAVEN_FULL_GRAPH` are listed under [Docker image environment variables](docker-image.md#environment-variables). Set them in the shell that runs `scan-sbom.sh` and they reach dependency resolution the same way.
+
 On Windows, environment variables set in a command prompt do not survive a
 double-click. The launchers therefore also read `UI_PORT`, `SBOM_LANG`,
 `SBOM_PULL`, `SBOM_IMAGE_TAR`, `SBOM_SCANNER_IMAGE`, `SBOM_OUTPUT_DIR` and

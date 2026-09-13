@@ -507,10 +507,13 @@ if [ "$UI_MODE" = "true" ]; then
     # Go toolchain and module proxy settings for Go dependency resolution. A
     # name-only -e is skipped by docker when the variable is unset.
     GO_ENV_FLAGS=(-e GOTOOLCHAIN -e GOPROXY -e GOSUMDB)
+    # Source-scan options for build-prep.sh; the UI container's entrypoint passes
+    # them on to the cdxgen container.
+    read -ra PREP_ENV_FLAGS <<< "$(build_prep_env_args)"
     ensure_image_fresh "$POSTPROCESS_IMAGE"
     exec "${DOCKER_ENV[@]}" docker run --rm "${TTY_FLAGS[@]}" -p "${UI_BIND_ADDRESS}:${UI_PORT}:8080" \
         -v "$(hostpath "$UI_BASE")":/src -v "$(hostpath "$UI_BASE")":/host-output \
-        "${MOUNT_FLAGS[@]}" "${HF_FLAGS[@]}" "${GO_ENV_FLAGS[@]}" \
+        "${MOUNT_FLAGS[@]}" "${HF_FLAGS[@]}" "${GO_ENV_FLAGS[@]}" "${PREP_ENV_FLAGS[@]}" \
         -v /var/run/docker.sock:/var/run/docker.sock \
         -e MODE=UI -e UI_PORT=8080 -e SBOM_UI_HOST_DIR="$(hostpath "$UI_BASE")" \
         -e SBOM_UI_SCAN_ROOTS="$SCAN_ROOTS" -e EXTERNAL_LOOKUP="$EXTERNAL_LOOKUP" \
@@ -1582,6 +1585,8 @@ if [ "$MODE" = "SOURCE" ]; then
             echo "[WARN] Ignoring GOTOOLCHAIN: not a Go toolchain name (e.g. auto, local, go1.26.0)."
             HOST_GOTOOLCHAIN="" ;;
     esac
+    # Names only (see build_prep_env_args), so this is safe inside the eval.
+    PREP_ENV_ARGS=$(build_prep_env_args)
     eval "$DOCKER_MSYS"docker run --rm -u 0:0 \
         -v "\"$(hostpath "$SCAN_INPUT_DIR")\"":/app \
         -v "\"$(hostpath "$OUTPUT_HOST_DIR")\"":/out \
@@ -1594,6 +1599,7 @@ if [ "$MODE" = "SOURCE" ]; then
         -e PROJECT_VERSION="\"$PROJECT_VERSION\"" \
         -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
         -e HOST_GOTOOLCHAIN="\"$HOST_GOTOOLCHAIN\"" -e GOPROXY -e GOSUMDB \
+        $PREP_ENV_ARGS \
         --entrypoint sh "\"$CDX_IMG\"" \
         -c "'sh /tmp/build-prep.sh /app \"/out/$OUTPUT_FILE\" $CDX_SPEC_VERSION'" \
         || { echo "[ERROR] SBOM generation failed (stage 1)"; exit 1; }

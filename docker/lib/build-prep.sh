@@ -31,6 +31,9 @@ cd "$SRC" 2>/dev/null || exit 0
 
 log() { echo "[build-prep] $*"; }
 
+# The BOMLENS_* opt-out switches count as set only for 1 or true, as documented.
+opted_out() { case "$1" in 1|true) return 0 ;; esac; return 1; }
+
 # ---------------------------------------------------------------------------
 # Source-tree guard — hand the scanned project back exactly as we found it.
 #
@@ -71,7 +74,7 @@ guard_paths() {
 }
 
 guard_snapshot() {
-    [ -z "${BOMLENS_KEEP_BUILD_OUTPUT:-}" ] || { log "source-tree guard off (BOMLENS_KEEP_BUILD_OUTPUT)"; return 0; }
+    opted_out "${BOMLENS_KEEP_BUILD_OUTPUT:-}" && { log "source-tree guard off (BOMLENS_KEEP_BUILD_OUTPUT)"; return 0; }
     GUARD_DIR=$(mktemp -d 2>/dev/null) || { GUARD_DIR=""; return 0; }
     guard_paths f > "$GUARD_DIR/files.before" 2>/dev/null
     guard_paths d > "$GUARD_DIR/dirs.before" 2>/dev/null
@@ -189,7 +192,7 @@ fi
 # so a rare optional=true runtime dep is dropped too; BOMLENS_MAVEN_FULL_GRAPH=1
 # opts out (keep the full graph, unchanged behavior).
 MAVEN_SCOPE_FILTER=""
-if [ -f pom.xml ] && [ -z "${BOMLENS_MAVEN_FULL_GRAPH:-}" ]; then
+if [ -f pom.xml ] && ! opted_out "${BOMLENS_MAVEN_FULL_GRAPH:-}"; then
     MAVEN_SCOPE_FILTER=1
 fi
 
@@ -218,7 +221,7 @@ if { [ -f build.gradle ] || [ -f build.gradle.kts ]; } && command -v gradle >/de
     # prodReleaseRuntimeClasspath). If nothing is found we leave the filter off
     # (full graph, unchanged behavior) so recall never regresses.
     # BOMLENS_ANDROID_FULL_GRAPH=1 opts out entirely (keep the build+test superset).
-    if [ -n "${ANDROID_HOME:-}" ] && [ -z "${BOMLENS_ANDROID_FULL_GRAPH:-}" ]; then
+    if [ -n "${ANDROID_HOME:-}" ] && ! opted_out "${BOMLENS_ANDROID_FULL_GRAPH:-}"; then
         log "android: resolving deployable release runtime classpath"
         _relset=$(mktemp)
         _subs=$("$GRADLEW" --no-daemon -q --console=plain projects 2>/dev/null \
@@ -375,7 +378,7 @@ fi
 # post-filter cdxgen's BOM to it near the end, mirroring the Android release-scope
 # filter. BOMLENS_NODE_FULL_GRAPH=1 opts out (keep the dev+prod superset).
 NODE_PROD_SET=""
-if [ -f package.json ] && [ -z "${BOMLENS_NODE_FULL_GRAPH:-}" ] \
+if [ -f package.json ] && ! opted_out "${BOMLENS_NODE_FULL_GRAPH:-}" \
    && command -v npm >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then
     log "node: resolving production dependency set"
     _npmtmp=$(mktemp -d)

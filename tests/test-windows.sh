@@ -187,6 +187,18 @@ GOTOOLCHAIN='go1.26.0;touch x' scan_in "$d" --project Pgotcbad --version 1.0.0 -
   && pass "GOTOOLCHAIN that is not a toolchain name is not passed on" \
   || { fail "GOTOOLCHAIN that is not a toolchain name is not passed on" "rc=$RC"; show; }
 
+# Source-scan options for build-prep.sh reach the cdxgen container by name only.
+d="$(new_proj prepenv)"; printf '{"name":"a"}' > "$d/package.json"
+BOMLENS_KEEP_BUILD_OUTPUT=1 BOMLENS_MAVEN_FULL_GRAPH=1 BOMLENS_ANDROID_FULL_GRAPH=1 BOMLENS_NODE_FULL_GRAPH=1 \
+  scan_in "$d" --project Pprepenv --version 1.0.0 --generate-only
+ok=1
+for n in BOMLENS_KEEP_BUILD_OUTPUT BOMLENS_MAVEN_FULL_GRAPH BOMLENS_ANDROID_FULL_GRAPH BOMLENS_NODE_FULL_GRAPH; do
+  in_log "-e $n" || ok=0
+  in_log "$n=" && ok=0
+done
+[ "$ok" = 1 ] && pass "BOMLENS_* source-scan options passed to the cdxgen container by name" \
+  || { fail "BOMLENS_* source-scan options passed to the cdxgen container by name" "rc=$RC"; show; }
+
 # .NET needs a *.csproj glob, swift needs Package.swift — handled specially.
 d="$(new_proj dotnet)"; printf '<Project></Project>' > "$d/app.csproj"
 scan_in "$d" --project Pdotnet --version 1.0.0 --generate-only

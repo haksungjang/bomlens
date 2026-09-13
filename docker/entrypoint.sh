@@ -156,6 +156,7 @@ generate_sbom_cdxgen() {
     # would misreport a plain `kill -9` or an OOM on a different process in the
     # same container as memory exhaustion.
     local logf cidf; logf=$(mktemp); cidf=$(mktemp); rm -f "$cidf"
+    local prep_env; read -ra prep_env <<< "$(build_prep_env_args)"
     docker run -u 0:0 \
         --cidfile "$cidf" \
         --volumes-from "$self" \
@@ -165,6 +166,7 @@ generate_sbom_cdxgen() {
         -e PROJECT_NAME="$PROJECT_NAME" \
         -e PROJECT_VERSION="$PROJECT_VERSION" \
         -e HOST_GOTOOLCHAIN="${GOTOOLCHAIN:-}" -e GOPROXY -e GOSUMDB \
+        "${prep_env[@]}" \
         --entrypoint sh "$img" \
         -c "$prep" _ "$src" "$bom_path" "$CDX_SPEC_VERSION" 2>&1 | tee "$logf"
     rc=${PIPESTATUS[0]}
