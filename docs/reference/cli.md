@@ -50,6 +50,7 @@ Full options, analysis modes, CI/CD integration, and troubleshooting for BomLens
 | `--identify-vendored` | false | Identify open source copied (vendored) into C/C++ source that has no package manager. Matches file fingerprints against the OSSKB service (included in the published image; sends hashes, not source). See the [identify bundled OSS guide](../guides/identify-vendored.md) |
 | `--verify-weights` | false | With `--model`: download the repo's pickle-format weight files (`.bin`/`.pt`/`.pth`/`.ckpt` — the ones that execute code on load) and run the same local picklescan verification `--model-file` runs, instead of only trusting HuggingFace's own scan (`bomlens:hf:scan:*`). safetensors/GGUF/ONNX weights are never downloaded — they cannot execute code on load, so there is nothing for picklescan to check. Real network and disk cost (bounded by `AIBOM_VERIFY_MAX_FILES`/`AIBOM_VERIFY_MAX_BYTES`, default 5 files / 2 GiB each), unlike the metadata-only `ENRICH_HF_SECURITY` lookup, which is why this is opt-in. AI-model scans only |
 | `--byte-stable` | false | Deterministic (reproducible) SBOM output |
+| `--fail-on-conformance` | false | Exit 2 if this scan's own conformance report says "fail" (exit 3 if no conformance report was produced for this scan). Not offered with `--ui`. See [Exit codes](#exit-codes) |
 | `--sign` | false | cosign signature (`COSIGN_KEY` required) |
 | `--output-dir <dir>` | current directory | Base directory for outputs (alias `-o`). Each scan lands in a `{Project}_{Version}/` subfolder under it, keeping the bundle together and out of the source tree |
 | `--timestamp` | false | Append `_YYYYMMDD-HHMMSS` to the run subfolder so repeat scans of the same project and version are kept side by side instead of overwritten. Folder name only; SBOM bytes are unchanged |
@@ -128,6 +129,17 @@ A re-scan of the same project and version overwrites its subfolder by default, k
 To restore the previous flat layout, where every file is written directly in the base with no per-run subfolder, set `SBOM_OUTPUT_FLAT=1`. This is meant for CI that expects the old paths.
 
 `--diff` has no project or version of its own, so it writes its report directly into the base directory (current directory, or `--output-dir`) rather than a per-run subfolder.
+
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Scan succeeded |
+| 1 | Scan failed (bad arguments, Docker unavailable, a required input missing, and similar) |
+| 2 | `--fail-on-conformance`: the scan succeeded, but its own conformance report says "fail" |
+| 3 | `--fail-on-conformance`: the scan succeeded, but produced no conformance report to judge |
+
+2 and 3 are used only when `--fail-on-conformance` is given; every scan that does not use it exits 0 or 1.
 
 ## Pin the scanner image version
 

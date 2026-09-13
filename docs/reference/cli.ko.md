@@ -50,6 +50,7 @@ BomLens의 전체 옵션과 분석 모드, CI/CD 통합 방법, 트러블슈팅�
 | `--identify-vendored` | false | 패키지 매니저가 없는 C/C++ 소스에 복사돼 들어간(vendored) 오픈소스를 식별. 파일 지문을 OSSKB 서비스와 대조 (발행 이미지에 포함; 소스가 아니라 해시 전송). [내장 오픈소스 식별 가이드](../guides/identify-vendored.ko.md) 참고 |
 | `--verify-weights` | false | `--model`과 함께 쓰면 저장소의 pickle 계열 가중치 파일(`.bin`/`.pt`/`.pth`/`.ckpt`, 로드 시 코드를 실행할 수 있는 형식)을 내려받아 `--model-file`이 실행하는 것과 같은 로컬 picklescan 검증을 돌린다. HuggingFace 자체 스캔 결과(`bomlens:hf:scan:*`)만 믿는 대신 독립적으로 확인하는 것이다. safetensors·GGUF·ONNX 가중치는 내려받지 않는다. 로드 시 코드를 실행하지 않는 형식이라 picklescan으로 확인할 대상이 없기 때문이다. 실제 네트워크·디스크 비용이 들고(`AIBOM_VERIFY_MAX_FILES`/`AIBOM_VERIFY_MAX_BYTES`로 상한, 기본 5개 파일 · 각 2GiB) 메타데이터만 읽는 `ENRICH_HF_SECURITY` 조회와 달리 옵트인이다. AI 모델 스캔 전용 |
 | `--byte-stable` | false | 결정론적(재현 가능) SBOM 출력 |
+| `--fail-on-conformance` | false | 이 스캔 자체의 적합성 보고서가 "fail"이면 종료 코드 2로 끝난다(이 스캔에서 적합성 보고서가 아예 안 만들어졌으면 3). `--ui`와는 함께 쓸 수 없다. [종료 코드](#종료-코드) 참고 |
 | `--sign` | false | cosign 서명 (`COSIGN_KEY` 필요) |
 | `--output-dir <dir>` | 현재 디렉터리 | 산출물 베이스 디렉터리 (별칭 `-o`). 스캔마다 그 아래 `{Project}_{Version}/` 하위 폴더에 묶여 저장되어 소스 트리를 오염시키지 않음 |
 | `--timestamp` | false | 실행 하위 폴더 이름에 `_YYYYMMDD-HHMMSS`를 덧붙여, 같은 프로젝트와 버전을 다시 스캔해도 덮어쓰지 않고 나란히 보관. 폴더 이름만 바뀌고 SBOM 내용은 그대로 |
@@ -125,6 +126,17 @@ Windows에서는 명령 프롬프트에서 설정한 환경변수가 더블클�
 이전의 평면 배치, 즉 하위 폴더 없이 베이스에 파일을 바로 저장하던 방식으로 되돌리려면 `SBOM_OUTPUT_FLAT=1`을 설정합니다. 옛 경로를 기대하는 CI를 위한 옵션입니다.
 
 `--diff`는 프로젝트와 버전이 따로 없으므로 실행별 하위 폴더가 아니라 베이스 디렉터리(현재 디렉터리, 또는 `--output-dir`)에 바로 보고서를 씁니다.
+
+## 종료 코드
+
+| 코드 | 의미 |
+|------|------|
+| 0 | 스캔 성공 |
+| 1 | 스캔 실패(잘못된 인자, Docker 미실행, 필수 입력 누락 등) |
+| 2 | `--fail-on-conformance`: 스캔은 성공했지만 적합성 보고서가 "fail" |
+| 3 | `--fail-on-conformance`: 스캔은 성공했지만 판정할 적합성 보고서가 안 만들어짐 |
+
+2와 3은 `--fail-on-conformance`를 줬을 때만 나오며, 그 외 모든 스캔은 0 또는 1로 끝납니다.
 
 ## 특정 버전의 스캐너 이미지 사용
 

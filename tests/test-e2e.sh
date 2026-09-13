@@ -1348,6 +1348,35 @@ else
         && pass "analyze: conformance HTML report produced" \
         || fail "analyze: conformance HTML report produced"
     rm -rf "$w"
+
+    # --fail-on-conformance: a passing document exits 0 (real container run,
+    # not the stub test-windows.sh uses).
+    wp="$(mktemp -d "$WORK_ROOT/focpass.XXXXXX")"
+    cp "$REPO/tests/fixtures/good-spdx.json" "$wp/" 2>/dev/null
+    ( cd "$wp" && SBOM_SCANNER_IMAGE="$SCANNER_IMG" bash "$SCAN" \
+        --project "focpass" --version "1.0" --analyze good-spdx.json \
+        --generate-only --fail-on-conformance ) > "$wp/_scan.log" 2>&1
+    foc_pass_rc=$?
+    [ "$foc_pass_rc" -eq 0 ] \
+        && pass "--fail-on-conformance: a passing document exits 0 (container)" \
+        || fail "--fail-on-conformance pass case (container)" "rc=$foc_pass_rc; $(tail -5 "$wp/_scan.log" 2>/dev/null)"
+    rm -rf "$wp"
+
+    # --fail-on-conformance: a document missing every mandatory field (no spec
+    # version, no timestamp, no tools, no top component, no packages) fails
+    # every required check, so the container's own conformance result is
+    # "fail" regardless of any local scoring. Exit 2 with the report already
+    # on disk to look at.
+    wf="$(mktemp -d "$WORK_ROOT/focfail.XXXXXX")"
+    printf '{"bomFormat":"CycloneDX","specVersion":"9.9","components":[]}' > "$wf/bad.json"
+    ( cd "$wf" && SBOM_SCANNER_IMAGE="$SCANNER_IMG" bash "$SCAN" \
+        --project "focfail" --version "1.0" --analyze bad.json \
+        --generate-only --fail-on-conformance ) > "$wf/_scan.log" 2>&1
+    foc_fail_rc=$?
+    { [ "$foc_fail_rc" -eq 2 ] && [ -f "$wf/focfail_1.0_conformance.json" ]; } \
+        && pass "--fail-on-conformance: a failing document exits 2, report still written (container)" \
+        || fail "--fail-on-conformance fail case (container)" "rc=$foc_fail_rc; $(tail -5 "$wf/_scan.log" 2>/dev/null)"
+    rm -rf "$wf"
 fi
 
 # --------------------------------------------------------
