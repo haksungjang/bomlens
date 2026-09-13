@@ -228,6 +228,26 @@ scan_in "$d" --project Pswift --version 1.0.0 --generate-only
 { in_out "Language: swift" && in_log "cdxgen-debian-swift"; } \
   && pass "swift (Package.swift) → swift image" || { fail "swift (Package.swift) → swift image" "rc=$RC"; show; }
 
+# Layouts found below the root: a Kotlin DSL Android app goes to the Android SDK
+# image, and a .NET solution with its projects under src/ goes to the .NET image
+# despite the e2e-only package.json at its root.
+d="$(new_proj androidkts)"; mkdir -p "$d/app"
+printf 'rootProject.name = "k"\n' > "$d/settings.gradle.kts"
+printf 'android {\n    namespace = "com.example.k"\n    compileSdk = 34\n}\n' > "$d/app/build.gradle.kts"
+scan_in "$d" --project Pandroidkts --version 1.0.0 --generate-only
+{ in_out "Android source detected" && in_log "bomlens-android-sdk34"; } \
+  && pass "Kotlin DSL Android app → Android SDK image" \
+  || { fail "Kotlin DSL Android app → Android SDK image" "rc=$RC"; show; }
+
+d="$(new_proj dotnetsub)"; mkdir -p "$d/src/App"
+printf '<Solution />\n' > "$d/App.slnx"
+printf '{"name":"e2e","devDependencies":{"@playwright/test":"^1"}}' > "$d/package.json"
+printf '<Project Sdk="Microsoft.NET.Sdk"></Project>' > "$d/src/App/App.csproj"
+scan_in "$d" --project Pdotnetsub --version 1.0.0 --generate-only
+{ in_out "Language: dotnet" && in_log "cdxgen-debian-dotnet9"; } \
+  && pass ".NET solution with projects in src/ → dotnet image" \
+  || { fail ".NET solution with projects in src/ → dotnet image" "rc=$RC"; show; }
+
 # Unknown (no manifest) and mixed (two manifests) both fall back to all-in-one.
 d="$(new_proj unknown)"; printf 'hello\n' > "$d/README"
 scan_in "$d" --project Punknown --version 1.0.0 --generate-only

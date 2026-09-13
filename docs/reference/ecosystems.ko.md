@@ -149,7 +149,7 @@ jq '.components | length' NodeExample_1.0.0/NodeExample_1.0.0_bom.json
 ./scripts/scan-sbom.sh --project "DotNetExample" --version "1.0.0" --target examples/dotnet --generate-only
 ```
 
-감지 파일: `*.csproj` + `packages.lock.json`
+감지 파일: 루트나 그 아래 세 단계 폴더까지의 `*.csproj`, `*.fsproj`, `*.sln`, `*.slnx`와 `packages.lock.json`
 
 ---
 
@@ -224,7 +224,7 @@ Docker 이미지 분석은 프로젝트 루트에서 실행합니다.
 | Rust | `Cargo.lock` |
 | Ruby | `Gemfile.lock` |
 | PHP | `composer.lock` |
-| .NET | `*.csproj` + `packages.lock.json` |
+| .NET | `*.csproj`, `*.fsproj`, `*.sln`, `*.slnx`(루트 또는 세 단계 아래 폴더까지) + `packages.lock.json` |
 
 ## 결과 비교
 
