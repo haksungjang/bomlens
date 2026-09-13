@@ -4349,6 +4349,74 @@ BOMLENS_KEEP_BUILD_OUTPUT=1 PATH="$GUARD_ROOT/bin:$PATH" \
     && pass "BOMLENS_KEEP_BUILD_OUTPUT=1 keeps the resolved tree" \
     || fail "the opt-out did not keep the resolved tree"
 
+echo "== source-tree guard: an interrupt stops the resolver instead of waiting it out =="
+# Regression for G-16/G-18: a plain foreground `cdxgen "$@"` deferred INT/TERM
+# handling until cdxgen finished on its own (measured: a 5-minute `docker stop`
+# grace never let cleanup run). build-prep.sh now runs cdxgen backgrounded and
+# waits on it explicitly (run_supervised), so a signal is handled the moment it
+# arrives instead of after the resolver's foreground command returns. Driven
+# with a stub `cdxgen` that spawns a real, killable grandchild and blocks a
+# long time itself, so a slow interrupt handler shows up as this test taking
+# tens of seconds instead of a few.
+INT_ROOT="$WORK/interrupt"
+mkdir -p "$INT_ROOT/bin" "$INT_ROOT/src"
+CDXGEN_MARKER="$INT_ROOT/marker"
+cat > "$INT_ROOT/bin/cdxgen" <<STUB
+#!/bin/sh
+( i=0; while [ "\$i" -lt 60 ]; do echo "\$i" > "$CDXGEN_MARKER.tick"; sleep 1; i=\$((i + 1)); done ) &
+echo "\$!" > "$CDXGEN_MARKER.childpid"
+mkdir -p build
+sleep 60
+STUB
+chmod +x "$INT_ROOT/bin/cdxgen"
+printf 'keep me\n' > "$INT_ROOT/src/README"
+
+PATH="$INT_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$INT_ROOT/src" "$INT_ROOT/out/bom.json" >"$INT_ROOT/log" 2>&1 &
+BP_PID=$!
+
+_n=0
+while [ ! -s "$CDXGEN_MARKER.childpid" ] && [ "$_n" -lt 50 ]; do sleep 0.1; _n=$((_n + 1)); done
+GRANDCHILD_PID="$(cat "$CDXGEN_MARKER.childpid" 2>/dev/null || echo "")"
+
+if [ -z "$GRANDCHILD_PID" ]; then
+    fail "stub cdxgen's grandchild never started (test setup issue, not build-prep.sh)"
+else
+    T0=$(date +%s)
+    kill -TERM "$BP_PID" 2>/dev/null
+    _n=0
+    while kill -0 "$BP_PID" 2>/dev/null && [ "$_n" -lt 150 ]; do sleep 0.1; _n=$((_n + 1)); done
+    T1=$(date +%s)
+    ELAPSED=$((T1 - T0))
+    if kill -0 "$BP_PID" 2>/dev/null; then
+        fail "build-prep.sh did not exit within 15s of SIGTERM" "still running as pid $BP_PID"
+        kill -KILL "$BP_PID" 2>/dev/null
+    elif [ "$ELAPSED" -lt 20 ]; then
+        pass "build-prep.sh exited on SIGTERM in ${ELAPSED}s, not after the resolver's own 60s"
+    else
+        fail "build-prep.sh took ${ELAPSED}s to exit after SIGTERM (expected well under the resolver's 60s)"
+    fi
+
+    # Whether the grandchild also died depends on setsid/process-group support:
+    # present on Linux (including the cdxgen images this runs in for real),
+    # absent on macOS (no setsid, no /proc). Report which path this run took
+    # instead of silently skipping.
+    sleep 0.3
+    if command -v setsid >/dev/null 2>&1 || [ -d /proc ]; then
+        if kill -0 "$GRANDCHILD_PID" 2>/dev/null; then
+            fail "the resolver's grandchild process is still running after build-prep.sh exited" "pid $GRANDCHILD_PID"
+            kill -KILL "$GRANDCHILD_PID" 2>/dev/null
+        else
+            pass "the resolver's grandchild process was stopped along with it"
+        fi
+    else
+        echo "  (skip: no setsid and no /proc here, so there is no mechanism on this platform to reach the grandchild -- reflects local macOS dev, not the Linux cdxgen containers this actually runs in)"
+    fi
+fi
+
+[ ! -e "$INT_ROOT/src/build" ] \
+    && pass "guard_restore ran before exit: the build dir the stub created is gone" \
+    || fail "build dir left behind after an interrupted scan" "$(cd "$INT_ROOT/src" && find . | sort | tr '\n' ' ')"
+
 echo "== lic-mapping: 0BSD stops claiming the generic BSD names =="
 # build-prep.sh corrects cdxgen's two license-name tables before cdxgen runs,
 # because "BSD License" (the only BSD classifier PyPI has) resolved to 0BSD — a

@@ -976,6 +976,73 @@ else
     else
         skip "go-newer-toolchain fixture not found"
     fi
+
+    # 3e: G-16/G-18 regression, driven through the real script path (not a
+    # stub): interrupt a SOURCE scan while cdxgen is actually mid-resolve and
+    # confirm neither the cdxgen container nor build artifacts in the source
+    # tree survive it. swiftsrc has no committed Package.resolved, so cdxgen
+    # takes the real network-resolve path (git-clones its two dependencies)
+    # instead of the near-instant committed-lockfile fast path, giving the
+    # interrupt a real window to land in.
+    swiftsrc="$EXAMPLES/swift"
+    if [ -d "$swiftsrc" ]; then
+        w="$(mktemp -d "$WORK_ROOT/interrupt.XXXXXX")"
+        out="$(mktemp -d "$WORK_ROOT/interrupt-out.XXXXXX")"
+        cp -R "$swiftsrc/." "$w/"
+        ( cd "$w" && git init -q && printf '.build/\n' > .gitignore \
+              && git add -A && git -c user.email=t@t -c user.name=t commit -q -m init )
+        ( cd "$w" && SBOM_SCANNER_IMAGE="$SCANNER_IMG" bash "$SCAN" \
+              --project interrupttest --version 1.0 --generate-only --output-dir "$out" ) \
+            > "$out/_scan.log" 2>&1 &
+        scan_pid=$!
+
+        n=0
+        while ! grep -q '\[build-prep\] cdxgen' "$out/_scan.log" 2>/dev/null && [ "$n" -lt 300 ]; do
+            sleep 0.1; n=$((n + 1))
+        done
+
+        if ! grep -q '\[build-prep\] cdxgen' "$out/_scan.log" 2>/dev/null; then
+            fail "G-16/G-18: scan never reached the cdxgen stage within 30s (test setup, not the fix)" \
+                 "$(tail -20 "$out/_scan.log")"
+            kill -KILL "$scan_pid" 2>/dev/null
+        else
+            kill -TERM "$scan_pid" 2>/dev/null
+            n=0
+            while kill -0 "$scan_pid" 2>/dev/null && [ "$n" -lt 400 ]; do sleep 0.1; n=$((n + 1)); done
+            if kill -0 "$scan_pid" 2>/dev/null; then
+                fail "G-16/G-18: interrupted scan-sbom.sh did not exit within 40s of SIGTERM"
+                kill -KILL "$scan_pid" 2>/dev/null
+            else
+                pass "G-16/G-18: interrupted scan-sbom.sh exited promptly"
+            fi
+
+            # small grace: --rm's own removal can lag a moment behind `docker
+            # stop` returning.
+            leftover=""
+            n=0
+            while [ "$n" -lt 30 ]; do
+                leftover=$(docker ps -a --format '{{.Names}}' | grep '^bomlens-scan-' || true)
+                [ -z "$leftover" ] && break
+                sleep 0.2; n=$((n + 1))
+            done
+            if [ -z "$leftover" ]; then
+                pass "G-16/G-18: no bomlens-scan-* container left running after the interrupt"
+            else
+                fail "G-16/G-18: a bomlens-scan-* container was left behind after the interrupt" "$leftover"
+                docker rm -f $leftover >/dev/null 2>&1 || true
+            fi
+
+            if [ -z "$(cd "$w" && git status --ignored --short)" ]; then
+                pass "G-16/G-18: the source tree is clean (git status --ignored) after the interrupt"
+            else
+                fail "G-16/G-18: the source tree is not clean after the interrupt" \
+                     "$(cd "$w" && git status --ignored --short)"
+            fi
+        fi
+        rm -rf "$w" "$out"
+    else
+        skip "swift example not found"
+    fi
 fi
 
 # --------------------------------------------------------
