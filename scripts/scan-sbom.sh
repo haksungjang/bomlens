@@ -1352,7 +1352,23 @@ elif [ -n "$TARGET" ]; then
         # Same as an uploaded SBOM: the risk report needs license + vulnerability data.
         GENERATE_NOTICE="true"; GENERATE_SECURITY="true"
         fi
-    elif [ -d "$TARGET" ]; then MODE="ROOTFS";
+    elif [ -d "$TARGET" ]; then
+        if _is_rootfs_dir "$TARGET"; then
+            # Looks like a real root filesystem (etc/ plus two of bin/sbin/usr/lib/var):
+            # syft reads its package database directly, same as an archive that
+            # unpacked to one (see INGEST_ROOTFS above).
+            MODE="ROOTFS"
+        else
+            # An ordinary source tree pointed at directly, e.g. `--target
+            # examples/nodejs`. MODE is already "SOURCE" by default (set above,
+            # before this elif chain), but SCAN_INPUT_DIR still defaults to the
+            # current directory ($(pwd), set earlier near SOURCE_DIR) — without
+            # this, cdxgen would silently scan the current directory instead of
+            # the folder the user named. Resolve to an absolute path so it
+            # survives any later `cd`.
+            MODE="SOURCE"
+            SCAN_INPUT_DIR="$(cd "$TARGET" && pwd)"
+        fi
     else MODE="IMAGE"; fi
 elif [ "$FORCE_FIRMWARE" = "true" ]; then
     echo "[ERROR] --firmware requires '--target <firmware-file>'."; exit 1
@@ -1431,10 +1447,17 @@ case "$MODE" in
               fi ;;
     MERGE)    META_SOURCE="";                META_TARGET=""; META_LABEL="" ;;
     *)
-        # SOURCE covers three different inputs: a clone, an extracted archive,
-        # and the current folder. GIT_URL is what distinguishes the first.
+        # SOURCE covers four different inputs: a clone, an extracted archive,
+        # a folder named directly with --target, and the current folder.
+        # GIT_URL is what distinguishes the first.
         if [ -n "$GIT_URL" ]; then
             META_SOURCE="git-url";    META_TARGET="$GIT_URL"; META_LABEL=""
+        elif [ -n "$TARGET" ] && [ -d "$TARGET" ]; then
+            # A directory named directly (not an archive) that did not look like a
+            # root filesystem — same shape as the web UI's folder-picker "deep
+            # source scan" input, so it reuses that source value rather than the
+            # file-oriented "zip-upload".
+            META_SOURCE="scan-target-src"; META_TARGET=""; META_LABEL="$TARGET"
         elif [ -n "$TARGET" ]; then
             META_SOURCE="zip-upload"; META_TARGET=""; META_LABEL="$(basename "$TARGET")"
         else
