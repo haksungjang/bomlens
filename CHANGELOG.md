@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The Dependencies tree now has a search box, and a vulnerable package's row in Vulnerabilities/Components carries a "View in Dependencies" link that jumps straight to it in the tree, ancestors already expanded, instead of leaving the reader to hand-expand branches looking for it.
 - The Vulnerabilities screen now shows a bundle summary when two or more CVEs on the same installed package share the same fixed version, naming the single upgrade that resolves all of them, instead of leaving the reader to notice the coincidence by comparing the Fixed column row by row.
+- The Overview comparison against the previous scan of the same project now names what changed (components added/removed/version-changed, vulnerabilities new/resolved), instead of only a net component-count delta and a worst-severity direction that a like-for-like swap could leave looking unchanged.
 
 ### Fixed
 

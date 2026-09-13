@@ -938,6 +938,77 @@ test("overview has no axe violations", async ({ page }) => {
   expect(results.violations).toEqual([]);
 });
 
+// A second scan of the same project ("demo"), earlier than DONE, with a
+// smaller and different component/vulnerability set: curl is gone in DONE
+// (removed), openssl and readline are new to DONE (added), zlib carries the
+// same version in both (no change), and the one CVE here (curl) isn't in
+// DONE's list (resolved) while DONE's two CVEs aren't in this one (new).
+const PREV_DONE = {
+  ok: true,
+  mode: "SOURCE",
+  id: "demo_0.9",
+  results: [{ name: "demo_0.9_bom.json", size: 80 }],
+  security: {
+    CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 1, UNKNOWN: 0, TOTAL: 1,
+    vulnerabilities: [
+      { id: "CVE-2024-0003", severity: "LOW", pkg: "curl", installed: "7.80.0", fixed: "7.81.0", title: "minor issue" },
+    ],
+  },
+  conformance: null,
+  sbom: {
+    components: 2,
+    componentList: [
+      { name: "zlib", version: "1.2.0", group: "", purl: "pkg:github/madler/zlib", type: "library", licenses: ["Zlib"] },
+      { name: "curl", version: "7.80.0", group: "", purl: "pkg:generic/curl@7.80.0", type: "library", licenses: ["MIT"] },
+    ],
+  },
+};
+
+const RECENT_WITH_PREVIOUS = [
+  { id: "demo_1.0", project: "demo", version: "1.0", components: 3, maxSeverity: "CRITICAL", isAiScan: false, componentType: null, inputSource: null, generatedAt: 2000 },
+  { id: "demo_0.9", project: "demo", version: "0.9", components: 2, maxSeverity: "LOW", isAiScan: false, componentType: null, inputSource: null, generatedAt: 1000 },
+];
+
+async function stubAndRunWithPreviousScan(page: Page, theme: Theme = "light", lang: Lang = "en") {
+  await seedThemeLang(page, theme, lang);
+  await page.route("**/capabilities", (r) =>
+    r.fulfill({ contentType: "application/json", body: JSON.stringify({ firmware: false, scanoss: false, docker: true }) }),
+  );
+  await page.route("**/results", (r) => r.fulfill({ contentType: "application/json", body: "[]" }));
+  await page.route("**/scans", (r) =>
+    r.fulfill({ contentType: "application/json", body: JSON.stringify(RECENT_WITH_PREVIOUS) }),
+  );
+  await page.route("**/scan?id=demo_0.9", (r) =>
+    r.fulfill({ contentType: "application/json", body: JSON.stringify(PREV_DONE) }),
+  );
+  await page.route("**/file**", (r) =>
+    r.fulfill({ contentType: "application/json", body: JSON.stringify(SBOM) }),
+  );
+  await page.route("**/scan-stream**", (r) =>
+    r.fulfill({ contentType: "text/event-stream", body: `event: done\ndata: ${JSON.stringify(DONE)}\n\n` }),
+  );
+  await page.goto("/?ui=next#/new");
+  await page.fill("#project", "demo");
+  await page.fill("#version", "1.0");
+  await page.getByTestId("run-scan").click();
+}
+
+test("Overview shows what changed since the previous scan of the same project", async ({ page }) => {
+  await stubAndRunWithPreviousScan(page);
+  await expect(page.locator("main h1")).toBeVisible();
+
+  // The component/vulnerability breakdown loads in a second pass (it needs
+  // the previous scan's full lists); wait past the "computing" placeholder,
+  // which never contains the "·" separator the ready summary always does.
+  const compSummary = page.getByTestId("comp-change-summary");
+  const vulnSummary = page.getByTestId("vuln-change-summary");
+  await expect(compSummary).toContainText("·");
+  await expect(vulnSummary).toContainText("·");
+
+  await expect(compSummary).toHaveText("2 new · 1 removed · 0 updated");
+  await expect(vulnSummary).toHaveText("2 new · 1 resolved");
+});
+
 test("Overview warns when the SBOM degraded to syft (disk space)", async ({ page }) => {
   await page.route("**/capabilities", (r) =>
     r.fulfill({ contentType: "application/json", body: JSON.stringify({ firmware: false, scanoss: false, docker: true }) }),
@@ -966,6 +1037,18 @@ test("Overview warns when the SBOM degraded to syft (disk space)", async ({ page
 // waits on language-agnostic anchors — section links by href, the Tree toggle by
 // test id, and data values (package names, scores, licence ids) that don't
 // translate — so the same flow drives every locale.
+// The comparison card is conditional on a previous scan of the same project,
+// which the plain overview baseline below never has, so it never appears
+// there. A dedicated fixture covers the card on its own.
+for (const { theme, lang } of COMBOS) {
+  test(`overview comparison card matches baseline: ${theme}/${lang} @visual`, async ({ page }) => {
+    await stubAndRunWithPreviousScan(page, theme, lang);
+    await expect(page.locator("main h1")).toBeVisible();
+    await expect(page.getByTestId("comp-change-summary")).toContainText("·");
+    await captureMain(page, "overview-comparison", theme, lang);
+  });
+}
+
 for (const { theme, lang } of COMBOS) {
   test(`overview section matches baseline — ${theme}/${lang} @visual`, async ({ page }) => {
     await stubAndRun(page, theme, lang);

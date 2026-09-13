@@ -1,6 +1,7 @@
 // Copyright 2026 SK Telecom Co., Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
+import { useEffect, useState } from "react";
 import {
   Biohazard,
   Boxes,
@@ -26,13 +27,14 @@ import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import type {
-  ComponentItem,
-  DoneEvent,
-  RecentScan,
-  ResultFile,
-  Severity,
-  YoctoVex,
+import {
+  loadScan,
+  type ComponentItem,
+  type DoneEvent,
+  type RecentScan,
+  type ResultFile,
+  type Severity,
+  type YoctoVex,
 } from "@/lib/api";
 import type { LicenseRiskTier } from "@/lib/licenses";
 import type { SectionId } from "@/lib/nav";
@@ -46,6 +48,7 @@ import { type ProvenanceKind, provenanceOf } from "@/lib/provenance";
 import { formatRelativeTime, scanComparison } from "@/lib/recent";
 import { conformanceCount, inputSbomFileName, isAiScan, sbomFileName } from "@/lib/results";
 import { scanHash } from "@/lib/route";
+import { diffComponents, diffVulnerabilities, type ComponentDiff, type VulnDiff } from "@/lib/scanDiff";
 import { cn } from "@/lib/utils";
 
 import { LicenseRiskBar } from "./LicenseRiskBar";
@@ -243,6 +246,48 @@ export function Overview({
   const comparison = scanId ? scanComparison(recent, scanId) : null;
   const provenance = provenanceOf(result.scanConfig);
 
+  // The comparison card above renders instantly from the Recent-scans summary
+  // (component count + worst severity, no fetch). What actually changed, which
+  // components and which CVEs, needs the previous scan's full component and
+  // vulnerability lists, which the summary doesn't carry, so it loads in a
+  // second pass and fills the card in once it lands.
+  const [changes, setChanges] = useState<{
+    components: ComponentDiff;
+    vulns: VulnDiff;
+    /** Either scan's component list was capped server-side, so the diff may
+     *  be missing rows outside what was actually shown. */
+    partial: boolean;
+  } | null>(null);
+  const [changesLoading, setChangesLoading] = useState(false);
+  useEffect(() => {
+    setChanges(null);
+    if (!comparison) return;
+    let cancelled = false;
+    setChangesLoading(true);
+    loadScan(comparison.prev.id).then((prev) => {
+      if (cancelled) return;
+      setChangesLoading(false);
+      if (!prev) return;
+      setChanges({
+        components: diffComponents(
+          prev.sbom?.componentList ?? [],
+          result.sbom?.componentList ?? [],
+        ),
+        vulns: diffVulnerabilities(
+          prev.security?.vulnerabilities ?? [],
+          result.security?.vulnerabilities ?? [],
+        ),
+        partial: Boolean(prev.sbom?.truncated || result.sbom?.truncated),
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // result and scanId change together (a new scan replaces both); comparison
+    // is derived from scanId + recent, so scanId is the one stable dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scanId, comparison?.prev.id]);
+
   return (
     <div className="space-y-6">
       {provenance && (
@@ -324,7 +369,54 @@ export function Overview({
                 )}
               </div>
             </div>
+            {/* The two figures above can hide real churn: +3/-3 components nets
+                to "no change", and a worst-severity direction says nothing
+                about which CVEs actually moved. These need the previous
+                scan's full lists (a second fetch, below), so they fill in a
+                moment after the card above already rendered. */}
+            {(changesLoading || changes) && (
+              <div>
+                <div className="text-xs text-muted-foreground">
+                  {t("overview.compChangeLabel")}
+                </div>
+                <div
+                  className="mt-1 text-sm font-medium text-foreground"
+                  data-testid="comp-change-summary"
+                >
+                  {changesLoading || !changes
+                    ? t("overview.diffLoading")
+                    : t("overview.compChangeSummary", {
+                        added: changes.components.added.length,
+                        removed: changes.components.removed.length,
+                        changed: changes.components.changed.length,
+                      })}
+                </div>
+              </div>
+            )}
+            {(changesLoading || changes) && (
+              <div>
+                <div className="text-xs text-muted-foreground">
+                  {t("overview.vulnChangeLabel")}
+                </div>
+                <div
+                  className="mt-1 text-sm font-medium text-foreground"
+                  data-testid="vuln-change-summary"
+                >
+                  {changesLoading || !changes
+                    ? t("overview.diffLoading")
+                    : t("overview.vulnChangeSummary", {
+                        added: changes.vulns.new.length,
+                        resolved: changes.vulns.resolved.length,
+                      })}
+                </div>
+              </div>
+            )}
           </CardContent>
+          {changes?.partial && (
+            <p className="border-t px-4 py-2 text-xs text-muted-foreground">
+              {t("overview.diffPartial")}
+            </p>
+          )}
         </Card>
       )}
       {/* Zero components is the one result a reader reliably misreads: it looks
