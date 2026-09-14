@@ -26,6 +26,7 @@ bom.json
 *_vendored.cdx.json
 *_modelica.cdx.json
 *_cocoapods.cdx.json
+*_conda.cdx.json
 *_files.json
 *_source.json
 *_input.json

@@ -24,6 +24,12 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_PREP="$REPO_DIR/docker/lib/build-prep.sh"
+# build-prep.sh is bind-mounted alone into the stage-1 cdxgen container
+# (isolated from the rest of docker/lib/), so identify-conda.py has to be
+# mounted alongside it for build-prep.sh to be able to invoke it before
+# cdxgen runs (see docker/lib/identify-conda.py's own header for why this
+# has to happen before cdxgen, not only in the stage-2 post-process step).
+IDENTIFY_CONDA="$REPO_DIR/docker/lib/identify-conda.py"
 # shellcheck source=docker/lib/cdx-version.sh
 . "$REPO_DIR/docker/lib/cdx-version.sh"
 
@@ -1862,6 +1868,7 @@ if [ "$MODE" = "SOURCE" ]; then
         -v "\"$(hostpath "$SCAN_INPUT_DIR")\"":/app \
         -v "\"$(hostpath "$OUTPUT_HOST_DIR")\"":/out \
         -v "\"$(hostpath "$BUILD_PREP")\"":/tmp/build-prep.sh:ro \
+        -v "\"$(hostpath "$IDENTIFY_CONDA")\"":/tmp/identify-conda.py:ro \
         $CACHE_MOUNTS \
         $GUARD_STATE_ARGS \
         -e HOME=/tmp/sbomhome \
