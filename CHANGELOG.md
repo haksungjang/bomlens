@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A dependency that an excluded npm workspace member hoisted into shared `node_modules`, and that no shipped member needs, is no longer left in the production dependency set the same npm source scan filters to.
 - A Node/npm source scan that falls back to syft (direct dependencies only, no cdxgen) now fails with guidance instead of completing if the result covers none of the project's declared dependencies, on every path that can reach this fallback, not only the cdxgen-crash case below: a project with no committed lockfile and no cdxgen available (for example the web UI without Docker access) previously scanned "successfully" to a near-empty SBOM built from none of its own dependencies.
 - The CLI no longer prints the dependency resolver's own output during SBOM generation; it goes to a log file named on screen instead.
+- A deb, rpm, or apk component's `cpe` no longer carries the distro's own epoch or package-revision suffix in its version field; the component's own `version` and `purl` are unaffected. `libssl3` and `libcrypto3` now map to the `openssl` CPE.
 
 ### Fixed
 
