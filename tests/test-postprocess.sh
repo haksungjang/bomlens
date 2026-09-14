@@ -6758,6 +6758,158 @@ else
     echo "  SKIP: jq not installed; Node fallback quality gate not exercised"
 fi
 
+echo "== maven parent-POM license inheritance: only when the child declares none of its own =="
+if command -v node >/dev/null 2>&1; then
+    sed -n "/<<'MLIC_JS'/,/^MLIC_JS\$/p" "$PREP" | sed '1d;$d' > "$WORK/mlic.js"
+
+    MP="$WORK/mvn-lic-reactor"
+    mkdir -p "$MP/inherits" "$MP/own-license" "$MP/already-set"
+    cat > "$MP/pom.xml" <<'POM'
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>org.example</groupId>
+  <artifactId>lic-root</artifactId>
+  <version>1.0.0</version>
+  <packaging>pom</packaging>
+  <licenses>
+    <license><name>Apache License, Version 2.0</name></license>
+  </licenses>
+  <modules>
+    <module>inherits</module>
+    <module>own-license</module>
+    <module>already-set</module>
+  </modules>
+</project>
+POM
+    cat > "$MP/inherits/pom.xml" <<'POM'
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>org.example</groupId><artifactId>lic-root</artifactId><version>1.0.0</version><relativePath>../pom.xml</relativePath></parent>
+  <artifactId>inherits-module</artifactId>
+</project>
+POM
+    # Declares its own license in the pom, but the SBOM component (as cdxgen
+    # might hand it, missing the license) shows none -- a cdxgen gap, not a
+    # case this fills over with a possibly different parent license.
+    cat > "$MP/own-license/pom.xml" <<'POM'
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>org.example</groupId><artifactId>lic-root</artifactId><version>1.0.0</version><relativePath>../pom.xml</relativePath></parent>
+  <artifactId>own-license-module</artifactId>
+  <licenses>
+    <license><name>MIT License</name></license>
+  </licenses>
+</project>
+POM
+    cat > "$MP/already-set/pom.xml" <<'POM'
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>org.example</groupId><artifactId>lic-root</artifactId><version>1.0.0</version><relativePath>../pom.xml</relativePath></parent>
+  <artifactId>already-set-module</artifactId>
+</project>
+POM
+    cat > "$WORK/mlic-bom.json" <<'JSON'
+{
+  "components": [
+    { "purl": "pkg:maven/org.example/lic-root@1.0.0" },
+    { "purl": "pkg:maven/org.example/inherits-module@1.0.0" },
+    { "purl": "pkg:maven/org.example/own-license-module@1.0.0" },
+    { "purl": "pkg:maven/org.example/already-set-module@1.0.0",
+      "licenses": [{"license": {"name": "BSD-3-Clause"}}] }
+  ]
+}
+JSON
+    # A dependency resolved from the local repository, not a module of this
+    # project's own reactor: its own pom declares no <licenses>, and its
+    # <parent> names a coordinate with no relativePath at all (the ordinary
+    # shape a remote dependency's pom takes) that only the local repository
+    # -- not this reactor's checkout -- can resolve.
+    M2="$WORK/mlic-m2"
+    mkdir -p "$M2/org/example/ext-dep/2.0" "$M2/org/example/ext-parent/1.0.0"
+    cat > "$M2/org/example/ext-dep/2.0/ext-dep-2.0.pom" <<'POM'
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>org.example</groupId><artifactId>ext-parent</artifactId><version>1.0.0</version></parent>
+  <artifactId>ext-dep</artifactId>
+</project>
+POM
+    cat > "$M2/org/example/ext-parent/1.0.0/ext-parent-1.0.0.pom" <<'POM'
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>org.example</groupId>
+  <artifactId>ext-parent</artifactId>
+  <version>1.0.0</version>
+  <packaging>pom</packaging>
+  <licenses>
+    <license><name>Eclipse Public License 2.0</name></license>
+  </licenses>
+</project>
+POM
+
+    # A parent chain that cycles back on itself (ext-parent's own coordinate,
+    # misdeclared as its own parent) must still terminate -- the depth cap
+    # backstops the visited set here, since a two-node cycle both fits well
+    # under it and would still be caught by the set alone; MAX_PARENT_DEPTH
+    # exists for a long non-cyclic chain the set never revisits.
+    mkdir -p "$M2/org/example/cyclic/1.0"
+    cat > "$M2/org/example/cyclic/1.0/cyclic-1.0.pom" <<'POM'
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>org.example</groupId><artifactId>cyclic</artifactId><version>1.0</version></parent>
+  <artifactId>cyclic</artifactId>
+</project>
+POM
+
+    jq '.components += [
+      {"purl":"pkg:maven/org.example/ext-dep@2.0"},
+      {"purl":"pkg:maven/org.example/cyclic@1.0"}
+    ]' "$WORK/mlic-bom.json" > "$WORK/mlic-bom.json.tmp" && mv "$WORK/mlic-bom.json.tmp" "$WORK/mlic-bom.json"
+
+    ( cd "$MP" && timeout 5 node "$WORK/mlic.js" "$WORK/mlic-bom.json" "$M2" ) >/dev/null 2>&1
+    _mlic_rc=$?
+    if [ "$_mlic_rc" -ne 0 ]; then
+        fail "parent-POM license inheritance timed out or errored (should never hang)"
+    fi
+    if jq -e '(.components[0] | has("licenses")) | not' "$WORK/mlic-bom.json" >/dev/null 2>&1; then
+        pass "the module declaring its own license (the reactor root) is left untouched"
+    else
+        fail "the root module's own license was rewritten" "$(jq -c '.components[0]' "$WORK/mlic-bom.json" 2>&1)"
+    fi
+    if jq -e '
+        .components[1].licenses == [{"license": {"name": "Apache License, Version 2.0"}}]
+        and (.components[1].properties | any(.name=="bomlens:licenseSource" and .value=="parent POM"))
+    ' "$WORK/mlic-bom.json" >/dev/null 2>&1; then
+        pass "a module with no license of its own inherits the parent's, with the source recorded"
+    else
+        fail "parent-POM license inheritance did not fill the expected value" "$(jq -c '.components[1]' "$WORK/mlic-bom.json" 2>&1)"
+    fi
+    if jq -e '(.components[2] | has("licenses")) | not' "$WORK/mlic-bom.json" >/dev/null 2>&1; then
+        pass "a module whose own pom declares a license is left alone even though the SBOM component omits one"
+    else
+        fail "a module's own pom.xml license was overwritten by the parent's" "$(jq -c '.components[2]' "$WORK/mlic-bom.json" 2>&1)"
+    fi
+    if jq -e '.components[3].licenses == [{"license": {"name": "BSD-3-Clause"}}]' "$WORK/mlic-bom.json" >/dev/null 2>&1; then
+        pass "a module whose SBOM component already carries a license is left untouched"
+    else
+        fail "a component with an existing license was overwritten" "$(jq -c '.components[3]' "$WORK/mlic-bom.json" 2>&1)"
+    fi
+    if jq -e '
+        .components[4].licenses == [{"license": {"name": "Eclipse Public License 2.0"}}]
+        and (.components[4].properties | any(.name=="bomlens:licenseSource" and .value=="parent POM"))
+    ' "$WORK/mlic-bom.json" >/dev/null 2>&1; then
+        pass "a dependency outside the reactor inherits its parent's license from the local repository"
+    else
+        fail "local-repository parent-POM inheritance did not fill the expected value" "$(jq -c '.components[4]' "$WORK/mlic-bom.json" 2>&1)"
+    fi
+    if jq -e '(.components[5] | has("licenses")) | not' "$WORK/mlic-bom.json" >/dev/null 2>&1; then
+        pass "a parent chain that cycles back on itself resolves to not-found, safely"
+    else
+        fail "a cyclic parent chain was not left untouched" "$(jq -c '.components[5]' "$WORK/mlic-bom.json" 2>&1)"
+    fi
+else
+    echo "  SKIP: node not installed; maven parent-POM license inheritance not exercised"
+fi
+
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
