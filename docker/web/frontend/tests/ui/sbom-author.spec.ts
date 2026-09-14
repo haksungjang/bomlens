@@ -7,7 +7,7 @@ import { test, expect, type Page } from "@playwright/test";
  * SBOM author (--sbom-author on the CLI, SBOM_AUTHOR on the container): the
  * organisation or person running the scan, recorded on metadata.authors.
  * Offered for any scan except ANALYZE (a supplier SBOM we only convert; we did
- * not author it — see entrypoint.sh's docmeta dispatch). The backend is
+ * not author it, see entrypoint.sh's docmeta dispatch). The backend is
  * stubbed; server.py's own env/sibling-arg wiring is covered by
  * tests/test-web-ui.sh and tests/test-windows.sh.
  */
@@ -62,7 +62,7 @@ test("SBOM author field is hidden for an SBOM upload (ANALYZE)", async ({ page }
   await page.goto("/#/new");
   await selectSbomUpload(page);
   // Other advanced options remain (deep CVE, byte-stable, …), so the
-  // disclosure itself still renders — just not this field.
+  // disclosure itself still renders, just not this field.
   await page.getByText("Advanced scan options").click();
   await expect(page.getByLabel("SBOM author (optional)")).toHaveCount(0);
 });
