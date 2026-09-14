@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Overview comparison card's "more severe than before" text failed WCAG AA contrast in light mode. A token-lint rule now catches a risk-severity color token used on body text instead of its text-safe variant.
 - Language detection recognizes an Android project that uses the Kotlin DSL, declares the Android plugin in a version catalog or keeps `AndroidManifest.xml` under `app/src/main`, and a .NET solution whose projects sit in subfolders or that uses `.slnx`, so each is scanned with its own resolver image.
 - A scan of a folder that never got the chance to restore its own build artifacts (a forced kill, an out-of-memory kill, a host crash) now has them cleaned up by the next scan of the same folder, from the CLI, the web UI, or the desktop app.
+- A source scan's dependency-resolution steps (Cargo, Go, Bundler, pip, npm, Swift, Gradle/Android) had no time limit and discarded their own error output, so a stuck or failing step left no trace and the SBOM looked complete. Each step is now bounded (`BOMLENS_PREP_TIMEOUT`, default 900s / 1800s for Gradle and Android) and a failure or timeout is logged with the step's own output and recorded on the SBOM as `bomlens:pipeline-step-failed`.
 
 ## [v1.11.11] - 2026-09-14
 

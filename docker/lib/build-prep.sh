@@ -266,6 +266,44 @@ stop_supervised() {
     _cg_pid=""; _cg_pgid=""
 }
 
+# Time limits for the resolution steps below, run through prep_step. A first
+# Gradle resolve (empty cache) can legitimately take well over 15 minutes, and
+# losing dependencies to a timeout is worse than a slow scan, so Gradle steps
+# get a longer budget than the rest. BOMLENS_PREP_TIMEOUT overrides both.
+PREP_TIMEOUT_DEFAULT="${BOMLENS_PREP_TIMEOUT:-900}"
+PREP_TIMEOUT_GRADLE="${BOMLENS_PREP_TIMEOUT:-1800}"
+
+# Run one resolution step (LABEL, a timeout in seconds, then the command and
+# its args) under run_supervised_timeout, so it is stopped like the rest if the
+# scan is interrupted. Failure or a timeout (rc 124) is logged with the
+# command's own stderr (last 20 lines) and recorded in PREP_FAILED, a
+# space-separated list of labels a caller stamps onto the SBOM once cdxgen has
+# run. Never aborts the script; returns the command's exit code.
+PREP_FAILED=""
+prep_step() {
+    _ps_label="$1"; _ps_timeout="$2"; shift 2
+    _ps_err=$(mktemp)
+    run_supervised_timeout "$_ps_timeout" "$@" 2>"$_ps_err"
+    _ps_rc=$?
+    if [ "$_ps_rc" -ne 0 ]; then
+        if [ "$_ps_rc" -eq 124 ]; then
+            echo "[build-prep] $_ps_label: timed out after ${_ps_timeout}s" >&2
+        else
+            echo "[build-prep] $_ps_label: failed (rc=$_ps_rc)" >&2
+        fi
+        if [ -s "$_ps_err" ]; then
+            echo "[build-prep] $_ps_label said (last 20 lines):" >&2
+            tail -20 "$_ps_err" | sed 's/^/[build-prep]   /' >&2
+        fi
+        case " $PREP_FAILED " in
+            *" $_ps_label "*) ;;
+            *) PREP_FAILED="${PREP_FAILED:+$PREP_FAILED }$_ps_label" ;;
+        esac
+    fi
+    rm -f "$_ps_err"
+    return "$_ps_rc"
+}
+
 # Cleanup-only invocation (BOMLENS_GUARD_RESTORE_ONLY=1): a prior run recorded
 # its snapshot at /bomlens-state/$BOMLENS_GUARD_ID and never got to restore
 # it -- SIGKILL, OOM, a host crash, anything that skips the traps below. The
@@ -289,7 +327,7 @@ trap 'stop_supervised; guard_restore; exit 143' TERM
 # Rust — cdxgen does NOT auto-run cargo; lockfile is essential for transitive deps
 if [ -f Cargo.toml ] && command -v cargo >/dev/null 2>&1; then
     log "cargo generate-lockfile"
-    cargo generate-lockfile 2>/dev/null
+    prep_step cargo-lockfile "$PREP_TIMEOUT_DEFAULT" cargo generate-lockfile
 fi
 
 # Go — complete go.sum so cdxgen's default-readonly `go list -deps` resolves the
@@ -313,14 +351,14 @@ if [ -f go.mod ] && command -v go >/dev/null 2>&1; then
         echo "[build-prep] go: allow access to proxy.golang.org (or your GOPROXY) from the Docker engine and re-scan." >&2
     fi
     log "go mod tidy"
-    GOFLAGS="-mod=mod" go mod tidy 2>/dev/null || GOFLAGS="-mod=mod" go mod download 2>/dev/null
+    prep_step go-mod-tidy "$PREP_TIMEOUT_DEFAULT" sh -c 'GOFLAGS="-mod=mod" go mod tidy || GOFLAGS="-mod=mod" go mod download'
 fi
 
 # Ruby — ensure a lockfile exists (cdxgen ruby images usually auto-resolve,
 # but a Gemfile.lock makes it deterministic)
 if [ -f Gemfile ] && [ ! -f Gemfile.lock ] && command -v bundle >/dev/null 2>&1; then
     log "bundle lock"
-    bundle lock 2>/dev/null || bundle install 2>/dev/null
+    prep_step bundle-lock "$PREP_TIMEOUT_DEFAULT" sh -c 'bundle lock || bundle install'
 fi
 
 # Maven — no pre-resolve step. cdxgen invokes maven itself (dependency:tree /
@@ -375,11 +413,14 @@ if { [ -f build.gradle ] || [ -f build.gradle.kts ]; } && command -v gradle >/de
     if [ -n "${ANDROID_HOME:-}" ] && ! opted_out "${BOMLENS_ANDROID_FULL_GRAPH:-}"; then
         log "android: resolving deployable release runtime classpath"
         _relset=$(mktemp)
-        _subs=$("$GRADLEW" --no-daemon -q --console=plain projects 2>/dev/null \
+        # Both Gradle calls below share one label: to a reader they are one
+        # logical step (the release classpath resolve), whether it timed out
+        # listing subprojects or resolving one module's dependencies.
+        _subs=$(prep_step android-release-classpath "$PREP_TIMEOUT_GRADLE" "$GRADLEW" --no-daemon -q --console=plain projects \
                 | sed -n "s/.*Project '\(:[A-Za-z0-9:._-]*\)'.*/\1/p")
         # Include the root ("") as a fallback for single-module projects.
         for _s in $_subs ""; do
-            _dep=$("$GRADLEW" --no-daemon -q --console=plain "${_s}:dependencies" 2>/dev/null)
+            _dep=$(prep_step android-release-classpath "$PREP_TIMEOUT_GRADLE" "$GRADLEW" --no-daemon -q --console=plain "${_s}:dependencies")
             [ -n "$_dep" ] || continue
             # Pick the deployable release runtime config for this module: prefer the
             # plain releaseRuntimeClasspath, else the first flavored release variant
@@ -426,7 +467,7 @@ if { [ -f build.gradle ] || [ -f build.gradle.kts ]; } && command -v gradle >/de
     else
         # java-gradle (or opted-out Android): resolve so cdxgen sees the full graph.
         log "gradle dependencies"
-        "$GRADLEW" --no-daemon dependencies >/dev/null 2>&1 || true
+        prep_step gradle-dependencies "$PREP_TIMEOUT_GRADLE" "$GRADLEW" --no-daemon dependencies >/dev/null
     fi
 fi
 
@@ -443,65 +484,80 @@ fi
 # without the bad pin). So: keep the bulk install as the fast path, surface pip's
 # own error when it fails, then retry requirement by requirement so one
 # unbuildable pin costs only its own evidence.
+# Written to a temp file and run as its own script, not a shell function:
+# prep_step backgrounds a step through setsid, which execs a real process and
+# cannot see a function defined in build-prep.sh's own interpreter (setsid:
+# failed to execute ...: No such file or directory, pip never ran, silently,
+# because the failure still landed in PREP_FAILED). Same reason go-mod-tidy,
+# bundle-lock and npm-production-set below run through sh rather than a
+# function. A file rather than `sh -c "$(cat <<'EOF' ...)"`: some /bin/sh
+# builds mis-parse a `case ... ;; esac` heredoc body nested inside a command
+# substitution.
+#
+# Everything the script writes to stderr (pip's own output included, no longer
+# routed through a side file) lands in prep_step's capture and its
+# last-20-lines report on failure. The per-requirement "$_pf of $_pn failed"
+# summary stays, since prep_step's generic message has no way to know that
+# count.
+_pip_script=$(mktemp 2>/dev/null) || _pip_script="${TMPDIR:-/tmp}/bomlens-pip-install.sh"
+cat > "$_pip_script" <<'PIPSCRIPT'
+PIP_BSP=""                       # PEP 668 needs --break-system-packages here
+
+# One best-effort install attempt. A PEP 668 "externally managed" image
+# refuses the plain call and needs --break-system-packages; that is the only
+# failure worth retrying, and once seen it is remembered, so a requirement
+# that simply cannot be built is attempted once rather than twice.
+pip_try() {
+    if [ -n "$PIP_BSP" ]; then
+        pip3 install -q --break-system-packages "$@"
+        return $?
+    fi
+    _ptry=$(mktemp 2>/dev/null) || _ptry="${TMPDIR:-/tmp}/bomlens-pip-try.err"
+    pip3 install -q "$@" 2>"$_ptry"
+    _prc=$?
+    if [ "$_prc" -ne 0 ] && grep -q "externally-managed-environment" "$_ptry" 2>/dev/null; then
+        rm -f "$_ptry"
+        pip3 install -q --break-system-packages "$@" || return 1
+        PIP_BSP=1
+        return 0
+    fi
+    cat "$_ptry" >&2
+    rm -f "$_ptry"
+    return "$_prc"
+}
+
+if ! pip_try -r requirements.txt; then
+    echo "[build-prep] pip: bulk install failed; retrying one requirement at a time" >&2
+    _reqs=$(mktemp 2>/dev/null) || _reqs="${TMPDIR:-/tmp}/bomlens-reqs.txt"
+    # Strip comments the way pip does: a whole-line '#', or a '#' that
+    # follows whitespace. A bare '#' inside a token is left alone so a VCS
+    # URL fragment (git+https://...#egg=name) survives.
+    sed -e 's/^[[:space:]]*#.*$//' -e 's/[[:space:]][[:space:]]*#.*$//' \
+        -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' requirements.txt > "$_reqs"
+    _pn=0; _pf=0
+    while IFS= read -r _req; do
+        [ -n "$_req" ] || continue
+        # Option lines (-r/-c/-e/--index-url/--hash/...) are not requirement
+        # specifiers; installing them one by one is meaningless.
+        case "$_req" in -*) continue ;; esac
+        _pn=$((_pn + 1))
+        pip_try "$_req" \
+            || { _pf=$((_pf + 1)); echo "[build-prep] pip: could not install '$_req'" >&2; }
+    done < "$_reqs"
+    rm -f "$_reqs"
+    if [ "$_pf" -gt 0 ]; then
+        echo "[build-prep] pip: $_pf of $_pn requirement(s) failed to install" >&2
+        exit 1
+    fi
+fi
+exit 0
+PIPSCRIPT
+
 if [ -f requirements.txt ] && command -v pip3 >/dev/null 2>&1; then
     log "pip install requirements"
-    PIP_BSP=""                       # PEP 668 needs --break-system-packages here
-    _piperr=$(mktemp 2>/dev/null) || _piperr="${TMPDIR:-/tmp}/bomlens-pip.err"
-
-    # One best-effort install attempt. A PEP 668 "externally managed" image
-    # refuses the plain call and needs --break-system-packages; that is the only
-    # failure worth retrying, and once seen it is remembered, so a requirement
-    # that simply cannot be built is attempted once rather than twice.
-    pip_try() {
-        if [ -n "$PIP_BSP" ]; then
-            pip3 install -q --break-system-packages "$@" 2>>"$_piperr"
-            return $?
-        fi
-        _ptry=$(mktemp 2>/dev/null) || _ptry="${TMPDIR:-/tmp}/bomlens-pip-try.err"
-        pip3 install -q "$@" 2>"$_ptry"
-        _prc=$?
-        if [ "$_prc" -ne 0 ] && grep -q "externally-managed-environment" "$_ptry" 2>/dev/null; then
-            rm -f "$_ptry"
-            pip3 install -q --break-system-packages "$@" 2>>"$_piperr" || return 1
-            PIP_BSP=1
-            return 0
-        fi
-        cat "$_ptry" >> "$_piperr" 2>/dev/null
-        rm -f "$_ptry"
-        return "$_prc"
-    }
-
-    if ! pip_try -r requirements.txt; then
-        log "pip: bulk install failed; retrying one requirement at a time"
-        _reqs=$(mktemp 2>/dev/null) || _reqs="${TMPDIR:-/tmp}/bomlens-reqs.txt"
-        # Strip comments the way pip does: a whole-line '#', or a '#' that
-        # follows whitespace. A bare '#' inside a token is left alone so a VCS
-        # URL fragment (git+https://...#egg=name) survives.
-        sed -e 's/^[[:space:]]*#.*$//' -e 's/[[:space:]][[:space:]]*#.*$//' \
-            -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' requirements.txt > "$_reqs"
-        _pn=0; _pf=0
-        while IFS= read -r _req; do
-            [ -n "$_req" ] || continue
-            # Option lines (-r/-c/-e/--index-url/--hash/...) are not requirement
-            # specifiers; installing them one by one is meaningless.
-            case "$_req" in -*) continue ;; esac
-            _pn=$((_pn + 1))
-            pip_try "$_req" \
-                || { _pf=$((_pf + 1)); echo "[build-prep] pip: could not install '$_req'" >&2; }
-        done < "$_reqs"
-        rm -f "$_reqs"
-        # This report goes to stderr, next to pip's own output, so the two stay
-        # together in a combined log. What pip said is the point: the cause of a
-        # partial install belongs in the scan log, not in /dev/null. Tail only,
-        # because a resolver failure can print hundreds of candidate lines.
-        [ "$_pf" -gt 0 ] && echo "[build-prep] pip: $_pf of $_pn requirement(s) failed to install" >&2
-        if [ -s "$_piperr" ]; then
-            echo "[build-prep] pip: last lines of pip output:" >&2
-            tail -20 "$_piperr" >&2
-        fi
-    fi
-    rm -f "$_piperr"
+    prep_step pip-install "$PREP_TIMEOUT_DEFAULT" sh "$_pip_script"
 fi
+rm -f "$_pip_script"
 
 # Swift / SPM — cdxgen reads Package.resolved for the resolved graph, and parses it
 # offline (verified: both the v1 `object.pins` and v2 top-level `pins` formats). Only run
@@ -515,7 +571,7 @@ if [ -f Package.swift ] && command -v swift >/dev/null 2>&1; then
         log "swift: committed Package.resolved present; skipping network resolve"
     else
         log "swift package resolve (no committed Package.resolved)"
-        swift package resolve >/dev/null 2>&1 || true
+        prep_step swift-package-resolve "$PREP_TIMEOUT_DEFAULT" swift package resolve >/dev/null
     fi
 fi
 
@@ -537,7 +593,7 @@ if [ -f package.json ] && ! opted_out "${BOMLENS_NODE_FULL_GRAPH:-}" \
     # Copy a committed lockfile too so the prod resolve pins the same versions cdxgen sees.
     [ -f package-lock.json ] && cp package-lock.json "$_npmtmp/" 2>/dev/null
     _nodeset=$(mktemp)
-    if ( cd "$_npmtmp" && npm install --omit=dev --package-lock-only --no-audit --no-fund --ignore-scripts >/dev/null 2>&1 ) \
+    if prep_step npm-production-set "$PREP_TIMEOUT_DEFAULT" sh -c "cd \"$_npmtmp\" && npm install --omit=dev --package-lock-only --no-audit --no-fund --ignore-scripts" >/dev/null \
        && [ -f "$_npmtmp/package-lock.json" ]; then
         # Emit name@version for every non-dev node_modules entry in the resolved lockfile.
         node -e '
@@ -725,6 +781,32 @@ elif [ -f /opt/bin/cdxgen ]; then
 else
     echo "[build-prep] ERROR: cdxgen not found in image" >&2
     exit 1
+fi
+
+# Record each prep_step that failed or timed out (PREP_FAILED, space-separated
+# labels) on the SBOM, one bomlens:pipeline-step-failed property per label,
+# the same shape docker/lib/pipeline-step.sh's mark_pipeline_warning writes.
+# This file is bind-mounted alone (see the header comment), so the property is
+# appended inline with node rather than sourcing that script.
+if [ "${rc:-1}" -eq 0 ] && [ -n "$PREP_FAILED" ] && [ -f "$OUT" ] && command -v node >/dev/null 2>&1; then
+    _pf=$(mktemp).js
+    cat > "$_pf" <<'PREPFAIL_JS'
+const fs = require('fs');
+const [bomPath, labels] = process.argv.slice(2);
+let bom;
+try { bom = JSON.parse(fs.readFileSync(bomPath, 'utf8')); } catch (e) { process.exit(0); }
+bom.metadata = bom.metadata || {};
+const props = bom.metadata.properties || [];
+const list = labels.split(' ').filter(Boolean);
+for (const label of list) {
+  props.push({ name: 'bomlens:pipeline-step-failed', value: label });
+}
+bom.metadata.properties = props;
+fs.writeFileSync(bomPath, JSON.stringify(bom, null, 2));
+process.stderr.write('[build-prep] recorded ' + list.length + ' failed preprocessing step(s) on the SBOM: ' + list.join(', ') + '\n');
+PREPFAIL_JS
+    node "$_pf" "$OUT" "$PREP_FAILED" || log "prep-failed: recording skipped (non-fatal)"
+    rm -f "$_pf"
 fi
 
 # Android release-scope filter: keep only components in the deployable release

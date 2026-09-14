@@ -4585,6 +4585,201 @@ fi
     && pass "guard_restore ran before exit: the build dir the stub created is gone" \
     || fail "build dir left behind after an interrupted scan" "$(cd "$INT_ROOT/src" && find . | sort | tr '\n' ' ')"
 
+echo "== prep_step: a failed preprocessing step is logged with its stderr and recorded on the SBOM =="
+# Regression for G-2/G-7: cargo/go/bundle/gradle/android/swift/npm/pip all ran
+# with their stderr discarded and no time limit, so a failure or a stuck
+# network call left no trace anywhere. Every one of those steps now goes
+# through prep_step, which logs the failure (with the command's own stderr)
+# and stamps bomlens:pipeline-step-failed on the SBOM. Driven with stub
+# cargo/cdxgen on PATH so the real prep_step and run_supervised_timeout run,
+# not a reimplementation of either.
+PREP_FAIL_ROOT="$WORK/prep-fail"
+mkdir -p "$PREP_FAIL_ROOT/bin" "$PREP_FAIL_ROOT/src" "$PREP_FAIL_ROOT/out"
+printf '[package]\nname = "x"\nversion = "0.1.0"\n' > "$PREP_FAIL_ROOT/src/Cargo.toml"
+cat > "$PREP_FAIL_ROOT/bin/cargo" <<'STUB'
+#!/bin/sh
+echo "boom: registry unreachable" >&2
+exit 1
+STUB
+chmod +x "$PREP_FAIL_ROOT/bin/cargo"
+# Minimal cdxgen stub: find the -o argument, write a valid empty CycloneDX doc.
+cat > "$PREP_FAIL_ROOT/bin/cdxgen" <<'STUB'
+#!/bin/sh
+out=""; prev=""
+for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+printf '{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"metadata":{},"components":[]}\n' > "$out"
+STUB
+chmod +x "$PREP_FAIL_ROOT/bin/cdxgen"
+
+PATH="$PREP_FAIL_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$PREP_FAIL_ROOT/src" "$PREP_FAIL_ROOT/out/bom.json" \
+    > "$PREP_FAIL_ROOT/log" 2>&1
+
+grep -q '\[build-prep\] cargo-lockfile: failed (rc=1)' "$PREP_FAIL_ROOT/log" \
+    && pass "prep_step logs the label and exit code of a failed step" \
+    || fail "the failure was not logged" "$(cat "$PREP_FAIL_ROOT/log")"
+grep -q 'boom: registry unreachable' "$PREP_FAIL_ROOT/log" \
+    && pass "the failed step's own stderr reaches the scan log" \
+    || fail "the command's stderr was not surfaced" "$(cat "$PREP_FAIL_ROOT/log")"
+if command -v jq >/dev/null 2>&1 && [ -f "$PREP_FAIL_ROOT/out/bom.json" ]; then
+    jq -e '[.metadata.properties[]? | select(.name=="bomlens:pipeline-step-failed" and .value=="cargo-lockfile")] | length == 1' \
+        "$PREP_FAIL_ROOT/out/bom.json" >/dev/null 2>&1 \
+        && pass "the failed step is recorded on the SBOM as bomlens:pipeline-step-failed" \
+        || fail "the SBOM does not carry the failure" "$(jq -c '.metadata.properties' "$PREP_FAIL_ROOT/out/bom.json" 2>&1)"
+fi
+
+echo "== prep_step: a step that outlives its budget is stopped and reported as a timeout, not waited out =="
+PREP_TO_ROOT="$WORK/prep-timeout"
+mkdir -p "$PREP_TO_ROOT/bin" "$PREP_TO_ROOT/src" "$PREP_TO_ROOT/out"
+printf '[package]\nname = "x"\nversion = "0.1.0"\n' > "$PREP_TO_ROOT/src/Cargo.toml"
+cp "$PREP_FAIL_ROOT/bin/cdxgen" "$PREP_TO_ROOT/bin/cdxgen"
+cat > "$PREP_TO_ROOT/bin/cargo" <<'STUB'
+#!/bin/sh
+sleep 30
+STUB
+chmod +x "$PREP_TO_ROOT/bin/cargo"
+
+T0=$(date +%s)
+PATH="$PREP_TO_ROOT/bin:$PATH" BOMLENS_PREP_TIMEOUT=1 \
+    sh "$LIB/build-prep.sh" "$PREP_TO_ROOT/src" "$PREP_TO_ROOT/out/bom.json" \
+    > "$PREP_TO_ROOT/log" 2>&1
+T1=$(date +%s)
+ELAPSED=$((T1 - T0))
+
+grep -q '\[build-prep\] cargo-lockfile: timed out after 1s' "$PREP_TO_ROOT/log" \
+    && pass "prep_step reports a timeout distinctly from an ordinary failure" \
+    || fail "the timeout was not logged" "$(cat "$PREP_TO_ROOT/log")"
+if [ "$ELAPSED" -lt 15 ]; then
+    pass "build-prep.sh moved on in ${ELAPSED}s, not after the stub's own 30s sleep"
+else
+    fail "build-prep.sh took ${ELAPSED}s (expected well under the stub's 30s sleep)"
+fi
+[ -f "$PREP_TO_ROOT/out/bom.json" ] \
+    && pass "a timed-out step does not abort the scan; cdxgen still ran and wrote the SBOM" \
+    || fail "no SBOM was written after the timeout"
+if command -v jq >/dev/null 2>&1 && [ -f "$PREP_TO_ROOT/out/bom.json" ]; then
+    jq -e '[.metadata.properties[]? | select(.name=="bomlens:pipeline-step-failed" and .value=="cargo-lockfile")] | length == 1' \
+        "$PREP_TO_ROOT/out/bom.json" >/dev/null 2>&1 \
+        && pass "the timeout is recorded on the SBOM the same way a failure is" \
+        || fail "the SBOM does not carry the timeout" "$(jq -c '.metadata.properties' "$PREP_TO_ROOT/out/bom.json" 2>&1)"
+fi
+
+echo "== prep_step: a successful step leaves no trace of failure =="
+PREP_OK_ROOT="$WORK/prep-ok"
+mkdir -p "$PREP_OK_ROOT/bin" "$PREP_OK_ROOT/src" "$PREP_OK_ROOT/out"
+printf '[package]\nname = "x"\nversion = "0.1.0"\n' > "$PREP_OK_ROOT/src/Cargo.toml"
+cp "$PREP_FAIL_ROOT/bin/cdxgen" "$PREP_OK_ROOT/bin/cdxgen"
+cat > "$PREP_OK_ROOT/bin/cargo" <<'STUB'
+#!/bin/sh
+exit 0
+STUB
+chmod +x "$PREP_OK_ROOT/bin/cargo"
+PATH="$PREP_OK_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$PREP_OK_ROOT/src" "$PREP_OK_ROOT/out/bom.json" \
+    > "$PREP_OK_ROOT/log" 2>&1
+if grep -q 'cargo-lockfile: failed\|cargo-lockfile: timed out' "$PREP_OK_ROOT/log"; then
+    fail "a successful step was reported as failed" "$(cat "$PREP_OK_ROOT/log")"
+else
+    pass "a successful step is silent (no failed/timed-out line)"
+fi
+if command -v jq >/dev/null 2>&1 && [ -f "$PREP_OK_ROOT/out/bom.json" ]; then
+    jq -e '[.metadata.properties[]? | select(.name=="bomlens:pipeline-step-failed")] | length == 0' \
+        "$PREP_OK_ROOT/out/bom.json" >/dev/null 2>&1 \
+        && pass "a successful scan carries no bomlens:pipeline-step-failed property" \
+        || fail "an unexpected pipeline-step-failed property was recorded" "$(jq -c '.metadata.properties' "$PREP_OK_ROOT/out/bom.json" 2>&1)"
+fi
+
+echo "== prep_step: the same label failing more than once is recorded only once =="
+# Isolated unit test of the dedup logic in prep_step itself (real function,
+# lifted from build-prep.sh), with run_supervised_timeout stubbed to a plain
+# passthrough so the test is about PREP_FAILED bookkeeping, not process
+# supervision (already covered above).
+_body="$(awk '
+    /^prep_step\(\) \{/ { inside = 1 }
+    inside { print }
+    inside && $0 == "}" { exit }
+' "$LIB/build-prep.sh")"
+if [ -z "$_body" ]; then
+    fail "could not lift prep_step out of build-prep.sh (was it renamed?)"
+else
+    run_supervised_timeout() { shift; "$@"; }
+    eval "$_body"
+    PREP_FAILED=""
+    prep_step dup-label 5 false
+    prep_step dup-label 5 false
+    prep_step other-label 5 false
+    [ "$PREP_FAILED" = "dup-label other-label" ] \
+        && pass "a label that fails repeatedly is recorded once, distinct labels each appear" \
+        || fail "PREP_FAILED dedup is wrong" "got [$PREP_FAILED]"
+fi
+
+echo "== prep_step: every resolution step runs through it (no bare invocation left) =="
+# The pre-prep_step patterns (silently discarded stderr, no time limit) must
+# not reappear alongside prep_step for the same command.
+for pattern in \
+    'cargo generate-lockfile 2>/dev/null' \
+    'go mod tidy 2>/dev/null' \
+    'bundle lock 2>/dev/null' \
+    'swift package resolve >/dev/null 2>&1 || true' \
+    'GRADLEW" --no-daemon dependencies >/dev/null 2>&1 || true'; do
+    if grep -qF "$pattern" "$LIB/build-prep.sh"; then
+        fail "the old unwrapped pattern is still present" "$pattern"
+    fi
+done
+pass "none of the old silently-discarded preprocessing invocations remain"
+
+echo "== prep_step/run_supervised: no step's command is a shell function defined in this file =="
+# Regression: pip-install passed _pip_install_requirements (a shell function)
+# as prep_step's command. prep_step backgrounds a step through setsid, which
+# execs a real process and cannot see a function defined in build-prep.sh's
+# own interpreter -- it failed every time (rc=127), silently, because the
+# failure still landed in PREP_FAILED and read like an ordinary failure.
+# Functions defined inside the pip heredoc are a separate script's text, not
+# part of build-prep.sh's own function table, so that block is skipped here.
+BP_FUNCS=$(sed '/<<.PIPSCRIPT/,/^PIPSCRIPT$/d' "$LIB/build-prep.sh" \
+    | grep -oE '^[A-Za-z_][A-Za-z0-9_]*\(\)' | sed 's/()//')
+BP_BAD=""
+for f in $BP_FUNCS; do
+    if grep -qE "prep_step[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+$f([[:space:]]|\$)" "$LIB/build-prep.sh" \
+        || grep -qE "run_supervised[[:space:]]+$f([[:space:]]|\$)" "$LIB/build-prep.sh" \
+        || grep -qE "run_supervised_timeout[[:space:]]+[^[:space:]]+[[:space:]]+$f([[:space:]]|\$)" "$LIB/build-prep.sh"; then
+        BP_BAD="$BP_BAD $f"
+    fi
+done
+[ -z "$BP_BAD" ] \
+    && pass "no prep_step/run_supervised call passes a locally-defined function as its command" \
+    || fail "a step's command is a shell function, not an external command (setsid cannot exec it)" "$BP_BAD"
+
+echo "== prep_step: pip-install actually runs pip3, not a function setsid cannot exec =="
+# Same stub-PATH harness as the failed/success cases above, but exercising the
+# pip step specifically -- the one step this regression broke. PIP_MARKER
+# proves the stub pip3 actually ran; before the fix it never did ("setsid:
+# failed to execute ...: No such file or directory"), silently, on any host
+# that has setsid (every cdxgen container, and CI's Ubuntu runners).
+PREP_PIP_ROOT="$WORK/prep-pip"
+mkdir -p "$PREP_PIP_ROOT/bin" "$PREP_PIP_ROOT/src" "$PREP_PIP_ROOT/out"
+printf 'flask==3.0.0\n' > "$PREP_PIP_ROOT/src/requirements.txt"
+cp "$PREP_FAIL_ROOT/bin/cdxgen" "$PREP_PIP_ROOT/bin/cdxgen"
+PIP_MARKER="$PREP_PIP_ROOT/pip-ran"
+cat > "$PREP_PIP_ROOT/bin/pip3" <<'STUB'
+#!/bin/sh
+echo "$@" >> ../pip-ran
+exit 0
+STUB
+chmod +x "$PREP_PIP_ROOT/bin/pip3"
+PATH="$PREP_PIP_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$PREP_PIP_ROOT/src" "$PREP_PIP_ROOT/out/bom.json" \
+    > "$PREP_PIP_ROOT/log" 2>&1
+if command -v setsid >/dev/null 2>&1; then
+    [ -s "$PIP_MARKER" ] \
+        && pass "pip-install ran the real pip3 under setsid (CI has it; this host does too)" \
+        || fail "pip3 never ran under setsid" "$(cat "$PREP_PIP_ROOT/log")"
+else
+    [ -s "$PIP_MARKER" ] \
+        && pass "pip-install ran pip3 (no setsid on this host, so this run does not exercise the regression -- CI's does)" \
+        || fail "pip3 never ran even without setsid" "$(cat "$PREP_PIP_ROOT/log")"
+fi
+grep -q 'pip-install: failed\|pip-install: timed out' "$PREP_PIP_ROOT/log" \
+    && fail "pip-install was reported as failed" "$(cat "$PREP_PIP_ROOT/log")" \
+    || pass "pip-install left no failure trace"
+
 echo "== lic-mapping: 0BSD stops claiming the generic BSD names =="
 # build-prep.sh corrects cdxgen's two license-name tables before cdxgen runs,
 # because "BSD License" (the only BSD classifier PyPI has) resolved to 0BSD — a
