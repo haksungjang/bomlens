@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - The Overview screen now shows when a best-effort post-process step (CPE/EOL/malicious enrichment, conformance validation, notice generation, and the like) failed during a scan, naming which one, instead of a valid but silently incomplete SBOM giving no visible sign of it.
+- The Overview comparison card's added/removed/version-changed component names and new/resolved CVE ids now link into Components/Vulnerabilities filtered to that one name, instead of leaving the reader to retype it into the section's own search box.
 
 ### Fixed
 

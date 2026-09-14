@@ -574,7 +574,7 @@
     "compAddedHeading": "Added",
     "compRemovedHeading": "Removed",
     "compChangedHeading": "Version changed",
-    "compChangedLine": "{{name}} moved from {{from}} to {{to}}",
+    "compChangedSuffix": "moved from {{from}} to {{to}}",
     "vulnChangeLabel": "Vulnerabilities changed",
     "vulnChangeSummary": "{{added}} new · {{resolved}} resolved",
     "vulnNewHeading": "New",
