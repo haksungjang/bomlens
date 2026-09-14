@@ -77,6 +77,22 @@ Detected file: `build.gradle` or `build.gradle.kts`
 
 ---
 
+## Android
+
+Detected when the project has a Gradle root (`settings.gradle[.kts]` or `build.gradle[.kts]` at the root) and shows a sign of the Android Gradle plugin: the plugin id in the version catalog (`gradle/libs.versions.toml`), the plugin id or a catalog alias in a build script (root or `app/`), a Kotlin DSL `namespace` declaration, or an `AndroidManifest.xml` a few levels down. A manifest with no Gradle root does not count on its own, which also keeps a .NET MAUI app's `Platforms/Android/AndroidManifest.xml` from being misread as an Android project.
+
+Android needs an SDK platform image BomLens does not publish: the Android SDK it contains is not open source, and Google's terms do not allow redistributing it, so the image is built locally instead. The project's `compileSdk`/`compileSdkVersion` picks the API level (34 if none is found); the scan then looks for `bomlens-android-sdk<API>:latest`, and if it is missing, prints the build command instead of failing on a missing image:
+
+```bash
+docker build --build-arg ANDROID_API=<API> -t bomlens-android-sdk<API> docker/android
+```
+
+Building it means accepting Google's SDK terms yourself. Set `ANDROID_IMAGE_PREFIX` to use an image built elsewhere.
+
+> Note: images published under `ghcr.io/sktelecom/bomlens-android-sdk<API>` up to v1.9.0 still work for scans on that release line, but nothing new is pushed to them; a current scan needs a locally built image.
+
+---
+
 ## Node.js
 
 ```bash
