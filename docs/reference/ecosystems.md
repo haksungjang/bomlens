@@ -64,6 +64,7 @@ Detected file: `pom.xml`
 
 > Note: cdxgen resolves the whole build graph, so BomLens filters the SBOM to the deployable set — compile and runtime scope — and drops the test and provided toolchain (JUnit, Lombok, and the like) so the result reflects what ships rather than the full build. To keep the complete resolved graph instead, set `BOMLENS_MAVEN_FULL_GRAPH=1` ([Docker image environment variables](docker-image.md#environment-variables)).
 > A runtime dependency declared with `<optional>true</optional>` is dropped as well, because cdxgen gives it the same tag as a test-scope one.
+> A multi-module reactor can carry modules that never get deployed alongside the ones that do: a demo, or a module the project itself excludes from `mvn deploy` (`maven-deploy-plugin`'s `skip` resolving to `true`, however it is set). Such a module's own component is left out. A dependency only that module needs is left out too, but only when no deployed module in the same reactor declares it at any scope (a deployed module's own `provided` or `test` declaration of it, not just a `compile`/`runtime` one, is enough to keep it, since the SBOM's dependency graph does not record which scope each edge represents). `BOMLENS_MAVEN_FULL_GRAPH=1` keeps everything this leaves out. The excluded modules and the components dropped because of them are recorded on the SBOM as `bomlens:excluded-modules` and `bomlens:excluded-components`.
 
 ---
 

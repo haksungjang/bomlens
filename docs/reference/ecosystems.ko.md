@@ -64,6 +64,7 @@ jq '.components | length' NodeExample_1.0.0/NodeExample_1.0.0_bom.json
 
 > 주의: cdxgen은 전체 빌드 그래프를 해석하므로, BomLens는 SBOM을 배포 대상 집합인 compile·runtime 스코프로 걸러 test·provided 도구(JUnit, Lombok 등)를 덜어냅니다. 결과가 전체 빌드가 아니라 실제 배포되는 구성을 반영하도록 하려는 것입니다. 전체 해석 그래프를 그대로 두려면 `BOMLENS_MAVEN_FULL_GRAPH=1`을 설정하세요([Docker 이미지 환경 변수](docker-image.ko.md#환경-변수)).
 > `<optional>true</optional>`로 선언한 runtime 의존성도 cdxgen이 test 스코프와 같은 태그를 붙이므로 함께 빠집니다.
+> 멀티 모듈 리액터에는 배포되는 모듈과 함께, 데모처럼 한 번도 배포되지 않는 모듈이 섞여 있을 수 있습니다(`maven-deploy-plugin`의 `skip`이 어떤 방식으로 설정됐든 결국 `true`로 풀리는 모듈). 그런 모듈 자신의 컴포넌트는 빠집니다. 그 모듈만 필요로 하는 의존성도 함께 빠지지만, 같은 리액터의 배포되는 모듈이 어떤 스코프로도 그 의존성을 선언하지 않을 때만 그렇습니다(배포되는 모듈의 `provided`나 `test` 선언 하나만 있어도, `compile`·`runtime`이 아니어도, 남습니다). SBOM의 의존성 그래프가 각 연결이 어떤 스코프인지 따로 기록하지 않기 때문입니다. `BOMLENS_MAVEN_FULL_GRAPH=1`로 이렇게 빠지는 것을 모두 그대로 둘 수 있습니다. 제외한 모듈과 그 때문에 빠진 컴포넌트는 SBOM에 각각 `bomlens:excluded-modules`, `bomlens:excluded-components`로 기록됩니다.
 
 ---
 
