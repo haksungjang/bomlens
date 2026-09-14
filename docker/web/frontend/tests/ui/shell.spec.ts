@@ -516,6 +516,95 @@ test("Sidebar's New scan recovers a stranded failure result", async ({ page }) =
   await expect(page.locator("#project")).toHaveValue("");
 });
 
+// server.py sets errorMessage on the done event (not a separate error event)
+// when a scan fails with no other classification: its own [ERROR] block from
+// the log. A `done` event -- ok or not -- always moves the app off ScanRunning
+// and onto the section screen (the small badge next to the heading is the
+// only other place a failure shows there), so this is Overview's own banner,
+// not ScanRunning's.
+test("a scan that fails with the scanner's own [ERROR] text shows it on the Overview failure banner", async ({ page }) => {
+  await page.route("**/capabilities", (r) =>
+    r.fulfill({ contentType: "application/json", body: JSON.stringify({ firmware: false, scanoss: false, docker: true }) }),
+  );
+  await page.route("**/results", (r) => r.fulfill({ contentType: "application/json", body: "[]" }));
+  const errorMessage =
+    "[ERROR] The dependency resolver failed and the fallback scan found none of the project's declared dependencies.";
+  await page.route("**/scan-stream**", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: `event: done\ndata: ${JSON.stringify({ ...DONE, ok: false, id: undefined, errorMessage })}\n\n`,
+    }),
+  );
+  await page.goto("/?ui=next#/new");
+  await page.fill("#project", "demo");
+  await page.fill("#version", "1.0");
+  await page.getByTestId("run-scan").click();
+
+  await expect(page.getByRole("status")).toHaveText("Scan failed");
+  await expect(page.getByRole("alert").getByText(errorMessage, { exact: false })).toBeVisible();
+  // The generic fallback body must not show alongside the specific text.
+  await expect(page.getByText("Something went wrong before the scan could complete")).toHaveCount(0);
+
+  const axe = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  expect(axe.violations).toEqual([]);
+});
+
+// Same as above, in dark mode: the "Scan failed" badge's text-risk-critical-fg
+// is a different (lighter) value there (see index.css's .dark block), so this
+// checks it is not only the light-mode value that clears AA.
+test("the Overview failure banner and Scan failed badge pass contrast in dark mode too", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("sbom.theme", "dark"));
+  await page.route("**/capabilities", (r) =>
+    r.fulfill({ contentType: "application/json", body: JSON.stringify({ firmware: false, scanoss: false, docker: true }) }),
+  );
+  await page.route("**/results", (r) => r.fulfill({ contentType: "application/json", body: "[]" }));
+  const errorMessage = "[ERROR] The dependency resolver failed.";
+  await page.route("**/scan-stream**", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: `event: done\ndata: ${JSON.stringify({ ...DONE, ok: false, id: undefined, errorMessage })}\n\n`,
+    }),
+  );
+  await page.goto("/?ui=next#/new");
+  await page.fill("#project", "demo");
+  await page.fill("#version", "1.0");
+  await page.getByTestId("run-scan").click();
+
+  await expect(page.getByRole("status")).toHaveText("Scan failed");
+  await expect(page.getByRole("alert").getByText(errorMessage, { exact: false })).toBeVisible();
+
+  const axe = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  expect(axe.violations).toEqual([]);
+});
+
+// The same failure, but with no errorMessage at all (the server had nothing
+// [ERROR]-shaped to show, e.g. the scanner just exited 1 with no such line):
+// the generic fallback body shows instead, same copy as ScanRunning's own.
+test("a scan that fails with no [ERROR] text falls back to the generic banner body", async ({ page }) => {
+  await page.route("**/capabilities", (r) =>
+    r.fulfill({ contentType: "application/json", body: JSON.stringify({ firmware: false, scanoss: false, docker: true }) }),
+  );
+  await page.route("**/results", (r) => r.fulfill({ contentType: "application/json", body: "[]" }));
+  await page.route("**/scan-stream**", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: `event: done\ndata: ${JSON.stringify({ ...DONE, ok: false, id: undefined, errorMessage: null })}\n\n`,
+    }),
+  );
+  await page.goto("/?ui=next#/new");
+  await page.fill("#project", "demo");
+  await page.fill("#version", "1.0");
+  await page.getByTestId("run-scan").click();
+
+  await expect(
+    page.getByRole("alert").getByText("Something went wrong before the scan could complete"),
+  ).toBeVisible();
+});
+
 // The subtitle under the result heading names what was scanned. It lives inside
 // the screenshot baselines, but pixels are the wrong guard for wording: a short
 // phrase edit stays under the diff tolerance, so the baselines kept an outdated

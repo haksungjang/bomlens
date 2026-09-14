@@ -418,6 +418,110 @@ def _classify_git_failure(text):
     return None
 
 
+# Scrubbing for _ScanErrorTracker below: masks credential/token-shaped text
+# that could appear in a scanner [ERROR] line before it ever reaches the SSE
+# stream shown to the browser. Independent of the "Response:" line drop in
+# _ScanErrorTracker (that drop is unconditional regardless of indentation;
+# these patterns are a second, explicit layer in case such a line were ever
+# folded into a block some other way).
+_URL_USERINFO_RE = re.compile(r"://[^/\s@]+:[^/\s@]+@")
+_AUTH_HEADER_RE = re.compile(r"(?i)\bauthorization:\s*.+$")
+_BEARER_TOKEN_RE = re.compile(r"(?i)\bbearer\s+\S+")
+_TOKEN_PARAM_RE = re.compile(r"(?i)\btoken=[^&\s\"']+")
+_HEX_BLOB_RE = re.compile(r"\b[0-9a-fA-F]{20,}\b")
+_BASE64_BLOB_RE = re.compile(r"\b[A-Za-z0-9+/]{24,}={0,2}\b")
+
+
+def _scrub_error_text(text):
+    """Mask credential/token-shaped substrings in one scanner log line before
+    it can reach the browser as part of a failed-scan card's error message.
+
+    Order matters: the structural patterns (a URL's embedded userinfo, an
+    Authorization header, a Bearer token, a `token=` query param) are masked
+    first so their replacement text ("***") does not then get re-matched and
+    mangled by the broader hex/base64-blob patterns that run last."""
+    text = _URL_USERINFO_RE.sub("://***@", text)
+    text = _AUTH_HEADER_RE.sub("Authorization: ***", text)
+    text = _BEARER_TOKEN_RE.sub("Bearer ***", text)
+    text = _TOKEN_PARAM_RE.sub("token=***", text)
+    text = _HEX_BLOB_RE.sub("***", text)
+    text = _BASE64_BLOB_RE.sub("***", text)
+    return text
+
+
+# Cap on the joined [ERROR] block text shown on a failed-scan card (see
+# _ScanErrorTracker). Matches the cap server.py already uses for a git clone
+# failure's raw stderr (_classify_git_failure's caller, run_sibling_scan's
+# 500-char tail): this is the same kind of short human-readable diagnostic,
+# so it gets the same length.
+_SCAN_ERROR_MAX_CHARS = 500
+
+_ERROR_LINE_RE = re.compile(r"^\[ERROR\]")
+_RESPONSE_LINE_RE = re.compile(r"(?i)^response:")
+
+
+class _ScanErrorTracker:
+    """Collects the [ERROR] block(s) a scan's own log emits, for a failed-scan
+    card's errorMessage when the server has no other classification for the
+    failure (see the `error_sent` flag at each done-event call site).
+
+    entrypoint.sh's own convention (matched by hand across its ~20 multi-line
+    [ERROR] blocks) is: the marker line starts with "[ERROR]", and any lines
+    that continue its explanation are indented. A line that is blank, is not
+    indented, or is itself a new marker line, ends the current block. This
+    tracker keeps every DISTINCT block seen during the run (not just the
+    last): a discard-then-exit sequence like #109's Node fallback quality gate
+    prints one block explaining what happened, followed later by a separate
+    one-line block ("fallback SBOM discarded (see above)") right before the
+    process exits: showing only the last of those would show just the
+    "(see above)" line and lose the actual explanation.
+
+    A line starting with "Response:" (a raw upstream HTTP response body, on
+    the TRUSCA/Dependency-Track upload failure paths) never continues a block
+    and is never itself treated as a marker, regardless of indentation. This
+    check runs before the indentation check, so it holds even if a future
+    change indents that line to line up with the block above it.
+    """
+
+    def __init__(self):
+        self._blocks = []      # distinct block texts, in first-seen order
+        self._current = []     # lines of the block being built, or []
+
+    def _flush(self):
+        if self._current:
+            text = "\n".join(self._current)
+            if text not in self._blocks:
+                self._blocks.append(text)
+            self._current = []
+
+    def feed(self, line):
+        if not isinstance(line, str):
+            self._flush()
+            return
+        stripped = line.strip()
+        if not stripped or _RESPONSE_LINE_RE.match(stripped):
+            self._flush()
+            return
+        if _ERROR_LINE_RE.match(stripped):
+            self._flush()
+            self._current.append(_scrub_error_text(stripped))
+            return
+        if self._current and line[:1] in (" ", "\t"):
+            self._current.append(_scrub_error_text(stripped))
+            return
+        self._flush()
+
+    def result(self):
+        """The joined, capped error message, or None if no block was seen."""
+        self._flush()
+        if not self._blocks:
+            return None
+        joined = "\n".join(self._blocks)
+        if len(joined) > _SCAN_ERROR_MAX_CHARS:
+            joined = "..." + joined[-(_SCAN_ERROR_MAX_CHARS - 3):]
+        return joined
+
+
 def safe_scan_dir(rel):
     """Resolve a user-supplied directory path strictly inside an allowed scan
     root (block path traversal and symlink escape). Returns the real path on
@@ -5063,12 +5167,18 @@ class Handler(BaseHTTPRequestHandler):
             # notice for C/C++ or Swift). Deduplicated and capped: a repeated
             # line says nothing more the second time.
             scan_warnings = []
+            # Tracks this run's [ERROR] block(s), for errorMessage on the done
+            # event below when the run fails with no other classification
+            # (error_sent stays False): see _ScanErrorTracker.
+            error_tracker = _ScanErrorTracker()
+            error_sent = False
 
             def note_log(ln):
                 if isinstance(ln, str) and ln.lstrip().startswith("[WARN]"):
                     text = ln.strip()
                     if text not in scan_warnings and len(scan_warnings) < MAX_SCAN_WARNINGS:
                         scan_warnings.append(text)
+                error_tracker.feed(ln)
                 sse("log", json.dumps(ln))
             if sibling is not None:
                 # Firmware / AI on the permissive-only base image: run the
@@ -5093,6 +5203,7 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 ok = rc == 0
                 if rc == -1:
+                    error_sent = True
                     sse("error", json.dumps({
                         "detail": "Failed to launch the %s sibling container." % mode.lower(),
                         "key": None,
@@ -5129,6 +5240,7 @@ class Handler(BaseHTTPRequestHandler):
                     proc.wait()
                     ok = proc.returncode == 0
                 except Exception as exc:  # noqa: BLE001
+                    error_sent = True
                     sse("error", json.dumps({"detail": "Failed to launch scan: %s" % exc, "key": None}))
 
             # Artifacts landed in run_out (the run folder named run_id); the
@@ -5153,6 +5265,11 @@ class Handler(BaseHTTPRequestHandler):
                 # as the run-folder sidecar so a re-opened scan carries it too.
                 "scanConfig": scan_config,
                 "scanWarnings": scan_warnings,
+                # Only when this run's own failure was never already classified
+                # via a dedicated `error` event above (error_sent); see
+                # _ScanErrorTracker. None when the run succeeded or nothing
+                # matched the [ERROR] convention.
+                "errorMessage": None if (ok or error_sent) else error_tracker.result(),
             }
             if scan_warnings:
                 scan_config["warnings"] = scan_warnings

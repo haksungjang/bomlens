@@ -22,6 +22,7 @@ import {
   ShieldCheck,
   TrendingDown,
   TrendingUp,
+  TriangleAlert,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -323,6 +324,26 @@ export function Overview({
 
   return (
     <div className="space-y-6">
+      {/* A scan that ended in `done.ok=false` still lands here (the badge next
+          to the heading is the only other place this shows) with everything
+          else below rendering the empty/absent shape of a scan that produced
+          nothing. errorMessage is the scanner's own [ERROR] block when the
+          server had no other classification for the failure (see server.py's
+          _ScanErrorTracker); same title/fallback copy as the running-scan
+          failure card, so the two read consistently. */}
+      {!result.ok && (
+        <Card role="alert" className="border-destructive/40 bg-destructive/5">
+          <CardContent className="space-y-1 p-4">
+            <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+              <TriangleAlert className="h-4 w-4 shrink-0 text-destructive" aria-hidden />
+              {t("run.failedTitle")}
+            </div>
+            <p className="whitespace-pre-wrap break-words text-sm text-muted-foreground">
+              {result.errorMessage || t("run.failedBody")}
+            </p>
+          </CardContent>
+        </Card>
+      )}
       {provenance && (
         // What was scanned. Sits above the counts because it frames them: the
         // same "71 components" means something different for a folder on disk
