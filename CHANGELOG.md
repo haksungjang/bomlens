@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Overview comparison card's added/removed/version-changed component names and new/resolved CVE ids now link into Components/Vulnerabilities filtered to that one name, instead of leaving the reader to retype it into the section's own search box.
 - The conformance report (JSON/Markdown/HTML) now names any post-process step that failed during generation, so a passing result is not read as a guarantee that every step ran cleanly. Does not affect the pass/fail result or any individual check's status.
 
+### Changed
+
+- A source scan leaves out the manifests under test, fixture, example, benchmark and demo folders and the GitHub Actions workflows in `.github/workflows` by default, and records the patterns and the files it left out in the `bomlens:excluded-paths` and `bomlens:excluded-manifests` properties. `BOMLENS_INCLUDE_NON_SHIPPED=1` keeps them.
+
 ### Fixed
 
 - The desktop app's declared minimum `electron` and `electron-builder` versions fell inside ranges with known vulnerabilities (a critical Electron advisory, high-severity advisories in electron-builder's dependencies). Both are now pinned to exact versions past their fixed versions.
