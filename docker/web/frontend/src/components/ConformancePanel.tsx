@@ -37,10 +37,12 @@ import {
 import { Disclosure } from "@/components/ui/disclosure";
 import { cn } from "@/lib/utils";
 
+// `color` is applied to an aria-hidden Icon at each usage site, not read
+// directly as body text.
 const STATUS = {
-  pass: { Icon: CircleCheck, color: "text-risk-low", key: "g7.sPass" },
-  fail: { Icon: CircleX, color: "text-risk-critical", key: "g7.sFail" },
-  warn: { Icon: CircleAlert, color: "text-risk-medium", key: "g7.sWarn" },
+  pass: { Icon: CircleCheck, color: "text-risk-low", key: "g7.sPass" }, // token-lint-ignore
+  fail: { Icon: CircleX, color: "text-risk-critical", key: "g7.sFail" }, // token-lint-ignore
+  warn: { Icon: CircleAlert, color: "text-risk-medium", key: "g7.sWarn" }, // token-lint-ignore
   // Nothing in this document to judge. Muted on purpose: it is neither a gap the
   // reader can close nor something met, so it must not read as either.
   na: { Icon: CircleMinus, color: "text-muted-foreground", key: "g7.sNa" },

@@ -1037,8 +1037,8 @@ test("Overview comparison card's names jump into the filtered section", async ({
   // this list needs to see where they are.
   await openssl.focus();
   await expect(openssl).toBeFocused();
-  // Scoped to the new list, not the whole page: the severity-trend text
-  // beside it has a pre-existing contrast issue unrelated to this change.
+  // Scoped to the new list, not the whole page: this fixture's severity-trend
+  // text has its own axe coverage below.
   const axe = await new AxeBuilder({ page })
     .include('[data-testid="comp-change-details"]')
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
@@ -1059,6 +1059,22 @@ test("Overview comparison card's names jump into the filtered section", async ({
   await expect(page.getByRole("link", { name: /^Vulnerabilities/ })).toHaveAttribute("aria-current", "page");
   await expect(page.getByText("CVE-2024-0001").first()).toBeVisible();
   await expect(page.getByText("CVE-2024-0002")).toHaveCount(0);
+});
+
+test("Overview comparison card's severity trend text has no axe violations", async ({ page }) => {
+  // Regression guard: this card's "more severe than before" text used the
+  // graphical text-risk-high token instead of text-risk-high-fg and failed
+  // WCAG AA contrast in light mode (3.56:1, needs 4.5:1); severityDir "up" on
+  // this fixture is what put that text on the page at all. Full-page, not
+  // scoped: this also covers the comparison card's diff-name links (their own
+  // contrast/underline fix is tested separately, above).
+  await stubAndRunWithPreviousScan(page);
+  await expect(page.locator("main h1")).toBeVisible();
+  await expect(page.getByText("more severe than before")).toBeVisible();
+  const axe = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  expect(axe.violations).toEqual([]);
 });
 
 test("Overview warns when the SBOM degraded to syft (disk space)", async ({ page }) => {

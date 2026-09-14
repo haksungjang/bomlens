@@ -57,11 +57,13 @@ import { LicenseRiskBar } from "./LicenseRiskBar";
 import { ResultsList } from "./ResultsList";
 import { SeverityBar } from "./SeverityBar";
 
-/** Tone → token-driven icon colour (graphical, so 3:1 is enough). */
+/** Tone → token-driven icon colour (graphical, so 3:1 is enough). Applied to
+ *  an aria-hidden Icon at the usage site, not read directly as body text.
+ *  token-lint-ignore */
 const TONE_ICON: Record<AttentionItem["tone"], string> = {
-  critical: "text-risk-critical",
-  high: "text-risk-high",
-  info: "text-risk-info",
+  critical: "text-risk-critical", // token-lint-ignore
+  high: "text-risk-high", // token-lint-ignore
+  info: "text-risk-info", // token-lint-ignore
 };
 const ATTN_ICON: Record<AttentionItem["id"], LucideIcon> = {
   malicious: Biohazard,
@@ -379,8 +381,16 @@ export function Overview({
                 <div
                   className={cn(
                     "mt-1 flex items-center gap-1.5 text-sm font-medium",
-                    comparison.severityDir === "up" && "text-risk-high",
-                    comparison.severityDir === "down" && "text-risk-low",
+                    // The graphical/badge token (used at full saturation for
+                    // icons and badge backgrounds) fails WCAG AA text contrast
+                    // on this card's background in light mode (3.56:1, needs
+                    // 4.5:1); badge.tsx already uses the -fg variant for the
+                    // same reason, and it passes here in both themes (7.31:1
+                    // light, 10.2:1 dark).
+                    comparison.severityDir === "up" && "text-risk-high-fg",
+                    // Bare token, but already passing in both themes (5.17:1
+                    // light, 6.76:1 dark), left as-is, nothing to fix.
+                    comparison.severityDir === "down" && "text-risk-low", // token-lint-ignore: body text on card, contrast checked
                     comparison.severityDir === "same" && "text-foreground",
                   )}
                 >
@@ -959,7 +969,9 @@ function JumpCards({
             icon: CalendarX,
             value: eolCount,
             label: t("result.eolTile"),
-            valueClass: atRiskCount > 0 ? "text-risk-critical" : undefined,
+            // Bare token, but already passing on this tile's bg-card in both
+            // themes (4.83:1 light, 6.22:1 dark); left as-is, nothing to fix.
+            valueClass: atRiskCount > 0 ? "text-risk-critical" : undefined, // token-lint-ignore: body text on card, contrast checked
             sub: atRiskCount > 0 ? t("result.eolAtRisk", { count: atRiskCount }) : undefined,
           },
         ]
