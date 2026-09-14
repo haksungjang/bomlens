@@ -2625,6 +2625,91 @@ jq -e '.checks[] | select(.id=="purl-syntax") | .missing | index("commons-lang3:
 pb_cov=$(jq -r '.checks[] | select(.id=="purl") | .status' "$WORK/pbad_conformance.json")
 [ "$pb_cov" = "pass" ] && pass "PURL coverage stays green (syntax is a separate check)" || fail "purl coverage='$pb_cov', expected pass"
 
+echo "== conformance: os-purl-namespace fails an OS purl whose distro is only a qualifier =="
+# The guide's submission checklist rejects an rpm/deb/apk purl whose
+# distribution appears only as a `?distro=` qualifier and not as the purl
+# namespace (pkg:rpm/<distro>/name) — the same as a namespace missing outright.
+# CycloneDX JSON, SPDX JSON, and SPDX Tag-Value each run their own copy of this
+# check, so each is exercised here.
+jq '.components += [
+  {"type":"library","name":"openssl","version":"3.0.7","purl":"pkg:rpm/openssl@3.0.7?distro=rhel-9"}
+]' "$FIX/good-cyclonedx.json" > "$WORK/distro-qual-cdx.json"
+bash "$LIB/validate-sbom.sh" "$WORK/distro-qual-cdx.json" "$WORK/dqc" "supplier" >/dev/null 2>&1
+dqc_stat=$(jq -r '.checks[] | select(.id=="os-purl-namespace") | .status' "$WORK/dqc_conformance.json")
+[ "$dqc_stat" = "fail" ] && pass "CycloneDX JSON: distro-only-qualifier purl fails os-purl-namespace" \
+    || fail "CycloneDX JSON: os-purl-namespace status='$dqc_stat', expected fail"
+jq -e '.checks[] | select(.id=="os-purl-namespace") | .missing | index("pkg:rpm/openssl@3.0.7?distro=rhel-9")' \
+    "$WORK/dqc_conformance.json" >/dev/null \
+    && pass "CycloneDX JSON: missing list names the offending purl" \
+    || fail "CycloneDX JSON: missing list lacks the distro-only-qualifier purl"
+
+jq '.packages += [{
+  "name":"openssl","SPDXID":"SPDXRef-Package-openssl","versionInfo":"3.0.7",
+  "downloadLocation":"NOASSERTION",
+  "externalRefs":[{"referenceCategory":"PACKAGE-MANAGER","referenceType":"purl",
+                    "referenceLocator":"pkg:rpm/openssl@3.0.7?distro=rhel-9"}]
+}]' "$FIX/good-spdx.json" > "$WORK/distro-qual-spdx.json"
+bash "$LIB/validate-sbom.sh" "$WORK/distro-qual-spdx.json" "$WORK/dqs" "supplier" >/dev/null 2>&1
+dqs_stat=$(jq -r '.checks[] | select(.id=="os-purl-namespace") | .status' "$WORK/dqs_conformance.json")
+[ "$dqs_stat" = "fail" ] && pass "SPDX JSON: distro-only-qualifier purl fails os-purl-namespace" \
+    || fail "SPDX JSON: os-purl-namespace status='$dqs_stat', expected fail"
+
+cp "$FIX/supplier-clean-tagvalue.spdx" "$WORK/distro-qual.spdx"
+cat >> "$WORK/distro-qual.spdx" <<'EOF'
+
+PackageName: openssl
+SPDXID: SPDXRef-Package-openssl
+PackageVersion: 3.0.7
+PackageDownloadLocation: NOASSERTION
+ExternalRef: PACKAGE-MANAGER purl pkg:rpm/openssl@3.0.7?distro=rhel-9
+PackageLicenseConcluded: NOASSERTION
+PackageChecksum: SHA1: 1111111111111111111111111111111111111
+Relationship: SPDXRef-DOCUMENT DEPENDS_ON SPDXRef-Package-openssl
+EOF
+bash "$LIB/validate-sbom.sh" "$WORK/distro-qual.spdx" "$WORK/dqtv" "supplier" >/dev/null 2>&1
+dqtv_stat=$(jq -r '.checks[] | select(.id=="os-purl-namespace") | "\(.status) \(.detail)"' "$WORK/dqtv_conformance.json")
+[ "$dqtv_stat" = "fail 1 without distribution" ] && pass "SPDX Tag-Value: distro-only-qualifier purl fails os-purl-namespace" \
+    || fail "SPDX Tag-Value: os-purl-namespace = '$dqtv_stat', expected 'fail 1 without distribution'"
+
+# A real syft-style purl carries the distro as BOTH the namespace and a
+# `?distro=` qualifier (e.g. pkg:rpm/rocky/openssl@3.0.7?distro=rocky-9.3).
+# That must still pass — the qualifier alone is not what makes it fail.
+jq '.components += [
+  {"type":"library","name":"openssl","version":"3.0.7","purl":"pkg:rpm/rocky/openssl@3.0.7?distro=rocky-9.3"}
+]' "$FIX/good-cyclonedx.json" > "$WORK/distro-ns-cdx.json"
+bash "$LIB/validate-sbom.sh" "$WORK/distro-ns-cdx.json" "$WORK/dnc" "supplier" >/dev/null 2>&1
+dnc_stat=$(jq -r '.checks[] | select(.id=="os-purl-namespace") | .status' "$WORK/dnc_conformance.json")
+[ "$dnc_stat" = "pass" ] && pass "CycloneDX JSON: namespace + distro= qualifier together still pass" \
+    || fail "CycloneDX JSON: os-purl-namespace status='$dnc_stat', expected pass"
+
+jq '.packages += [{
+  "name":"openssl","SPDXID":"SPDXRef-Package-openssl","versionInfo":"3.0.7",
+  "downloadLocation":"NOASSERTION",
+  "externalRefs":[{"referenceCategory":"PACKAGE-MANAGER","referenceType":"purl",
+                    "referenceLocator":"pkg:rpm/rocky/openssl@3.0.7?distro=rocky-9.3"}]
+}]' "$FIX/good-spdx.json" > "$WORK/distro-ns-spdx.json"
+bash "$LIB/validate-sbom.sh" "$WORK/distro-ns-spdx.json" "$WORK/dns" "supplier" >/dev/null 2>&1
+dns_stat=$(jq -r '.checks[] | select(.id=="os-purl-namespace") | .status' "$WORK/dns_conformance.json")
+[ "$dns_stat" = "pass" ] && pass "SPDX JSON: namespace + distro= qualifier together still pass" \
+    || fail "SPDX JSON: os-purl-namespace status='$dns_stat', expected pass"
+
+cp "$FIX/supplier-clean-tagvalue.spdx" "$WORK/distro-ns.spdx"
+cat >> "$WORK/distro-ns.spdx" <<'EOF'
+
+PackageName: openssl
+SPDXID: SPDXRef-Package-openssl
+PackageVersion: 3.0.7
+PackageDownloadLocation: NOASSERTION
+ExternalRef: PACKAGE-MANAGER purl pkg:rpm/rocky/openssl@3.0.7?distro=rocky-9.3
+PackageLicenseConcluded: NOASSERTION
+PackageChecksum: SHA1: 2222222222222222222222222222222222222
+Relationship: SPDXRef-DOCUMENT DEPENDS_ON SPDXRef-Package-openssl
+EOF
+bash "$LIB/validate-sbom.sh" "$WORK/distro-ns.spdx" "$WORK/dnstv" "supplier" >/dev/null 2>&1
+dnstv_stat=$(jq -r '.checks[] | select(.id=="os-purl-namespace") | .status' "$WORK/dnstv_conformance.json")
+[ "$dnstv_stat" = "pass" ] && pass "SPDX Tag-Value: namespace + distro= qualifier together still pass" \
+    || fail "SPDX Tag-Value: os-purl-namespace status='$dnstv_stat', expected pass"
+
 echo "== CONFORMANCE_PROFILE: skt-submission tightens PURL/no-generic; default stays as before =="
 
 # A pkg:generic component under the default profile: no-generic warns, does
