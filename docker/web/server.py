@@ -2722,6 +2722,13 @@ def run_sibling_scan(image, mode, out_dir, on_log, *, upload_file=None, model_id
         "--volumes-from", self_cid,
         "-v", "/var/run/docker.sock:/var/run/docker.sock",
         "-e", "MODE=%s" % mode,  # mode ∈ _SIBLING_MODES (checked above)
+        # Tells this run's entrypoint.sh it may sweep known-suffix leftovers of
+        # an earlier scan of the same project/version before writing its own
+        # artifacts: this caller (a current server.py) always finishes its own
+        # run in one container, so nothing here is a stage-1 handoff the
+        # cleanup could mistake for stale output. An old server.py never sends
+        # this, and an entrypoint.sh built before it existed ignores it.
+        "-e", "BOMLENS_ARTIFACT_CLEANUP=1",
         "-e", "PROJECT_NAME=%s" % _env_flag_value(env.get("PROJECT_NAME", "")),
         "-e", "PROJECT_VERSION=%s" % _env_flag_value(env.get("PROJECT_VERSION", "")),
         # Outbound license (SPDX id) for the license-conflict check. Sanitized the
@@ -4392,6 +4399,11 @@ class Handler(BaseHTTPRequestHandler):
         # Build the run-scan environment + working dir for the chosen source.
         env = os.environ.copy()
         env.update({
+            # Tells this run's entrypoint.sh it may sweep known-suffix
+            # leftovers of an earlier scan of the same project/version before
+            # writing its own artifacts (same reasoning as the sibling-
+            # container -e flag of the same name above).
+            "BOMLENS_ARTIFACT_CLEANUP": "1",
             "PROJECT_NAME": project,
             "PROJECT_VERSION": version,
             "PROJECT_LICENSE": outbound_license,

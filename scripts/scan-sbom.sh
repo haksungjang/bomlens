@@ -1889,11 +1889,15 @@ else
     ensure_image_fresh "$RUN_IMAGE"
     # VOL/ENVV/pp_env/cosign_run intentionally expand to multiple tokens (-v, -e
     # pairs), so the word splitting SC2046 flags here is required, not a bug.
+    # BOMLENS_ARTIFACT_CLEANUP=1 tells entrypoint.sh it is safe to sweep
+    # known-suffix leftovers of an earlier scan of the same project/version:
+    # this single-container run generates its whole output in one shot, so
+    # there is no stage-1 handoff the sweep could mistake for stale output.
     export_scan_secrets
     # shellcheck disable=SC2046
     eval "$DOCKER_MSYS"docker run --rm $VOL \
         --add-host=host.docker.internal:host-gateway \
-        -e MODE="$MODE" $ENVV $(pp_env)$(cosign_run) \
+        -e MODE="$MODE" -e BOMLENS_ARTIFACT_CLEANUP=1 $ENVV $(pp_env)$(cosign_run) \
         "\"$RUN_IMAGE\""
 fi
 

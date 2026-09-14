@@ -440,6 +440,9 @@ d="$(new_proj img)"
 scan_in "$d" --project Img --version 1 --target nginx:latest --generate-only
 { in_out "Mode: IMAGE" && in_log "TARGET_IMAGE=nginx:latest"; } \
   && pass "--target nginx:latest → IMAGE mode" || { fail "--target image → IMAGE mode" "rc=$RC"; show; }
+in_log "-e BOMLENS_ARTIFACT_CLEANUP=1" \
+  && pass "the single-container docker run opts into stale-artifact cleanup (BOMLENS_ARTIFACT_CLEANUP)" \
+  || { fail "BOMLENS_ARTIFACT_CLEANUP missing from the single-container docker run"; show; }
 
 d="$(new_proj bin)"; printf 'ELFish\n' > "$d/app.out"
 scan_in "$d" --project Bin --version 1 --target app.out --generate-only

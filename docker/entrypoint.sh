@@ -101,36 +101,53 @@ KNOWN_ARTIFACT_SUFFIXES=(
     _modelica.cdx.json _cocoapods.cdx.json
     _security_cvebintool.json _security_grype.json _security_yocto.json
 )
-# A CLI SOURCE scan writes $OUTPUT_FILE in two containers: stage 1 (cdxgen,
-# on the host) first, this one (POSTPROCESS) second. scan-sbom.sh removes any
-# leftover from an earlier run at this filename before stage 1 starts, so by
-# the time this runs, that same filename is either absent or is stage 1's own
-# fresh output for THIS run -- never a stale one. Deleting it here anyway
-# would be exactly the bug that pre-deletion exists to prevent, so
-# scan-sbom.sh names it (BOMLENS_RUN_INPUT) and it is skipped below. Only a
-# plain filename (no path separator, no leading dot) is honored; anything
-# else is ignored rather than trusted, since a malformed value here should
-# degrade to "skip nothing", not to a path escape.
-_run_input=""
-if [ -n "${BOMLENS_RUN_INPUT:-}" ] && printf '%s' "$BOMLENS_RUN_INPUT" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._-]*$'; then
-    _run_input="$BOMLENS_RUN_INPUT"
-fi
-if [ -n "$HOST_OUTPUT_DIR" ] && [ -d "$HOST_OUTPUT_DIR" ]; then
-    _cleaned=()
-    for _suf in "${KNOWN_ARTIFACT_SUFFIXES[@]}"; do
-        _f="$HOST_OUTPUT_DIR/${OUT_PREFIX}${_suf}"
-        [ -n "$_run_input" ] && [ "$(basename "$_f")" = "$_run_input" ] && continue
-        if [ -f "$_f" ]; then
-            rm -f "$_f"
-            _cleaned+=("$(basename "$_f")")
-        fi
-    done
-    if [ "${#_cleaned[@]}" -gt 0 ]; then
-        echo "[INFO] cleaned ${#_cleaned[@]} stale artifact(s) from a previous scan of the same project/version: ${_cleaned[*]}"
+# Only a caller that knows about this cleanup runs it at all. An old
+# scan-sbom.sh or server.py (built before this existed) sends neither signal
+# below, so its calls fall through to the pre-cleanup behavior (nothing
+# removed) instead of this new sweep mistaking ITS stage 1's just-written
+# $OUTPUT_FILE for a previous run's leftover -- that mistake is exactly what
+# broke a 2-stage CLI SOURCE scan started by an old scan-sbom.sh against a new
+# image: BOMLENS_RUN_INPUT (below) only protects one filename, it does not
+# gate whether the sweep runs at all, so a caller that never sends it still
+# had everything else it just produced swept away.
+#
+# BOMLENS_RUN_INPUT itself is the signal for the 2-stage CLI SOURCE path (a
+# current scan-sbom.sh always sets it there, see below); every other path
+# (single-container CLI modes, the web UI in-process and sibling-container
+# paths) has no stage-1 filename to name, so a current caller sends
+# BOMLENS_ARTIFACT_CLEANUP=1 instead.
+if [ -n "${BOMLENS_RUN_INPUT:-}" ] || [ "${BOMLENS_ARTIFACT_CLEANUP:-}" = "1" ]; then
+    # A CLI SOURCE scan writes $OUTPUT_FILE in two containers: stage 1 (cdxgen,
+    # on the host) first, this one (POSTPROCESS) second. scan-sbom.sh removes any
+    # leftover from an earlier run at this filename before stage 1 starts, so by
+    # the time this runs, that same filename is either absent or is stage 1's own
+    # fresh output for THIS run -- never a stale one. Deleting it here anyway
+    # would be exactly the bug that pre-deletion exists to prevent, so
+    # scan-sbom.sh names it (BOMLENS_RUN_INPUT) and it is skipped below. Only a
+    # plain filename (no path separator, no leading dot) is honored; anything
+    # else is ignored rather than trusted, since a malformed value here should
+    # degrade to "skip nothing", not to a path escape.
+    _run_input=""
+    if [ -n "${BOMLENS_RUN_INPUT:-}" ] && printf '%s' "$BOMLENS_RUN_INPUT" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._-]*$'; then
+        _run_input="$BOMLENS_RUN_INPUT"
     fi
-    unset _cleaned _suf _f
+    if [ -n "$HOST_OUTPUT_DIR" ] && [ -d "$HOST_OUTPUT_DIR" ]; then
+        _cleaned=()
+        for _suf in "${KNOWN_ARTIFACT_SUFFIXES[@]}"; do
+            _f="$HOST_OUTPUT_DIR/${OUT_PREFIX}${_suf}"
+            [ -n "$_run_input" ] && [ "$(basename "$_f")" = "$_run_input" ] && continue
+            if [ -f "$_f" ]; then
+                rm -f "$_f"
+                _cleaned+=("$(basename "$_f")")
+            fi
+        done
+        if [ "${#_cleaned[@]}" -gt 0 ]; then
+            echo "[INFO] cleaned ${#_cleaned[@]} stale artifact(s) from a previous scan of the same project/version: ${_cleaned[*]}"
+        fi
+        unset _cleaned _suf _f
+    fi
+    unset _run_input
 fi
-unset _run_input
 
 # Report language for the human-facing conformance + AI-profile reports. Only
 # en (default) or ko; the report generators read REPORT_LANG directly, so export
