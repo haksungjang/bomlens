@@ -153,6 +153,7 @@
     "sbomDegradedDisk": "전이 의존성 분석기(cdxgen)가 Docker 디스크 공간 부족으로 실행되지 못해, 이 SBOM에는 직접 의존성만 담겼습니다. 공간을 확보(예: \"docker system prune\")한 뒤 다시 스캔하면 전체 의존성 그래프를 얻습니다.",
     "sbomDegradedOom": "전이 의존성 분석기(cdxgen)가 메모리 부족으로 강제 종료돼, 이 SBOM에는 직접 의존성만 담겼습니다. Docker 엔진에 메모리를 더 할당(Docker Desktop은 설정의 Resources, macOS의 Colima는 \"colima start --memory N\")한 뒤 다시 스캔하면 전체 의존성 그래프를 얻습니다.",
     "sbomDegradedNetwork": "전이 의존성 분석기(cdxgen)가 실제 의존성 트리를 확인하는 데 필요한 패키지 저장소(Maven Central, npm, PyPI 등)에 접근하지 못해, 이 SBOM에는 직접 의존성만 담겼습니다. Docker 엔진에서 프록시나 방화벽 설정을 확인한 뒤 다시 스캔하면 전체 의존성 그래프를 얻습니다.",
+    "sbomDegradedCrash": "이 프로젝트의 의존성을 해석하던 스캔 도구가 비정상 종료해, 이 SBOM은 매니페스트만 읽어 대신 만들어졌고 전이 의존성이 빠졌을 수 있습니다. 스캔 로그를 확인하고, 문제가 계속되면 lock 파일을 둔 뒤 다시 스캔해 주십시오.",
     "sbomGraphEmptyTitle": "의존성 그래프가 비어 있습니다",
     "sbomGraphEmptyBody": "전이 의존성 분석기는 정상적으로 실행됐지만, 이후 처리 과정에서 의존성 관계가 사라진 것으로 보입니다. 다시 스캔해도 계속 비어 있다면 결함일 수 있으니 알려주세요.",
     "scanossUnavailableTitle": "SCANOSS 검색이 완료되지 않았습니다",

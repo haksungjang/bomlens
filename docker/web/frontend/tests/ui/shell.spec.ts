@@ -1101,6 +1101,31 @@ test("Overview warns when the SBOM degraded to syft (disk space)", async ({ page
   expect(axe.violations).toEqual([]);
 });
 
+test("Overview warns when the SBOM degraded to syft (scan tool crash)", async ({ page }) => {
+  await page.route("**/capabilities", (r) =>
+    r.fulfill({ contentType: "application/json", body: JSON.stringify({ firmware: false, scanoss: false, docker: true }) }),
+  );
+  await page.route("**/results", (r) => r.fulfill({ contentType: "application/json", body: "[]" }));
+  const degraded = { ...DONE, sbom: { ...DONE.sbom, sbomToolDegraded: "cdxgen-crash" } };
+  await page.route("**/scan-stream**", (r) =>
+    r.fulfill({ contentType: "text/event-stream", body: `event: done\ndata: ${JSON.stringify(degraded)}\n\n` }),
+  );
+  await page.goto("/?ui=next#/new");
+  await page.fill("#project", "demo");
+  await page.fill("#version", "1.0");
+  await page.getByTestId("run-scan").click();
+
+  // The crash-specific banner, not the generic fallback body, and no tool
+  // name or raw error text in it.
+  await expect(page.getByText(/crashed while resolving/)).toBeVisible();
+  await expect(page.getByText("cdxgen", { exact: false })).toHaveCount(0);
+
+  const axe = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  expect(axe.violations).toEqual([]);
+});
+
 // Result-section visuals run across light/dark × en/ko. The setup navigates and
 // waits on language-agnostic anchors — section links by href, the Tree toggle by
 // test id, and data values (package names, scores, licence ids) that don't
