@@ -518,6 +518,9 @@ export interface ScanConfig {
   /** The outbound license declared for this scan (SPDX id), which switches the
    *  license-conflict check on. Empty or absent means it stayed off. */
   license?: string;
+  /** The SBOM author declared for this scan (CycloneDX metadata.authors).
+   *  Empty or absent means none was declared. */
+  sbomAuthor?: string;
   /** Match components against NVD-only (CPE) advisories too, catching
    *  vulnerabilities other matching paths miss. Offered for any scan that
    *  produces or reads a package SBOM (not firmware or an AI model — see
@@ -662,6 +665,12 @@ export interface ScanParams {
   /** Outbound license (SPDX id) the project ships under. Read server-side as the
    *  exact `license` parameter; empty leaves the license-conflict check off. */
   license?: string;
+  /** The organisation or person running this scan (CycloneDX metadata.authors),
+   *  not the tool and not whoever wrote the software. Read server-side as the
+   *  exact `sbom_author` parameter; empty leaves the SBOM without one. Hidden
+   *  for ANALYZE (see showSbomAuthor): that mode converts a document someone
+   *  else authored. */
+  sbomAuthor?: string;
   /** AI-model scans only: the intended usage the assessment should grade
    *  against. Read server-side as the exact `usage` query parameter; omitted
    *  (sent empty) when unspecified or for any other source. */
@@ -1110,6 +1119,7 @@ export function startScan(params: ScanParams, handlers: ScanHandlers): EventSour
     byte_stable: String(params.byteStable),
     conformance_profile: params.conformanceProfile ?? "",
     license: params.license ?? "",
+    sbom_author: params.sbomAuthor ?? "",
     usage: params.usage ?? "",
     deep_cve: String(params.deepCve),
     upload_target: params.uploadTarget ?? "",

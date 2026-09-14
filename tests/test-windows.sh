@@ -50,6 +50,16 @@ cat > "$BIN/docker" <<'STUB'
 #!/usr/bin/env bash
 log="${DOCKER_STUB_LOG:-/dev/null}"
 echo "docker $*" >> "$log"
+# DOCKER_STUB_ARGV_DUMP=1 additionally logs each argv element on its own
+# bracketed line, so a test can tell "one element containing a space" apart
+# from "word-split into several" -- something a substring grep on the `$*`
+# line above cannot, since that line always has spaces between elements
+# either way.
+if [ "${DOCKER_STUB_ARGV_DUMP:-0}" = "1" ]; then
+  for a in "$@"; do
+    printf '<%s>\n' "$a" >> "$log"
+  done
+fi
 case "${1:-}" in
   version|info|pull|image|inspect|stop|rm) exit 0 ;;
   run)
@@ -659,6 +669,49 @@ scan_in "$d" --project PT --version 1 --target app.out --generate-only \
     && in_log "TRUSCA_PROJECT_ID=proj-123" && in_log "bomlens-deep-cve"; } \
   && pass "--license/--sbom-author/--identify-vendored/--trusca/--deep-cve reach the container" \
   || { fail "pass-through flags reach the container"; show; }
+
+# --------------------------------------------------------
+section "--sbom-author reaches the container verbatim (legal-entity names, shell metacharacters)"
+# --------------------------------------------------------
+# The web UI's server.py path checked ("SK Telecom Co., Ltd.", parens/ampersand)
+# is a subprocess env var, never shell syntax. The CLI path is different: it
+# goes through printf %q into an `eval "$DOCKER_MSYS"docker run ...
+# $(pp_env)...` command line (scripts/scan-sbom.sh), which only round-trips a
+# value correctly if %q's escaping actually gets re-parsed by that eval. Argv
+# dumped one bracketed element per line (DOCKER_STUB_ARGV_DUMP), not just
+# grepped as a substring of the joined `docker $*` line, so a value split
+# across multiple `-e` tokens (silently narrower than intended) would be
+# caught too: `<SBOM_AUTHOR=one` and `two>` on separate lines would not match
+# the single-line assertion below.
+d="$(new_proj sbom-author-verbatim)"; printf 'ELFish\n' > "$d/app.out"
+DOCKER_STUB_ARGV_DUMP=1 \
+  scan_in "$d" --project SA1 --version 1 --target app.out --generate-only \
+  --sbom-author 'SK Telecom Co., Ltd.'
+in_log "<SBOM_AUTHOR=SK Telecom Co., Ltd.>" \
+  && pass "a legal-entity name with a comma reaches the container as one unbroken argv element" \
+  || { fail "SK Telecom Co., Ltd. was split or mangled crossing the eval boundary"; show; cat "$LOG"; }
+
+d="$(new_proj sbom-author-korean)"; printf 'ELFish\n' > "$d/app.out"
+DOCKER_STUB_ARGV_DUMP=1 \
+  scan_in "$d" --project SA2 --version 1 --target app.out --generate-only \
+  --sbom-author '(주)에스케이 & 파트너스'
+in_log "<SBOM_AUTHOR=(주)에스케이 & 파트너스>" \
+  && pass "a Korean legal-entity name with parens/ampersand reaches the container as one unbroken argv element" \
+  || { fail "(주)에스케이 & 파트너스 was split or mangled crossing the eval boundary"; show; cat "$LOG"; }
+
+# Command substitution stays literal text -- eval re-parses the %q-escaped
+# value as one shell word, so $(...) and `...` inside it are data, not syntax.
+rm -f /tmp/bomlens-test-pwned-eval /tmp/bomlens-test-pwned-backtick
+d="$(new_proj sbom-author-injection)"; printf 'ELFish\n' > "$d/app.out"
+scan_in "$d" --project SA3 --version 1 --target app.out --generate-only \
+  --sbom-author 'Evil $(touch /tmp/bomlens-test-pwned-eval) `touch /tmp/bomlens-test-pwned-backtick`'
+if [ ! -e /tmp/bomlens-test-pwned-eval ] && [ ! -e /tmp/bomlens-test-pwned-backtick ] \
+   && in_log 'SBOM_AUTHOR=Evil $(touch /tmp/bomlens-test-pwned-eval) `touch /tmp/bomlens-test-pwned-backtick`'; then
+    pass "command substitution in --sbom-author is not executed and reaches the container as literal text"
+else
+    fail "--sbom-author let a shell command run"; show
+    rm -f /tmp/bomlens-test-pwned-eval /tmp/bomlens-test-pwned-backtick
+fi
 
 # No flag -> the container sees the default profile.
 d="$(new_proj profdefault)"; printf 'ELFish\n' > "$d/app.out"

@@ -2515,14 +2515,21 @@ def _valid_model_id(mid):
 
 
 def _env_flag_value(value):
-    """Sanitize a free-text value (project name/version) for a docker-run
-    `-e KEY=<value>` argument.
+    """Sanitize a free-text value (project name/version, SBOM author) for a
+    docker-run `-e KEY=<value>` argument.
 
     It is already a single argv element (subprocess is invoked with a list and
     shell=False, so it can never split into a new flag), but we additionally
     strip control characters and the few shell-significant bytes so the value
-    that reaches the command line is a plain, bounded token."""
-    return re.sub(r"[^\w.+:/ @=-]", "", (value or ""))[:256]
+    that reaches the command line is a plain, bounded token. `,'()&` are kept
+    despite being shell-significant elsewhere: a legal entity name commonly
+    carries them ("SK Telecom Co., Ltd.", "(주)..."), none of them can split
+    or extend the argv (still one list element, shell=False), and none of the
+    downstream consumers re-parses this value as shell syntax (docker-run argv
+    here; jq --arg in stamp-document-metadata.sh; scan-sbom.sh's own --sbom-author
+    is verified end-to-end through its `eval "$DOCKER_MSYS"docker run ...
+    $(printf ... %q ...)` path, which is exactly what %q exists to make safe)."""
+    return re.sub(r"[^\w.+:/ @=&(),'-]", "", (value or ""))[:256]
 
 
 def _self_container_id():
@@ -2695,6 +2702,12 @@ def run_sibling_scan(image, mode, out_dir, on_log, *, upload_file=None, model_id
         # Outbound license (SPDX id) for the license-conflict check. Sanitized the
         # same way as the project name; empty means the check stays off.
         "-e", "PROJECT_LICENSE=%s" % _env_flag_value(env.get("PROJECT_LICENSE", "")),
+        # SBOM author (metadata.authors). Sanitized the same way; empty means
+        # docmeta leaves the SBOM without one. ANALYZE is one of _SIBLING_MODES,
+        # but harmless to forward regardless: the frontend never sends it for
+        # ANALYZE (showSbomAuthor), and entrypoint.sh's own docmeta dispatch
+        # already excludes ANALYZE (it converts a document we did not author).
+        "-e", "SBOM_AUTHOR=%s" % _env_flag_value(env.get("SBOM_AUTHOR", "")),
         "-e", "HOST_OUTPUT_DIR=%s" % out_dir,  # container path, contained in OUTPUT_DIR
         "-e", "GENERATE_NOTICE=%s" % _bool_env("GENERATE_NOTICE"),
         "-e", "GENERATE_SECURITY=%s" % _bool_env("GENERATE_SECURITY"),
@@ -4139,6 +4152,15 @@ class Handler(BaseHTTPRequestHandler):
         # value simply leaves the check off.
         outbound_license = g("license").strip()[:64]
 
+        # Optional SBOM author (--sbom-author on the CLI): the organisation or
+        # person running this scan, recorded on metadata.authors. Free text (a
+        # legal entity name), bounded here and sanitized again at the docker-run
+        # boundary; an empty value leaves the SBOM without one. The frontend
+        # hides this field for ANALYZE, but a direct API call could still send
+        # it, so it stays here rather than in a per-mode branch: entrypoint.sh's
+        # own docmeta dispatch is what actually excludes ANALYZE.
+        sbom_author = g("sbom_author").strip()[:128]
+
         # Optional AI usage scenario (--usage on the CLI) scoping the model risk
         # assessment. Closed allowlist: an out-of-list value is refused before
         # the stream starts, and the literal REBOUND from _USAGE_CONTEXTS (never
@@ -4246,6 +4268,7 @@ class Handler(BaseHTTPRequestHandler):
                 "includeOsv": g("includeOsv") == "true",
                 "byteStable": g("byte_stable") == "true",
                 "deepCve": g("deep_cve") == "true",
+                "sbomAuthor": sbom_author,
             }
             write_scanmeta(run_out, scan_config)
 
@@ -4307,6 +4330,7 @@ class Handler(BaseHTTPRequestHandler):
             "PROJECT_NAME": project,
             "PROJECT_VERSION": version,
             "PROJECT_LICENSE": outbound_license,
+            "SBOM_AUTHOR": sbom_author,
             "UPLOAD_ENABLED": "false",
             "HOST_OUTPUT_DIR": run_out,
             # entrypoint.sh's own cdxgen-sibling cancel handler uses the same
