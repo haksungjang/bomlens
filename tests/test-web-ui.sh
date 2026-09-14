@@ -501,6 +501,76 @@ rc = server.run_sibling_scan(
 assert rc == 0, rc
 assert not any(a.startswith("CONFORMANCE_PROFILE") for a in captured["args"]), captured["args"]
 
+# PURL/LICENSE/HASH/FIELD_MIN_PCT: an operator's environment variable on this
+# server's own container (docs/reference/docker-image.md), not a request field
+# -- so _pct_env reads os.environ directly, and the test sets it there too
+# (not via extra_env, which run_sibling_scan merges in as if it were a request
+# field). A missed forward would silently re-grade a scan against the default
+# thresholds instead of the operator's own, the same class of bug as
+# CONFORMANCE_PROFILE above.
+_PCT_VARS = ("PURL_MIN_PCT", "LICENSE_MIN_PCT", "HASH_MIN_PCT", "FIELD_MIN_PCT")
+for _v in _PCT_VARS:
+    os.environ[_v] = "77"
+captured.clear()
+rc = server.run_sibling_scan(
+    "ghcr.io/sktelecom/bomlens-deep-cve:1.5.0", "ANALYZE", run_out,
+    lambda ln: None, upload_file=up_file,
+)
+assert rc == 0, rc
+for _v in _PCT_VARS:
+    assert ("%s=77" % _v) in captured["args"], (_v, captured["args"])
+for _v in _PCT_VARS:
+    del os.environ[_v]
+
+# Unset -> not forwarded at all (validate-sbom.sh's own default applies).
+captured.clear()
+rc = server.run_sibling_scan(
+    "ghcr.io/sktelecom/bomlens-deep-cve:1.5.0", "ANALYZE", run_out,
+    lambda ln: None, upload_file=up_file,
+)
+assert rc == 0, rc
+assert not any(a.startswith(_PCT_VARS) for a in captured["args"]), captured["args"]
+
+# A bad value (non-numeric, or numeric but out of 0-100) is dropped, not
+# forwarded as-is -- validate-sbom.sh's `--argjson` would crash the whole
+# conformance step on the non-numeric one.
+for _bad in ("abc", "150", "-5", "12.5", ""):
+    os.environ["PURL_MIN_PCT"] = _bad
+    captured.clear()
+    rc = server.run_sibling_scan(
+        "ghcr.io/sktelecom/bomlens-deep-cve:1.5.0", "ANALYZE", run_out,
+        lambda ln: None, upload_file=up_file,
+    )
+    assert rc == 0, rc
+    assert not any(a.startswith("PURL_MIN_PCT") for a in captured["args"]), (_bad, captured["args"])
+    del os.environ["PURL_MIN_PCT"]
+
+# DEEP_LICENSE and BYTE_STABLE: plain New scan checkboxes the request already
+# sets on the in-process env dict (server's own env.update above), not an
+# operator environment variable like the four PCT vars -- so the test drives
+# them via extra_env, the same way CONFORMANCE_PROFILE above does. A missed
+# forward would silently drop a checkbox the reader just turned on.
+captured.clear()
+rc = server.run_sibling_scan(
+    "ghcr.io/sktelecom/bomlens-deep-cve:1.5.0", "SOURCE", run_out,
+    lambda ln: None, source_root=src_root,
+    extra_env={"DEEP_LICENSE": "true", "BYTE_STABLE": "true"},
+)
+assert rc == 0, rc
+assert "DEEP_LICENSE=true" in captured["args"], captured["args"]
+assert "BYTE_STABLE=true" in captured["args"], captured["args"]
+
+# Off (or simply not set) forwards the explicit "false", not silence -- a
+# missing key must not fall back to _bool_env's default-true.
+captured.clear()
+rc = server.run_sibling_scan(
+    "ghcr.io/sktelecom/bomlens-deep-cve:1.5.0", "SOURCE", run_out,
+    lambda ln: None, source_root=src_root,
+)
+assert rc == 0, rc
+assert "DEEP_LICENSE=false" in captured["args"], captured["args"]
+assert "BYTE_STABLE=false" in captured["args"], captured["args"]
+
 # HF_TOKEN: inherited from THIS container's environment (never posted to the UI)
 # and forwarded by name only, so the secret stays out of the docker-run argv.
 HF_SENTINEL = "hf_sentinel_do_not_leak_9f3a"

@@ -2494,6 +2494,7 @@ _SIBLING_MODES = ("FIRMWARE", "AIBOM", "ANALYZE", "SOURCE", "IMAGE", "ROOTFS", "
 _USAGE_CONTEXTS = ("internal", "product", "redistribute", "outputs-only")
 _CONFORMANCE_PROFILES = ("default", "skt-submission")
 _REPORT_LANGS = ("en", "ko")
+_PCT_ENV_NAMES = ("PURL_MIN_PCT", "LICENSE_MIN_PCT", "HASH_MIN_PCT", "FIELD_MIN_PCT")
 
 
 def _valid_image_ref(ref):
@@ -2531,6 +2532,29 @@ def _env_flag_value(value):
     is verified end-to-end through its `eval "$DOCKER_MSYS"docker run ...
     $(printf ... %q ...)` path, which is exactly what %q exists to make safe)."""
     return re.sub(r"[^\w.+:/ @=&(),'-]", "", (value or ""))[:256]
+
+
+def _pct_env(name):
+    """Read a conformance-threshold percentage (PURL/LICENSE/HASH/FIELD_MIN_PCT)
+    from this process's own environment, validated to an int 0-100, or None if
+    unset/not a plain integer/out of range.
+
+    validate-sbom.sh reads these with `--argjson`, which crashes the whole
+    conformance step on a non-numeric value (jq: "invalid JSON text passed to
+    --argjson") and silently accepts a numeric-but-nonsensical one (150%,
+    -5%) as a coverage floor no scan could ever clear or always clears. Both
+    scan paths call this and only ever see None (key omitted, validate-sbom.sh
+    falls back to its own default) or a value already known to be sane -- the
+    bad-input case never reaches either path, rather than reaching one and not
+    the other."""
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return None
+    try:
+        n = int(raw)
+    except ValueError:
+        return None
+    return n if 0 <= n <= 100 else None
 
 
 def _self_container_id():
@@ -2715,6 +2739,20 @@ def run_sibling_scan(image, mode, out_dir, on_log, *, upload_file=None, model_id
         # No GENERATE_SPDX: SPDX is exported on demand after the scan
         # (convert_bom_to_spdx), so the sibling never produces it.
         "-e", "GENERATE_REPORT=%s" % _bool_env("GENERATE_REPORT"),
+        # Deep license (ScanCode) and reproducible output are plain form
+        # toggles (see server's own env dict above), not gated to one sibling
+        # mode here: entrypoint.sh already scopes DEEP_LICENSE to a present
+        # /src tree and skips it with a WARN when scancode isn't in the image
+        # (it currently is not, in the published deep-cve image -- see
+        # SBOM_DEEP_LICENSE in docker/Dockerfile), and BYTE_STABLE's
+        # normalize-sbom.sh --stable runs unconditionally for every mode.
+        # Leaving either unforwarded would silently drop a checkbox the reader
+        # just turned on, the same bug class as CONFORMANCE_PROFILE above.
+        # Not _bool_env: both are opt-in (off by default), and _bool_env
+        # defaults a missing key to "true" -- the wrong direction here, same
+        # reason UPLOAD_ENABLED below reads env.get(...) == "true" directly.
+        "-e", "DEEP_LICENSE=%s" % ("true" if env.get("DEEP_LICENSE") == "true" else "false"),
+        "-e", "BYTE_STABLE=%s" % ("true" if env.get("BYTE_STABLE") == "true" else "false"),
     ]
     # The profile the caller resolved (see the main handler's per-mode default),
     # re-derived from a closed allowlist like AI_USAGE_CONTEXT below, never the
@@ -2729,6 +2767,17 @@ def run_sibling_scan(image, mode, out_dir, on_log, *, upload_file=None, model_id
     # env string: this decides which language the sibling's own generated
     # reports (notice, conformance, security, AI profile) render in.
     args += ["-e", "REPORT_LANG=%s" % (env.get("REPORT_LANG") if env.get("REPORT_LANG") in _REPORT_LANGS else "en")]
+    # Conformance-threshold overrides: an operator's environment variable, not a
+    # request field (no web form sets these), so read fresh from os.environ via
+    # _pct_env the same way the in-process path does -- not the merged `env`
+    # above, which may still carry extra_env's raw, unvalidated copy for a key
+    # _pct_env rejected there. Omitted (not None) forwards nothing, same as an
+    # unset var: validate-sbom.sh's own default (profile-driven for PURL_MIN_PCT,
+    # fixed for the other three) applies identically on both paths.
+    for _pct_name in _PCT_ENV_NAMES:
+        _pct_val = _pct_env(_pct_name)
+        if _pct_val is not None:
+            args += ["-e", "%s=%d" % (_pct_name, _pct_val)]
     # Opt-in OSV advisories for firmware: forward only the two fixed control
     # values the UI may have set on the firmware path. We re-derive each from a
     # closed allowlist (never the env string itself) so no user-influenced text
@@ -4370,6 +4419,20 @@ class Handler(BaseHTTPRequestHandler):
             # literal, no user text. SECURITY_NVD_VERIFY stays off (network/NVD key).
             "DEEP_CVE": "true" if g("deep_cve") == "true" else "false",
         })
+        # Conformance-threshold overrides (PURL/LICENSE/HASH/FIELD_MIN_PCT): no
+        # web form sets these, an operator does, as plain environment variables
+        # on this server's own container (see docs/reference/docker-image.md).
+        # env.copy() above already carries whatever was set, but unvalidated --
+        # re-set each from _pct_env's validated read, and drop it when invalid,
+        # so this path and the sibling one (run_sibling_scan) see identically
+        # sane input rather than one crashing validate-sbom.sh's jq and the
+        # other quietly falling back to a default.
+        for _pct_name in _PCT_ENV_NAMES:
+            _pct_val = _pct_env(_pct_name)
+            if _pct_val is None:
+                env.pop(_pct_name, None)
+            else:
+                env[_pct_name] = str(_pct_val)
         # Allowlisted above (and rebound to the _USAGE_CONTEXTS literal). Set
         # only when given: assess-ai-risk.sh treats the absent var as "no
         # scenario" and reports every binding condition instead.
