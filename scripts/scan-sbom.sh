@@ -648,6 +648,18 @@ UPLOAD_VAR="true"; [ "$GENERATE_ONLY" = "true" ] && UPLOAD_VAR="false"
 CONFORMANCE_RESULT_FILE="${OUTPUT_HOST_DIR}/${SAFE_PROJECT}_${SAFE_VERSION}_conformance.result"
 [ "$FAIL_ON_CONFORMANCE" = "true" ] && rm -f "$CONFORMANCE_RESULT_FILE"
 
+# A SOURCE scan writes $OUTPUT_FILE in two containers: stage 1 (cdxgen) here on
+# the host first, stage 2 (POSTPROCESS, entrypoint.sh) after. entrypoint.sh's
+# own stale-artifact cleanup runs at stage 2's startup and cannot otherwise
+# tell this run's own file, which stage 1 just wrote, from a leftover of an
+# earlier run at the same --project/--version (this folder is reused, not
+# recreated) -- both are just "$OUTPUT_FILE already on disk". Removing any
+# leftover here, before stage 1 runs, means stage 2 always finds either
+# nothing (stage 1 hasn't run yet) or stage 1's own fresh file; entrypoint.sh
+# is told that file's name (BOMLENS_RUN_INPUT, below) so it skips it rather
+# than mistaking it for a stale one.
+rm -f "${OUTPUT_HOST_DIR}/${OUTPUT_FILE}"
+
 # Temp dirs (git clone / archive extract) are cleaned on any exit. A container
 # build step (e.g. npm install during a source scan) can leave root-owned files
 # in the mounted temp dir on Linux, where the host user cannot rm them; fall back
@@ -1804,7 +1816,7 @@ if [ "$MODE" = "SOURCE" ]; then
         -v "\"$(hostpath "$SCAN_INPUT_DIR")\"":/src -v "\"$(hostpath "$OUTPUT_HOST_DIR")\"":/host-output \
         -w /host-output \
         --add-host=host.docker.internal:host-gateway \
-        -e MODE=POSTPROCESS $(pp_env)$(cosign_run) \
+        -e MODE=POSTPROCESS -e BOMLENS_RUN_INPUT="$OUTPUT_FILE" $(pp_env)$(cosign_run) \
         "\"$POSTPROCESS_IMAGE\""
 else
     # image / binary / rootfs / firmware / aibom / analyze / merge: scanner image

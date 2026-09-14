@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The web UI's conformance panel now shows the same failed-post-process-step note the Overview screen already carries, naming which step, instead of only Overview showing it. On a document someone else supplied for review, the note suggests asking the supplier to regenerate it instead of re-scanning.
 - `--fail-on-conformance` makes the scan itself exit non-zero when this run's own conformance report says "fail" (2), or produced none to judge (3), instead of a separate step having to inspect the report for CI gating.
 - The web UI's New scan advanced options now has an SBOM author field (`--sbom-author`/`SBOM_AUTHOR` on the CLI), so a supplier scanning through the web UI can declare who generated the SBOM without dropping to the command line. Hidden for ANALYZE, where the document already has its own author.
+- Re-scanning the same project and version removes the previous run's artifacts from the output folder before writing new ones; other files in the folder are kept.
 
 ### Changed
 

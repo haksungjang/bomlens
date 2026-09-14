@@ -185,6 +185,37 @@ while IFS= read -r suf; do
     fi
 done < <(printf '%s\n' "$entrypoint_suffixes")
 
+# entrypoint.sh's own stale-artifact cleanup (KNOWN_ARTIFACT_SUFFIXES) is meant
+# to mirror the REGISTRY exactly: every suffix any producer script can write,
+# so a re-scan's leftover from a previous run's mode/options is always
+# recognized. Checked both directions: the array must have everything the
+# REGISTRY has, and nothing the REGISTRY does not.
+cleanup_suffixes=$(awk '/^KNOWN_ARTIFACT_SUFFIXES=\(/,/^\)/' "$ENTRYPOINT" \
+    | grep -v '^[[:space:]]*#' \
+    | grep -v '^KNOWN_ARTIFACT_SUFFIXES=' \
+    | grep -oE '_[A-Za-z0-9._-]+' \
+    | grep -E '^_[A-Za-z0-9._-]+$' | sort -u)
+if [ -z "$cleanup_suffixes" ]; then
+    echo "FAIL: could not find entrypoint.sh's KNOWN_ARTIFACT_SUFFIXES array (stale-artifact cleanup)."
+    fail=1
+else
+    while IFS= read -r suf; do
+        [ -z "$suf" ] && continue
+        if ! printf '%s\n' "$cleanup_suffixes" | grep -qFx "$suf"; then
+            echo "FAIL: $suf is in the REGISTRY but missing from entrypoint.sh's KNOWN_ARTIFACT_SUFFIXES, so a re-scan would not clean up a stale one."
+            fail=1
+        fi
+    done < <(printf '%s\n' "$registry_suffixes")
+    while IFS= read -r suf; do
+        [ -z "$suf" ] && continue
+        if ! printf '%s\n' "$registry_suffixes" | grep -qFx "$suf"; then
+            echo "FAIL: entrypoint.sh's KNOWN_ARTIFACT_SUFFIXES has '$suf', which is not in the REGISTRY here."
+            echo "      Add a line for it in scripts/check-artifact-registry-sync.sh."
+            fail=1
+        fi
+    done < <(printf '%s\n' "$cleanup_suffixes")
+fi
+
 if [ "$fail" -ne 0 ]; then
     echo ""
     echo "Artifact registry sync check failed — entrypoint.sh/server.py/.gitignore/docs disagree about a scan output file."
