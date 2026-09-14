@@ -1750,6 +1750,62 @@ else
     echo "  SKIP: jq not available for conformance generation"
 fi
 
+echo "== conformance_summary passes through pipelineStepsFailed (F-17) =="
+# validate-sbom.sh already dedupes/orders/caps this off the SBOM's own
+# bomlens:pipeline-step-failed properties; conformance_summary must pass it
+# through, and default to []/0 for a report generated before this field
+# existed (an old _conformance.json on disk, or one hand-crafted without it),
+# rather than surfacing a missing key as null and breaking the frontend type.
+if command -v jq >/dev/null 2>&1; then
+    jq '.metadata.properties = [
+      {"name":"bomlens:pipeline-step-failed","value":"normalize"},
+      {"name":"bomlens:pipeline-step-failed","value":"enrich-cpe"},
+      {"name":"bomlens:pipeline-step-failed","value":"normalize"}
+    ]' "$ROOT_DIR/tests/fixtures/good-cyclonedx.json" > "$OUT/psfweb_1.0_bom.json"
+    PROJECT=psfweb GEN_AT=2026-01-01 bash "$ROOT_DIR/docker/lib/validate-sbom.sh" \
+        "$OUT/psfweb_1.0_bom.json" "$OUT/psfweb_1.0" >/dev/null 2>&1
+    if SBOM_OUTPUT_DIR="$OUT" python3 - "$ROOT_DIR" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+c = server.conformance_summary("psfweb_1.0")
+assert c is not None, "no conformance summary"
+assert c.get("pipelineStepsFailed") == ["normalize", "enrich-cpe"], (
+    "pipelineStepsFailed not passed through / not deduped", c.get("pipelineStepsFailed"))
+assert c.get("pipelineStepsFailedMore") == 0, c.get("pipelineStepsFailedMore")
+PY
+    then
+        pass "conformance_summary passes through pipelineStepsFailed, deduped"
+    else
+        fail "conformance_summary did not pass through pipelineStepsFailed"
+    fi
+    rm -f "$OUT"/psfweb_1.0_*
+
+    # An old report predates the field entirely -- absence, not null or a crash.
+    PROJECT=psfold GEN_AT=2026-01-01 bash "$ROOT_DIR/docker/lib/validate-sbom.sh" \
+        "$ROOT_DIR/tests/fixtures/good-cyclonedx.json" "$OUT/psfold_1.0" >/dev/null 2>&1
+    jq 'del(.pipelineStepsFailed, .pipelineStepsFailedMore)' \
+        "$OUT/psfold_1.0_conformance.json" > "$OUT/psfold_1.0_conformance.json.tmp" \
+        && mv "$OUT/psfold_1.0_conformance.json.tmp" "$OUT/psfold_1.0_conformance.json"
+    if SBOM_OUTPUT_DIR="$OUT" python3 - "$ROOT_DIR" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+c = server.conformance_summary("psfold_1.0")
+assert c is not None, "no conformance summary"
+assert c.get("pipelineStepsFailed") == [], ("an old report must default to []", c.get("pipelineStepsFailed"))
+assert c.get("pipelineStepsFailedMore") == 0, ("an old report must default to 0", c.get("pipelineStepsFailedMore"))
+PY
+    then
+        pass "an old report with no pipelineStepsFailed key defaults to [] and 0"
+    else
+        fail "an old report without pipelineStepsFailed was not defaulted safely"
+    fi
+    rm -f "$OUT"/psfold_1.0_*
+else
+    echo "  SKIP: jq not available for conformance generation"
+fi
+
 echo "== ai profile summary (ai_profile_summary) =="
 # generate-ai-profile.sh re-aggregates the conformance + SBOM artifacts into a
 # governance card. ai_profile_summary must return the light rollup for an AI SBOM

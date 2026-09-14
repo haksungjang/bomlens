@@ -1768,10 +1768,25 @@ def conformance_summary(run_id):
             if how or how_ko:
                 row["reviewGuide"] = {"how": how, "howKo": how_ko, "docUrl": rg_url}
         checks.append(row)
+    # pipelineStepsFailed/pipelineStepsFailedMore: validate-sbom.sh (F-17) already
+    # dedupes, orders, and caps these at MAX_PIPELINE_STEPS ids of
+    # MAX_PIPELINE_STEP_LEN chars each, the same numbers this file uses for
+    # pipeline_steps_seen above (kept in sync deliberately). Re-applied here
+    # anyway, same as every other field in this function -- the report is ours,
+    # but an older one predates this field entirely and reads as an absent key,
+    # which must default to [] / 0 rather than surfacing as null.
+    pipeline_steps_failed = [
+        s[:MAX_PIPELINE_STEP_LEN] for s in _as_list(data.get("pipelineStepsFailed")) if isinstance(s, str)
+    ][:MAX_PIPELINE_STEPS]
+    pipeline_steps_failed_more = data.get("pipelineStepsFailedMore")
+    if not isinstance(pipeline_steps_failed_more, int) or pipeline_steps_failed_more < 0:
+        pipeline_steps_failed_more = 0
     out = {
         "result": data.get("result", "unknown"),
         "format": data.get("format", ""),
         "checks": checks,
+        "pipelineStepsFailed": pipeline_steps_failed,
+        "pipelineStepsFailedMore": pipeline_steps_failed_more,
     }
     # Top-level regulatory crosswalk rollup (AI SBOMs only; validate-sbom.sh omits
     # the key entirely for non-AI SBOMs or when the crosswalk registry is absent).
