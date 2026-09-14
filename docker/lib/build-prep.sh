@@ -1853,6 +1853,262 @@ CWMF_JS
     fi
 fi
 
+# pnpm workspace-member filter: the same problem as the Cargo/npm filters
+# above -- cdxgen reads pnpm-lock.yaml directly, so a member whose own
+# directory sits under an excluded tree (a playground or __tests__ package,
+# say) survives the file-level --exclude globs. Drop such a member's own
+# component, and a dependency only that member reaches (any way at all),
+# unless a kept member reaches it too. BOMLENS_INCLUDE_NON_SHIPPED=1 opts
+# out, same switch as the file-level exclusion above.
+#
+# Member discovery and the dependency graph both come from `pnpm ls`, never
+# from hand-parsing pnpm-lock.yaml's YAML. A single `pnpm ls -r --depth
+# Infinity --json --lockfile-only` call needs no node_modules and no
+# network, and returns every workspace project's own full recursive
+# dependency tree in one process (confirmed against a real 283-project
+# workspace: 1.1MB of JSON, ~3.5s -- far cheaper than one `pnpm ls --filter`
+# call per member).
+#
+# A workspace-member dependency carries pnpm's `link:`/`file:` version
+# prefix and always repeats the target's own absolute path in its `path`
+# field, so a member-to-member edge resolves by matching that path against
+# the top-level project list -- never by name, and never by trusting a link
+# node's own inline expansion (pnpm fills that in for some occurrences of a
+# link and leaves it empty for others; the top-level project entry is the
+# one place every member's own direct dependencies are always complete).
+#
+# An external registry package's edges collapse onto its own name@version:
+# pnpm expands a name@version's dependencies at most once per `pnpm ls`
+# call and marks every later occurrence "deduped": true with no
+# "dependencies" key, so the adjacency for that name@version has to be
+# collected from whichever occurrence(s), anywhere in the whole document,
+# actually carry it -- not from any one node's local subtree. A name@version
+# that is deduped everywhere it appears does happen in real workspaces (an
+# `overrides`-aliased package, and pnpm's own internal ESM/CJS-compat
+# "-cjs" aliases both do this) -- `dedupedDependenciesCount` says it has
+# children, but none of its occurrences ever show them. Such a package is
+# never dropped (protected), the same conservative fallback the npm filter
+# above gives an unresolved dependency name.
+if [ "${rc:-1}" -eq 0 ] && [ -f pnpm-workspace.yaml ] && [ -f pnpm-lock.yaml ] \
+   && [ -n "$EXCLUDE_NON_SHIPPED" ] \
+   && [ -f "$OUT" ] && command -v node >/dev/null 2>&1 && command -v pnpm >/dev/null 2>&1; then
+    _pwtree=$(prep_step pnpm-workspace-tree "$PREP_TIMEOUT_DEFAULT" pnpm ls -r --depth Infinity --json --lockfile-only)
+    _pwtree_rc=$?
+    if [ "$_pwtree_rc" -eq 0 ] && [ -n "$_pwtree" ]; then
+        _pwtreef=$(mktemp)
+        printf '%s' "$_pwtree" > "$_pwtreef"
+        _pwmf=$(mktemp).js
+        cat > "$_pwmf" <<'PWMF_JS'
+const fs = require('fs');
+const path = require('path');
+const [bomPath, treePath, dirsStr] = process.argv.slice(2);
+let bom;
+try { bom = JSON.parse(fs.readFileSync(bomPath, 'utf8')); } catch (e) { process.exit(0); }
+if (!Array.isArray(bom.components) || !Array.isArray(bom.dependencies)) process.exit(0);
+
+const MAX_TREE_BYTES = 64 * 1024 * 1024;
+let treeText;
+try {
+  const st = fs.statSync(treePath);
+  if (st.size > MAX_TREE_BYTES) process.exit(0);
+  treeText = fs.readFileSync(treePath, 'utf8');
+} catch (e) { process.exit(0); }
+let tree;
+try { tree = JSON.parse(treeText); } catch (e) { process.exit(0); }
+if (!Array.isArray(tree) || tree.length === 0) process.exit(0);
+if (tree.some(p => !p || typeof p.path !== 'string')) process.exit(0);   // shape unexpected: bail
+
+const NON_SHIPPED_DIRS = new Set((dirsStr || '').split(/\s+/).filter(Boolean));
+let cwd;
+try { cwd = fs.realpathSync(process.cwd()); } catch (e) { cwd = process.cwd(); }
+function canon(p) { try { return fs.realpathSync(p); } catch (e) { return p; } }
+function relOf(absPath) { return path.relative(cwd, canon(absPath)); }
+function underExcludedTree(rel) {
+  if (!rel || rel.startsWith('..')) return false;
+  return rel.split(path.sep).some(seg => NON_SHIPPED_DIRS.has(seg));
+}
+
+// pathToMember keys on the realpath'd absolute path, the same identity a
+// link/file dependency's own "path" field carries, so a member-to-member
+// edge matches by exact key lookup, never by name.
+const pathToMember = new Map();
+for (const p of tree) {
+  const key = canon(p.path);
+  pathToMember.set(key, {
+    name: typeof p.name === 'string' ? p.name : null,
+    version: typeof p.version === 'string' ? p.version : null,
+    relPath: relOf(p.path),
+    excluded: underExcludedTree(relOf(p.path)),
+  });
+}
+const excludedMembers = [...pathToMember.values()].filter(m => m.excluded);
+if (excludedMembers.length === 0) process.exit(0);
+const keptMembers = [...pathToMember.values()].filter(m => !m.excluded);
+if (keptMembers.length === 0) process.exit(0);
+
+const BUDGET_MS = 5000;
+const deadline = Date.now() + BUDGET_MS;
+let steps = 0;
+let budgetExceeded = false;
+function overBudget() {
+  if (budgetExceeded) return true;
+  if ((++steps & 0xfff) === 0 && Date.now() > deadline) budgetExceeded = true;
+  return budgetExceeded;
+}
+
+function mergedDeps(node) {
+  return Object.assign({}, node.dependencies, node.devDependencies, node.optionalDependencies);
+}
+
+// extAdj: "name@version" -> child tokens, built from whichever occurrence(s)
+// in the WHOLE tree carry that name@version's real "dependencies" (the
+// first one visited; later "deduped": true occurrences of the same
+// name@version are skipped via the extAdj.has(nv) guard, since pnpm
+// guarantees they resolve to the identical subtree). hiddenChildren
+// collects a name@version pnpm says has children (dedupedDependenciesCount
+// > 0) that this pass never once saw expanded -- protected below.
+const extAdj = new Map();
+const hiddenChildren = new Set();
+
+function tokenFor(name, node) {
+  if (overBudget() || !node || typeof node.version !== 'string') return null;
+  if ((node.version.startsWith('link:') || node.version.startsWith('file:')) && typeof node.path === 'string') {
+    const key = canon(node.path);
+    return pathToMember.has(key) ? 'm:' + key : null;   // unresolvable link target: drop the edge
+  }
+  const from = typeof node.from === 'string' ? node.from : name;
+  const nv = from + '@' + node.version;
+  const hasDeps = Object.prototype.hasOwnProperty.call(node, 'dependencies')
+    || Object.prototype.hasOwnProperty.call(node, 'devDependencies')
+    || Object.prototype.hasOwnProperty.call(node, 'optionalDependencies');
+  if (hasDeps) {
+    if (!extAdj.has(nv)) extAdj.set(nv, collectTokens(mergedDeps(node)));
+  } else if (typeof node.dedupedDependenciesCount === 'number' && node.dedupedDependenciesCount > 0) {
+    hiddenChildren.add(nv);
+  }
+  return 'e:' + nv;
+}
+function collectTokens(depsObj) {
+  const out = [];
+  for (const name of Object.keys(depsObj)) {
+    if (overBudget()) return out;
+    const t = tokenFor(name, depsObj[name]);
+    if (t) out.push(t);
+  }
+  return out;
+}
+
+// memberChildren: each member's own direct (dependencies + devDependencies
+// + optionalDependencies) tokens, from its own top-level project entry --
+// never from a link node's inline (sometimes-partial) copy of the same
+// list. Walking every project here also fully populates extAdj above,
+// regardless of which project happens to visit a given external package
+// first.
+const memberChildren = new Map();
+for (const p of tree) {
+  if (overBudget()) process.exit(0);
+  memberChildren.set(canon(p.path), collectTokens(mergedDeps(p)));
+}
+if (budgetExceeded) process.exit(0);
+
+const protectedNV = new Set([...hiddenChildren].filter(nv => !extAdj.has(nv)));
+
+function childrenOf(token) {
+  if (token.charCodeAt(0) === 109 /* 'm' */) return memberChildren.get(token.slice(2)) || [];
+  return extAdj.get(token.slice(2)) || [];
+}
+function bfs(starts) {
+  const seen = new Set(starts);
+  const queue = starts.slice();
+  while (queue.length) {
+    if (overBudget()) return null;
+    const cur = queue.shift();
+    for (const next of childrenOf(cur)) if (!seen.has(next)) { seen.add(next); queue.push(next); }
+  }
+  return seen;
+}
+const keptRoots = [...pathToMember.entries()].filter(([, m]) => !m.excluded).map(([k]) => 'm:' + k);
+const excludeRoots = [...pathToMember.entries()].filter(([, m]) => m.excluded).map(([k]) => 'm:' + k);
+const reachedFromKeep = bfs(keptRoots);
+const reachedFromExclude = bfs(excludeRoots);
+if (!reachedFromKeep || !reachedFromExclude) process.exit(0);
+
+// Drop set: reached from an excluded root, not reached from any kept root
+// (any way at all), and -- for an external package -- not protected. A
+// dropped member's own name@version joins the very same pool an external
+// package purl is matched against below: its component carries an ordinary
+// pkg:npm purl too, so one drop set and one filter pass cover both.
+const dropNV = new Set();
+for (const token of reachedFromExclude) {
+  if (reachedFromKeep.has(token)) continue;
+  if (token.charCodeAt(0) === 109 /* 'm' */) {
+    const m = pathToMember.get(token.slice(2));
+    if (m.name && m.version) dropNV.add(m.name + '@' + m.version);
+  } else {
+    const nv = token.slice(2);
+    if (!protectedNV.has(nv)) dropNV.add(nv);
+  }
+}
+if (dropNV.size === 0) process.exit(0);
+
+const refOf = c => c['bom-ref'] || c.purl;
+const nvOfPurl = purl => {
+  const m = /^pkg:npm\/([^@]+)@([^?]+)/.exec(purl || '');
+  return m ? decodeURIComponent(m[1]) + '@' + decodeURIComponent(m[2]) : null;
+};
+const droppedPurls = [];
+const keep = c => {
+  const nv = nvOfPurl(c.purl);
+  if (!nv || !dropNV.has(nv)) return true;
+  droppedPurls.push(c.purl);
+  return false;
+};
+const before = bom.components.length;
+bom.components = bom.components.filter(keep);
+if (droppedPurls.length === 0) process.exit(0);
+
+const mc = bom.metadata && bom.metadata.component;
+const keptRefs = new Set(bom.components.map(refOf));
+if (mc) keptRefs.add(mc['bom-ref'] || mc.purl);
+bom.dependencies = bom.dependencies
+  .filter(d => keptRefs.has(d.ref))
+  .map(d => Array.isArray(d.dependsOn) ? Object.assign({}, d, { dependsOn: d.dependsOn.filter(r => keptRefs.has(r)) }) : d);
+
+function mergeCapped(existing, additions, limit) {
+  let shown = [];
+  let priorTotal = 0;
+  if (existing) {
+    const m = /^(.*?)(?: \(\+(\d+) more\))?$/.exec(existing);
+    shown = m[1] ? m[1].split(', ').filter(Boolean) : [];
+    priorTotal = shown.length + (m[2] ? parseInt(m[2], 10) : 0);
+  }
+  const merged = shown.concat(additions);
+  const total = priorTotal + additions.length;
+  let val = merged.slice(0, limit).join(', ');
+  if (total > limit) val += ' (+' + (total - Math.min(limit, merged.length)) + ' more)';
+  return val;
+}
+const LIMIT = 50;
+bom.metadata = bom.metadata || {};
+const existingProps = bom.metadata.properties || [];
+const priorMembers = (existingProps.find(p => p.name === 'bomlens:excluded-members') || {}).value || null;
+const priorComponents = (existingProps.find(p => p.name === 'bomlens:excluded-components') || {}).value || null;
+const memberList = excludedMembers.map(m => 'pnpm:' + m.relPath + ' (' + (m.name || '(unnamed)') + ')');
+const props = existingProps.filter(p => p.name !== 'bomlens:excluded-members' && p.name !== 'bomlens:excluded-components');
+props.push({ name: 'bomlens:excluded-members', value: mergeCapped(priorMembers, memberList, LIMIT) });
+props.push({ name: 'bomlens:excluded-components', value: mergeCapped(priorComponents, droppedPurls, LIMIT) });
+bom.metadata.properties = props;
+
+fs.writeFileSync(bomPath, JSON.stringify(bom, null, 2));
+process.stderr.write('[build-prep] pnpm: excluded ' + excludedMembers.length + ' workspace member(s), dropped ' + (before - bom.components.length) + ' of ' + before + ' components\n');
+PWMF_JS
+        node "$_pwmf" "$OUT" "$_pwtreef" "$NON_SHIPPED_DIRS" || log "pnpm: workspace-member filter skipped (non-fatal)"
+        rm -f "$_pwmf" "$_pwtreef"
+    else
+        log "pnpm: could not resolve workspace tree; skipping workspace-member filter"
+    fi
+fi
+
 # Maven parent-POM license inheritance: a project commonly declares
 # <licenses> once, on a parent pom, and leaves the child silent about it,
 # relying on Maven's own effective-POM inheritance. cdxgen reads each
