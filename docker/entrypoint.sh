@@ -97,7 +97,7 @@ KNOWN_ARTIFACT_SUFFIXES=(
     _risk-report.md _risk-report.html
     _scancode.json _files.json _source.json _input.json
     _yocto_vex.json _security_epss.json _vendored.cdx.json
-    _ai-profile.json _ai-profile.md _ai-profile.html
+    _ai-profile.json _ai-profile.md
     _modelica.cdx.json _cocoapods.cdx.json
     _security_cvebintool.json _security_grype.json _security_yocto.json
 )
