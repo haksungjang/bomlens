@@ -77,6 +77,22 @@ jq '.components | length' NodeExample_1.0.0/NodeExample_1.0.0_bom.json
 
 ---
 
+## Android
+
+Gradle 루트(`settings.gradle[.kts]` 또는 `build.gradle[.kts]`가 루트에 있음)가 있고, Android Gradle 플러그인의 흔적이 함께 있을 때 감지합니다. 버전 카탈로그(`gradle/libs.versions.toml`)의 플러그인 id, 빌드 스크립트(루트 또는 `app/`)의 플러그인 id나 카탈로그 별칭, Kotlin DSL `namespace` 선언, 또는 몇 단계 아래의 `AndroidManifest.xml` 중 하나면 됩니다. Gradle 루트 없이 매니페스트만 있으면 인정하지 않는데, 이 덕분에 .NET MAUI 앱의 `Platforms/Android/AndroidManifest.xml`을 Android 프로젝트로 잘못 읽지 않습니다.
+
+Android는 BomLens가 배포하지 않는 SDK 플랫폼 이미지가 필요합니다. 담긴 Android SDK 자체가 오픈소스가 아니고 구글 약관이 재배포를 허용하지 않아서, 이 이미지는 쓰는 쪽에서 직접 빌드해야 합니다. 프로젝트의 `compileSdk`/`compileSdkVersion`으로 API 레벨을 정하고(못 찾으면 34), `bomlens-android-sdk<API>:latest`를 찾습니다. 이미지가 없으면 이미지 없음으로 실패하는 대신 빌드 명령을 그대로 출력합니다.
+
+```bash
+docker build --build-arg ANDROID_API=<API> -t bomlens-android-sdk<API> docker/android
+```
+
+빌드한다는 것은 구글 SDK 약관에 직접 동의한다는 뜻입니다. 다른 곳에서 빌드한 이미지를 쓰려면 `ANDROID_IMAGE_PREFIX`를 설정하세요.
+
+> 참고: v1.9.0까지 배포됐던 `ghcr.io/sktelecom/bomlens-android-sdk<API>` 이미지는 그 릴리스 라인 스캔에는 여전히 쓸 수 있지만, 더는 새로 올라가지 않습니다. 지금 스캔하려면 직접 빌드한 이미지가 필요합니다.
+
+---
+
 ## Node.js
 
 ```bash

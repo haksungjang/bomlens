@@ -183,6 +183,10 @@ docker system prune -f
 
 With Rancher Desktop or Docker Desktop, the same cleanup is also available from the app's own Preferences screen.
 
+### Leftover files from an earlier scan
+
+Re-scanning the same `--project`/`--version` reuses its output folder. If an earlier scan there did not finish (a forced kill, an out-of-memory kill, a host crash) and left files a run with today's mode or options would not produce, the next scan of that folder removes them before writing its own artifacts, so nothing survives to be mistaken for this run's output.
+
 ### Anything else
 
 1. Check verbose logs with `VERBOSE=true ./tests/test-scan.sh`.
