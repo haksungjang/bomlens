@@ -126,11 +126,50 @@ mark_sbom_excluded() {
     fi
 }
 
+# Prints the first file under $1, at most $2 levels deep, that matches the find
+# tests after them. VCS data, installed dependencies and build output are not
+# walked, nor are the non-shipped folders when NON_SHIPPED_DIRS is defined.
+_detect_first() {
+    local d="$1" depth="$2" n prune=()
+    shift 2
+    for n in .git node_modules vendor build target bin obj .build Pods .venv ${NON_SHIPPED_DIRS:-}; do
+        prune+=(-o -name "$n")
+    done
+    (cd "$d" 2>/dev/null && find . -maxdepth "$depth" \( "${prune[@]:1}" \) -prune -o -type f \( "$@" \) -print -quit 2>/dev/null)
+}
+
+# True when $1 holds a Gradle settings or build script.
+_detect_gradle_root() {
+    local g
+    for g in settings.gradle settings.gradle.kts build.gradle build.gradle.kts; do
+        [ -f "$1/$g" ] && return 0
+    done
+    return 1
+}
+
+# True when $1/package.json declares devDependencies and no dependencies. Read
+# without jq, which the host CLI does not require.
+_detect_node_dev_only() {
+    local flat
+    [ -f "$1/package.json" ] || return 1
+    flat=$(tr -d '\r\n' < "$1/package.json")
+    case "$flat" in *'"devDependencies"'*) ;; *) return 1 ;; esac
+    ! printf '%s' "$flat" | grep -qE '"dependencies"[[:space:]]*:[[:space:]]*\{[[:space:]]*"'
+}
+
 detect_lang() {
     local d="$1" langs=""
-    # Android: build.gradle with android plugin, or AndroidManifest.xml
-    if grep -rqsE "com\.android\.(application|library)|namespace +['\"]" "$d"/build.gradle "$d"/build.gradle.kts "$d"/app/build.gradle "$d"/app/build.gradle.kts 2>/dev/null \
-       || find "$d" -maxdepth 3 -name AndroidManifest.xml 2>/dev/null | grep -q .; then
+    # Android: a Gradle project (a settings or build script at the root) that
+    # applies the Android plugin. The plugin shows up as its id in the version
+    # catalog, as the id or a catalog alias in a build script, as the Groovy or
+    # Kotlin DSL `namespace`, or through an AndroidManifest.xml (app/src/main is
+    # four levels down). Without a Gradle root a manifest alone does not count: a
+    # .NET MAUI app carries one under Platforms/Android.
+    if _detect_gradle_root "$d" && {
+           grep -qsE 'id *= *"com\.android\.(application|library)"' "$d/gradle/libs.versions.toml" \
+        || grep -qsE "com\.android\.(application|library)|namespace *=? *['\"]|alias\(libs\.plugins\.android\.(application|library)\)" \
+               "$d"/build.gradle "$d"/build.gradle.kts "$d"/app/build.gradle "$d"/app/build.gradle.kts \
+        || [ -n "$(_detect_first "$d" 6 -name AndroidManifest.xml)" ]; }; then
         echo "android"; return
     fi
     # iOS / Swift: SPM (Package.swift), CocoaPods (Podfile), or Xcode project
@@ -152,10 +191,25 @@ detect_lang() {
       || [ -f "$d/setup.py" ] || [ -f "$d/setup.cfg" ] || [ -f "$d/Pipfile" ]; } && langs="$langs python"
     [ -f "$d/package.json" ] && langs="$langs node"
     [ -f "$d/composer.json" ] && langs="$langs php"
-    { ls "$d"/*.csproj >/dev/null 2>&1 || ls "$d"/*.sln >/dev/null 2>&1; } && langs="$langs dotnet"
+    { ls "$d"/*.csproj >/dev/null 2>&1 || ls "$d"/*.fsproj >/dev/null 2>&1 \
+      || ls "$d"/*.sln >/dev/null 2>&1 || ls "$d"/*.slnx >/dev/null 2>&1; } && langs="$langs dotnet"
     # C/C++ with a package manager (Conan / vcpkg). cdxgen's all-in-one image
     # resolves these; raw CMake/Make C/C++ has no manifest and stays "unknown".
     { [ -f "$d/conanfile.txt" ] || [ -f "$d/conanfile.py" ] || [ -f "$d/vcpkg.json" ]; } && langs="$langs cpp"
+    # .NET solutions usually keep their projects in subfolders (src/App/App.csproj).
+    # A .NET project found there counts like one at the root. A package.json with
+    # only devDependencies beside it is an e2e or tooling setup, not a Node.js
+    # project, so it does not turn the tree into mixed.
+    case "$langs " in
+        *" dotnet "*) ;;
+        *)
+            [ -n "$(_detect_first "$d" 4 -name '*.csproj' -o -name '*.fsproj' -o -name '*.sln' -o -name '*.slnx')" ] \
+                && langs="$langs dotnet" ;;
+    esac
+    case "$langs " in
+        *" dotnet "*)
+            case "$langs " in *" node "*) _detect_node_dev_only "$d" && langs="${langs/ node/}" ;; esac ;;
+    esac
     # shellcheck disable=SC2086
     set -- $langs
     if [ "$#" -eq 1 ]; then echo "$1"; elif [ "$#" -eq 0 ]; then echo "unknown"; else echo "mixed"; fi

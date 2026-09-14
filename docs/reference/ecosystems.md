@@ -149,7 +149,7 @@ Detected file: `Cargo.lock`
 ./scripts/scan-sbom.sh --project "DotNetExample" --version "1.0.0" --target examples/dotnet --generate-only
 ```
 
-Detected file: `*.csproj` + `packages.lock.json`
+Detected files: `*.csproj`, `*.fsproj`, `*.sln` or `*.slnx`, at the root or in folders up to three levels below it, plus `packages.lock.json`
 
 ---
 
@@ -224,7 +224,7 @@ If source analysis finds no dependencies, check for the lock file below.
 | Rust | `Cargo.lock` |
 | Ruby | `Gemfile.lock` |
 | PHP | `composer.lock` |
-| .NET | `*.csproj` + `packages.lock.json` |
+| .NET | `*.csproj`, `*.fsproj`, `*.sln` or `*.slnx` (root or up to three folders down) + `packages.lock.json` |
 
 ## Comparing results
 

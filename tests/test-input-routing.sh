@@ -310,6 +310,43 @@ got="$(detect_lang "$LANGDIR/proj")"
 [ "$got" = "mixed" ] && pass "setup.py beside another language reads as mixed" \
     || fail "a mixed tree detects as '$got'"
 
+echo "== language detection: Android and .NET projects laid out below the root =="
+# Android was recognized by the Groovy DSL, by the plugin id in a build script,
+# or by a manifest at most three levels down, so a Kotlin DSL project, one that
+# declares the plugin in a version catalog, and the standard
+# app/src/main/AndroidManifest.xml all read as java. .NET looked at the root
+# only, so a solution with its projects under src/ read as whatever the root held.
+FX="$ROOT_DIR/tests/fixtures"
+for fx in android-scope android-kotlin-dsl android-version-catalog; do
+    got="$(detect_lang "$FX/$fx")"
+    [ "$got" = "android" ] && pass "$fx detects as android" \
+        || fail "$fx detects as '$got'" "an Android app would be scanned without the Android SDK image"
+done
+
+rm -rf "${LANGDIR:?}/proj" && mkdir -p "$LANGDIR/proj/app/src/main"
+printf 'plugins {\n}\n' > "$LANGDIR/proj/build.gradle.kts"
+: > "$LANGDIR/proj/app/src/main/AndroidManifest.xml"
+got="$(detect_lang "$LANGDIR/proj")"
+[ "$got" = "android" ] && pass "a Gradle project with app/src/main/AndroidManifest.xml detects as android" \
+    || fail "app/src/main/AndroidManifest.xml under a Gradle root detects as '$got'"
+
+got="$(detect_lang "$FX/dotnet-subfolder")"
+[ "$got" = "dotnet" ] && pass "a .slnx solution with projects in src/ and an e2e-only package.json detects as dotnet" \
+    || fail "dotnet-subfolder detects as '$got'" "neither the MAUI AndroidManifest.xml nor the e2e package.json may decide the language"
+
+rm -rf "${LANGDIR:?}/proj" && mkdir -p "$LANGDIR/proj/src/App"
+printf '{\n  "name": "web",\n  "dependencies": {\n    "express": "^4"\n  }\n}\n' > "$LANGDIR/proj/package.json"
+: > "$LANGDIR/proj/src/App/App.csproj"
+got="$(detect_lang "$LANGDIR/proj")"
+[ "$got" = "mixed" ] && pass "a package.json with dependencies beside a .csproj in a subfolder reads as mixed" \
+    || fail "a node app with a .csproj in a subfolder detects as '$got'"
+
+rm -rf "${LANGDIR:?}/proj" && mkdir -p "$LANGDIR/proj"
+: > "$LANGDIR/proj/App.slnx"
+got="$(detect_lang "$LANGDIR/proj")"
+[ "$got" = "dotnet" ] && pass "a root .slnx detects as dotnet" \
+    || fail "a root .slnx detects as '$got'"
+
 echo "== --model routes a Figshare item to the dataset path =="
 # One option takes both AI inputs a person is handed a link to, so the reference
 # itself decides which path runs. The server applies the same rule on the string
