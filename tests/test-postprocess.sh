@@ -3556,8 +3556,8 @@ sed -n '/^# Stale-artifact cleanup\./,/^# Report language for the human-facing c
 CLEANUP_SNIPPET_LINES="$(wc -l < "$WORK/cleanup-snippet.sh" | tr -d '[:space:]')"
 if [ ! -s "$WORK/cleanup-snippet.sh" ]; then
     fail "could not extract the stale-artifact cleanup snippet from entrypoint.sh (did its anchor comments move?)"
-elif [ -z "$CLEANUP_SNIPPET_LINES" ] || [ "$CLEANUP_SNIPPET_LINES" -gt 80 ]; then
-    fail "cleanup snippet is $CLEANUP_SNIPPET_LINES lines (expected well under 80) -- the end anchor likely did not match, and sourcing it would run the rest of entrypoint.sh" \
+elif [ -z "$CLEANUP_SNIPPET_LINES" ] || [ "$CLEANUP_SNIPPET_LINES" -gt 100 ]; then
+    fail "cleanup snippet is $CLEANUP_SNIPPET_LINES lines (expected well under 100) -- the end anchor likely did not match, and sourcing it would run the rest of entrypoint.sh" \
         "did the REPORT_LANG comment in docker/entrypoint.sh change?"
 elif grep -q '^[[:space:]]*exit\b' "$WORK/cleanup-snippet.sh"; then
     fail "cleanup snippet contains an exit statement -- refusing to source it into this test process" \
@@ -3585,6 +3585,11 @@ else
     HOST_OUTPUT_DIR="$CLEANDIR"
     # shellcheck disable=SC2034  # read by the sourced snippet
     OUT_PREFIX="proj_1.0"
+    # A current caller (scan-sbom.sh's single-container path, server.py) sends
+    # this; see the BOMLENS_RUN_INPUT-gated cases below for the CLI SOURCE
+    # 2-stage path's own signal.
+    # shellcheck disable=SC2034  # read by the sourced snippet
+    BOMLENS_ARTIFACT_CLEANUP="1"
     CLEANUP_LOG="$(. "$WORK/cleanup-snippet.sh" 2>&1)"
 
     remaining="$(ls "$CLEANDIR")"
@@ -3623,12 +3628,15 @@ else
     HOST_OUTPUT_DIR="$CLEANDIR2"
     # shellcheck disable=SC2034  # read by the sourced snippet
     OUT_PREFIX="fresh_1.0"
+    # shellcheck disable=SC2034  # read by the sourced snippet
+    BOMLENS_ARTIFACT_CLEANUP="1"
     CLEANUP_LOG2="$(. "$WORK/cleanup-snippet.sh" 2>&1)"
     if [ -z "$CLEANUP_LOG2" ]; then
         pass "a clean folder (nothing stale) produces no cleanup log line"
     else
         fail "a clean folder logged a cleanup that did not happen" "$CLEANUP_LOG2"
     fi
+    unset BOMLENS_ARTIFACT_CLEANUP
 
     # BOMLENS_RUN_INPUT (scan-sbom.sh's stage 1 -> stage 2 handoff, F-92
     # follow-up): stage 1 already wrote this run's own _bom.json before this
@@ -3676,8 +3684,37 @@ else
         pass "a malformed BOMLENS_RUN_INPUT (path separator) is ignored, not honored"
     fi
     unset BOMLENS_RUN_INPUT
+
+    # Compatibility: an old scan-sbom.sh (built before this cleanup existed)
+    # sends neither BOMLENS_RUN_INPUT nor BOMLENS_ARTIFACT_CLEANUP. Against a
+    # new image, cleanup must not run at all -- the whole point being that
+    # stage 1's just-written _bom.json (an old caller's own 2-stage SOURCE
+    # handoff) is never mistaken for stale output, since an old caller has no
+    # way to protect it by name. Simulates v1.11.11's docker run for stage 2:
+    # PROJECT_NAME/PROJECT_VERSION/MODE=POSTPROCESS and nothing else new.
+    CLEANDIR5="$WORK/cleanup-dir-oldcaller"; mkdir -p "$CLEANDIR5"
+    echo "an old caller's stage-1 output, must survive" > "$CLEANDIR5/proj_1.0_bom.json"
+    echo "an old caller's own earlier NOTICE, also untouched (old behavior: nothing swept)" \
+        > "$CLEANDIR5/proj_1.0_NOTICE.txt"
+    # shellcheck disable=SC2034  # read by the sourced snippet
+    HOST_OUTPUT_DIR="$CLEANDIR5"
+    # shellcheck disable=SC2034  # read by the sourced snippet
+    OUT_PREFIX="proj_1.0"
+    CLEANUP_LOG5="$(. "$WORK/cleanup-snippet.sh" 2>&1)"
+    remaining5="$(ls "$CLEANDIR5")"
+    if printf '%s\n' "$remaining5" | grep -qFx "proj_1.0_bom.json" \
+        && printf '%s\n' "$remaining5" | grep -qFx "proj_1.0_NOTICE.txt"; then
+        pass "an old caller sending neither signal: cleanup does not run, stage-1 output survives"
+    else
+        fail "cleanup ran for a caller that never opted in" "$remaining5"
+    fi
+    if [ -z "$CLEANUP_LOG5" ]; then
+        pass "an old caller sending neither signal: no cleanup log line either"
+    else
+        fail "cleanup logged something despite no caller opting in" "$CLEANUP_LOG5"
+    fi
 fi
-unset HOST_OUTPUT_DIR OUT_PREFIX
+unset HOST_OUTPUT_DIR OUT_PREFIX BOMLENS_ARTIFACT_CLEANUP
 
 echo "== node-scope: production filter drops the devDependencies tree =="
 # Guards docker/lib/build-prep.sh's node production-scope filter: cdxgen pulls a
