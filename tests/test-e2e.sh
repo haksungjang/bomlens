@@ -1835,6 +1835,70 @@ else
         else
             fail "rootfs ($label): one operating-system component, $os_name $os_version" "found $os_count"
         fi
+
+        # cpe coverage baseline: every library component still carries a cpe
+        # (syft has done this natively since before this repo touched cpe at
+        # all -- this only guards against a future change accidentally
+        # dropping one).
+        local cpen; cpen=$(jq '[.components[]? | select(.type=="library") | select((.cpe // "") != "")] | length' "$bom")
+        if [ "$cpen" = "$libn" ]; then
+            pass "rootfs ($label): every library component still carries a cpe ($cpen/$libn)"
+        else
+            fail "rootfs ($label): every library component still carries a cpe" "$cpen/$libn"
+        fi
+
+        # At least half the library components got a bomlens:cpeSource (name-map
+        # or distro-version-strip) -- a proportion, not the exact measured count,
+        # so this does not flake when a distro point release adds or drops a
+        # no-hyphen-version package the strip rule intentionally leaves alone.
+        local cpesrcn; cpesrcn=$(jq '[.components[]? | select(.type=="library")
+            | select((.properties // []) | any(.name=="bomlens:cpeSource"))] | length' "$bom")
+        if [ "$libn" -gt 0 ] 2>/dev/null && [ "$((cpesrcn * 2))" -ge "$libn" ] 2>/dev/null; then
+            pass "rootfs ($label): at least half the library cpes were touched (name-map or version-stripped): $cpesrcn/$libn"
+        else
+            fail "rootfs ($label): at least half the library cpes were touched" "$cpesrcn/$libn"
+        fi
+
+        # A name-map-corrected component's cpe version must no longer carry the
+        # distro revision marker for this package format -- catches a future
+        # change to strip_distro_revision (or its whitelist-branch caller) that
+        # stops applying to whitelisted names.
+        local marker_re
+        case "$purl_type" in
+            deb) marker_re='\+deb|ubuntu|~' ;;
+            rpm) marker_re='\.el[0-9]|\.fc[0-9]' ;;
+            apk) marker_re='-r[0-9]' ;;
+            *) marker_re='(?!)' ;;  # matches nothing
+        esac
+        if jq -e --arg re "$marker_re" \
+            '[.components[]? | select(.type=="library")
+              | select((.properties // []) | any(.name=="bomlens:cpeSource" and .value=="name-map"))
+              | select(((.cpe // "") | split(":")[5]? // "") | test($re))] | length == 0' \
+            "$bom" >/dev/null 2>&1; then
+            pass "rootfs ($label): name-map cpes carry no leftover distro revision marker"
+        else
+            fail "rootfs ($label): name-map cpes carry no leftover distro revision marker"
+        fi
+
+        # RPM keeps its real Vendor-derived operating-system cpe; deb/apk never
+        # had one, and this step does not add one -- pins that asymmetry so it
+        # is a visible regression, not a silent drift, if it ever changes.
+        if [ "$purl_type" = "rpm" ]; then
+            if jq -e --arg n "$os_name" \
+                '.components[] | select(.type=="operating-system") | (.cpe // "") | startswith("cpe:2.3:o:" + $n + ":")' \
+                "$bom" >/dev/null 2>&1; then
+                pass "rootfs ($label): operating-system component keeps a real cpe:2.3:o:$os_name:... "
+            else
+                fail "rootfs ($label): operating-system component keeps a real cpe:2.3:o:$os_name:..."
+            fi
+        else
+            if jq -e '.components[] | select(.type=="operating-system") | (.cpe // null) == null' \
+                "$bom" >/dev/null 2>&1; then
+                pass "rootfs ($label): operating-system component has no cpe (unchanged, deb/apk never had one)"
+            else
+                fail "rootfs ($label): operating-system component has no cpe (unchanged, deb/apk never had one)"
+            fi
+        fi
     }
 
     rootfs_distro_case "debian" "$ROOTFS_DEBIAN_IMG" "deb" "debian-12.15" "debian" "12.15" 40 200

@@ -1295,6 +1295,115 @@ case "$other" in
   *) fail "the withheld marker suppressed enrichment on another component" "got $other" ;;
 esac
 
+echo "== F-1a: distro (deb/rpm/apk) cpe version cleanup beyond the name map =="
+cat > "$WORK/distro-cpe.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6","components":[
+  {"type":"library","name":"bash","version":"5.2.15-2+b13",
+   "purl":"pkg:deb/debian/bash@5.2.15-2%2Bb13?arch=arm64",
+   "cpe":"cpe:2.3:a:bash:bash:5.2.15-2\\+b13:*:*:*:*:*:*:*"},
+  {"type":"library","name":"bsdutils","version":"1:2.38.1-5+deb12u3",
+   "purl":"pkg:deb/debian/bsdutils@1%3A2.38.1-5%2Bdeb12u3?arch=arm64",
+   "cpe":"cpe:2.3:a:bsdutils:bsdutils:1\\:2.38.1-5\\+deb12u3:*:*:*:*:*:*:*"},
+  {"type":"library","name":"base-files","version":"13ubuntu10.4",
+   "purl":"pkg:deb/ubuntu/base-files@13ubuntu10.4?arch=arm64",
+   "cpe":"cpe:2.3:a:base-files:base-files:13ubuntu10.4:*:*:*:*:*:*:*"},
+  {"type":"library","name":"audit-libs","version":"3.0.7-104.el9",
+   "purl":"pkg:rpm/rocky/audit-libs@3.0.7-104.el9?arch=aarch64",
+   "cpe":"cpe:2.3:a:rockyenterprisesoftwarefoundation:audit-libs:3.0.7-104.el9:*:*:*:*:*:*:*"},
+  {"type":"library","name":"apk-tools","version":"2.14.4-r1",
+   "purl":"pkg:apk/alpine/apk-tools@2.14.4-r1?arch=aarch64",
+   "cpe":"cpe:2.3:a:apk-tools:apk-tools:2.14.4-r1:*:*:*:*:*:*:*"},
+  {"type":"library","name":"libcrypto3","version":"3.3.7-r0",
+   "purl":"pkg:apk/alpine/libcrypto3@3.3.7-r0?arch=aarch64&upstream=openssl",
+   "cpe":"cpe:2.3:a:libcrypto3:libcrypto3:3.3.7-r0:*:*:*:*:*:*:*"},
+  {"type":"library","name":"some-maven-lib","version":"1:2.0",
+   "purl":"pkg:maven/org.example/some-maven-lib@2.0",
+   "cpe":"cpe:2.3:a:example:some-maven-lib:1\\:2.0:*:*:*:*:*:*:*"},
+  {"type":"library","name":"hyphen-upstream-deb","version":"1.2-rc1-3",
+   "purl":"pkg:deb/debian/hyphen-upstream-deb@1.2-rc1-3?arch=arm64",
+   "cpe":"cpe:2.3:a:hyphen-upstream-deb:hyphen-upstream-deb:1.2-rc1-3:*:*:*:*:*:*:*"},
+  {"type":"library","name":"hyphen-upstream-rpm","version":"1.2-rc1-3.el9",
+   "purl":"pkg:rpm/rocky/hyphen-upstream-rpm@1.2-rc1-3.el9?arch=aarch64",
+   "cpe":"cpe:2.3:a:somevendor:hyphen-upstream-rpm:1.2-rc1-3.el9:*:*:*:*:*:*:*"}
+]}
+JSON
+bash "$LIB/enrich-cpe.sh" "$WORK/distro-cpe.json" >/dev/null 2>&1
+dc_get() { jq -r --arg n "$1" --arg f "$2" '[.components[]|select(.name==$n)][0][$f] // "NONE"' "$WORK/distro-cpe.json"; }
+dc_src() { jq -r --arg n "$1" '[.components[]|select(.name==$n)][0] | [(.properties//[])[]?|select(.name=="bomlens:cpeSource")|.value][0] // "NONE"' "$WORK/distro-cpe.json"; }
+# (a) A whitelisted deb name (bash) gets its distro epoch/revision stripped from
+# the cpe version, same as the firmware -<digits>/-r<digits> rule but covering
+# the deb "+build" shape too.
+[ "$(dc_get bash cpe)" = "cpe:2.3:a:gnu:bash:5.2.15:*:*:*:*:*:*:*" ] \
+    && pass "whitelisted deb bash: cpe version cleaned to 5.2.15 (epoch/revision not part of NVD version)" \
+    || fail "bash cpe='$(dc_get bash cpe)'"
+# (b) A NON-whitelisted deb name (bsdutils) keeps its self-referential
+# vendor/product (not corrected -- no guessing this round) but the epoch and
+# revision are still stripped from the version.
+[ "$(dc_get bsdutils cpe)" = "cpe:2.3:a:bsdutils:bsdutils:2.38.1:*:*:*:*:*:*:*" ] \
+    && pass "non-whitelisted deb bsdutils: epoch+revision stripped, vendor/product left self-referential" \
+    || fail "bsdutils cpe='$(dc_get bsdutils cpe)'"
+[ "$(dc_src bsdutils)" = "distro-version-strip" ] \
+    && pass "bsdutils carries bomlens:cpeSource=distro-version-strip (distinct from name-map)" \
+    || fail "bsdutils cpeSource='$(dc_src bsdutils)'"
+# (c) A version with no "-" at all has no revision to remove under the narrow
+# rule and is left completely untouched (conservative: do not guess where the
+# upstream version ends without a hyphen to anchor on).
+[ "$(dc_get base-files cpe)" = "cpe:2.3:a:base-files:base-files:13ubuntu10.4:*:*:*:*:*:*:*" ] \
+    && pass "deb version with no hyphen (13ubuntu10.4) left untouched" \
+    || fail "base-files cpe='$(dc_get base-files cpe)'"
+[ "$(dc_src base-files)" = "NONE" ] \
+    && pass "untouched base-files carries no cpeSource property" \
+    || fail "base-files unexpectedly marked as '$(dc_src base-files)'"
+# (d) rpm: the real Vendor-derived vendor (rockyenterprisesoftwarefoundation) is
+# left exactly as syft set it; only the .el9 release tag and revision go.
+[ "$(dc_get audit-libs cpe)" = "cpe:2.3:a:rockyenterprisesoftwarefoundation:audit-libs:3.0.7:*:*:*:*:*:*:*" ] \
+    && pass "non-whitelisted rpm audit-libs: .el9 release stripped, real rpm vendor kept" \
+    || fail "audit-libs cpe='$(dc_get audit-libs cpe)'"
+# (e) apk: the existing -r<digits> rule also applies to non-whitelisted names now.
+[ "$(dc_get apk-tools cpe)" = "cpe:2.3:a:apk-tools:apk-tools:2.14.4:*:*:*:*:*:*:*" ] \
+    && pass "non-whitelisted apk apk-tools: -r1 stripped, vendor/product left self-referential" \
+    || fail "apk-tools cpe='$(dc_get apk-tools cpe)'"
+# (e2) libcrypto3 IS in the name map (alpine's openssl split package, purl's
+# upstream=openssl confirms it): corrected to the real openssl:openssl vendor,
+# not just version-stripped.
+[ "$(dc_get libcrypto3 cpe)" = "cpe:2.3:a:openssl:openssl:3.3.7:*:*:*:*:*:*:*" ] \
+    && pass "alpine libcrypto3 maps to openssl:openssl via the name map" \
+    || fail "libcrypto3 cpe='$(dc_get libcrypto3 cpe)'"
+[ "$(dc_src libcrypto3)" = "name-map" ] \
+    && pass "libcrypto3 carries bomlens:cpeSource=name-map" \
+    || fail "libcrypto3 cpeSource='$(dc_src libcrypto3)'"
+# (f) A non-OS purl (maven) is never touched by this pass, even with an
+# epoch-shaped version and an already-escaped colon in its cpe.
+[ "$(dc_get some-maven-lib cpe)" = "cpe:2.3:a:example:some-maven-lib:1\\:2.0:*:*:*:*:*:*:*" ] \
+    && pass "non-OS purl (maven) cpe left untouched by the distro-revision pass" \
+    || fail "some-maven-lib cpe='$(dc_get some-maven-lib cpe)'"
+# (f2) An upstream version can itself contain a hyphen (a pre-release tag like
+# "-rc1"); only the segment after the LAST hyphen is a distro revision. deb and
+# rpm share this shape.
+[ "$(dc_get hyphen-upstream-deb cpe)" = "cpe:2.3:a:hyphen-upstream-deb:hyphen-upstream-deb:1.2-rc1:*:*:*:*:*:*:*" ] \
+    && pass "deb: only the segment after the last hyphen is stripped (1.2-rc1-3 -> 1.2-rc1)" \
+    || fail "hyphen-upstream-deb cpe='$(dc_get hyphen-upstream-deb cpe)'"
+[ "$(dc_get hyphen-upstream-rpm cpe)" = "cpe:2.3:a:somevendor:hyphen-upstream-rpm:1.2-rc1:*:*:*:*:*:*:*" ] \
+    && pass "rpm: only the segment after the last hyphen is stripped (1.2-rc1-3.el9 -> 1.2-rc1)" \
+    || fail "hyphen-upstream-rpm cpe='$(dc_get hyphen-upstream-rpm cpe)'"
+# (g) component.version and purl are NEVER touched by this step: Trivy matches
+# by purl + OS context, and the distro revision has to stay there verbatim.
+[ "$(dc_get bsdutils version)" = "1:2.38.1-5+deb12u3" ] \
+    && pass "bsdutils component.version unchanged (still the real installed version)" \
+    || fail "bsdutils version changed to '$(dc_get bsdutils version)'"
+[ "$(dc_get bsdutils purl)" = "pkg:deb/debian/bsdutils@1%3A2.38.1-5%2Bdeb12u3?arch=arm64" ] \
+    && pass "bsdutils purl unchanged" \
+    || fail "bsdutils purl changed to '$(dc_get bsdutils purl)'"
+[ "$(dc_get audit-libs version)" = "3.0.7-104.el9" ] \
+    && pass "audit-libs component.version unchanged" \
+    || fail "audit-libs version changed to '$(dc_get audit-libs version)'"
+# (h) idempotent: a second pass changes nothing further.
+cp "$WORK/distro-cpe.json" "$WORK/distro-cpe2.json"
+bash "$LIB/enrich-cpe.sh" "$WORK/distro-cpe2.json" >/dev/null 2>&1
+diff -q "$WORK/distro-cpe.json" "$WORK/distro-cpe2.json" >/dev/null 2>&1 \
+    && pass "distro cpe version cleanup is idempotent" \
+    || fail "a second pass changed the SBOM further"
+
 echo "== F-1b: OS-context enrichment — synthesize/normalize operating-system for distro matching =="
 OSCTX="$LIB/enrich-os-context.py"
 # (a) rpm/centos SBOM with NO operating-system component: one is synthesized from
