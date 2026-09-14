@@ -61,7 +61,36 @@ if [ "${DOCKER_STUB_ARGV_DUMP:-0}" = "1" ]; then
   done
 fi
 case "${1:-}" in
-  version|info|pull|image|inspect|stop|rm) exit 0 ;;
+  version|info|pull|image|stop|rm) exit 0 ;;
+  ps)
+    # `docker ps -aq --filter label=bomlens.scan=cli --filter status=exited`:
+    # the startup sweep for a scan container an earlier, killed run left
+    # behind. DOCKER_STUB_EXITED_CLI_CONTAINERS models what that query finds;
+    # unset/empty means the ordinary no-leftover case, same as this stub's
+    # own silence for any other `docker ps` call (the name-lookup one
+    # elsewhere in scan-sbom.sh falls through here too, and must stay empty).
+    has_label=0; has_exited=0
+    for a in "$@"; do
+      case "$a" in
+        label=bomlens.scan=cli) has_label=1 ;;
+        status=exited) has_exited=1 ;;
+      esac
+    done
+    if [ "$has_label" = 1 ] && [ "$has_exited" = 1 ] && [ -n "${DOCKER_STUB_EXITED_CLI_CONTAINERS:-}" ]; then
+      printf '%s\n' $DOCKER_STUB_EXITED_CLI_CONTAINERS
+    fi
+    exit 0 ;;
+  inspect)
+    # -f '{{.State.OOMKilled}}' (stage 1's fallback classification): the stub
+    # container never OOMs, so this is always "false", matching real docker's
+    # own output shape (the templated field's value, not a JSON blob).
+    echo "false"; exit 0 ;;
+  wait)
+    # Stage 1 reads the container's exit code from `docker wait`, not the
+    # `docker run | tee` pipeline's own status (that would be tee's).
+    # DOCKER_STUB_RUN_RC models a container that ran and reported this rc
+    # instead of 0; unset/empty means the ordinary successful-run case below.
+    echo "${DOCKER_STUB_RUN_RC:-0}"; exit 0 ;;
   run)
     # Drop the SBOM where the real container would: the host dir bind-mounted to
     # /host-output (post-process / single-shot) or /out (source stage 1) — i.e.
@@ -226,6 +255,32 @@ BOMLENS_CANCEL_GRACE=45 scan_in "$d" --ui --output-dir "$d"
 in_log "-e BOMLENS_CANCEL_GRACE" \
   && pass "BOMLENS_CANCEL_GRACE passed to the web UI container" \
   || { fail "BOMLENS_CANCEL_GRACE passed to the web UI container" "rc=$RC"; show; }
+
+# --------------------------------------------------------
+section "Startup sweep for a killed scan's leftover container"
+# --------------------------------------------------------
+# Every scan container carries a bomlens.scan=cli label; each run's startup
+# sweeps up only its own label's EXITED containers (a process killed before
+# its own cleanup could run leaves one behind for good otherwise), never a
+# still-running one -- the daemon's own --filter status=exited already keeps
+# this query from ever naming a running container in the first place.
+d="$(new_proj sweepleftover)"; printf '{"name":"a"}' > "$d/package.json"
+DOCKER_STUB_EXITED_CLI_CONTAINERS="bomlens-scan-11111-1 bomlens-scan-22222-2" \
+  scan_in "$d" --project Psweep --version 1.0.0 --generate-only
+{ in_log "ps -aq --filter label=bomlens.scan=cli --filter status=exited" \
+    && in_log "rm bomlens-scan-11111-1 bomlens-scan-22222-2"; } \
+  && pass "an exited leftover from an earlier run is swept up at startup" \
+  || { fail "an exited leftover from an earlier run is swept up at startup" "rc=$RC"; show; }
+
+d="$(new_proj sweepnone)"; printf '{"name":"a"}' > "$d/package.json"
+scan_in "$d" --project Psweepnone --version 1.0.0 --generate-only
+# The sweep's own removal is a plain "rm <id...>", distinct from the per-run
+# container's "rm -f <name>" cleanup elsewhere in the same log -- an empty
+# leftover query must produce none of the former, some of the latter still
+# expected as usual.
+! grep -qE '^docker rm bomlens-scan-' "$LOG" \
+  && pass "no leftover found means nothing named by the sweep query is removed" \
+  || { fail "no leftover found means nothing named by the sweep query is removed" "rc=$RC"; show; }
 
 # --------------------------------------------------------
 section "Host-persistent guard state (5-P PR 2)"

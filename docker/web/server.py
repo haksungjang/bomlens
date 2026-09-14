@@ -1455,9 +1455,11 @@ def sbom_summary(run_id):
         for p in meta_props
     )
     # sbom-tool-degraded: set by entrypoint.sh when cdxgen couldn't run and the
-    # scan fell back to syft (direct deps only) — "oom", "disk-space", "network"
-    # or the generic "cdxgen-unavailable". Drives a result banner so the thin
-    # dependency graph has a visible reason.
+    # scan fell back to syft (direct deps only): "oom", "disk-space", "network",
+    # "cdxgen-crash" (cdxgen ran and failed on its own: an internal exception,
+    # or its own document validation rejecting the result) or the generic
+    # "cdxgen-unavailable" (cdxgen never ran at all). Drives a result banner
+    # so the thin dependency graph has a visible reason.
     degraded = next(
         (
             p.get("value")

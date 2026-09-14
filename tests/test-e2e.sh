@@ -1010,6 +1010,60 @@ else
         skip "go-newer-toolchain fixture not found"
     fi
 
+    # 3g: cdxgen crashes on a `retract (` block right after a `replace (`
+    # block (getGoPkgComponent builds a purl with no name), unrelated to the
+    # GOTOOLCHAIN fix above. The CLI now falls back to syft (direct deps via
+    # go.sum, no cdxgen) instead of exiting 1 on a raw stack trace, and
+    # records why.
+    gra="$REPO/tests/fixtures/go-retract-after-replace"
+    if [ -d "$gra" ]; then
+        w="$(run_source_scan "$gra")"
+        if jq -e '([.components[]?.purl // empty] | any(startswith("pkg:golang/github.com/spf13/cobra@")))
+                  and ([.metadata.properties[]? | select(.name=="bomlens:sbom-tool-degraded") | .value][0] == "cdxgen-crash")' \
+               "$w/testapp_1.0_bom.json" >/dev/null 2>&1; then
+            pass "go retract-after-replace: cdxgen crash falls back to syft and records cdxgen-crash"
+        else
+            fail "go retract-after-replace: cdxgen crash falls back to syft and records cdxgen-crash" "$(tail -5 "$w/_scan.log" 2>/dev/null)"; show_log_if_verbose "$w"
+        fi
+        if grep -qE 'TypeError|Invalid purl|Schema validation failed' "$w/_scan.log" 2>/dev/null; then
+            fail "go retract-after-replace: raw cdxgen stack trace reached the terminal output" "$(grep -E 'TypeError|Invalid purl|Schema validation failed' "$w/_scan.log")"
+        else
+            pass "go retract-after-replace: no raw cdxgen stack trace in the terminal output"
+        fi
+        rm -rf "$w"
+    else
+        skip "go-retract-after-replace fixture not found"
+    fi
+
+    # 3h: the web UI's SOURCE mode without a docker.sock (its own no-cdxgen
+    # path, entrypoint.sh's "else" branch) against a Node project with real
+    # declared dependencies (examples/nodejs) but no committed lockfile: syft
+    # has nothing to read and resolves none of them. Runs the scanner image
+    # directly, not through scan-sbom.sh (which always has docker.sock), to
+    # exercise this exact branch with a real image rather than a stub. The
+    # scan now fails with guidance instead of reporting a near-empty SBOM as
+    # a successful, complete result when the fallback resolves none of the
+    # project's own dependencies.
+    ndocker="$REPO/examples/nodejs"
+    if [ -d "$ndocker" ]; then
+        w="$(mktemp -d "$WORK_ROOT/nodocker.XXXXXX")"
+        docker run --rm -v "$ndocker":/src:ro -v "$w":/host-output -w /host-output \
+            -e MODE=SOURCE -e PROJECT_NAME=nodocktest -e PROJECT_VERSION=1.0 \
+            "$SCANNER_IMG" > "$w/_scan.log" 2>&1
+        rc=$?
+        if [ "$rc" -ne 0 ] \
+            && grep -q "docker.sock/CLI/host-path unavailable" "$w/_scan.log" \
+            && grep -q "declared dependencies" "$w/_scan.log" \
+            && [ ! -f "$w/nodocktest_1.0_bom.json" ]; then
+            pass "no-docker syft fallback: a 0-coverage result is discarded and the scan fails with guidance"
+        else
+            fail "no-docker syft fallback: a 0-coverage result is discarded and the scan fails with guidance" "rc=$rc $(tail -10 "$w/_scan.log" 2>/dev/null)"; show_log_if_verbose "$w"
+        fi
+        rm -rf "$w"
+    else
+        skip "examples/nodejs not found"
+    fi
+
     # 3e: G-16/G-18 regression, driven through the real script path (not a
     # stub): interrupt a SOURCE scan while cdxgen is actually mid-resolve and
     # confirm neither the cdxgen container nor build artifacts in the source
@@ -1039,14 +1093,25 @@ else
         # itself runs a real `swift package resolve` (cloning its two
         # dependencies from GitHub) before cdxgen even starts — budget for
         # that network step too, not just the image pull above.
+        #
+        # Stage 1's own output goes to a log file, not the terminal, so the
+        # "cdxgen" trace is no longer in _scan.log itself; the terminal only
+        # gets that log file's path (the "(log: ...)" line). Wait for that
+        # line first, then poll the file it names for the same cdxgen marker
+        # as before.
         n=0
-        while ! grep -q '\[build-prep\] cdxgen' "$out/_scan.log" 2>/dev/null && [ "$n" -lt 1200 ]; do
+        stage1_log=""
+        while [ -z "$stage1_log" ] && [ "$n" -lt 1200 ]; do
+            stage1_log="$(sed -n 's/^ *(log: \(.*\))$/\1/p' "$out/_scan.log" 2>/dev/null | head -1)"
+            if [ -z "$stage1_log" ]; then sleep 0.1; n=$((n + 1)); fi
+        done
+        while [ -n "$stage1_log" ] && ! grep -q '\[build-prep\] cdxgen' "$stage1_log" 2>/dev/null && [ "$n" -lt 1200 ]; do
             sleep 0.1; n=$((n + 1))
         done
 
-        if ! grep -q '\[build-prep\] cdxgen' "$out/_scan.log" 2>/dev/null; then
+        if [ -z "$stage1_log" ] || ! grep -q '\[build-prep\] cdxgen' "$stage1_log" 2>/dev/null; then
             fail "G-16/G-18: scan never reached the cdxgen stage within 120s (test setup, not the fix)" \
-                 "$(tail -20 "$out/_scan.log")"
+                 "$(tail -20 "$out/_scan.log") $(tail -20 "$stage1_log" 2>/dev/null)"
             kill -KILL "$scan_pid" 2>/dev/null
         else
             kill -TERM "$scan_pid" 2>/dev/null

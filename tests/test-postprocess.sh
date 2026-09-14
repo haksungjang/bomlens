@@ -6597,6 +6597,56 @@ else
     echo "  SKIP: node not installed; cargo+npm merge not exercised"
 fi
 
+echo "== Node/npm fallback quality gate: a syft fallback covering none of the declared deps is discarded =="
+# syft's pnpm-lock.yaml parsing can miss every real dependency and return only
+# its own platform tooling -- a "successful" scan that in fact describes
+# nothing about the project.
+if command -v jq >/dev/null 2>&1; then
+    NQ="$WORK/node-quality"
+    mkdir -p "$NQ/root/packages/foo"
+    printf '%s\n' '{"name":"root","devDependencies":{"build-tool":"^5.0.0"}}' > "$NQ/root/package.json"
+    printf 'packages:\n  - "packages/*"\n' > "$NQ/root/pnpm-workspace.yaml"
+    printf '%s\n' '{"name":"foo","dependencies":{"axios":"^1.0.0"}}' > "$NQ/root/packages/foo/package.json"
+
+    printf '%s\n' '{"components":[{"name":"@pnpm/exe.linux-x64"},{"name":"pnpm"}]}' > "$NQ/sbom-no-match.json"
+    printf '%s\n' '{"components":[{"name":"axios"},{"name":"pnpm"}]}' > "$NQ/sbom-match.json"
+    mkdir -p "$NQ/no-decl"
+    printf '%s\n' '{"name":"empty"}' > "$NQ/no-decl/package.json"
+
+    _decl=$(bash -c '. "$1"; _node_declared_dep_names "$2"' _ "$DETECT" "$NQ/root" | tr '\n' ' ')
+    [ "$_decl" = "axios build-tool " ] \
+        && pass "declared dependency names combine the root and every pnpm workspace member" \
+        || fail "_node_declared_dep_names output unexpected" "got [$_decl]"
+
+    bash -c '. "$1"; node_fallback_covers_declared_deps "$2" "$3"' _ "$DETECT" "$NQ/root" "$NQ/sbom-no-match.json"
+    [ "$?" -eq 1 ] && pass "a fallback covering none of the declared names is rejected" \
+        || fail "node_fallback_covers_declared_deps did not reject a 0-coverage fallback"
+
+    bash -c '. "$1"; node_fallback_covers_declared_deps "$2" "$3"' _ "$DETECT" "$NQ/root" "$NQ/sbom-match.json"
+    [ "$?" -eq 0 ] && pass "a fallback covering at least one declared name is accepted" \
+        || fail "node_fallback_covers_declared_deps rejected a fallback that did cover a declared name"
+
+    bash -c '. "$1"; node_fallback_covers_declared_deps "$2" "$3"' _ "$DETECT" "$NQ/no-decl" "$NQ/sbom-no-match.json"
+    [ "$?" -eq 2 ] && pass "a project with no declared dependencies skips the gate (nothing to cover)" \
+        || fail "node_fallback_covers_declared_deps did not skip a project with no declared deps"
+
+    cp "$NQ/sbom-no-match.json" "$NQ/applied.json"
+    _out=$(bash -c '. "$1"; apply_node_fallback_quality_gate "$2" "$3" 1' _ "$DETECT" "$NQ/applied.json" "$NQ/root")
+    if [ ! -f "$NQ/applied.json" ] && printf '%s' "$_out" | grep -q "lockfile"; then
+        pass "apply_node_fallback_quality_gate discards the file and prints lockfile guidance"
+    else
+        fail "apply_node_fallback_quality_gate did not discard/guide as expected" "file present=$([ -f "$NQ/applied.json" ] && echo yes || echo no), output=[$_out]"
+    fi
+
+    cp "$NQ/sbom-match.json" "$NQ/kept.json"
+    bash -c '. "$1"; apply_node_fallback_quality_gate "$2" "$3" 1' _ "$DETECT" "$NQ/kept.json" "$NQ/root" >/dev/null
+    [ -f "$NQ/kept.json" ] \
+        && pass "apply_node_fallback_quality_gate leaves a covering fallback in place" \
+        || fail "apply_node_fallback_quality_gate removed a fallback that did cover a declared name"
+else
+    echo "  SKIP: jq not installed; Node fallback quality gate not exercised"
+fi
+
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
