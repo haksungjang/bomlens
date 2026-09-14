@@ -10,6 +10,8 @@
 #   produces <out_prefix>_conformance.json   (machine-readable result)
 #            <out_prefix>_conformance.md      (human summary)
 #            <out_prefix>_conformance.html    (visual summary)
+#            <out_prefix>_conformance.result  (bare "pass"/"fail", for --fail-on-conformance
+#                                              to read without a host jq dependency)
 #
 # Validation runs against the ORIGINAL submission (before any CycloneDX
 # conversion), so SPDX-specific metadata is judged accurately. It NEVER aborts
@@ -956,6 +958,10 @@ jq -n \
   profile: $profile, untraceableComponents: $untraceable, checks: $checks }
 + (if ($xwalk.frameworks | length) > 0 then { regulatoryCrosswalk: $xwalk } else {} end)
 ' > "$JSON"
+
+# Bare pass/fail sidecar for --fail-on-conformance (scripts/scan-sbom.sh): a
+# single word, so the CLI can gate on it without requiring jq on the host.
+printf '%s' "$RESULT" > "${OUT_PREFIX}_conformance.result"
 
 # --------------------------------------------------------
 # Localization (REPORT_LANG=ko). The JSON above is NEVER localized — it is an

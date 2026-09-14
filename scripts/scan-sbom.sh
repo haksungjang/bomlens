@@ -89,6 +89,10 @@ REPORT_LANG="${REPORT_LANG:-en}"
 # the SKT supplier submission review applies (100% PURL coverage, pkg:generic
 # required). Passed through as-is; validate-sbom.sh normalizes unknown values.
 CONFORMANCE_PROFILE="${CONFORMANCE_PROFILE:-default}"
+# CI gate: exit non-zero when this scan's own conformance report says "fail".
+# Host-only logic (see the check near the end of this script); nothing is
+# passed to the container for it.
+FAIL_ON_CONFORMANCE="false"
 FORCE_FIRMWARE="false"; ANALYZE_SBOM=""; MODEL=""; MODEL_FILE=""
 # Set when --target turned out to be a Yocto build directory: the folder the
 # user pointed at, while ANALYZE_SBOM holds the image SBOM found inside it.
@@ -160,6 +164,7 @@ while [[ "$#" -gt 0 ]]; do
         --verify-weights) VERIFY_WEIGHTS="true" ;;
         --sign) SIGN_SBOM="true" ;;
         --byte-stable) BYTE_STABLE="true" ;;
+        --fail-on-conformance) FAIL_ON_CONFORMANCE="true" ;;
         --lang) REPORT_LANG="$2"; shift ;;
         --conformance-profile) CONFORMANCE_PROFILE="$2"; shift ;;
         --firmware) FORCE_FIRMWARE="true" ;;
@@ -292,6 +297,10 @@ Options:
                          default 5 files / 2 GiB each), so this is opt-in, unlike
                          the metadata-only file-security lookup.
   --byte-stable          Deterministic SBOM output
+  --fail-on-conformance  Exit 2 if this scan's own conformance report says
+                         "fail" (exit 3 if no conformance report was produced
+                         for this scan). Not offered with --ui. See "Exit
+                         codes" in the CLI reference.
   --lang <en|ko>         Language for the human-facing conformance and AI-profile
                          reports (.md/.html). Default en. The SBOM and the JSON
                          reports stay English regardless.
@@ -476,6 +485,7 @@ SBOM_PULL="${SBOM_PULL:-missing}"
 # Web UI mode
 # ========================================================
 if [ "$UI_MODE" = "true" ]; then
+    [ "$FAIL_ON_CONFORMANCE" = "true" ] && { echo "[ERROR] --fail-on-conformance is not offered with --ui (it exits on one scan's result; the UI runs many)."; exit 1; }
     docker_check
     # The web UI owns per-run subfolders itself (server.py creates them under the
     # mounted base). Honor --output-dir as that base; default to the current dir.
@@ -605,6 +615,14 @@ fi
 mkdir -p "$OUTPUT_HOST_DIR" || { echo "[ERROR] cannot create output dir: $OUTPUT_HOST_DIR"; exit 1; }
 OUTPUT_HOST_DIR="$(cd "$OUTPUT_HOST_DIR" && pwd)"  # absolute, for docker -v
 UPLOAD_VAR="true"; [ "$GENERATE_ONLY" = "true" ] && UPLOAD_VAR="false"
+
+# --fail-on-conformance judges this run's own result file, so a stale one from
+# an earlier run at the same --project/--version (this folder is reused, not
+# recreated) must not be mistaken for this run's verdict. Removed before the
+# scan runs; the final check below then trusts "exists" to mean "this run
+# produced it".
+CONFORMANCE_RESULT_FILE="${OUTPUT_HOST_DIR}/${SAFE_PROJECT}_${SAFE_VERSION}_conformance.result"
+[ "$FAIL_ON_CONFORMANCE" = "true" ] && rm -f "$CONFORMANCE_RESULT_FILE"
 
 # Temp dirs (git clone / archive extract) are cleaned on any exit. A container
 # build step (e.g. npm install during a source scan) can leave root-owned files
@@ -1795,3 +1813,20 @@ if [ "$GENERATE_ONLY" = "true" ]; then
     fi
 fi
 echo "=========================================="
+
+# --fail-on-conformance: judged last, after every artifact above is already on
+# disk, so a failing report can still be opened and acted on. Reads the bare
+# pass/fail sidecar validate-sbom.sh writes next to the JSON report (no jq
+# dependency on the host). Distinct from a scan failure (exit 1 elsewhere in
+# this script): 2 means the scan succeeded and its own conformance check
+# failed, 3 means this run produced no conformance report to judge at all.
+if [ "$FAIL_ON_CONFORMANCE" = "true" ]; then
+    if [ ! -f "$CONFORMANCE_RESULT_FILE" ]; then
+        echo "[ERROR] --fail-on-conformance: this scan produced no conformance report to judge."
+        exit 3
+    fi
+    if [ "$(cat "$CONFORMANCE_RESULT_FILE")" = "fail" ]; then
+        echo "[ERROR] Conformance check failed. See ${SAFE_PROJECT}_${SAFE_VERSION}_conformance.md / .html for details."
+        exit 2
+    fi
+fi

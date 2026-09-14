@@ -1075,7 +1075,10 @@ fi
 # invalidate that signature (the .sig would no longer verify against the
 # now-different file).
 if [ "$SCAN_MODE" = "ANALYZE" ] || [ "${GENERATE_REPORT:-false}" = "true" ]; then
-    for ext in json md html; do
+    # "result" is the bare pass/fail sidecar --fail-on-conformance reads; it
+    # never appears in server.py's ARTIFACT_SUFFIXES (not human-facing), only
+    # in ARTIFACTS here so it actually reaches HOST_OUTPUT_DIR.
+    for ext in json md html result; do
         [ -f "${OUT_PREFIX}_conformance.${ext}" ] && ARTIFACTS+=("${OUT_PREFIX}_conformance.${ext}")
     done
     run_optional_step generate-risk-report bash "$LIBDIR/generate-risk-report.sh" "$OUT_PREFIX" "$PROJECT_NAME" "$SCAN_MODE"

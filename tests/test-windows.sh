@@ -81,6 +81,12 @@ case "${1:-}" in
       dest="${hostout:-.}"; mkdir -p "$dest" 2>/dev/null
       printf '{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"metadata":{"component":{"type":"application","name":"%s","version":"%s"}},"components":[]}\n' \
         "$pn" "$pv" > "$dest/${pn}_${pv}_bom.json"
+      # DOCKER_STUB_CONFORMANCE_RESULT models validate-sbom.sh's bare pass/fail
+      # sidecar (--fail-on-conformance reads it). Unset means this run produced
+      # no conformance report, same as a mode/step that never generates one.
+      if [ -n "${DOCKER_STUB_CONFORMANCE_RESULT:-}" ]; then
+        printf '%s' "$DOCKER_STUB_CONFORMANCE_RESULT" > "$dest/${pn}_${pv}_conformance.result"
+      fi
     fi
     # MODE=DIFF carries no PROJECT_NAME/VERSION at all — it names its own
     # output file (DIFF_OUT_NAME) instead, so it needs its own stub write.
@@ -129,7 +135,7 @@ for flag in --project --version --target --git --branch --firmware --analyze \
             --byte-stable --sign --output-dir --timestamp --ui \
             --license --sbom-author --model --model-file --usage --merge --merge-root \
             --diff --trusca --upload-target --deep-cve --identify-vendored --verify-weights --spdx --lang \
-            --conformance-profile; do
+            --conformance-profile --fail-on-conformance; do
   if printf '%s' "$HELP" | grep -q -- "$flag"; then pass "help documents $flag"
   else fail "help documents $flag"; fi
 done
@@ -535,6 +541,57 @@ scan_in "$d" --project PB --version 1 --target app.out --generate-only \
   || { fail "unknown --conformance-profile handling"; show; }
 
 # --------------------------------------------------------
+section "--fail-on-conformance exit codes"
+# --------------------------------------------------------
+# Host-only logic (scan-sbom.sh reads validate-sbom.sh's bare pass/fail
+# sidecar itself), so the stub models it via DOCKER_STUB_CONFORMANCE_RESULT
+# rather than anything on the docker-run argv.
+d="$(new_proj foc_pass)"; printf 'ELFish\n' > "$d/app.out"
+export DOCKER_STUB_CONFORMANCE_RESULT=pass
+scan_in "$d" --project FP --version 1 --target app.out --generate-only --fail-on-conformance
+rc_pass=$RC
+unset DOCKER_STUB_CONFORMANCE_RESULT
+[ "$rc_pass" -eq 0 ] && pass "--fail-on-conformance: a pass report exits 0" \
+  || { fail "--fail-on-conformance pass case" "rc=$rc_pass"; show; }
+
+d="$(new_proj foc_fail)"; printf 'ELFish\n' > "$d/app.out"
+export DOCKER_STUB_CONFORMANCE_RESULT=fail
+scan_in "$d" --project FF --version 1 --target app.out --generate-only --fail-on-conformance
+rc_fail=$RC
+unset DOCKER_STUB_CONFORMANCE_RESULT
+{ [ "$rc_fail" -eq 2 ] && in_out "Conformance check failed"; } \
+  && pass "--fail-on-conformance: a fail report exits 2" \
+  || { fail "--fail-on-conformance fail case" "rc=$rc_fail"; show; }
+
+d="$(new_proj foc_none)"; printf 'ELFish\n' > "$d/app.out"
+scan_in "$d" --project FN --version 1 --target app.out --generate-only --fail-on-conformance
+rc_none=$RC
+{ [ "$rc_none" -eq 3 ] && in_out "no conformance report to judge"; } \
+  && pass "--fail-on-conformance: no report exits 3" \
+  || { fail "--fail-on-conformance no-report case" "rc=$rc_none"; show; }
+
+# A stale .result from an earlier run at the same project/version (this run's
+# folder is reused, not recreated) must not be read as this run's verdict:
+# this run produces no report, so the gate must still see "no report" (3),
+# not the leftover "pass".
+d="$(new_proj foc_stale)"; printf 'ELFish\n' > "$d/app.out"
+export DOCKER_STUB_CONFORMANCE_RESULT=pass
+scan_in "$d" --project FS --version 1 --target app.out --generate-only --fail-on-conformance
+[ "$RC" -eq 0 ] || { fail "--fail-on-conformance stale-result setup" "rc=$RC"; show; }
+unset DOCKER_STUB_CONFORMANCE_RESULT
+scan_in "$d" --project FS --version 1 --target app.out --generate-only --fail-on-conformance
+rc_stale=$RC
+{ [ "$rc_stale" -eq 3 ] && in_out "no conformance report to judge"; } \
+  && pass "--fail-on-conformance: a stale pass file from an earlier run is not mistaken for this run's verdict" \
+  || { fail "--fail-on-conformance stale-result case" "rc=$rc_stale"; show; }
+
+d="$(new_proj foc_ui)"
+err="$(bash "$SCAN" --ui --fail-on-conformance 2>&1)"; rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s' "$err" | grep -q "not offered with --ui"; } \
+  && pass "--fail-on-conformance is rejected with --ui" \
+  || fail "--fail-on-conformance + --ui rejection" "rc=$rc: $err"
+
+# --------------------------------------------------------
 section "Windows path & filesystem adversarial matrix"
 # --------------------------------------------------------
 # Windows path/filename grammar differs from Linux in ways "works in CI"
@@ -715,6 +772,13 @@ fi
 if [ -f "$SCAN_BAT" ]; then
   grep -q "scan-sbom.sh" "$SCAN_BAT"     && pass "scan-sbom.bat delegates to scan-sbom.sh" || fail "scan-sbom.bat delegates to scan-sbom.sh"
   grep -qi "where bash" "$SCAN_BAT"      && pass "scan-sbom.bat checks for Git Bash"        || fail "scan-sbom.bat checks for Git Bash"
+  # --fail-on-conformance's exit codes (2/3) are only useful to a CI author if
+  # scan-sbom.bat actually forwards scan-sbom.sh's real exit code instead of
+  # cmd's own (e.g. an "endlocal" alone always reports 0). No Windows/Wine here
+  # to run it, so this is a static check for the two lines that make it work.
+  { grep -qi "%ERRORLEVEL%" "$SCAN_BAT" && grep -qi "exit /b" "$SCAN_BAT"; } \
+    && pass "scan-sbom.bat forwards scan-sbom.sh's real exit code (ERRORLEVEL)" \
+    || fail "scan-sbom.bat exit code forwarding"
 fi
 # check-setup helper exists on both platforms and inspects the same prerequisites.
 [ -f "$CHECK_BAT" ] && pass "scripts/check-setup.bat present" || fail "scripts/check-setup.bat present"
