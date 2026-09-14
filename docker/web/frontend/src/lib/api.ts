@@ -560,6 +560,12 @@ export interface DoneEvent {
   /** Warning lines the scan emitted, deduplicated and capped. These decide how
    *  far a reader should trust the numbers, and used to vanish with the log. */
   scanWarnings?: string[];
+  /** Set only when `ok` is false and the server had not already sent a
+   *  classified `error` event for this run: the scanner's own [ERROR] block(s)
+   *  from the log, deduplicated, joined in order, capped at 500 chars (cut
+   *  from the front, with a leading "..." when it is). Shown verbatim on the
+   *  failed-scan card in place of the generic fallback body. */
+  errorMessage?: string | null;
 }
 
 /** Input types the UI offers; each maps to a backend MODE in server.py. */

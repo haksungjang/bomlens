@@ -3053,6 +3053,31 @@ case "$mode" in
     progress) echo "[firmware-cvedb-progress] 42%"; write_bom ;;
     deepcve-progress) echo "[deep-cve-progress] 55%"; write_bom ;;
     fail) echo "[stub] scanner exploded" >&2; exit 1 ;;
+    # Mirrors #109's Node fallback quality gate: an [ERROR] block explaining
+    # what happened, then a separate one-line [ERROR] right before exit. Both
+    # must reach the failed-scan card, not just the last ("see above") line.
+    error-block)
+        echo "[ERROR] The dependency resolver failed and the fallback scan found none of the project's declared dependencies."
+        echo "        Commit a lockfile that matches package.json, or run 'npm install' once so a resolvable lockfile is present, then re-scan."
+        echo "[ERROR] fallback SBOM discarded (see above)."
+        exit 1
+        ;;
+    # The real merged text of #109's apply_node_fallback_quality_gate
+    # (docker/lib/source-detect.sh), verbatim -- this is what actually reaches
+    # a web UI scan's log today, not a stand-in.
+    error-block-real)
+        echo "[ERROR] The dependency resolver failed and the fallback scan found none of the project's declared dependencies (direct-deps-only manifest reading), so the result would misrepresent the scan as covering the dependency tree when it covers none of it."
+        echo "        Commit a lockfile (package-lock.json, npm-shrinkwrap.json, yarn.lock or pnpm-lock.yaml) that matches package.json if one is missing, or run 'npm install'/'pnpm install' once so a resolvable lockfile is present, then re-scan."
+        echo "        Or scan from an environment where cdxgen itself can run (Docker access for the web UI's source scan; a working docker.sock for the CLI's transitive resolution) instead of relying on this direct-deps-only fallback."
+        exit 1
+        ;;
+    # A raw upstream HTTP response body (as the TRUSCA/Dependency-Track upload
+    # failure paths print) must never reach the card, indented or not.
+    error-response-leak)
+        echo "[ERROR] TRUSCA ingest failed (HTTP 500)"
+        echo "Response: {\"secret\": \"do-not-leak-me\"}"
+        exit 1
+        ;;
     hang)
         i=0
         while [ "$i" -lt 100 ]; do
@@ -3191,10 +3216,159 @@ import sys, json
 evs = json.load(sys.stdin)
 dones = [e for e in evs if e['event'] == 'done']
 assert len(dones) == 1 and dones[0]['data']['ok'] is False, evs
+# No [ERROR]-marked line at all: nothing to show beyond the generic fallback
+# the frontend already falls back to (run.failedBody) when this is null.
+assert dones[0]['data'].get('errorMessage') is None, evs
 "; then
     pass "scanner exit 1 ends the stream with done ok:false"
 else
     fail "failed scan did not report done ok:false" "$events"
+fi
+
+# Mirrors #109's Node fallback quality gate: an explanation block, then a
+# separate one-line block right before exit. Both must reach errorMessage in
+# order, not just the last ("see above") line.
+echo error-block > "$STUB_MODE_FILE"
+events=$(sse_events "project=errblock&version=1.0&source=current-dir")
+if echo "$events" | python3 -c "
+import sys, json
+evs = json.load(sys.stdin)
+dones = [e for e in evs if e['event'] == 'done']
+assert len(dones) == 1 and dones[0]['data']['ok'] is False, evs
+msg = dones[0]['data'].get('errorMessage')
+assert msg is not None, evs
+assert 'dependency resolver failed' in msg, msg
+assert 'Commit a lockfile' in msg, msg
+assert msg.endswith('fallback SBOM discarded (see above).'), msg
+# No sse('error') was sent for this run (a plain exit 1, no rc==-1/exception
+# path), so errorMessage is the only place this reached the client.
+assert not [e for e in evs if e['event'] == 'error'], evs
+"; then
+    pass "a multi-block scanner failure reaches errorMessage in order, not just the last block"
+else
+    fail "multi-block [ERROR] capture did not reach errorMessage as expected" "$events"
+fi
+
+# The real merged wording (#109, docker/lib/source-detect.sh's
+# apply_node_fallback_quality_gate), not a stand-in: guards against the stub
+# above drifting stale if that file's message ever changes without this test
+# changing too.
+if grep -qF "The dependency resolver failed and the fallback scan found none of the project's declared dependencies (direct-deps-only manifest reading)" \
+    "$ROOT_DIR/docker/lib/source-detect.sh" \
+    && grep -qF "Commit a lockfile (package-lock.json, npm-shrinkwrap.json, yarn.lock or pnpm-lock.yaml)" \
+        "$ROOT_DIR/docker/lib/source-detect.sh"; then
+    pass "the stub's real-wording case still matches docker/lib/source-detect.sh verbatim"
+else
+    fail "docker/lib/source-detect.sh's Node fallback quality gate wording changed; update the error-block-real stub and this test to match"
+fi
+echo error-block-real > "$STUB_MODE_FILE"
+events=$(sse_events "project=errblockreal&version=1.0&source=current-dir")
+if echo "$events" | python3 -c "
+import sys, json
+evs = json.load(sys.stdin)
+dones = [e for e in evs if e['event'] == 'done']
+assert len(dones) == 1 and dones[0]['data']['ok'] is False, evs
+msg = dones[0]['data'].get('errorMessage')
+assert msg is not None, evs
+assert len(msg) == 500, len(msg)
+assert msg.startswith('...'), msg
+# The real block is 687 chars raw, so the cap cuts into the first (diagnostic)
+# sentence -- both actionable guidance sentences, at the tail, must survive
+# in full: that's what a reader actually needs to act on.
+assert msg.endswith(
+    \"or run 'npm install'/'pnpm install' once so a resolvable lockfile is present, then re-scan.\n\"
+    \"Or scan from an environment where cdxgen itself can run (Docker access for the web UI's source scan; \"
+    \"a working docker.sock for the CLI's transitive resolution) instead of relying on this direct-deps-only fallback.\"
+), msg
+"; then
+    pass "the real #109 Node-fallback message is captured and the 500-char cap keeps both guidance sentences intact"
+else
+    fail "the real #109 Node-fallback message was not captured as expected" "$events"
+fi
+
+# A raw upstream HTTP response body (as printed on the TRUSCA/Dependency-Track
+# upload failure paths) must never reach the client, regardless of indentation.
+echo error-response-leak > "$STUB_MODE_FILE"
+events=$(sse_events "project=respleak&version=1.0&source=current-dir")
+if echo "$events" | python3 -c "
+import sys, json
+evs = json.load(sys.stdin)
+dones = [e for e in evs if e['event'] == 'done']
+assert len(dones) == 1 and dones[0]['data']['ok'] is False, evs
+msg = dones[0]['data'].get('errorMessage')
+# The raw line still streams to the live log as always (unchanged, pre-existing
+# behavior); only errorMessage -- the new field a card would show prominently
+# -- must never carry the response body.
+assert msg == '[ERROR] TRUSCA ingest failed (HTTP 500)', msg
+assert 'do-not-leak-me' not in msg, msg
+assert any('do-not-leak-me' in str(e['data']) for e in evs if e['event'] == 'log'), \
+    'expected the raw Response: line to still be in the live log, unaffected'
+"; then
+    pass "a raw Response: body line never reaches errorMessage, only the [ERROR] line above it"
+else
+    fail "a Response: line leaked into errorMessage" "$events"
+fi
+
+echo "== _scrub_error_text: credential/token-shaped text is masked before display =="
+if SBOM_OUTPUT_DIR="$OUT" python3 - "$ROOT_DIR" <<'PY'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+
+scrub = server._scrub_error_text
+assert "hunter2" not in scrub("Upload to https://user:hunter2@example.com/api failed")
+assert "***@example.com" in scrub("Upload to https://user:hunter2@example.com/api failed")
+assert "abcdef1234567890abcdef1234567890" not in scrub(
+    "Authorization: Bearer abcdef1234567890abcdef1234567890")
+assert "dXNlcjpwYXNz" not in scrub("curl: Authorization: Basic dXNlcjpwYXNz")
+assert "deadbeefdeadbeefdeadbeef" not in scrub("curl failed: token=deadbeefdeadbeefdeadbeef1234")
+assert "0123456789abcdef0123456789abcdef01234567" not in scrub(
+    "hash mismatch: 0123456789abcdef0123456789abcdef01234567")
+assert "QWxhZGRpbjpvcGVuIHNlc2FtZQ==QWxhZGRpbjpvcGVuIHNlc2FtZQ==" not in scrub(
+    "blob: QWxhZGRpbjpvcGVuIHNlc2FtZQ==QWxhZGRpbjpvcGVuIHNlc2FtZQ==")
+# Ordinary text with no credential-shaped substring survives untouched.
+assert scrub("[ERROR] TARGET_FILE not found: /src/demo.zip") == "[ERROR] TARGET_FILE not found: /src/demo.zip"
+print("ok")
+PY
+then
+    pass "URL userinfo, Authorization/Bearer, token=, hex and base64 blobs are all masked"
+else
+    fail "_scrub_error_text let a credential/token-shaped substring through"
+fi
+
+echo "== _ScanErrorTracker: block grouping, dedup and the 500-char cap =="
+if SBOM_OUTPUT_DIR="$OUT" python3 - "$ROOT_DIR" <<'PY'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+
+# A repeated identical block (e.g. a retried step logging the same [ERROR]
+# twice) is kept only once, not duplicated.
+t = server._ScanErrorTracker()
+t.feed("[ERROR] source dir not found: /src")
+t.feed("[ERROR] source dir not found: /src")
+assert t.result() == "[ERROR] source dir not found: /src", t.result()
+
+# An [ERROR] block still open at end-of-stream (no trailing blank/marker line)
+# is still captured.
+t2 = server._ScanErrorTracker()
+t2.feed("[ERROR] top")
+t2.feed("        continues here")
+assert t2.result() == "[ERROR] top\ncontinues here", t2.result()
+
+# Over the 500-char cap: the front is cut, not the end, with a leading "...".
+t3 = server._ScanErrorTracker()
+t3.feed("[ERROR] " + ("lorem ipsum dolor sit amet " * 30))
+res = t3.result()
+assert len(res) == 500, len(res)
+assert res.startswith("..."), res
+assert res.endswith("lorem ipsum dolor sit amet"), res
+print("ok")
+PY
+then
+    pass "the tracker dedupes identical blocks, flushes an unterminated block, and caps at 500 chars from the front"
+else
+    fail "_ScanErrorTracker grouping/dedup/cap behavior regressed"
 fi
 
 echo ok > "$STUB_MODE_FILE"
