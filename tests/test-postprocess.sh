@@ -2818,6 +2818,84 @@ bash "$LIB/validate-sbom.sh" "$WORK/tv-old.spdx" "$WORK/tvo" "supplier" >/dev/nu
 tvo=$(jq -r '"\(.checks[] | select(.id=="spec-version") | .status)/\(.result)"' "$WORK/tvo_conformance.json")
 [ "$tvo" = "fail/fail" ] && pass "Tag-Value SPDX-2.1 fails the spec-version check" || fail "Tag-Value spec-version: '$tvo', expected fail/fail"
 
+echo "== conformance: pipelineStepsFailed surfaces a supplier document's own failed-step markers (F-17) =="
+# docker/lib/pipeline-step.sh's mark_pipeline_warning stamps a
+# bomlens:pipeline-step-failed metadata property on the SBOM itself for every
+# best-effort post-process step that failed. validate-sbom.sh reads it
+# straight off $SBOM (the document under test), so a re-analyzed document
+# still carries it under --analyze too -- no exception for ANALYZE by design.
+# Deduped, order preserved, mirrors server.py's pipeline_steps_seen (#87).
+jq '.metadata.properties = [
+  {"name":"bomlens:pipeline-step-failed","value":"normalize"},
+  {"name":"bomlens:pipeline-step-failed","value":"enrich-cpe"},
+  {"name":"bomlens:pipeline-step-failed","value":"normalize"},
+  {"name":"other-property","value":"ignored"}
+]' "$FIX/good-cyclonedx.json" > "$WORK/psf-dedupe.json"
+bash "$LIB/validate-sbom.sh" "$WORK/psf-dedupe.json" "$WORK/psfd" "supplier" >/dev/null 2>&1
+psfd=$(jq -c '.pipelineStepsFailed' "$WORK/psfd_conformance.json")
+[ "$psfd" = '["normalize","enrich-cpe"]' ] \
+    && pass "duplicate step ids are deduped, order preserved" \
+    || fail "pipelineStepsFailed after dedupe: $psfd, expected [\"normalize\",\"enrich-cpe\"]"
+psfd_result=$(jq -r '.result' "$WORK/psfd_conformance.json")
+psfd_fails=$(jq '[.checks[] | select(.status=="fail")] | length' "$WORK/psfd_conformance.json")
+[ "$psfd_result" = "pass" ] && [ "$psfd_fails" = "0" ] \
+    && pass "a failed pipeline step does not affect the result or any check's status" \
+    || fail "pipelineStepsFailed changed the verdict: result=$psfd_result fails=$psfd_fails"
+
+# ANALYZE input is an untrusted supplier document, so a step id can be any
+# string: html gets it HTML-escaped inside <code>, md has backticks stripped
+# and newlines flattened so the value cannot break out of its code span.
+jq '.metadata.properties = [
+  {"name":"bomlens:pipeline-step-failed","value":"<script>alert(1)</script>"},
+  {"name":"bomlens:pipeline-step-failed","value":"back`tick`s\nnewline"}
+]' "$FIX/good-cyclonedx.json" > "$WORK/psf-hostile.json"
+bash "$LIB/validate-sbom.sh" "$WORK/psf-hostile.json" "$WORK/psfh" "supplier" >/dev/null 2>&1
+[ "$(grep -c '<script>alert' "$WORK/psfh_conformance.html")" = "0" ] \
+    && pass "html report never carries an unescaped <script> from a pipeline-step id" \
+    || fail "html report leaked an unescaped <script> tag"
+grep -q '&lt;script&gt;alert(1)&lt;/script&gt;' "$WORK/psfh_conformance.html" \
+    && pass "html report shows the escaped id inside <code>" \
+    || fail "html report did not show the HTML-escaped step id"
+grep -q '`backticks newline`' "$WORK/psfh_conformance.md" \
+    && pass "md report strips backticks and flattens newlines in a step id" \
+    || fail "md report did not sanitize the hostile step id"
+
+# Caps: length per id and count of ids shown, same numbers as server.py's
+# MAX_PIPELINE_STEP_LEN / MAX_PIPELINE_STEPS (#87), so the two never drift.
+jq --argjson n 25 '.metadata.properties = (
+    [range(0;$n) | {"name":"bomlens:pipeline-step-failed","value":("step-" + (.|tostring))}]
+  )' "$FIX/good-cyclonedx.json" > "$WORK/psf-many.json"
+bash "$LIB/validate-sbom.sh" "$WORK/psf-many.json" "$WORK/psfm" "supplier" >/dev/null 2>&1
+psfm=$(jq -r '"\(.pipelineStepsFailed|length)/\(.pipelineStepsFailedMore)"' "$WORK/psfm_conformance.json")
+[ "$psfm" = "20/5" ] && pass "step ids are capped at 20 shown, the rest counted (got $psfm)" \
+    || fail "pipelineStepsFailed cap: $psfm, expected 20/5"
+grep -q '(and 5 more)' "$WORK/psfm_conformance.md" \
+    && pass "md report states the overflow count" \
+    || fail "md report did not state '(and 5 more)'"
+long_val=$(python3 -c 'print("y"*150)' 2>/dev/null || perl -e 'print "y" x 150')
+jq --arg v "$long_val" '.metadata.properties = [{"name":"bomlens:pipeline-step-failed","value":$v}]' \
+    "$FIX/good-cyclonedx.json" > "$WORK/psf-long.json"
+bash "$LIB/validate-sbom.sh" "$WORK/psf-long.json" "$WORK/psfl" "supplier" >/dev/null 2>&1
+psfl_len=$(jq '.pipelineStepsFailed[0] | length' "$WORK/psfl_conformance.json")
+[ "$psfl_len" = "100" ] && pass "a single step id is truncated to 100 chars" \
+    || fail "step id length: $psfl_len, expected 100"
+
+# Normal case: no such property at all, or a format (SPDX JSON / SPDX
+# Tag-Value) that never carries CycloneDX-style metadata.properties -- all
+# fall through to the same empty result, not an error.
+bash "$LIB/validate-sbom.sh" "$FIX/good-cyclonedx.json" "$WORK/psfnone" "supplier" >/dev/null 2>&1
+psfnone=$(jq -c '.pipelineStepsFailed' "$WORK/psfnone_conformance.json")
+[ "$psfnone" = "[]" ] && pass "no failed-step markers -> pipelineStepsFailed: []" \
+    || fail "pipelineStepsFailed with no markers: $psfnone, expected []"
+bash "$LIB/validate-sbom.sh" "$FIX/good-spdx.json" "$WORK/psfspdxj" "supplier" >/dev/null 2>&1
+psfspdxj=$(jq -c '.pipelineStepsFailed' "$WORK/psfspdxj_conformance.json")
+[ "$psfspdxj" = "[]" ] && pass "SPDX JSON input -> pipelineStepsFailed: []" \
+    || fail "SPDX JSON pipelineStepsFailed: $psfspdxj, expected []"
+bash "$LIB/validate-sbom.sh" "$FIX/supplier-clean-tagvalue.spdx" "$WORK/psfspdxtv" "supplier" >/dev/null 2>&1
+psfspdxtv=$(jq -c '.pipelineStepsFailed' "$WORK/psfspdxtv_conformance.json")
+[ "$psfspdxtv" = "[]" ] && pass "SPDX Tag-Value input -> pipelineStepsFailed: []" \
+    || fail "SPDX Tag-Value pipelineStepsFailed: $psfspdxtv, expected []"
+
 echo "== conformance: SPDX transitive check counts DEPENDENCY_OF (Syft's reverse-direction edge) =="
 # Syft writes OS-package dependency edges in SPDX as the reverse relationship
 # DEPENDENCY_OF (e.g. NetworkManager-libnm DEPENDENCY_OF NetworkManager), never
