@@ -157,7 +157,7 @@ MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
 | `BOMLENS_NODE_FULL_GRAPH` | — | — | Node.js source scans: set `1` to keep the full dev-plus-production graph instead of the production-only set |
 | `BOMLENS_ANDROID_FULL_GRAPH` | - | - | Android source scans (Android SDK image): set `1` to keep the full graph, build and test tooling included, instead of filtering to the release runtime classpath |
 | `BOMLENS_KEEP_BUILD_OUTPUT` | — | — | Source scans: set `1` to leave the resolved tree in place. By default the scan restores the files its resolvers rewrote (`go.mod`, `go.sum`, `Cargo.lock`, `Gemfile.lock`, `Package.resolved`) and removes the build directories they created, so the scanned project is handed back as it was |
-| `BOMLENS_CANCEL_GRACE` | — | `30` | Seconds a cancelled scan (CLI Ctrl+C, or the web UI's cancel button) gets to stop cleanly before it is force-stopped |
+| `BOMLENS_CANCEL_GRACE` | — | `30` | Seconds a cancelled scan (CLI Ctrl+C, or the web UI's cancel button) gets to stop cleanly before it is force-stopped. Applies to the CLI and `--ui`; the desktop app always uses the default |
 | `CYCLONEDX_SPEC_VERSIONS` | — | `1.3 1.4 1.5 1.6` | Accepted CycloneDX spec versions for the conformance check (space-separated); overrides the default range |
 | `AI_CYCLONEDX_SPEC_VERSIONS` | — | `1.3 1.4 1.5 1.6 1.7` | Accepted CycloneDX versions for AI SBOMs (ML-BOM), which additionally allow 1.7 |
 | `SPDX_SPEC_VERSIONS` | — | `SPDX-2.2 SPDX-2.3` | Accepted SPDX spec versions for the conformance check |
