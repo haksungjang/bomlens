@@ -1142,6 +1142,17 @@ def security_summary(run_id):
                     "url": v.get("PrimaryURL") or "",
                     "refs": (v.get("References") or [])[:MAX_VULN_REFS],
                 }
+                # Same normalized join key as _component_risk_index. PkgName +
+                # InstalledVersion alone collide across different components that
+                # happen to share both (a vendored copy in one ecosystem, an
+                # unrelated package of the same name in another): without the
+                # purl, an "upgrade fixes N CVEs" bundle can merge findings that
+                # belong to two different components. Omitted when Trivy did not
+                # resolve a PkgIdentifier for this finding.
+                ident = v.get("PkgIdentifier")
+                purl = ident.get("PURL") if isinstance(ident, dict) else None
+                if purl:
+                    row["purl"] = _norm_purl(purl)
                 # EPSS (exploit probability, 0..1) + CISA KEV (actively exploited).
                 epss = pr.get("epss")
                 if isinstance(epss, (int, float)):

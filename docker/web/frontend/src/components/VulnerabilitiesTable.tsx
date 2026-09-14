@@ -460,7 +460,10 @@ export function VulnerabilitiesTable({
         </thead>
         <tbody>
           {visible.map((v, i) => {
-            const key = `${v.id}-${v.pkg}-${i}`;
+            // `i` alone already makes this unique for React; purl (falling back
+            // to pkg name) is used instead of pkg so the key identifies the same
+            // component as the grouping/join keys elsewhere in this file.
+            const key = `${v.id}-${v.purl || v.pkg}-${i}`;
             const isOpen = openKey === key;
             const links = vulnLinks(v);
             const hasDetail =

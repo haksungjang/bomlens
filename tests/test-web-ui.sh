@@ -1674,6 +1674,37 @@ else
 fi
 rm -f "$OUT"/serr_1.0_* "$OUT"/sok_1.0_*
 
+echo "== purl attached to vulnerability rows (security_summary) =="
+# Two different components (different ecosystems) can share a name and
+# installed version by coincidence. Without the purl on each row, a consumer
+# joining/grouping by pkg+installed alone (groupByUpgrade on the frontend)
+# would merge findings that belong to two unrelated components.
+cat > "$OUT/purl_1.0_security.json" <<'JSON'
+{"Results":[{"Vulnerabilities":[
+  {"VulnerabilityID":"CVE-1","Severity":"HIGH","PkgName":"foo","InstalledVersion":"1.0",
+   "PkgIdentifier":{"PURL":"pkg:npm/foo@1.0"}},
+  {"VulnerabilityID":"CVE-2","Severity":"LOW","PkgName":"foo","InstalledVersion":"1.0",
+   "PkgIdentifier":{"PURL":"pkg:golang/foo@1.0"}},
+  {"VulnerabilityID":"CVE-3","Severity":"LOW","PkgName":"libfoo","InstalledVersion":"1.0"}
+]}]}
+JSON
+if SBOM_OUTPUT_DIR="$OUT" python3 - "$ROOT_DIR" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+vulns = {x["id"]: x for x in server.security_summary("purl_1.0")["vulnerabilities"]}
+assert vulns["CVE-1"]["purl"] == "pkg:npm/foo@1.0", vulns["CVE-1"]
+assert vulns["CVE-2"]["purl"] == "pkg:golang/foo@1.0", vulns["CVE-2"]
+assert vulns["CVE-1"]["purl"] != vulns["CVE-2"]["purl"], "different components must not share a purl"
+assert "purl" not in vulns["CVE-3"], vulns["CVE-3"]  # no PkgIdentifier -> omitted, not guessed
+PY
+then
+    pass "purl attached to each vulnerability row when Trivy resolved one"
+else
+    fail "purl attachment is wrong"
+fi
+rm -f "$OUT"/purl_1.0_*
+
 echo "== untrusted SBOM shapes must not crash the summaries (ANALYZE mode) =="
 # ANALYZE copies an uploaded SBOM verbatim; CycloneDX does not force components[]
 # to be objects or properties/licenses/externalReferences to be arrays. A crafted
