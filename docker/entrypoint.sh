@@ -782,6 +782,22 @@ if command -v jq >/dev/null 2>&1; then
     COMP_COUNT=$(jq '[.components[]?] | length' "$OUTPUT_FILE" 2>/dev/null || echo 0)
     if [ "${COMP_COUNT:-0}" -eq 0 ]; then
         echo "[WARN] SBOM has 0 components — the scan may have found nothing (missing lockfile or empty source)."
+        # A directory --target that is not itself a root filesystem but
+        # has one a level or two below it (a delivery folder wrapping the
+        # actual rootfs) is a common way this ends up empty -- cdxgen has
+        # nothing to read there. scan-sbom.sh already found this on the host
+        # (nested_rootfs_hint) and names it here only now that the scan is
+        # confirmed empty, not on sight of the folder alone: a source repo
+        # that happens to hold a rootfs-shaped fixture, but still resolves
+        # real components, must never see this note. Validated the same way
+        # as BOMLENS_RUN_INPUT: an unexpected character degrades to no note,
+        # never to an unsafe value echoed verbatim.
+        if [ -n "${NESTED_ROOTFS_HINT:-}" ] \
+           && printf '%s' "$NESTED_ROOTFS_HINT" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._/ -]*$' \
+           && ! printf '%s' "$NESTED_ROOTFS_HINT" | grep -q '\.\.'; then
+            echo "       $NESTED_ROOTFS_HINT (inside the scanned folder) looks like a root filesystem."
+            echo "       If that folder is the actual delivery, re-run with --target pointed at it directly."
+        fi
     fi
 fi
 

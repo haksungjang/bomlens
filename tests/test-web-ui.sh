@@ -1102,6 +1102,57 @@ else
     fail "Yocto detection parity failed (see assertion above)"
 fi
 
+echo "== nested_rootfs_hint: mirrors scan-sbom.sh's shape check for the web UI's deep source scan =="
+if python3 - "$ROOT_DIR" <<'PY'
+import os, sys, tempfile
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+
+with tempfile.TemporaryDirectory() as root:
+    def mk(*parts):
+        p = os.path.join(root, *parts)
+        os.makedirs(p, exist_ok=True)
+        return p
+
+    # Same four fixtures, same names and shapes, as
+    # tests/test-input-routing.sh's "nested_rootfs_hint" section,
+    # kept in sync deliberately (see the comment on nested_rootfs_hint in
+    # scripts/scan-sbom.sh and in this file's own nested_rootfs_hint).
+
+    # A directory that is itself a rootfs (etc/ + 2 of bin/sbin/usr/lib/var)
+    # gets no hint -- it has nothing to add there, this check exists only for
+    # the SOURCE-branch diagnostic.
+    flat = mk("flat")
+    for sub in ("etc", "bin", "sbin", "usr", "lib"):
+        mk("flat", sub)
+    assert server.nested_rootfs_hint(flat) is None, "a rootfs itself should get no hint"
+
+    # The common wrapped-delivery shape, named relative to the picked folder --
+    # what the web UI's own diagnostic will show the user.
+    delivery = mk("delivery")
+    mk("delivery", "release-20260919", "rootfs", "etc")
+    mk("delivery", "release-20260919", "rootfs", "bin")
+    mk("delivery", "release-20260919", "rootfs", "usr")
+    assert server.nested_rootfs_hint(delivery) == os.path.join("release-20260919", "rootfs"), \
+        server.nested_rootfs_hint(delivery)
+
+    onelevel = mk("onelevel")
+    mk("onelevel", "rootfs", "etc")
+    mk("onelevel", "rootfs", "bin")
+    mk("onelevel", "rootfs", "var")
+    assert server.nested_rootfs_hint(onelevel) == "rootfs", server.nested_rootfs_hint(onelevel)
+
+    # No nested rootfs anywhere -- no hint, same as an ordinary source tree.
+    nodeps = mk("nodeps")
+    mk("nodeps", "src")
+    assert server.nested_rootfs_hint(nodeps) is None
+PY
+then
+    pass "nested_rootfs_hint matches the CLI's shape check (self/wrapped/one-level/none)"
+else
+    fail "nested_rootfs_hint parity with scan-sbom.sh failed (see assertion above)"
+fi
+
 echo "== upload round-trip (the regression that shows as 'Failed to fetch') =="
 echo "hello" > "$WORK/payload.txt"
 ( cd "$WORK" && zip -q sample.zip payload.txt )

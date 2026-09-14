@@ -546,6 +546,37 @@ def scan_root_dir(d):
     return resolved if os.path.isdir(resolved) else None
 
 
+def _is_rootfs_dir(d):
+    """Mirrors scripts/scan-sbom.sh's _is_rootfs_dir: etc/ plus at least two
+    of bin/sbin/usr/lib/var. Two, not one, so a source repo that happens to
+    carry etc/ and lib/ (not unusual) is not mistaken for a root filesystem."""
+    if not os.path.isdir(os.path.join(d, "etc")):
+        return False
+    hits = sum(1 for sub in ("bin", "sbin", "usr", "lib", "var") if os.path.isdir(os.path.join(d, sub)))
+    return hits >= 2
+
+
+def nested_rootfs_hint(d):
+    """Mirrors scripts/scan-sbom.sh's nested_rootfs_hint: a
+    deep-source-scan folder that is not itself a root filesystem may still
+    have one a level or two below it (a delivery folder wrapping the actual
+    rootfs), which is why a scan of it can come back with 0 components.
+    Returns a path relative to `d`, or None. Never used to change routing --
+    MODE stays SOURCE either way, the same as the CLI side -- only to name a
+    candidate in the 0-components diagnostic once a scan is already confirmed
+    empty. Kept in sync with the CLI's version deliberately: same shape
+    check, same fixtures in tests/test-input-routing.sh and
+    tests/test-web-ui.sh."""
+    if _is_rootfs_dir(d):
+        return None
+    esc = glob.escape(d)
+    for pattern in ("*", "*/*"):
+        for cand in sorted(glob.glob(os.path.join(esc, pattern))):
+            if os.path.isdir(cand) and _is_rootfs_dir(cand):
+                return os.path.relpath(cand, d)
+    return None
+
+
 def is_yocto_build_dir(d):
     """True when `d` is a Yocto build directory, a deploy tree, or the
     per-machine image folder inside one. Anything outside an allowed scan root
@@ -4674,6 +4705,9 @@ class Handler(BaseHTTPRequestHandler):
                 mode = "SOURCE"
                 env["MODE"] = "SOURCE"
                 env["SOURCE_ROOT"] = scan_root_of(cleanup_dir)
+                hint = nested_rootfs_hint(scan_dir)
+                if hint:
+                    env["NESTED_ROOTFS_HINT"] = hint
 
             elif source == "git-url":
                 if not target:
