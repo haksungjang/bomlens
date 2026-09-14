@@ -2908,6 +2908,21 @@ def run_sibling_scan(image, mode, out_dir, on_log, *, upload_file=None, model_id
         # reason UPLOAD_ENABLED below reads env.get(...) == "true" directly.
         "-e", "DEEP_LICENSE=%s" % ("true" if env.get("DEEP_LICENSE") == "true" else "false"),
         "-e", "BYTE_STABLE=%s" % ("true" if env.get("BYTE_STABLE") == "true" else "false"),
+        # Security-report enrichment: an operator's own container environment,
+        # not a request field (no web form checkbox for either). Both default
+        # on and run unconditionally regardless of mode, same as
+        # GENERATE_SECURITY above, so _bool_env's missing-key default of
+        # "true" is the right one here (unlike DEEP_LICENSE/BYTE_STABLE above).
+        # Leaving either unforwarded would silently re-enable it in the
+        # sibling for an operator who turned it off (air-gapped network, no
+        # EPSS/KEV or malicious-package lookup), the opposite direction from
+        # the other toggles here but the same bug class.
+        "-e", "SECURITY_ENRICH=%s" % _bool_env("SECURITY_ENRICH"),
+        "-e", "ENRICH_MALICIOUS=%s" % _bool_env("ENRICH_MALICIOUS"),
+        # deps.dev version-currency check: opt-in (off by default, needs
+        # network), so an explicit env.get check like DEEP_LICENSE/BYTE_STABLE
+        # above, not _bool_env.
+        "-e", "STALENESS_ENRICH=%s" % ("true" if env.get("STALENESS_ENRICH") == "true" else "false"),
     ]
     # The profile the caller resolved (see the main handler's per-mode default),
     # re-derived from a closed allowlist like AI_USAGE_CONTEXT below, never the
@@ -2988,6 +3003,17 @@ def run_sibling_scan(image, mode, out_dir, on_log, *, upload_file=None, model_id
     # image swap itself is the caller's (sibling["image"] == DEEP_CVE_IMAGE).
     if env.get("DEEP_CVE") == "true" and mode not in ("FIRMWARE", "AIBOM"):
         args += ["-e", "DEEP_CVE=true"]
+        # NVD version-range verification for grype's nvd:cpe matches: opt-in,
+        # meaningful only alongside DEEP_CVE (scan-security.sh only invokes
+        # scan-nvd-cpe.py when grype ran under this same condition), so gate
+        # it the same way. The key is a secret, forwarded by NAME ONLY like
+        # SCANOSS_API_KEY/HF_TOKEN below so its value never reaches argv/`ps`
+        # -- the verify script still runs without it, just against the
+        # unauthenticated (lower rate limit) NVD API.
+        if env.get("SECURITY_NVD_VERIFY") == "true":
+            args += ["-e", "SECURITY_NVD_VERIFY=true"]
+            if env.get("NVD_API_KEY"):
+                args += ["-e", "NVD_API_KEY"]
     # Vendored-OSS identification (SCANOSS) can be enabled alongside deep-cve on
     # a source scan; forward the flag and, when set, the credential by NAME ONLY
     # (mirrors API_KEY/HF_TOKEN below — the value stays out of the argv/`ps`).

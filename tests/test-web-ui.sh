@@ -571,6 +571,95 @@ assert rc == 0, rc
 assert "DEEP_LICENSE=false" in captured["args"], captured["args"]
 assert "BYTE_STABLE=false" in captured["args"], captured["args"]
 
+# SECURITY_ENRICH/ENRICH_MALICIOUS: an operator's own container environment
+# (docs/reference/cli.md, docs/reference/docker-image.md), not a request
+# field -- same as the PCT vars, forwarded via extra_env the way
+# run_sibling_scan's caller passes its own os.environ.copy()-based env
+# through. Both default on and must reach the sibling explicitly off when the
+# operator turned them off (e.g. air-gapped, no EPSS/KEV/malicious lookup);
+# a missed forward would silently re-enable them only in the sibling.
+captured.clear()
+rc = server.run_sibling_scan(
+    "ghcr.io/sktelecom/bomlens-deep-cve:1.5.0", "SOURCE", run_out,
+    lambda ln: None, source_root=src_root,
+    extra_env={"SECURITY_ENRICH": "false", "ENRICH_MALICIOUS": "false"},
+)
+assert rc == 0, rc
+assert "SECURITY_ENRICH=false" in captured["args"], captured["args"]
+assert "ENRICH_MALICIOUS=false" in captured["args"], captured["args"]
+
+# Unset (or any other value) forwards the explicit default "true" -- the
+# missing-key case _bool_env is meant for, unlike DEEP_LICENSE/BYTE_STABLE.
+captured.clear()
+rc = server.run_sibling_scan(
+    "ghcr.io/sktelecom/bomlens-deep-cve:1.5.0", "SOURCE", run_out,
+    lambda ln: None, source_root=src_root,
+)
+assert rc == 0, rc
+assert "SECURITY_ENRICH=true" in captured["args"], captured["args"]
+assert "ENRICH_MALICIOUS=true" in captured["args"], captured["args"]
+
+# STALENESS_ENRICH: same operator-environment story, but opt-in (default off)
+# like DEEP_LICENSE/BYTE_STABLE -- on must be explicit, and unset must forward
+# the explicit "false", not silence.
+captured.clear()
+rc = server.run_sibling_scan(
+    "ghcr.io/sktelecom/bomlens-deep-cve:1.5.0", "SOURCE", run_out,
+    lambda ln: None, source_root=src_root,
+    extra_env={"STALENESS_ENRICH": "true"},
+)
+assert rc == 0, rc
+assert "STALENESS_ENRICH=true" in captured["args"], captured["args"]
+captured.clear()
+rc = server.run_sibling_scan(
+    "ghcr.io/sktelecom/bomlens-deep-cve:1.5.0", "SOURCE", run_out,
+    lambda ln: None, source_root=src_root,
+)
+assert rc == 0, rc
+assert "STALENESS_ENRICH=false" in captured["args"], captured["args"]
+
+# SECURITY_NVD_VERIFY + NVD_API_KEY: opt-in, meaningful only alongside
+# DEEP_CVE (gated the same way scan-security.sh gates scan-nvd-cpe.py). The
+# key is a secret, forwarded by NAME ONLY like SCANOSS_API_KEY above -- never
+# inlined as NVD_API_KEY=value.
+NVD_SENTINEL = "nvd_sentinel_do_not_leak_7c2e"
+captured.clear()
+rc = server.run_sibling_scan(
+    "ghcr.io/sktelecom/bomlens-deep-cve:1.5.0", "SOURCE", run_out,
+    lambda ln: None, source_root=src_root,
+    extra_env={"DEEP_CVE": "true", "SECURITY_NVD_VERIFY": "true", "NVD_API_KEY": NVD_SENTINEL},
+)
+assert rc == 0, rc
+_a = captured["args"]
+assert "SECURITY_NVD_VERIFY=true" in _a, _a
+assert "NVD_API_KEY" in _a and not any(x.startswith("NVD_API_KEY=") for x in _a), _a
+assert not any(NVD_SENTINEL in a for a in _a), "NVD_API_KEY value leaked into argv"
+assert (captured["env"] or {}).get("NVD_API_KEY") == NVD_SENTINEL, "subprocess env must carry the key for name-only -e"
+
+# SECURITY_NVD_VERIFY without DEEP_CVE -> not forwarded (the version filter it
+# controls never runs outside a deep-cve scan).
+captured.clear()
+rc = server.run_sibling_scan(
+    "ghcr.io/sktelecom/bomlens-deep-cve:1.5.0", "SOURCE", run_out,
+    lambda ln: None, source_root=src_root,
+    extra_env={"SECURITY_NVD_VERIFY": "true", "NVD_API_KEY": NVD_SENTINEL},
+)
+assert rc == 0, rc
+assert not any(x.startswith("SECURITY_NVD_VERIFY") for x in captured["args"]), captured["args"]
+assert not any(x == "NVD_API_KEY" for x in captured["args"]), captured["args"]
+
+# SECURITY_NVD_VERIFY off (default) with DEEP_CVE on -> stays out of the argv,
+# and no key is forwarded without it.
+captured.clear()
+rc = server.run_sibling_scan(
+    "ghcr.io/sktelecom/bomlens-deep-cve:1.5.0", "SOURCE", run_out,
+    lambda ln: None, source_root=src_root,
+    extra_env={"DEEP_CVE": "true", "NVD_API_KEY": NVD_SENTINEL},
+)
+assert rc == 0, rc
+assert not any(x.startswith("SECURITY_NVD_VERIFY") for x in captured["args"]), captured["args"]
+assert not any(x == "NVD_API_KEY" for x in captured["args"]), captured["args"]
+
 # HF_TOKEN: inherited from THIS container's environment (never posted to the UI)
 # and forwarded by name only, so the secret stays out of the docker-run argv.
 HF_SENTINEL = "hf_sentinel_do_not_leak_9f3a"
