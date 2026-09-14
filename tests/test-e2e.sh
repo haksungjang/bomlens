@@ -920,6 +920,39 @@ else
             fail "nodejs BOMLENS_NODE_FULL_GRAPH=1 keeps the full graph" "full=$nfull default=$ncomp"; show_log_if_verbose "$w"
         fi
         rm -rf "$w"
+
+        # 3a3: re-scanning the same project/version reuses the output folder.
+        # A CLI SOURCE scan writes its SBOM in two containers -- stage 1
+        # (cdxgen) here on the host, stage 2 (POSTPROCESS, entrypoint.sh)
+        # after -- and entrypoint.sh's stale-artifact cleanup runs at stage
+        # 2's startup. Regression: it could not tell stage 1's own
+        # just-written SBOM apart from a leftover of the PREVIOUS scan at the
+        # same project/version, and deleted it, so POSTPROCESS immediately
+        # failed with "SBOM not found for post-processing".
+        rescan_dir="$(mktemp -d "$WORK_ROOT/rescan.XXXXXX")"
+        cp -R "$nodesrc/." "$rescan_dir/" 2>/dev/null
+        ( cd "$rescan_dir" && SBOM_SCANNER_IMAGE="$SCANNER_IMG" bash "$SCAN" \
+            --project rescan --version 1.0 --generate-only ) > "$rescan_dir/_scan1.log" 2>&1
+        first_n=$(jq '[.components[]?]|length' "$rescan_dir/rescan_1.0_bom.json" 2>/dev/null || echo 0)
+        # Second scan with different options (--no-report), same project/version,
+        # same folder: stage 1's fresh SBOM must survive, and the first scan's
+        # now-stale notice/security/risk-report artifacts must be cleaned.
+        ( cd "$rescan_dir" && SBOM_SCANNER_IMAGE="$SCANNER_IMG" bash "$SCAN" \
+            --project rescan --version 1.0 --generate-only --no-report ) > "$rescan_dir/_scan2.log" 2>&1
+        second_n=$(jq '[.components[]?]|length' "$rescan_dir/rescan_1.0_bom.json" 2>/dev/null || echo 0)
+        if [ -f "$rescan_dir/rescan_1.0_bom.json" ] && [ "${first_n:-0}" -gt 0 ] && [ "${second_n:-0}" -eq "${first_n:-0}" ]; then
+            pass "re-scanning the same project/version: stage 1's own SBOM survives stage 2's cleanup ($second_n components)"
+        else
+            fail "re-scan lost the SBOM (stage 2 cleanup deleted stage 1's own output)" \
+                "first=$first_n second=$second_n; $(tail -5 "$rescan_dir/_scan2.log" 2>/dev/null)"
+            show_log_if_verbose "$rescan_dir"
+        fi
+        if [ -f "$rescan_dir/rescan_1.0_NOTICE.txt" ] || [ -f "$rescan_dir/rescan_1.0_security.json" ]; then
+            fail "re-scan with --no-report left the previous run's notice/security artifacts behind"
+        else
+            pass "re-scan with different options cleans the previous run's now-stale artifacts"
+        fi
+        rm -rf "$rescan_dir"
     else
         skip "nodejs example not found"
     fi

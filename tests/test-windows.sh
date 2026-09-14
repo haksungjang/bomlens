@@ -389,6 +389,13 @@ scan_in "$d" --project Done --version 2.0.0 --generate-only
   && pass "source scan completes and writes <proj>_<ver>/<proj>_<ver>_bom.json" \
   || { fail "source scan completes and writes SBOM" "rc=$RC"; show; }
 
+# Stage 2 (POSTPROCESS) must be told stage 1's output filename, so
+# entrypoint.sh's stale-artifact cleanup can tell this run's own fresh SBOM
+# apart from a leftover of an earlier run at the same --project/--version.
+in_log "-e BOMLENS_RUN_INPUT=Done_2.0.0_bom.json" \
+  && pass "POSTPROCESS is told this run's own SBOM filename (BOMLENS_RUN_INPUT)" \
+  || { fail "BOMLENS_RUN_INPUT missing from the POSTPROCESS docker run"; show; }
+
 # Fail-closed on an empty host mount, in the DEFAULT (non --generate-only) path.
 # Regression: the "did the artifact reach the host?" guard used to run ONLY under
 # --generate-only, so a full scan whose /host-output mount silently landed nothing

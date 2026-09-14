@@ -3546,6 +3546,139 @@ fi
 # apply a 1000-byte cap (instead of the real 100 MB default) to any later
 # entrypoint.sh fragment this file goes on to source.
 unset OUTPUT_FILE SBOM_SIZE_CAP_BYTES
+
+echo "== stale-artifact cleanup: a re-scan of the same project/version does not mix in a previous run's leftovers =="
+# Extracted verbatim from docker/entrypoint.sh (between its literal anchor
+# comments), so this test tracks the shipped logic rather than a hand-copied
+# duplicate that could silently drift from it.
+sed -n '/^# Stale-artifact cleanup\./,/^# Report language for the human-facing conformance/p' "$ROOT_DIR/docker/entrypoint.sh" \
+    | sed '$d' > "$WORK/cleanup-snippet.sh"
+CLEANUP_SNIPPET_LINES="$(wc -l < "$WORK/cleanup-snippet.sh" | tr -d '[:space:]')"
+if [ ! -s "$WORK/cleanup-snippet.sh" ]; then
+    fail "could not extract the stale-artifact cleanup snippet from entrypoint.sh (did its anchor comments move?)"
+elif [ -z "$CLEANUP_SNIPPET_LINES" ] || [ "$CLEANUP_SNIPPET_LINES" -gt 80 ]; then
+    fail "cleanup snippet is $CLEANUP_SNIPPET_LINES lines (expected well under 80) -- the end anchor likely did not match, and sourcing it would run the rest of entrypoint.sh" \
+        "did the REPORT_LANG comment in docker/entrypoint.sh change?"
+elif grep -q '^[[:space:]]*exit\b' "$WORK/cleanup-snippet.sh"; then
+    fail "cleanup snippet contains an exit statement -- refusing to source it into this test process" \
+        "$(cat "$WORK/cleanup-snippet.sh")"
+else
+    CLEANDIR="$WORK/cleanup-dir"; mkdir -p "$CLEANDIR"
+    # A previous run's opt-in artifacts (vendored ID, SPDX export) and the
+    # 2-B result sidecar -- exactly the kind of leftover an earlier run with
+    # different options would leave behind (sync_artifacts only ever copies).
+    for f in _bom.json _NOTICE.txt _security.json _conformance.json \
+             _conformance.result _vendored.cdx.json _bom.spdx.json; do
+        echo "stale" > "$CLEANDIR/proj_1.0${f}"
+    done
+    # A file the user placed in the folder themselves -- must survive.
+    echo "keep me" > "$CLEANDIR/README.md"
+    echo "keep me too" > "$CLEANDIR/proj_1.0_notes.txt"
+    # A DIFFERENT version's artifact sharing this run's prefix as a string
+    # prefix ("proj_1.0" is a string-prefix of "proj_1.0.1") -- must survive.
+    # The cleanup matches "${OUT_PREFIX}${suffix}" as one exact filename, never
+    # a "${OUT_PREFIX}*" glob, so this is a different exact name and is never
+    # a candidate.
+    echo "different version, keep me" > "$CLEANDIR/proj_1.0.1_bom.json"
+
+    # shellcheck disable=SC2034  # read by the sourced snippet
+    HOST_OUTPUT_DIR="$CLEANDIR"
+    # shellcheck disable=SC2034  # read by the sourced snippet
+    OUT_PREFIX="proj_1.0"
+    CLEANUP_LOG="$(. "$WORK/cleanup-snippet.sh" 2>&1)"
+
+    remaining="$(ls "$CLEANDIR")"
+    ok=1
+    for f in _bom.json _NOTICE.txt _security.json _conformance.json \
+             _conformance.result _vendored.cdx.json _bom.spdx.json; do
+        printf '%s\n' "$remaining" | grep -qFx "proj_1.0${f}" && ok=0
+    done
+    if [ "$ok" = 1 ]; then
+        pass "every known-suffix artifact from the previous run is removed"
+    else
+        fail "a known-suffix leftover survived the cleanup" "$remaining"
+    fi
+    if printf '%s\n' "$remaining" | grep -qFx "README.md" \
+        && printf '%s\n' "$remaining" | grep -qFx "proj_1.0_notes.txt"; then
+        pass "a file the user placed in the folder (no known suffix) is left alone"
+    else
+        fail "cleanup removed a file it should not have" "$remaining"
+    fi
+    if printf '%s\n' "$remaining" | grep -qFx "proj_1.0.1_bom.json"; then
+        pass "a different version's artifact sharing this run's prefix as a string prefix is left alone"
+    else
+        fail "cleanup matched by string prefix instead of an exact filename" "$remaining"
+    fi
+    if printf '%s' "$CLEANUP_LOG" | grep -q '\[INFO\] cleaned 7 stale artifact(s)'; then
+        pass "cleanup logs what it removed"
+    else
+        fail "cleanup did not log what it removed" "$CLEANUP_LOG"
+    fi
+
+    # A run with nothing stale in the folder (first scan of a project/version,
+    # or a folder --timestamp already made unique) must stay silent -- the
+    # log line is for something that actually happened, not routine noise.
+    CLEANDIR2="$WORK/cleanup-dir-empty"; mkdir -p "$CLEANDIR2"
+    # shellcheck disable=SC2034  # read by the sourced snippet
+    HOST_OUTPUT_DIR="$CLEANDIR2"
+    # shellcheck disable=SC2034  # read by the sourced snippet
+    OUT_PREFIX="fresh_1.0"
+    CLEANUP_LOG2="$(. "$WORK/cleanup-snippet.sh" 2>&1)"
+    if [ -z "$CLEANUP_LOG2" ]; then
+        pass "a clean folder (nothing stale) produces no cleanup log line"
+    else
+        fail "a clean folder logged a cleanup that did not happen" "$CLEANUP_LOG2"
+    fi
+
+    # BOMLENS_RUN_INPUT (scan-sbom.sh's stage 1 -> stage 2 handoff, F-92
+    # follow-up): stage 1 already wrote this run's own _bom.json before this
+    # container started, so it must survive even though it matches a known
+    # suffix -- unlike an actually-stale leftover of a different suffix,
+    # which is still removed in the same pass.
+    CLEANDIR3="$WORK/cleanup-dir-runinput"; mkdir -p "$CLEANDIR3"
+    echo "this run's own stage-1 output" > "$CLEANDIR3/proj_1.0_bom.json"
+    echo "stale" > "$CLEANDIR3/proj_1.0_NOTICE.txt"
+    # shellcheck disable=SC2034  # read by the sourced snippet
+    HOST_OUTPUT_DIR="$CLEANDIR3"
+    # shellcheck disable=SC2034  # read by the sourced snippet
+    OUT_PREFIX="proj_1.0"
+    # shellcheck disable=SC2034  # read by the sourced snippet
+    BOMLENS_RUN_INPUT="proj_1.0_bom.json"
+    CLEANUP_LOG3="$(. "$WORK/cleanup-snippet.sh" 2>&1)"
+    remaining3="$(ls "$CLEANDIR3")"
+    if printf '%s\n' "$remaining3" | grep -qFx "proj_1.0_bom.json" \
+        && ! printf '%s\n' "$remaining3" | grep -qFx "proj_1.0_NOTICE.txt"; then
+        pass "BOMLENS_RUN_INPUT protects this run's own stage-1 SBOM while other stale suffixes are still cleaned"
+    else
+        fail "BOMLENS_RUN_INPUT did not protect the named file correctly" "$remaining3"
+    fi
+    if printf '%s' "$CLEANUP_LOG3" | grep -q '\[INFO\] cleaned 1 stale artifact(s)'; then
+        pass "the protected file is not counted in the cleanup log"
+    else
+        fail "cleanup log did not reflect the one non-protected file removed" "$CLEANUP_LOG3"
+    fi
+
+    # A malformed BOMLENS_RUN_INPUT (path separator, attempting to name
+    # something outside this exact-filename check) must be ignored, not
+    # trusted -- it degrades to protecting nothing, never to a path escape.
+    CLEANDIR4="$WORK/cleanup-dir-runinput-bad"; mkdir -p "$CLEANDIR4"
+    echo "stale" > "$CLEANDIR4/proj_1.0_bom.json"
+    # shellcheck disable=SC2034  # read by the sourced snippet
+    HOST_OUTPUT_DIR="$CLEANDIR4"
+    # shellcheck disable=SC2034  # read by the sourced snippet
+    OUT_PREFIX="proj_1.0"
+    # shellcheck disable=SC2034  # read by the sourced snippet
+    BOMLENS_RUN_INPUT="../proj_1.0_bom.json"
+    . "$WORK/cleanup-snippet.sh" >/dev/null 2>&1
+    if [ -f "$CLEANDIR4/proj_1.0_bom.json" ]; then
+        fail "a malformed BOMLENS_RUN_INPUT still protected a file from cleanup"
+    else
+        pass "a malformed BOMLENS_RUN_INPUT (path separator) is ignored, not honored"
+    fi
+    unset BOMLENS_RUN_INPUT
+fi
+unset HOST_OUTPUT_DIR OUT_PREFIX
+
 echo "== node-scope: production filter drops the devDependencies tree =="
 # Guards docker/lib/build-prep.sh's node production-scope filter: cdxgen pulls a
 # deployed app's devDependencies (jest/eslint/@babel/...) into the SBOM, and the
