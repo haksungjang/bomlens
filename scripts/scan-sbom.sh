@@ -494,7 +494,14 @@ if [ "$UI_MODE" = "true" ]; then
     docker_check
     # The web UI owns per-run subfolders itself (server.py creates them under the
     # mounted base). Honor --output-dir as that base; default to the current dir.
-    UI_BASE="${OUTPUT_BASE:-$(pwd)}"
+    # Resolved with pwd -P, the same as the CLI's own guard-state key (below):
+    # a "current-dir" scan of a symlinked path must hash to the same key a CLI
+    # scan of that path would, so a scan interrupted from one side is still
+    # found and cleaned up by a rescan from the other. mkdir -p first: an
+    # --output-dir that does not exist yet previously relied on docker's own
+    # bind-mount auto-create, which cd here would otherwise break.
+    mkdir -p "${OUTPUT_BASE:-$(pwd)}" || { echo "[ERROR] cannot create output dir: ${OUTPUT_BASE:-$(pwd)}"; exit 1; }
+    UI_BASE="$(cd "${OUTPUT_BASE:-$(pwd)}" && pwd -P)"
     # Extra --mount dirs become read-only rootfs scan targets under
     # /scan-targets/<name>. SBOM_UI_SCAN_ROOTS carries "<container>|<host>"
     # lines so server.py can allow-list them and the UI can label them by
@@ -539,10 +546,18 @@ if [ "$UI_MODE" = "true" ]; then
     # must reach server.py inside the UI container (it reads the env var
     # itself; a host-side default here would never be seen there).
     CANCEL_ENV_FLAGS=(-e BOMLENS_CANCEL_GRACE)
+    # /bomlens-state (5-P PR 2): the same host-persistent guard-state directory
+    # the CLI path uses, so a directory scan launched through --ui can also
+    # recover a source tree a prior, too-hard-killed scan left dirty. entrypoint.sh
+    # inside this container reads SOURCE_ROOT_HOST (set below) and carries this
+    # mount to the cdxgen sibling itself via --volumes-from.
+    UI_GUARD_FLAGS=()
+    mkdir -p "$GUARD_STATE_DIR" 2>/dev/null && UI_GUARD_FLAGS=(-v "$(hostpath "$GUARD_STATE_DIR")":/bomlens-state)
     ensure_image_fresh "$POSTPROCESS_IMAGE"
     exec "${DOCKER_ENV[@]}" docker run --rm "${TTY_FLAGS[@]}" -p "${UI_BIND_ADDRESS}:${UI_PORT}:8080" \
         -v "$(hostpath "$UI_BASE")":/src -v "$(hostpath "$UI_BASE")":/host-output \
         "${MOUNT_FLAGS[@]}" "${HF_FLAGS[@]}" "${GO_ENV_FLAGS[@]}" "${PREP_ENV_FLAGS[@]}" "${CANCEL_ENV_FLAGS[@]}" \
+        "${UI_GUARD_FLAGS[@]}" \
         -v /var/run/docker.sock:/var/run/docker.sock \
         -e MODE=UI -e UI_PORT=8080 -e SBOM_UI_HOST_DIR="$(hostpath "$UI_BASE")" \
         -e SBOM_UI_SCAN_ROOTS="$SCAN_ROOTS" -e EXTERNAL_LOOKUP="$EXTERNAL_LOOKUP" \

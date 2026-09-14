@@ -105,6 +105,86 @@ stop_sibling() {
     docker stop -t "$BOMLENS_CANCEL_GRACE" "$SIBLING_CID" >/dev/null 2>&1 || true
 }
 
+# Host-persistent guard state (5-P PR 2): mirrors scripts/scan-sbom.sh's
+# setup_guard_state for the web UI's SOURCE scans. Whoever launched this
+# container (scan-sbom.sh --ui, the desktop app) mounts a host directory at
+# GUARD_STATE_DIR; --volumes-from "$self" below already carries that mount
+# into the cdxgen sibling, so only the env var needs adding there.
+#
+# Scope: only a stable, repeatedly-scanned host path. SOURCE_ROOT_HOST is
+# empty for a ZIP upload or git clone (a fresh temp dir every scan, so there
+# is no "next scan of the same tree" to hand a stale record to) — the same
+# scope scan-sbom.sh's CLI path uses.
+guard_hash() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum 2>/dev/null | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 2>/dev/null | awk '{print $1}'
+    else
+        return 1
+    fi
+}
+#   $1 = this container's id (for --volumes-from, sees the same mounts the
+#        real sibling would)
+#   $2 = build-prep.sh's own content (already read once by the caller)
+#   $3 = scanned tree, this container's path
+#   $4 = the name the caller is about to give the real sibling container
+#   $5 = the cdxgen image the caller is about to run (recorded for cleanup)
+GUARD_STATE_DIR="/bomlens-state"
+GUARD_ID=""
+setup_guard_state() {
+    local self="$1" prep="$2" src="$3" next_owner="$4" next_image="$5"
+    [ -n "${SOURCE_ROOT_HOST:-}" ] || return 0
+    [ -d "$GUARD_STATE_DIR" ] || return 0
+    local key owner_file owner ps_out ps_rc recorded_path recorded_image cleanup_image self_image
+    key=$(printf '%s' "$SOURCE_ROOT_HOST" | guard_hash) || return 0
+    [ -n "$key" ] || return 0
+    owner_file="$GUARD_STATE_DIR/$key/owner"
+    if [ -f "$owner_file" ]; then
+        owner=$(cat "$owner_file" 2>/dev/null)
+        recorded_path=$(cat "$GUARD_STATE_DIR/$key/path" 2>/dev/null)
+        if [ -z "$owner" ] || [ "$recorded_path" != "$SOURCE_ROOT_HOST" ] || ! command -v docker >/dev/null 2>&1; then
+            echo "[WARN] found a leftover-cleanup record for this folder that does not match it (or cannot be confirmed); leaving it in place."
+            return 0
+        fi
+        ps_out=$(docker ps --filter "name=^${owner}\$" --format '{{.Names}}' 2>/dev/null)
+        ps_rc=$?
+        if [ "$ps_rc" -ne 0 ]; then
+            echo "[WARN] could not confirm whether a previous scan of this folder ($owner) is still running; leaving its leftovers in place this time."
+            return 0
+        fi
+        if [ -n "$ps_out" ]; then
+            echo "[WARN] a previous scan of this folder ($owner) appears to still be running; not touching its leftovers."
+            return 0
+        fi
+        recorded_image=$(cat "$GUARD_STATE_DIR/$key/image" 2>/dev/null)
+        cleanup_image=""
+        if [ -n "$recorded_image" ] && docker image inspect "$recorded_image" >/dev/null 2>&1; then
+            cleanup_image="$recorded_image"
+        else
+            self_image=$(docker inspect -f '{{.Config.Image}}' "$self" 2>/dev/null)
+            if [ -n "$self_image" ] && docker image inspect "$self_image" >/dev/null 2>&1; then
+                cleanup_image="$self_image"
+            fi
+        fi
+        if [ -z "$cleanup_image" ]; then
+            echo "[WARN] no locally available image to clean up a previous interrupted scan's leftovers with; leaving them in place."
+            return 0
+        fi
+        echo "[INFO] cleaning up build artifacts a previous, interrupted scan of this folder left behind..."
+        docker run --rm -u 0:0 \
+            --volumes-from "$self" \
+            -e BOMLENS_GUARD_RESTORE_ONLY=1 -e "BOMLENS_GUARD_ID=$key" \
+            --entrypoint sh "$cleanup_image" \
+            -c "$prep" _ "$src" >/dev/null 2>&1 || true
+    fi
+    mkdir -p "$GUARD_STATE_DIR/$key" 2>/dev/null || return 0
+    printf '%s\n' "$next_owner" > "$GUARD_STATE_DIR/$key/owner" 2>/dev/null || return 0
+    printf '%s\n' "$SOURCE_ROOT_HOST" > "$GUARD_STATE_DIR/$key/path" 2>/dev/null || return 0
+    printf '%s\n' "$next_image" > "$GUARD_STATE_DIR/$key/image" 2>/dev/null || return 0
+    GUARD_ID="$key"
+}
+
 # generate_sbom_cdxgen: run a cdxgen language image as a SIBLING container (via the
 # mounted host Docker socket) so a web-UI source scan resolves transitive deps,
 # matching the CLI. The sibling reaches the scanned tree by inheriting THIS container's
@@ -181,7 +261,12 @@ generate_sbom_cdxgen() {
     # leaving it to run to completion unsupervised.
     local logf cidf rcf; logf=$(mktemp); cidf=$(mktemp); rcf=$(mktemp); rm -f "$cidf"
     local prep_env; read -ra prep_env <<< "$(build_prep_env_args)"
+    local sibling_name="bomlens-sib-$$"
+    setup_guard_state "$self" "$prep" "$src" "$sibling_name" "$img"
+    local guard_env=()
+    [ -n "$GUARD_ID" ] && guard_env=(-e "BOMLENS_GUARD_ID=$GUARD_ID")
     ( docker run -u 0:0 \
+        --name "$sibling_name" \
         --cidfile "$cidf" \
         --volumes-from "$self" \
         -e HOME=/tmp/sbomhome \
@@ -191,6 +276,7 @@ generate_sbom_cdxgen() {
         -e PROJECT_VERSION="$PROJECT_VERSION" \
         -e HOST_GOTOOLCHAIN="${GOTOOLCHAIN:-}" -e GOPROXY -e GOSUMDB \
         "${prep_env[@]}" \
+        "${guard_env[@]}" \
         --entrypoint sh "$img" \
         -c "$prep" _ "$src" "$bom_path" "$CDX_SPEC_VERSION"; echo $? > "$rcf" ) 2>&1 | tee "$logf" &
     local pipe_pid=$!
