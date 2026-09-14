@@ -1954,6 +1954,51 @@ else
 fi
 rm -f "$OUT"/pipefail_1.0_* "$OUT"/pipeok_1.0_*
 
+echo "== pipeline-step-failed: dedup, per-id cap, and list cap (untrusted input) =="
+# On an --analyze run this property comes from a supplier's document, so it is
+# untrusted: mark_pipeline_warning can record the same step twice (a
+# re-analyzed document), a step id could be arbitrarily long, and there is no
+# limit on how many distinct ids a document could carry. sbom_summary must
+# dedupe (order preserved), cap one id's length, and cap the list length while
+# counting the rest.
+if SBOM_OUTPUT_DIR="$OUT" python3 - "$ROOT_DIR" <<'PY'
+import sys, os, json
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+
+out_dir = os.environ["SBOM_OUTPUT_DIR"]
+long_value = "x" * 300
+props = (
+    [{"name": "bomlens:pipeline-step-failed", "value": "enrich-cpe"}] * 2
+    + [{"name": "bomlens:pipeline-step-failed", "value": long_value}]
+    + [{"name": "bomlens:pipeline-step-failed", "value": f"step-{i}"} for i in range(25)]
+)
+with open(os.path.join(out_dir, "pipebig_1.0_bom.json"), "w") as f:
+    json.dump(
+        {
+            "bomFormat": "CycloneDX",
+            "metadata": {"component": {"name": "pipebig", "version": "1.0"}, "properties": props},
+            "components": [{"name": "flask", "version": "2.0", "type": "library", "purl": "pkg:pypi/flask@2.0"}],
+        },
+        f,
+    )
+
+summary = server.sbom_summary("pipebig_1.0")
+steps = summary["pipelineStepsFailed"]
+# 27 distinct values in (enrich-cpe once deduped + the long one + 25 step-N),
+# capped to 20; the other 7 are counted, not shown.
+assert steps.count("enrich-cpe") == 1, steps
+assert len(steps) == 20, steps
+assert summary["pipelineStepsFailedMore"] == 7, summary["pipelineStepsFailedMore"]
+assert len(steps[1]) == 100, len(steps[1])
+PY
+then
+    pass "pipelineStepsFailed dedupes, caps id length at 100 and the list at 20"
+else
+    fail "pipelineStepsFailed untrusted-input handling is wrong (see assertion above)"
+fi
+rm -f "$OUT"/pipebig_1.0_*
+
 echo "== sbom-oversized property (sbom_summary) =="
 # When entrypoint.sh's size-cap check stamps bomlens:sbom-oversized, the
 # summary must surface it too; absent -> None.

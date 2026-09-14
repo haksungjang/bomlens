@@ -148,6 +148,7 @@
     "scanWarningsTitle": "The scan reported these while it ran",
     "pipelineFailedTitle": "Some data may be incomplete",
     "pipelineFailedHint": "Re-scan to retry, or check the run log for details.",
+    "pipelineFailedMore": "{{count}} more",
     "sbomDegradedTitle": "Direct dependencies only — deep resolution didn't run",
     "sbomDegradedBody": "The transitive-dependency analyzer (cdxgen) couldn't run, so this SBOM lists only direct dependencies. Make sure Docker is available and re-scan for the full dependency graph.",
     "sbomDegradedDisk": "The transitive-dependency analyzer (cdxgen) ran out of Docker disk space, so this SBOM lists only direct dependencies. Free space (e.g. \"docker system prune\") and re-scan for the full dependency graph.",

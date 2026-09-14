@@ -148,6 +148,7 @@
     "scanWarningsTitle": "검사 중 알린 사항",
     "pipelineFailedTitle": "일부 데이터가 없을 수 있습니다",
     "pipelineFailedHint": "다시 스캔하거나 실행 로그에서 원인을 확인하세요.",
+    "pipelineFailedMore": "외 {{count}}개",
     "sbomDegradedTitle": "직접 의존성만 — 전이 의존성 분석이 실행되지 않음",
     "sbomDegradedBody": "전이 의존성 분석기(cdxgen)가 실행되지 못해, 이 SBOM에는 직접 의존성만 담겼습니다. Docker가 사용 가능한지 확인한 뒤 다시 스캔하면 전체 의존성 그래프를 얻습니다.",
     "sbomDegradedDisk": "전이 의존성 분석기(cdxgen)가 Docker 디스크 공간 부족으로 실행되지 못해, 이 SBOM에는 직접 의존성만 담겼습니다. 공간을 확보(예: \"docker system prune\")한 뒤 다시 스캔하면 전체 의존성 그래프를 얻습니다.",

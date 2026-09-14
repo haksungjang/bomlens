@@ -631,6 +631,11 @@ export function Overview({
               );
             })}
           </ul>
+          {(result.sbom?.pipelineStepsFailedMore ?? 0) > 0 && (
+            <p className="mt-1 text-xs">
+              {t("result.pipelineFailedMore", { count: result.sbom?.pipelineStepsFailedMore })}
+            </p>
+          )}
           <p className="mt-1 text-xs">{t("result.pipelineFailedHint")}</p>
         </div>
       )}

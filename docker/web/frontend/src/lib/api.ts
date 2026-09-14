@@ -138,8 +138,12 @@ export interface SbomSummary {
    *  valid SBOM was still produced, but that step's output may be missing or
    *  incomplete. Stamped on the document itself, so it survives a re-open, a
    *  re-`--analyze`, or the SBOM being shared without its scan log. Empty when
-   *  nothing failed. */
+   *  nothing failed. This property comes from the SBOM itself, untrusted
+   *  supplier input on an --analyze run, so server.py dedupes it, caps each
+   *  id at 100 chars and the list at 20; the rest are counted below. */
   pipelineStepsFailed?: string[];
+  /** How many more failed steps exist past the 20 in pipelineStepsFailed. */
+  pipelineStepsFailedMore?: number;
   /** CycloneDX root component type (application/firmware/container/…) — drives
    *  the honest scan-kind subtitle, available on re-open (unlike the MODE). */
   componentType?: string | null;
