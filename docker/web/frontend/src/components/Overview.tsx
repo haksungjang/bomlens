@@ -94,6 +94,8 @@ function sbomDegradedBodyKey(reason: string): string {
       return "result.sbomDegradedOom";
     case "network":
       return "result.sbomDegradedNetwork";
+    case "cdxgen-crash":
+      return "result.sbomDegradedCrash";
     default:
       return "result.sbomDegradedBody";
   }
