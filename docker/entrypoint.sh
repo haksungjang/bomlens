@@ -1048,6 +1048,22 @@ if [ "${ENRICH_OS_CONTEXT:-true}" != "false" ] && [ "$AI_MODEL_SCAN" != "true" ]
     run_optional_step enrich-os-context python3 "$LIBDIR/enrich-os-context.py" "$OUTPUT_FILE"
 fi
 
+# Distro supplier enrichment: an rpm/deb/apk component carries `publisher` but
+# never `supplier` (verified: deb/apk hold an individual maintainer there,
+# different per package; rpm already holds the distro project, but that is a
+# different CycloneDX field with a different meaning, so it does not excuse
+# leaving `supplier` empty). enrich-distro-supplier.py reads the
+# operating-system component enrich-os-context.py just synthesized (or left
+# in place) and fills `supplier` with that distro's project name, for the
+# distros this file has a confirmed name for. Runs right after OS-context
+# enrichment, since it depends on that component. Skipped for AI SBOMs and
+# with ENRICH_DISTRO_SUPPLIER=false; a no-op when there is no single
+# unambiguous operating-system component, or its distro has no confirmed
+# supplier name yet. Best-effort, never aborts.
+if [ "${ENRICH_DISTRO_SUPPLIER:-true}" != "false" ] && [ "$AI_MODEL_SCAN" != "true" ]; then
+    run_optional_step enrich-distro-supplier python3 "$LIBDIR/enrich-distro-supplier.py" "$OUTPUT_FILE"
+fi
+
 # Maven CPE enrichment: maven libraries carry a PURL but no CPE, so a CPE-aware
 # engine cannot reach their NVD-only CVEs (older Apache libs like pdfbox 1.8.7 /
 # tomcat 7.0.50, matched in NVD by cpe:2.3:a:apache:pdfbox, absent from the GitHub

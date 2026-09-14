@@ -1521,6 +1521,117 @@ for _p in bomlens:os-context-ambiguous bomlens:os-context-unmatched; do
   _v=$(osc_prop "$_p" "$WORK/osc-centos.json")
   [ "$_v" = "NONE" ] && pass "single-distro SBOM carries no $_p" || fail "$_p present on a single-distro SBOM: '$_v'"
 done
+echo "== F-1b2: distro supplier enrichment (fill supplier from the os-context distro) =="
+DSUP="$LIB/enrich-distro-supplier.py"
+# (a) debian: os-context already resolved to a single, unambiguous distro.
+# Only the deb component gets a supplier; the maven component next to it does
+# not, and an rpm component from a DIFFERENT distro's own reactor is not
+# touched either (this fixture never lets them mix into one ambiguous SBOM --
+# that path is exercised separately in (d)).
+cat > "$WORK/dsup-debian.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6",
+ "components":[
+   {"type":"library","name":"bash","version":"5.2.15-2","purl":"pkg:deb/debian/bash@5.2.15-2?distro=debian-12"},
+   {"type":"library","name":"some-lib","version":"1.0","purl":"pkg:maven/org.example/some-lib@1.0"},
+   {"type":"operating-system","name":"debian","version":"12","bom-ref":"bomlens-os-context"}
+ ]}
+JSON
+python3 "$DSUP" "$WORK/dsup-debian.json" >/dev/null 2>&1
+dsup_get() { jq -r --arg n "$1" '[.components[]|select(.name==$n)][0].supplier.name // "NONE"' "$WORK/dsup-debian.json"; }
+[ "$(dsup_get bash)" = "Debian" ] && pass "deb component gets supplier=Debian from the os-context distro" \
+    || fail "bash supplier='$(dsup_get bash)'"
+[ "$(dsup_get some-lib)" = "NONE" ] && pass "a non-distro (maven) component next to it is not touched" \
+    || fail "some-lib supplier='$(dsup_get some-lib)', expected untouched"
+
+# (b) rocky rpm: publisher already carries the distro name (a real scan's own
+# syft output does this), but that must NOT excuse leaving supplier empty --
+# the two fields mean different things and supplier is still unset.
+cat > "$WORK/dsup-rocky.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6",
+ "components":[
+   {"type":"library","name":"alternatives","version":"1.24-1.el9",
+    "purl":"pkg:rpm/rocky/alternatives@1.24-1.el9?distro=rocky-9.3",
+    "publisher":"Rocky Enterprise Software Foundation"},
+   {"type":"operating-system","name":"rocky","version":"9","bom-ref":"bomlens-os-context"}
+ ]}
+JSON
+python3 "$DSUP" "$WORK/dsup-rocky.json" >/dev/null 2>&1
+rocky_sup=$(jq -r '[.components[]|select(.name=="alternatives")][0].supplier.name // "NONE"' "$WORK/dsup-rocky.json")
+[ "$rocky_sup" = "Rocky Enterprise Software Foundation" ] \
+    && pass "rpm component still gets supplier filled despite publisher already holding the distro name" \
+    || fail "rocky rpm supplier='$rocky_sup', expected filled (no rpm exception)"
+
+# (c) apk / alpine, and: a component that already carries a supplier is left
+# exactly as it was, not replaced.
+cat > "$WORK/dsup-alpine.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6",
+ "components":[
+   {"type":"library","name":"apk-tools","version":"2.14.0-r5",
+    "purl":"pkg:apk/alpine/apk-tools@2.14.0-r5?distro=alpine-3.19"},
+   {"type":"library","name":"already-set","version":"1.0",
+    "purl":"pkg:apk/alpine/already-set@1.0?distro=alpine-3.19",
+    "supplier":{"name":"Someone Else"}},
+   {"type":"operating-system","name":"alpine","version":"3.19","bom-ref":"bomlens-os-context"}
+ ]}
+JSON
+python3 "$DSUP" "$WORK/dsup-alpine.json" >/dev/null 2>&1
+alpine_sup=$(jq -r '[.components[]|select(.name=="apk-tools")][0].supplier.name // "NONE"' "$WORK/dsup-alpine.json")
+[ "$alpine_sup" = "Alpine" ] && pass "apk component gets supplier=Alpine" || fail "apk-tools supplier='$alpine_sup'"
+kept_sup=$(jq -r '[.components[]|select(.name=="already-set")][0].supplier.name // "NONE"' "$WORK/dsup-alpine.json")
+[ "$kept_sup" = "Someone Else" ] && pass "an existing non-empty supplier is not replaced" \
+    || fail "already-set supplier='$kept_sup', expected 'Someone Else' preserved"
+# Idempotent: a second run changes nothing further.
+cp "$WORK/dsup-alpine.json" "$WORK/dsup-alpine2.json"
+python3 "$DSUP" "$WORK/dsup-alpine2.json" >/dev/null 2>&1
+if diff -q "$WORK/dsup-alpine.json" "$WORK/dsup-alpine2.json" >/dev/null 2>&1; then
+    pass "enrich-distro-supplier is idempotent"
+else
+    fail "a second run changed an SBOM where every target already has a supplier"
+fi
+
+# (d) ambiguous distro (os-context voted a majority over a minority) -> stand
+# down entirely, since the single OS component name is not trustworthy for
+# every package in a mixed SBOM.
+cat > "$WORK/dsup-ambiguous.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6",
+ "metadata":{"properties":[{"name":"bomlens:os-context-ambiguous","value":"debian:12(5), alpine:3.19(2)"}]},
+ "components":[
+   {"type":"library","name":"bash","version":"5.2.15-2","purl":"pkg:deb/debian/bash@5.2.15-2?distro=debian-12"},
+   {"type":"operating-system","name":"debian","version":"12","bom-ref":"bomlens-os-context"}
+ ]}
+JSON
+python3 "$DSUP" "$WORK/dsup-ambiguous.json" >/dev/null 2>&1
+amb_sup=$(jq -r '[.components[]|select(.name=="bash")][0].supplier // "NONE"' "$WORK/dsup-ambiguous.json")
+[ "$amb_sup" = "NONE" ] && pass "an ambiguous (mixed-distro) SBOM is left untouched" \
+    || fail "ambiguous SBOM's bash got a supplier anyway: $amb_sup"
+
+# (e) no operating-system component at all (a source scan, or os-context-
+# unmatched) -> stand down.
+cat > "$WORK/dsup-no-os.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6",
+ "components":[
+   {"type":"library","name":"bash","version":"5.2.15-2","purl":"pkg:deb/debian/bash@5.2.15-2"}
+ ]}
+JSON
+python3 "$DSUP" "$WORK/dsup-no-os.json" >/dev/null 2>&1
+noos_sup=$(jq -r '[.components[]|select(.name=="bash")][0].supplier // "NONE"' "$WORK/dsup-no-os.json")
+[ "$noos_sup" = "NONE" ] && pass "no operating-system component -> left untouched" \
+    || fail "SBOM with no OS component got a supplier anyway: $noos_sup"
+
+# (f) a distro os-context resolves to (ubuntu, ...) but the table has no
+# confirmed supplier name for it -> stand down rather than guess.
+cat > "$WORK/dsup-ubuntu.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6",
+ "components":[
+   {"type":"library","name":"bash","version":"5.2.15-1ubuntu1","purl":"pkg:deb/ubuntu/bash@5.2.15-1ubuntu1?distro=ubuntu-24.04"},
+   {"type":"operating-system","name":"ubuntu","version":"24.04","bom-ref":"bomlens-os-context"}
+ ]}
+JSON
+python3 "$DSUP" "$WORK/dsup-ubuntu.json" >/dev/null 2>&1
+ubu_sup=$(jq -r '[.components[]|select(.name=="bash")][0].supplier // "NONE"' "$WORK/dsup-ubuntu.json")
+[ "$ubu_sup" = "NONE" ] && pass "a distro with no confirmed supplier name (ubuntu) is left untouched, not guessed" \
+    || fail "ubuntu SBOM's bash got a supplier anyway: $ubu_sup"
+
 echo "== F-1c: maven CPE enrichment — groupId-derived NVD cpe:2.3 =="
 MVNCPE="$LIB/enrich-maven-cpe.py"
 cat > "$WORK/mvn.json" <<'JSON'

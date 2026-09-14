@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Re-scanning with scan-sbom.sh, the web UI or the desktop app removes the previous run's artifacts from the output folder before writing new ones; other files in the folder are kept. A scanner image called directly with `docker run` is unaffected.
 - A source scan of a directory that comes back with 0 components now names a root-filesystem-shaped subfolder one or two levels below it, when there is one, instead of leaving the reader to guess why a plainly-named delivery folder produced an empty SBOM.
 - The Overview screen's notice about a direct-deps-only fallback now has dedicated wording for a scan tool crash (a dedicated reason, distinct from disk space, memory, network, or the tool being unavailable), naming neither the tool nor its raw error output.
+- An rpm, deb, or apk component now gets its `supplier` filled with the distro project's name (Debian, Alpine, or Rocky so far), read from the same distro context the scanner already infers for CVE matching. Left blank for a distro not yet confirmed, a mixed-distro SBOM, or a component that already carries one.
 
 ### Changed
 
