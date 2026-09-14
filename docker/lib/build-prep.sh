@@ -898,6 +898,258 @@ NFILTER_JS
     rm -f "$_nflt" "$NODE_PROD_SET"
 fi
 
+# npm workspace-member filter: the file-level exclusion above (the --exclude
+# globs built from NON_SHIPPED_DIRS) does not reach an npm workspace member
+# registered in package-lock.json, since cdxgen reads that file directly. A
+# member whose own directory sits under an excluded tree is dropped, along
+# with a dependency only that member reaches (any way at all -- dependencies,
+# devDependencies and optionalDependencies alike), unless a kept member
+# reaches it too. BOMLENS_INCLUDE_NON_SHIPPED=1 (the same switch the
+# file-level exclusion above uses) opts out.
+#
+# Reads package-lock.json's own "packages" map directly: a workspace member
+# is any key that is not the root ("") and does not contain "node_modules/"
+# -- the same distinction Cargo.lock draws between a path member (no
+# `source`) and a registry crate (`source` present), just expressed in
+# npm's own lockfile shape. Resolving one package's dependency name to the
+# entry it actually gets replays npm's own directory-nesting resolution
+# (walk up from the requiring package's own key, node_modules at a time,
+# same as Node's own runtime `require` resolution) rather than trusting a
+# declared semver range, and follows a workspace member's own `"link":
+# true` node_modules entry through to its real packages/... key. A name
+# that resolves nowhere is common and expected here (an optional or
+# platform-specific dependency simply not installed) and is just not
+# traversed further, unlike Cargo.lock, where every declared dependency
+# item is a byte someone else's tooling wrote and MUST resolve, so a miss
+# there means the parse itself is wrong.
+if [ "${rc:-1}" -eq 0 ] && [ -f package.json ] && [ -f package-lock.json ] \
+   && [ -n "$EXCLUDE_NON_SHIPPED" ] \
+   && [ -f "$OUT" ] && command -v node >/dev/null 2>&1; then
+    _nwmf=$(mktemp).js
+    cat > "$_nwmf" <<'NWMF_JS'
+const fs = require('fs');
+const path = require('path');
+const [bomPath, lockPath, dirsStr] = process.argv.slice(2);
+let bom;
+try { bom = JSON.parse(fs.readFileSync(bomPath, 'utf8')); } catch (e) { process.exit(0); }
+if (!Array.isArray(bom.components) || !Array.isArray(bom.dependencies)) process.exit(0);
+
+const LOCK_MAX_BYTES = 16 * 1024 * 1024;
+const BUDGET_MS = 3000;
+let lockText;
+try {
+  const st = fs.statSync(lockPath);
+  if (st.size > LOCK_MAX_BYTES) process.exit(0);
+  lockText = fs.readFileSync(lockPath, 'utf8');
+} catch (e) { process.exit(0); }
+let lock;
+try { lock = JSON.parse(lockText); } catch (e) { process.exit(0); }
+if (lock.lockfileVersion !== 2 && lock.lockfileVersion !== 3) process.exit(0);
+const packages = lock.packages;
+if (!packages || typeof packages !== 'object') process.exit(0);
+
+const deadline = Date.now() + BUDGET_MS;
+let steps = 0;
+function overBudget() { return (++steps & 0xfff) === 0 && Date.now() > deadline; }
+
+const NON_SHIPPED_DIRS = new Set((dirsStr || '').split(/\s+/).filter(Boolean));
+const keys = Object.keys(packages);
+const isMember = k => k !== '' && !k.includes('node_modules/');
+const memberKeys = keys.filter(isMember);
+if (memberKeys.length === 0) process.exit(0);
+
+function underExcludedTree(key) {
+  return key.split('/').some(seg => NON_SHIPPED_DIRS.has(seg));
+}
+const excludedMembers = memberKeys.filter(underExcludedTree);
+if (excludedMembers.length === 0) process.exit(0);
+const keptMembers = memberKeys.filter(k => !underExcludedTree(k));
+if (keptMembers.length === 0) process.exit(0);
+
+// Resolve a link entry (a workspace member's own node_modules alias) through
+// to the real packages/... key it points at.
+function resolveLink(key) {
+  let cur = key;
+  let hops = 0;
+  while (packages[cur] && packages[cur].link && typeof packages[cur].resolved === 'string') {
+    if (++hops > 20) return null;   // a link cycle: cannot determine
+    cur = packages[cur].resolved;
+  }
+  return packages[cur] ? cur : null;
+}
+
+// Every "node_modules/<name>" suffix anywhere in the lockfile, regardless of
+// which directory it hangs off of -- whether a declared dependency has any
+// installation trace at all, not just one reachable via the walk-up below.
+const installedNames = new Set();
+for (const k of keys) {
+  const i = k.lastIndexOf('node_modules/');
+  if (i !== -1) installedNames.add(k.slice(i + 'node_modules/'.length));
+}
+
+function isOptionalDecl(entry, name) {
+  if (entry.optionalDependencies && Object.prototype.hasOwnProperty.call(entry.optionalDependencies, name)) return true;
+  const pm = entry.peerDependenciesMeta;
+  return !!(pm && pm[name] && pm[name].optional === true);
+}
+
+function depNamesOf(entry) {
+  return Object.keys(Object.assign({},
+    entry.dependencies, entry.devDependencies, entry.optionalDependencies, entry.peerDependencies));
+}
+
+function resolveDep(fromKey, name) {
+  let dir = fromKey;
+  for (;;) {
+    const candidate = dir === '' ? 'node_modules/' + name : dir + '/node_modules/' + name;
+    if (packages[candidate]) return resolveLink(candidate);
+    if (dir === '') return null;
+    const idx = dir.lastIndexOf('/');
+    dir = idx === -1 ? '' : dir.slice(0, idx);
+  }
+}
+
+// adj holds only the edges that resolved. unresolved holds, per key, the
+// declared names that did not -- except an optional (or optional peer) one
+// with no installation trace anywhere, which is simply not installed and
+// carries no risk either way. A name that failed to resolve is not dropped
+// silently: whichever BFS below actually walks through the key that
+// declared it decides what that means for the filter (see the comment on
+// the kept-side walk).
+const adj = new Map();
+const unresolved = new Map();
+for (const k of keys) {
+  if (overBudget()) process.exit(0);
+  const entry = packages[k];
+  if (!entry || (entry.link && typeof entry.resolved === 'string')) continue;   // links carry no deps of their own
+  const targets = [];
+  const missing = [];
+  for (const name of depNamesOf(entry)) {
+    const t = resolveDep(k, name);
+    if (t) { targets.push(t); continue; }
+    if (isOptionalDecl(entry, name) && !installedNames.has(name)) continue;   // never installed anywhere: not a gap
+    missing.push(name);
+  }
+  adj.set(k, targets);
+  if (missing.length) unresolved.set(k, missing);
+}
+
+function bfs(starts) {
+  const seen = new Set(starts);
+  const queue = starts.slice();
+  while (queue.length) {
+    if (overBudget()) return null;
+    const cur = queue.shift();
+    for (const next of (adj.get(cur) || [])) if (!seen.has(next)) { seen.add(next); queue.push(next); }
+  }
+  return seen;
+}
+const reachedFromKeep = bfs(keptMembers);
+const reachedFromExclude = bfs(excludedMembers);
+if (!reachedFromKeep || !reachedFromExclude) process.exit(0);
+
+// A name a kept-reachable package declares but this pass could not resolve
+// (something other than an optional dependency never installed at all) is
+// not a "this drops" signal and not a "this stays" signal either -- it is a
+// missing edge in OUR OWN view of a graph that plainly does reach further,
+// since something in the kept tree asked for it. Treat every component
+// under that name, wherever it sits, as reachable from a kept root: dropping
+// it would risk cutting a component a kept member genuinely uses. An
+// unresolved name met walking the excluded side is not given the same
+// treatment -- skipping it there only leaves something in the SBOM that
+// might not have needed to stay, the safe direction. Too many protected
+// names at once means this pass cannot really tell what is going on, so it
+// stands down entirely rather than lean on a growing exception list.
+const PROTECTED_NAME_LIMIT = 50;
+const protectedNames = new Set();
+for (const k of reachedFromKeep) {
+  for (const name of (unresolved.get(k) || [])) protectedNames.add(name);
+}
+if (protectedNames.size > PROTECTED_NAME_LIMIT) process.exit(0);
+
+const dropKeys = new Set(excludedMembers);
+for (const k of reachedFromExclude) if (!reachedFromKeep.has(k)) dropKeys.add(k);
+if (dropKeys.size === 0) process.exit(0);
+
+// purl matching carries name@version, not the installed path, so collapse to
+// name@version pairs the same conservative way the Cargo filter does: a pair
+// reached from a kept root under ANY of its installed locations counts as
+// kept.
+function nvOf(k) {
+  const entry = packages[k];
+  if (!entry) return null;
+  const name = entry.name || k.slice(k.lastIndexOf('node_modules/') + 'node_modules/'.length);
+  return entry.version ? name + '@' + entry.version : null;
+}
+const keptNV = new Set([...reachedFromKeep].map(nvOf).filter(Boolean));
+const dropNV = new Set();
+for (const k of dropKeys) {
+  const entry = packages[k];
+  if (entry && entry.name && protectedNames.has(entry.name)) continue;   // a kept root's own unresolved edge named this
+  const nv = nvOf(k);
+  if (nv && !keptNV.has(nv)) dropNV.add(nv);
+}
+if (dropNV.size === 0) process.exit(0);
+
+const refOf = c => c['bom-ref'] || c.purl;
+const nvOfPurl = purl => {
+  const m = /^pkg:npm\/([^@]+)@([^?]+)/.exec(purl || '');
+  return m ? decodeURIComponent(m[1]) + '@' + decodeURIComponent(m[2]) : null;
+};
+const droppedPurls = [];
+const keep = c => {
+  const nv = nvOfPurl(c.purl);
+  if (!nv || !dropNV.has(nv)) return true;
+  droppedPurls.push(c.purl);
+  return false;
+};
+const before = bom.components.length;
+bom.components = bom.components.filter(keep);
+if (droppedPurls.length === 0) process.exit(0);
+
+const mc = bom.metadata && bom.metadata.component;
+const keptRefs = new Set(bom.components.map(refOf));
+if (mc) keptRefs.add(mc['bom-ref'] || mc.purl);
+bom.dependencies = bom.dependencies
+  .filter(d => keptRefs.has(d.ref))
+  .map(d => Array.isArray(d.dependsOn) ? Object.assign({}, d, { dependsOn: d.dependsOn.filter(r => keptRefs.has(r)) }) : d);
+
+function mergeCapped(existing, additions, limit) {
+  let shown = [];
+  let priorTotal = 0;
+  if (existing) {
+    const m = /^(.*?)(?: \(\+(\d+) more\))?$/.exec(existing);
+    shown = m[1] ? m[1].split(', ').filter(Boolean) : [];
+    priorTotal = shown.length + (m[2] ? parseInt(m[2], 10) : 0);
+  }
+  const merged = shown.concat(additions);
+  const total = priorTotal + additions.length;
+  let val = merged.slice(0, limit).join(', ');
+  if (total > limit) val += ' (+' + (total - Math.min(limit, merged.length)) + ' more)';
+  return val;
+}
+const LIMIT = 50;
+bom.metadata = bom.metadata || {};
+const existingProps = bom.metadata.properties || [];
+const priorMembers = (existingProps.find(p => p.name === 'bomlens:excluded-members') || {}).value || null;
+const priorComponents = (existingProps.find(p => p.name === 'bomlens:excluded-components') || {}).value || null;
+const memberList = excludedMembers.map(k => {
+  const entry = packages[k];
+  const name = (entry && entry.name) || k.split('/').pop();
+  return 'npm:' + k + ' (' + name + ')';
+});
+const props = existingProps.filter(p => p.name !== 'bomlens:excluded-members' && p.name !== 'bomlens:excluded-components');
+props.push({ name: 'bomlens:excluded-members', value: mergeCapped(priorMembers, memberList, LIMIT) });
+props.push({ name: 'bomlens:excluded-components', value: mergeCapped(priorComponents, droppedPurls, LIMIT) });
+bom.metadata.properties = props;
+
+fs.writeFileSync(bomPath, JSON.stringify(bom, null, 2));
+process.stderr.write('[build-prep] npm: excluded ' + excludedMembers.length + ' workspace member(s), dropped ' + (before - bom.components.length) + ' of ' + before + ' components\n');
+NWMF_JS
+    node "$_nwmf" "$OUT" package-lock.json "$NON_SHIPPED_DIRS" || log "npm: workspace-member filter skipped (non-fatal)"
+    rm -f "$_nwmf"
+fi
+
 # Maven scope filter: cdxgen tags each maven component with its resolved scope
 # (compile/runtime -> required, test -> optional, provided/system -> excluded).
 # Drop the non-deployable ones, keeping non-maven components, the app root, and

@@ -6194,6 +6194,300 @@ else
     echo "  SKIP: node not installed; cargo workspace-member filter not exercised"
 fi
 
+echo "== npm workspace-member filter: package-lock.json reachability =="
+if command -v node >/dev/null 2>&1; then
+    sed -n "/<<'NWMF_JS'/,/^NWMF_JS\$/p" "$PREP" | sed '1d;$d' > "$WORK/nwmf.js"
+    NON_SHIPPED_DIRS=$(grep -m1 '^NON_SHIPPED_DIRS=' "$PREP" | sed 's/^NON_SHIPPED_DIRS="\(.*\)"$/\1/')
+
+    # A workspace with two kept members (core, and util which depends on
+    # core -- both survive) and an excluded member (demo, under examples/)
+    # that alone reaches an external dependency (chalk, and its own
+    # transitive dependency ansi-styles, both dropped). core's own
+    # node_modules/@ex/core entry is a workspace "link" -- resolving through
+    # it, not treating it as its own graph node, is exactly what real npm
+    # workspace installs produce and what this filter must follow.
+    cat > "$WORK/nwmf-lock.json" <<'JSON'
+{
+  "name": "root",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": { "name": "root", "workspaces": ["packages/*", "examples/*"] },
+    "packages/core": { "name": "@ex/core", "version": "1.0.0" },
+    "packages/util": {
+      "name": "@ex/util",
+      "version": "1.0.0",
+      "dependencies": { "@ex/core": "*" }
+    },
+    "examples/demo": {
+      "name": "@ex/demo",
+      "version": "1.0.0",
+      "dependencies": { "@ex/core": "*", "chalk": "^5.3.0" }
+    },
+    "node_modules/@ex/core": { "resolved": "packages/core", "link": true },
+    "node_modules/@ex/util": { "resolved": "packages/util", "link": true },
+    "node_modules/chalk": {
+      "name": "chalk",
+      "version": "5.3.0",
+      "resolved": "https://registry.npmjs.org/chalk/-/chalk-5.3.0.tgz",
+      "dependencies": { "ansi-styles": "^6.0.0" }
+    },
+    "node_modules/ansi-styles": {
+      "name": "ansi-styles",
+      "version": "6.2.1",
+      "resolved": "https://registry.npmjs.org/ansi-styles/-/ansi-styles-6.2.1.tgz"
+    }
+  }
+}
+JSON
+    cat > "$WORK/nwmf-bom-orig.json" <<'JSON'
+{
+  "metadata": { "component": { "bom-ref": "root", "purl": "pkg:npm/root@1.0.0" } },
+  "components": [
+    { "bom-ref": "core", "purl": "pkg:npm/%40ex%2Fcore@1.0.0", "type": "library" },
+    { "bom-ref": "util", "purl": "pkg:npm/%40ex%2Futil@1.0.0", "type": "library" },
+    { "bom-ref": "demo", "purl": "pkg:npm/%40ex%2Fdemo@1.0.0", "type": "library" },
+    { "bom-ref": "chalk", "purl": "pkg:npm/chalk@5.3.0", "type": "library" },
+    { "bom-ref": "ansi", "purl": "pkg:npm/ansi-styles@6.2.1", "type": "library" }
+  ],
+  "dependencies": []
+}
+JSON
+    cp "$WORK/nwmf-bom-orig.json" "$WORK/nwmf-bom.json"
+    node "$WORK/nwmf.js" "$WORK/nwmf-bom.json" "$WORK/nwmf-lock.json" "$NON_SHIPPED_DIRS" >/dev/null 2>&1
+    if jq -e '
+        ([.components[].purl]) as $kept
+        | ($kept | index("pkg:npm/%40ex%2Fdemo@1.0.0") | not)
+        and ($kept | index("pkg:npm/chalk@5.3.0") | not)
+        and ($kept | index("pkg:npm/ansi-styles@6.2.1") | not)
+        and ($kept | index("pkg:npm/%40ex%2Fcore@1.0.0"))
+        and ($kept | index("pkg:npm/%40ex%2Futil@1.0.0"))
+    ' "$WORK/nwmf-bom.json" >/dev/null 2>&1; then
+        pass "excluded member and its own-only transitive dependency drop, a shared member survives"
+    else
+        fail "npm workspace-member filter result unexpected" "$(jq -c '.components[].purl' "$WORK/nwmf-bom.json" 2>&1)"
+    fi
+    if jq -e '
+        ([.metadata.properties[] | select(.name=="bomlens:excluded-members") | .value][0]
+          == "npm:examples/demo (@ex/demo)")
+        and ([.metadata.properties[] | select(.name=="bomlens:excluded-components") | .value][0]
+          | contains("demo") and contains("chalk") and contains("ansi-styles")
+            and (contains("core") | not) and (contains("util") | not))
+    ' "$WORK/nwmf-bom.json" >/dev/null 2>&1; then
+        pass "excluded npm workspace members and components are recorded, without the survivors"
+    else
+        fail "bomlens:excluded-members/-components recording unexpected" "$(jq -c '.metadata.properties' "$WORK/nwmf-bom.json" 2>&1)"
+    fi
+
+    # A kept member (util) declares a dependency (widget) this pass cannot
+    # resolve from util's own position in the tree -- nothing at or above
+    # util's own node_modules holds it. The excluded member (demo) declares
+    # the same name and DOES resolve it, nested under its own node_modules.
+    # Naive reachability would call widget excluded-only and drop it, but
+    # something in the kept tree asked for a package by that name, so it
+    # must survive: dropping it risks cutting a component a kept member
+    # genuinely uses. util's own optionalDependencies entry (maybe-thing,
+    # installed nowhere in this lockfile) is the control case -- an
+    # unresolved optional dependency with no installation trace anywhere is
+    # simply not installed, not a gap, and must not by itself force widget
+    # or anything else to be kept.
+    cat > "$WORK/nwmf-protect-lock.json" <<'JSON'
+{
+  "name": "root",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": { "name": "root", "workspaces": ["packages/*", "examples/*"] },
+    "packages/core": { "name": "@ex/core", "version": "1.0.0" },
+    "packages/util": {
+      "name": "@ex/util",
+      "version": "1.0.0",
+      "dependencies": { "@ex/core": "*", "widget": "^1.0.0" },
+      "optionalDependencies": { "maybe-thing": "^1.0.0" }
+    },
+    "examples/demo": {
+      "name": "@ex/demo",
+      "version": "1.0.0",
+      "dependencies": { "@ex/core": "*", "widget": "^1.0.0" }
+    },
+    "node_modules/@ex/core": { "resolved": "packages/core", "link": true },
+    "node_modules/@ex/util": { "resolved": "packages/util", "link": true },
+    "examples/demo/node_modules/widget": {
+      "name": "widget",
+      "version": "1.2.3",
+      "resolved": "https://registry.npmjs.org/widget/-/widget-1.2.3.tgz"
+    }
+  }
+}
+JSON
+    cat > "$WORK/nwmf-protect-bom.json" <<'JSON'
+{
+  "metadata": { "component": { "bom-ref": "root", "purl": "pkg:npm/root@1.0.0" } },
+  "components": [
+    { "bom-ref": "core", "purl": "pkg:npm/%40ex%2Fcore@1.0.0", "type": "library" },
+    { "bom-ref": "util", "purl": "pkg:npm/%40ex%2Futil@1.0.0", "type": "library" },
+    { "bom-ref": "demo", "purl": "pkg:npm/%40ex%2Fdemo@1.0.0", "type": "library" },
+    { "bom-ref": "widget", "purl": "pkg:npm/widget@1.2.3", "type": "library" }
+  ],
+  "dependencies": []
+}
+JSON
+    node "$WORK/nwmf.js" "$WORK/nwmf-protect-bom.json" "$WORK/nwmf-protect-lock.json" "$NON_SHIPPED_DIRS" >/dev/null 2>&1
+    if jq -e '
+        ([.components[].purl]) as $kept
+        | ($kept | index("pkg:npm/%40ex%2Fdemo@1.0.0") | not)
+        and ($kept | index("pkg:npm/widget@1.2.3"))
+        and ($kept | index("pkg:npm/%40ex%2Fcore@1.0.0"))
+        and ($kept | index("pkg:npm/%40ex%2Futil@1.0.0"))
+    ' "$WORK/nwmf-protect-bom.json" >/dev/null 2>&1; then
+        pass "a kept member's own unresolved dependency name is never dropped, even where an excluded member resolves it"
+    else
+        fail "unresolved-dependency protection result unexpected" "$(jq -c '.components[].purl' "$WORK/nwmf-protect-bom.json" 2>&1)"
+    fi
+
+    # An unrecognized lockfileVersion is the filter's own "cannot determine"
+    # case -- the SBOM is left untouched.
+    cat > "$WORK/nwmf-badversion-lock.json" <<'JSON'
+{
+  "lockfileVersion": 1,
+  "packages": {
+    "": { "name": "root" },
+    "packages/core": { "name": "@ex/core", "version": "1.0.0" }
+  }
+}
+JSON
+    cp "$WORK/nwmf-bom-orig.json" "$WORK/nwmf-badversion-bom.json"
+    if ( timeout 5 node "$WORK/nwmf.js" "$WORK/nwmf-badversion-bom.json" "$WORK/nwmf-badversion-lock.json" "$NON_SHIPPED_DIRS" ) >/dev/null 2>&1; then
+        if jq -e '[.components[].purl] | length == 5' "$WORK/nwmf-badversion-bom.json" >/dev/null 2>&1; then
+            pass "an unrecognized package-lock.json lockfileVersion resolves to cannot-determine, safely"
+        else
+            fail "unrecognized lockfileVersion was not left untouched" "$(jq -c '.components[].purl' "$WORK/nwmf-badversion-bom.json" 2>&1)"
+        fi
+    else
+        fail "an unrecognized lockfileVersion timed out or errored (should never hang)"
+    fi
+else
+    echo "  SKIP: node not installed; npm workspace-member filter not exercised"
+fi
+
+echo "== cargo + npm workspace-member filters: bomlens:excluded-members/-components merge, not overwrite =="
+if command -v node >/dev/null 2>&1; then
+    sed -n "/<<'CWMF_JS'/,/^CWMF_JS\$/p" "$PREP" | sed '1d;$d' > "$WORK/both-cwmf.js"
+    sed -n "/<<'NWMF_JS'/,/^NWMF_JS\$/p" "$PREP" | sed '1d;$d' > "$WORK/both-nwmf.js"
+    NON_SHIPPED_DIRS=$(grep -m1 '^NON_SHIPPED_DIRS=' "$PREP" | sed 's/^NON_SHIPPED_DIRS="\(.*\)"$/\1/')
+
+    # A single (hypothetical polyglot) scan where both the Cargo and the npm
+    # workspace-member filter find something to exclude on the SAME SBOM. The
+    # Cargo filter runs first (it comes first in build-prep.sh) and writes
+    # bomlens:excluded-members/-components; the npm filter must add to those
+    # properties, not replace them.
+    BR="$WORK/both-cargo-reactor"
+    mkdir -p "$BR/capp" "$BR/examples/cdemo"
+    cat > "$WORK/both-cwmf-meta.json" <<META
+{
+  "workspace_members": [
+    "path+file://$BR/capp#0.1.0",
+    "path+file://$BR/examples/cdemo#0.1.0"
+  ],
+  "packages": [
+    { "id": "path+file://$BR/capp#0.1.0", "name": "capp", "manifest_path": "$BR/capp/Cargo.toml" },
+    { "id": "path+file://$BR/examples/cdemo#0.1.0", "name": "cdemo", "manifest_path": "$BR/examples/cdemo/Cargo.toml" }
+  ]
+}
+META
+    cat > "$WORK/both-cwmf.lock" <<'LOCK'
+# This file is automatically @generated by Cargo.
+# It is not intended for manual editing.
+version = 4
+
+[[package]]
+name = "capp"
+version = "0.1.0"
+
+[[package]]
+name = "cdemo"
+version = "0.1.0"
+dependencies = [
+ "cdemo_dep",
+]
+
+[[package]]
+name = "cdemo_dep"
+version = "1.0.0"
+source = "registry+https://example.com/crates-index"
+LOCK
+    cat > "$WORK/both-bom.json" <<'JSON'
+{
+  "metadata": { "component": { "bom-ref": "root", "purl": "pkg:cargo/capp@0.1.0" } },
+  "components": [
+    { "bom-ref": "capp", "purl": "pkg:cargo/capp@0.1.0", "type": "library" },
+    { "bom-ref": "cdemo", "purl": "pkg:cargo/cdemo@0.1.0", "type": "library" },
+    { "bom-ref": "cdemodep", "purl": "pkg:cargo/cdemo_dep@1.0.0", "type": "library" },
+    { "bom-ref": "score", "purl": "pkg:npm/score@1.0.0", "type": "library" },
+    { "bom-ref": "sdemo", "purl": "pkg:npm/sdemo@1.0.0", "type": "library" },
+    { "bom-ref": "sdemodep", "purl": "pkg:npm/sdemo_dep@1.0.0", "type": "library" }
+  ],
+  "dependencies": []
+}
+JSON
+    ( cd "$BR" && node "$WORK/both-cwmf.js" "$WORK/both-bom.json" "$WORK/both-cwmf-meta.json" "$WORK/both-cwmf.lock" "$NON_SHIPPED_DIRS" ) >/dev/null 2>&1
+
+    cat > "$WORK/both-nwmf-lock.json" <<'JSON'
+{
+  "name": "root",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": { "name": "root", "workspaces": ["packages/*", "examples/*"] },
+    "packages/score": { "name": "score", "version": "1.0.0" },
+    "examples/sdemo": {
+      "name": "sdemo",
+      "version": "1.0.0",
+      "dependencies": { "sdemo_dep": "^1.0.0" }
+    },
+    "node_modules/sdemo_dep": {
+      "name": "sdemo_dep",
+      "version": "1.0.0",
+      "resolved": "https://registry.npmjs.org/sdemo_dep/-/sdemo_dep-1.0.0.tgz"
+    }
+  }
+}
+JSON
+    node "$WORK/both-nwmf.js" "$WORK/both-bom.json" "$WORK/both-nwmf-lock.json" "$NON_SHIPPED_DIRS" >/dev/null 2>&1
+
+    if jq -e '
+        ([.components[].purl]) as $kept
+        | ($kept | index("pkg:cargo/cdemo@0.1.0") | not)
+        and ($kept | index("pkg:cargo/cdemo_dep@1.0.0") | not)
+        and ($kept | index("pkg:npm/sdemo@1.0.0") | not)
+        and ($kept | index("pkg:npm/sdemo_dep@1.0.0") | not)
+        and ($kept | index("pkg:cargo/capp@0.1.0"))
+        and ($kept | index("pkg:npm/score@1.0.0"))
+    ' "$WORK/both-bom.json" >/dev/null 2>&1; then
+        pass "both filters' drops apply to the same SBOM"
+    else
+        fail "combined cargo+npm filter result unexpected" "$(jq -c '.components[].purl' "$WORK/both-bom.json" 2>&1)"
+    fi
+    if jq -e '
+        ([.metadata.properties[] | select(.name=="bomlens:excluded-members") | .value][0]) as $m
+        | ($m | contains("cargo:examples/cdemo (cdemo)")) and ($m | contains("npm:examples/sdemo (sdemo)"))
+    ' "$WORK/both-bom.json" >/dev/null 2>&1; then
+        pass "bomlens:excluded-members carries both filters' entries (npm did not overwrite cargo's)"
+    else
+        fail "bomlens:excluded-members did not merge" "$(jq -c '.metadata.properties[] | select(.name=="bomlens:excluded-members")' "$WORK/both-bom.json" 2>&1)"
+    fi
+    if jq -e '
+        ([.metadata.properties[] | select(.name=="bomlens:excluded-components") | .value][0]) as $c
+        | ($c | contains("cdemo")) and ($c | contains("sdemo"))
+    ' "$WORK/both-bom.json" >/dev/null 2>&1; then
+        pass "bomlens:excluded-components carries both filters' entries (npm did not overwrite cargo's)"
+    else
+        fail "bomlens:excluded-components did not merge" "$(jq -c '.metadata.properties[] | select(.name=="bomlens:excluded-components")' "$WORK/both-bom.json" 2>&1)"
+    fi
+else
+    echo "  SKIP: node not installed; cargo+npm merge not exercised"
+fi
+
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

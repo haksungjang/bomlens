@@ -106,6 +106,8 @@ Detected file: `package.json` + `package-lock.json` (or `yarn.lock`, `pnpm-lock.
 
 > Note: the SBOM is filtered to the production dependency set, so devDependencies are dropped and the result reflects what ships. To keep the full dev-plus-production graph instead, set `BOMLENS_NODE_FULL_GRAPH=1` ([Docker image environment variables](docker-image.md#environment-variables)).
 
+> Note: an npm workspace member registered in `package-lock.json` survives the file-level exclusion above even when its own directory sits under an excluded tree, because cdxgen reads `package-lock.json` directly. Such a member's own component is left out too, along with a dependency only that member needs, unless a kept member reaches it as well. `BOMLENS_INCLUDE_NON_SHIPPED=1` (the same switch as the file-level exclusion above) keeps everything this leaves out. The excluded members and the components dropped because of them are recorded on the SBOM as `bomlens:excluded-members` and `bomlens:excluded-components`. A yarn workspace member is not caught the same way yet.
+
 ---
 
 ## Python
