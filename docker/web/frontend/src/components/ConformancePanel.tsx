@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/state";
+import { PipelineStepsFailedNote } from "@/components/PipelineStepsFailedNote";
 import {
   fileUrl,
   type ConformanceCheck,
@@ -423,12 +424,17 @@ export function ConformancePanel({
   conformance,
   scanId,
   results = [],
+  isSuppliedDocument = false,
 }: {
   conformance: ConformanceSummary;
   /** Scoping for the report download links; omit to hide them. */
   scanId?: string | null;
   /** This scan's artifacts, to offer the same report as a file. */
   results?: ResultFile[];
+  /** An ANALYZE run against an uploaded SBOM the reader did not generate
+   *  (`Boolean(inputSbomFileName(result))`), so a failed-pipeline-step note
+   *  suggests asking the supplier to regenerate it instead of re-scanning. */
+  isSuppliedDocument?: boolean;
 }) {
   const { t } = useTranslation();
   const checks = conformance.checks ?? [];
@@ -450,7 +456,18 @@ export function ConformancePanel({
   );
 
   if (checks.length === 0) {
-    return <EmptyState>{t("g7.empty")}</EmptyState>;
+    return (
+      <div className="space-y-6">
+        <PipelineStepsFailedNote
+          steps={conformance.pipelineStepsFailed ?? []}
+          more={conformance.pipelineStepsFailedMore ?? 0}
+          context="conformance"
+          isSuppliedDocument={isSuppliedDocument}
+          testId="conformance-pipeline-steps-failed"
+        />
+        <EmptyState>{t("g7.empty")}</EmptyState>
+      </div>
+    );
   }
 
   const keep = (c: ConformanceCheck) =>
@@ -481,6 +498,13 @@ export function ConformancePanel({
 
   return (
     <div className="space-y-6">
+      <PipelineStepsFailedNote
+        steps={conformance.pipelineStepsFailed ?? []}
+        more={conformance.pipelineStepsFailedMore ?? 0}
+        context="conformance"
+        isSuppliedDocument={isSuppliedDocument}
+        testId="conformance-pipeline-steps-failed"
+      />
       <div className="space-y-1.5">
         <div className="flex flex-wrap items-center gap-2 text-sm">
           {conformance.format ? (

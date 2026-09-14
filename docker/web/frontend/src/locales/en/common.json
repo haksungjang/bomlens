@@ -146,9 +146,6 @@
     "unpinnedTitle": "Versions were resolved at scan time",
     "unpinnedBody": "This project states version ranges and ships no lock file, so the versions listed here are what a fresh install would fetch today — not necessarily what is installed on your machine. The vulnerability result was measured against these versions. To see the risk in your own environment, scan a manifest that pins exact versions.",
     "scanWarningsTitle": "The scan reported these while it ran",
-    "pipelineFailedTitle": "Some data may be incomplete",
-    "pipelineFailedHint": "Re-scan to retry, or check the run log for details.",
-    "pipelineFailedMore": "{{count}} more",
     "sbomDegradedTitle": "Direct dependencies only — deep resolution didn't run",
     "sbomDegradedBody": "The transitive-dependency analyzer (cdxgen) couldn't run, so this SBOM lists only direct dependencies. Make sure Docker is available and re-scan for the full dependency graph.",
     "sbomDegradedDisk": "The transitive-dependency analyzer (cdxgen) ran out of Docker disk space, so this SBOM lists only direct dependencies. Free space (e.g. \"docker system prune\") and re-scan for the full dependency graph.",
@@ -624,6 +621,14 @@
     "swiftPackageResolve": "Swift package resolution",
     "npmProductionSet": "npm production dependency resolution",
     "pipInstall": "Python dependency installation"
+  },
+  "pipelineNote": {
+    "titleScan": "Some data may be incomplete",
+    "hintScan": "Re-scan to retry, or check the run log for details.",
+    "titleConformance": "Some conformance checks may be based on incomplete data",
+    "hintConformance": "The following analysis step(s) failed while this SBOM was generated, so this input may be incomplete.",
+    "supplierHint": "Ask the supplier to regenerate this document.",
+    "more": "{{count}} more"
   },
   "models": {
     "loading": "Loading model details…",

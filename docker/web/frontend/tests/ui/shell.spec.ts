@@ -1191,6 +1191,84 @@ test("Overview renders an SBOM-supplied step id as literal text, not markup", as
   expect(await page.evaluate(() => (window as unknown as { __xss?: boolean }).__xss)).toBeUndefined();
 });
 
+// Same failed-pipeline-step fact, shown in two places (Overview and the
+// conformance panel) and two document origins (a scan the reader ran, an
+// ANALYZE run against a document someone else supplied, the `_input.json`
+// result entry is what a real ANALYZE run always writes, see inputSbomFileName).
+// A supplied document can't be re-scanned, so its hint must not say so.
+const SELF_SCAN_PIPELINE_DONE = {
+  ...DONE,
+  sbom: { ...DONE.sbom, pipelineStepsFailed: ["enrich-cpe"], pipelineStepsFailedMore: 2 },
+  conformance: {
+    result: "pass",
+    format: "CycloneDX",
+    checks: [{ id: "timestamp", label: "Timestamp present", required: true, status: "pass", detail: "1 found" }],
+    pipelineStepsFailed: ["enrich-cpe"],
+    pipelineStepsFailedMore: 2,
+  },
+};
+const SUPPLIED_PIPELINE_DONE = {
+  ...SELF_SCAN_PIPELINE_DONE,
+  mode: "ANALYZE",
+  results: [...DONE.results, { name: "demo_1.0_input.json", size: 100 }],
+};
+
+async function stubAndRunWithDone(page: Page, done: unknown) {
+  await seedThemeLang(page, "light", "en");
+  await page.route("**/capabilities", (r) =>
+    r.fulfill({ contentType: "application/json", body: JSON.stringify({ firmware: false, scanoss: false, docker: true }) }),
+  );
+  await page.route("**/results", (r) => r.fulfill({ contentType: "application/json", body: "[]" }));
+  await page.route("**/file**", (r) =>
+    r.fulfill({ contentType: "application/json", body: JSON.stringify(SBOM) }),
+  );
+  await page.route("**/scan-stream**", (r) =>
+    r.fulfill({ contentType: "text/event-stream", body: `event: done\ndata: ${JSON.stringify(done)}\n\n` }),
+  );
+  await page.goto("/?ui=next#/new");
+  await page.fill("#project", "demo");
+  await page.fill("#version", "1.0");
+  await page.getByTestId("run-scan").click();
+}
+
+test("pipeline-steps-failed note suggests re-scanning for a scan the reader ran, in Overview and Conformance", async ({ page }) => {
+  await stubAndRunWithDone(page, SELF_SCAN_PIPELINE_DONE);
+  await expect(page.locator("main h1")).toBeVisible();
+  const overviewBanner = page.getByTestId("pipeline-steps-failed");
+  await expect(overviewBanner).toContainText("Re-scan to retry");
+  await expect(overviewBanner).not.toContainText("Ask the supplier");
+
+  await page.getByRole("navigation").locator('a[href$="/conformance"]').first().click();
+  const confBanner = page.getByTestId("conformance-pipeline-steps-failed");
+  await expect(confBanner).toBeVisible();
+  await expect(confBanner).toContainText("analysis step(s) failed while this SBOM was generated");
+  await expect(confBanner).not.toContainText("Ask the supplier");
+});
+
+test("pipeline-steps-failed note suggests asking the supplier for a supplied SBOM, in Overview and Conformance", async ({ page }) => {
+  await stubAndRunWithDone(page, SUPPLIED_PIPELINE_DONE);
+  await expect(page.locator("main h1")).toBeVisible();
+  const overviewBanner = page.getByTestId("pipeline-steps-failed");
+  await expect(overviewBanner).toContainText("Ask the supplier to regenerate");
+  await expect(overviewBanner).not.toContainText("Re-scan to retry");
+
+  await page.getByRole("navigation").locator('a[href$="/conformance"]').first().click();
+  const confBanner = page.getByTestId("conformance-pipeline-steps-failed");
+  await expect(confBanner).toBeVisible();
+  await expect(confBanner).toContainText("analysis step(s) failed while this SBOM was generated");
+  await expect(confBanner).toContainText("Ask the supplier to regenerate");
+});
+
+// A report from before pipelineStepsFailed existed on the conformance JSON
+// reads as an absent key (server.py defaults it to [] / 0), so the note must
+// not render at all, not render empty.
+test("the conformance panel shows no pipeline-steps-failed note when the report predates the field", async ({ page }) => {
+  await stubAiAndRun(page);
+  await page.getByRole("navigation").locator('a[href$="/conformance"]').first().click();
+  await expect(page.getByText("CycloneDX", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("conformance-pipeline-steps-failed")).toHaveCount(0);
+});
+
 for (const { theme, lang } of COMBOS) {
   test(`overview pipeline-failed banner matches baseline: ${theme}/${lang} @visual`, async ({ page }) => {
     await stubAndRunPipelineFailed(page, theme, lang);
