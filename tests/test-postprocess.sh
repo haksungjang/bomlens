@@ -5513,6 +5513,382 @@ else
     echo "  SKIP: node not installed; build-prep.sh recorder not exercised"
 fi
 
+echo "== maven non-deployed-module filter: skip resolution and dependency-graph reachability =="
+PREP="$ROOT_DIR/docker/lib/build-prep.sh"
+if command -v node >/dev/null 2>&1; then
+    sed -n "/<<'MNDF_JS'/,/^MNDF_JS\$/p" "$PREP" | sed '1d;$d' > "$WORK/mndf.js"
+
+    # A deployed module, a module whose deploy skip comes from a custom
+    # property inherited two levels down, a module whose skip lives only in
+    # <profiles> (uncertain -- must NOT be excluded), and a diamond dependency
+    # both an excluded and a deployed module reach (must survive: something
+    # deployed still needs it).
+    MR="$WORK/mvn-reactor"
+    mkdir -p "$MR/deployed" "$MR/notdeployed/nested" "$MR/profile-guarded"
+    cat > "$MR/pom.xml" <<'POM'
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>org.example</groupId>
+  <artifactId>reactor-root</artifactId>
+  <version>1.0.0</version>
+  <packaging>pom</packaging>
+  <modules>
+    <module>deployed</module>
+    <module>notdeployed</module>
+    <module>profile-guarded</module>
+  </modules>
+  <properties>
+    <skip_maven_deploy>false</skip_maven_deploy>
+  </properties>
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-deploy-plugin</artifactId>
+        <configuration><skip>${skip_maven_deploy}</skip></configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>
+POM
+    cat > "$MR/deployed/pom.xml" <<'POM'
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>org.example</groupId><artifactId>reactor-root</artifactId><version>1.0.0</version><relativePath>../pom.xml</relativePath></parent>
+  <artifactId>deployed-module</artifactId>
+  <dependencies>
+    <dependency><groupId>org.example</groupId><artifactId>kept-lib</artifactId></dependency>
+    <dependency><groupId>org.example</groupId><artifactId>shared-lib</artifactId></dependency>
+  </dependencies>
+</project>
+POM
+    cat > "$MR/notdeployed/pom.xml" <<'POM'
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>org.example</groupId><artifactId>reactor-root</artifactId><version>1.0.0</version><relativePath>../pom.xml</relativePath></parent>
+  <artifactId>notdeployed-module</artifactId>
+  <packaging>pom</packaging>
+  <modules><module>nested</module></modules>
+  <properties>
+    <skip_maven_deploy>true</skip_maven_deploy>
+  </properties>
+</project>
+POM
+    cat > "$MR/notdeployed/nested/pom.xml" <<'POM'
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>org.example</groupId><artifactId>notdeployed-module</artifactId><version>1.0.0</version><relativePath>../pom.xml</relativePath></parent>
+  <artifactId>nested-module</artifactId>
+  <dependencies>
+    <dependency><groupId>org.example</groupId><artifactId>orphan-lib</artifactId></dependency>
+    <dependency><groupId>org.example</groupId><artifactId>shared-lib</artifactId></dependency>
+  </dependencies>
+</project>
+POM
+    cat > "$MR/profile-guarded/pom.xml" <<'POM'
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>org.example</groupId><artifactId>reactor-root</artifactId><version>1.0.0</version><relativePath>../pom.xml</relativePath></parent>
+  <artifactId>profile-guarded-module</artifactId>
+  <profiles>
+    <profile>
+      <id>release</id>
+      <properties><skip_maven_deploy>true</skip_maven_deploy></properties>
+    </profile>
+  </profiles>
+</project>
+POM
+    cat > "$WORK/mndf-bom.json" <<'JSON'
+{
+  "metadata": { "component": { "bom-ref": "root", "purl": "pkg:maven/org.example/reactor-root@1.0.0" } },
+  "components": [
+    { "bom-ref": "dep", "purl": "pkg:maven/org.example/deployed-module@1.0.0", "type": "library", "scope": "required" },
+    { "bom-ref": "notdep", "purl": "pkg:maven/org.example/notdeployed-module@1.0.0", "type": "library", "scope": "required" },
+    { "bom-ref": "nested", "purl": "pkg:maven/org.example/nested-module@1.0.0", "type": "library", "scope": "required" },
+    { "bom-ref": "pg", "purl": "pkg:maven/org.example/profile-guarded-module@1.0.0", "type": "library", "scope": "required" },
+    { "bom-ref": "kept", "purl": "pkg:maven/org.example/kept-lib@1.0.0", "type": "library", "scope": "required" },
+    { "bom-ref": "shared", "purl": "pkg:maven/org.example/shared-lib@1.0.0", "type": "library", "scope": "required" },
+    { "bom-ref": "orphan", "purl": "pkg:maven/org.example/orphan-lib@1.0.0", "type": "library", "scope": "required" }
+  ],
+  "dependencies": [
+    { "ref": "root", "dependsOn": ["dep", "notdep", "pg"] },
+    { "ref": "dep", "dependsOn": ["kept", "shared"] },
+    { "ref": "notdep", "dependsOn": ["nested"] },
+    { "ref": "nested", "dependsOn": ["orphan", "shared"] },
+    { "ref": "pg", "dependsOn": [] },
+    { "ref": "kept", "dependsOn": [] },
+    { "ref": "shared", "dependsOn": [] },
+    { "ref": "orphan", "dependsOn": [] }
+  ]
+}
+JSON
+    ( cd "$MR" && node "$WORK/mndf.js" "$WORK/mndf-bom.json" ) >/dev/null 2>&1
+    if jq -e '
+        ([.components[].purl]) as $kept
+        | ($kept | index("pkg:maven/org.example/orphan-lib@1.0.0") | not)
+        and ($kept | index("pkg:maven/org.example/notdeployed-module@1.0.0") | not)
+        and ($kept | index("pkg:maven/org.example/nested-module@1.0.0") | not)
+        and ($kept | index("pkg:maven/org.example/shared-lib@1.0.0"))
+        and ($kept | index("pkg:maven/org.example/kept-lib@1.0.0"))
+        and ($kept | index("pkg:maven/org.example/profile-guarded-module@1.0.0"))
+        and ($kept | index("pkg:maven/org.example/deployed-module@1.0.0"))
+    ' "$WORK/mndf-bom.json" >/dev/null 2>&1; then
+        pass "diamond dep (shared-lib) survives, orphan-only dep drops, profile-only skip is not excluded"
+    else
+        fail "non-deployed-module filter result unexpected" "$(jq -c '.components[].purl' "$WORK/mndf-bom.json" 2>&1)"
+    fi
+    if jq -e '
+        ([.metadata.properties[] | select(.name=="bomlens:excluded-modules") | .value][0]
+          == "org.example:nested-module, org.example:notdeployed-module")
+        and ([.metadata.properties[] | select(.name=="bomlens:excluded-components") | .value][0]
+          | contains("notdeployed-module") and contains("nested-module") and contains("orphan-lib")
+            and (contains("shared-lib") | not) and (contains("kept-lib") | not))
+    ' "$WORK/mndf-bom.json" >/dev/null 2>&1; then
+        pass "excluded modules and components are recorded, without the survivors"
+    else
+        fail "bomlens:excluded-modules/-components recording unexpected" "$(jq -c '.metadata.properties' "$WORK/mndf-bom.json" 2>&1)"
+    fi
+
+    # Form 1: the standard maven.deploy.skip property alone, no plugin config
+    # anywhere in the chain (isolated from the reactor above on purpose -- an
+    # inherited explicit <skip> config would shadow this property entirely).
+    SD="$WORK/mvn-std-skip"
+    mkdir -p "$SD"
+    cat > "$SD/pom.xml" <<'POM'
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>org.example</groupId>
+  <artifactId>standalone-std-skip</artifactId>
+  <version>1.0.0</version>
+  <properties><maven.deploy.skip>true</maven.deploy.skip></properties>
+</project>
+POM
+    cat > "$WORK/std-skip-bom.json" <<'JSON'
+{
+  "metadata": { "component": { "bom-ref": "root", "purl": "pkg:maven/org.example/standalone-std-skip@1.0.0" } },
+  "components": [
+    { "bom-ref": "self", "purl": "pkg:maven/org.example/standalone-std-skip@1.0.0", "type": "library", "scope": "required" },
+    { "bom-ref": "dep", "purl": "pkg:maven/org.example/std-skip-dep@1.0.0", "type": "library", "scope": "required" }
+  ],
+  "dependencies": [
+    { "ref": "root", "dependsOn": ["self"] },
+    { "ref": "self", "dependsOn": ["dep"] },
+    { "ref": "dep", "dependsOn": [] }
+  ]
+}
+JSON
+    ( cd "$SD" && node "$WORK/mndf.js" "$WORK/std-skip-bom.json" ) >/dev/null 2>&1
+    # A single-module "reactor" has no OTHER module to keep, so the filter's own
+    # keepRoots-empty guard stands down and leaves the BOM untouched -- this
+    # confirms resolveSkip reads maven.deploy.skip correctly without asserting
+    # on a drop that the guard deliberately prevents here.
+    if jq -e '[.components[].purl] | length == 2' "$WORK/std-skip-bom.json" >/dev/null 2>&1; then
+        pass "standard maven.deploy.skip property resolves without error (single-module guard stands down)"
+    else
+        fail "standard maven.deploy.skip case errored" "$(jq -c . "$WORK/std-skip-bom.json" 2>&1)"
+    fi
+
+    # Form 3: pluginManagement-only, inherited by a child with no <plugins>
+    # entry of its own -- must still apply (deploy is bound to the default
+    # lifecycle regardless of an explicit <plugins> declaration). A sibling
+    # overriding the inherited default with its own explicit <plugins> entry
+    # both gives the graph filter a deployed module to anchor on and confirms
+    # a direct declaration still wins over an inherited pluginManagement one.
+    PM="$WORK/mvn-pm-skip"
+    mkdir -p "$PM/child" "$PM/deployed-sibling"
+    cat > "$PM/pom.xml" <<'POM'
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>org.example</groupId>
+  <artifactId>pm-skip-root</artifactId>
+  <version>1.0.0</version>
+  <packaging>pom</packaging>
+  <modules><module>child</module><module>deployed-sibling</module></modules>
+  <build>
+    <pluginManagement>
+      <plugins>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-deploy-plugin</artifactId>
+          <configuration><skip>true</skip></configuration>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+  </build>
+</project>
+POM
+    cat > "$PM/child/pom.xml" <<'POM'
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>org.example</groupId><artifactId>pm-skip-root</artifactId><version>1.0.0</version><relativePath>../pom.xml</relativePath></parent>
+  <artifactId>pm-skip-child</artifactId>
+</project>
+POM
+    cat > "$PM/deployed-sibling/pom.xml" <<'POM'
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>org.example</groupId><artifactId>pm-skip-root</artifactId><version>1.0.0</version><relativePath>../pom.xml</relativePath></parent>
+  <artifactId>pm-deployed-sibling</artifactId>
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-deploy-plugin</artifactId>
+        <configuration><skip>false</skip></configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>
+POM
+    cat > "$WORK/pm-skip-bom.json" <<'JSON'
+{
+  "metadata": { "component": { "bom-ref": "root", "purl": "pkg:maven/org.example/pm-skip-root@1.0.0" } },
+  "components": [
+    { "bom-ref": "child", "purl": "pkg:maven/org.example/pm-skip-child@1.0.0", "type": "library", "scope": "required" },
+    { "bom-ref": "sibling", "purl": "pkg:maven/org.example/pm-deployed-sibling@1.0.0", "type": "library", "scope": "required" },
+    { "bom-ref": "other", "purl": "pkg:maven/org.example/pm-only-dep@1.0.0", "type": "library", "scope": "required" }
+  ],
+  "dependencies": [
+    { "ref": "root", "dependsOn": ["child", "sibling"] },
+    { "ref": "child", "dependsOn": ["other"] },
+    { "ref": "sibling", "dependsOn": [] },
+    { "ref": "other", "dependsOn": [] }
+  ]
+}
+JSON
+    ( cd "$PM" && node "$WORK/mndf.js" "$WORK/pm-skip-bom.json" ) >/dev/null 2>&1
+    # pm-skip-root itself also resolves skip=true (pluginManagement applies to
+    # the declaring pom's own auto-bound deploy execution too, not just to
+    # children), so it is listed alongside pm-skip-child -- it is never a drop
+    # candidate itself since it is this scan's metadata.component root.
+    if jq -e '
+        (([.metadata.properties[]? | select(.name=="bomlens:excluded-modules") | .value][0] // "")
+          == "org.example:pm-skip-child, org.example:pm-skip-root")
+        and ([.components[].purl] | index("pkg:maven/org.example/pm-only-dep@1.0.0") | not)
+        and ([.components[].purl] | index("pkg:maven/org.example/pm-deployed-sibling@1.0.0"))
+    ' "$WORK/pm-skip-bom.json" >/dev/null 2>&1; then
+        pass "pluginManagement-only skip applies, and an explicit sibling override still wins over it"
+    else
+        fail "pluginManagement-only skip was not recognized" "$(jq -c . "$WORK/pm-skip-bom.json" 2>&1)"
+    fi
+
+    # The parser must never hang, regardless of the cause: a pom with a CDATA
+    # section inside plugin configuration (a real, if uncommon, way a pom.xml
+    # holds source text with its own < and >) and, as a stand-in for whatever
+    # other construct might trip it up next, a pom with an unclosed tag. Both
+    # must finish well inside the parser's own budget, not just inside the
+    # test's outer timeout.
+    HT="$WORK/hang-test"
+    mkdir -p "$HT/cdata-mod" "$HT/other-mod"
+    cat > "$HT/pom.xml" <<'POM'
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>org.example</groupId>
+  <artifactId>hang-test-root</artifactId>
+  <version>1.0.0</version>
+  <packaging>pom</packaging>
+  <modules>
+    <module>cdata-mod</module>
+    <module>other-mod</module>
+  </modules>
+</project>
+POM
+    cat > "$HT/cdata-mod/pom.xml" <<'POM'
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>org.example</groupId><artifactId>hang-test-root</artifactId><version>1.0.0</version><relativePath>../pom.xml</relativePath></parent>
+  <artifactId>cdata-module</artifactId>
+  <properties>
+    <maven.deploy.skip>true</maven.deploy.skip>
+  </properties>
+  <build>
+    <plugins>
+      <plugin>
+        <artifactId>maven-antrun-plugin</artifactId>
+        <executions>
+          <execution>
+            <configuration>
+              <target>
+                <replace file="x">
+                  <replacevalue><![CDATA[import a.b.C;
+public class X { void f() { if (1 < 2 && 3 > 2) {} } }]]></replacevalue>
+                </replace>
+              </target>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>
+POM
+    cat > "$HT/other-mod/pom.xml" <<'POM'
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>org.example</groupId><artifactId>hang-test-root</artifactId><version>1.0.0</version><relativePath>../pom.xml</relativePath></parent>
+  <artifactId>other-module</artifactId>
+</project>
+POM
+    mkdir -p "$HT/unclosed-mod"
+    cat > "$HT/unclosed-mod/pom.xml" <<'POM'
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>org.example</groupId>
+  <artifactId>unclosed-module</artifactId>
+  <version>1.0.0</version>
+  <properties>
+    <skip_maven_deploy>true</skip_maven_deploy>
+  <build>
+POM
+    cat > "$WORK/hang-cdata-bom.json" <<'JSON'
+{
+  "metadata": { "component": { "bom-ref": "root", "purl": "pkg:maven/org.example/hang-test-root@1.0.0" } },
+  "components": [
+    { "bom-ref": "self", "purl": "pkg:maven/org.example/cdata-module@1.0.0", "type": "library", "scope": "required" },
+    { "bom-ref": "other", "purl": "pkg:maven/org.example/other-module@1.0.0", "type": "library", "scope": "required" }
+  ],
+  "dependencies": [
+    { "ref": "root", "dependsOn": ["self", "other"] },
+    { "ref": "other", "dependsOn": ["self"] },
+    { "ref": "self", "dependsOn": [] }
+  ]
+}
+JSON
+    if ( cd "$HT" && timeout 5 node "$WORK/mndf.js" "$WORK/hang-cdata-bom.json" ) >/dev/null 2>&1; then
+        if jq -e '[.components[].purl] | index("pkg:maven/org.example/cdata-module@1.0.0") | not' \
+               "$WORK/hang-cdata-bom.json" >/dev/null 2>&1; then
+            pass "a pom.xml with a CDATA section resolves correctly and does not hang"
+        else
+            fail "CDATA pom was not excluded" "$(jq -c '.components[].purl' "$WORK/hang-cdata-bom.json" 2>&1)"
+        fi
+    else
+        fail "a pom.xml with a CDATA section timed out or errored (should never hang)"
+    fi
+    # The unclosed-tag pom only needs to prove it cannot hang the run that
+    # reads it -- run the filter with it as the scan target's OWN pom (a
+    # malformed pom.xml at the target itself is the direct, realistic case;
+    # a malformed ancestor is the same code path, loadChain, one level up).
+    cat > "$WORK/hang-unclosed-bom.json" <<'JSON'
+{
+  "metadata": { "component": { "bom-ref": "self", "purl": "pkg:maven/org.example/unclosed-module@1.0.0" } },
+  "components": [
+    { "bom-ref": "dep", "purl": "pkg:maven/org.example/unclosed-dep@1.0.0", "type": "library", "scope": "required" }
+  ],
+  "dependencies": [
+    { "ref": "self", "dependsOn": ["dep"] },
+    { "ref": "dep", "dependsOn": [] }
+  ]
+}
+JSON
+    if ( cd "$HT/unclosed-mod" && timeout 5 node "$WORK/mndf.js" "$WORK/hang-unclosed-bom.json" ) >/dev/null 2>&1; then
+        pass "a pom.xml with an unclosed tag does not hang (resolves to not-skipped, safely)"
+    else
+        fail "a pom.xml with an unclosed tag timed out or errored (should never hang)"
+    fi
+else
+    echo "  SKIP: node not installed; non-deployed-module filter not exercised"
+fi
+
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
