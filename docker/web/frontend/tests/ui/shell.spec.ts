@@ -1104,7 +1104,7 @@ test("Overview shows which post-process steps failed, unmapped ids included", as
   await expect(page.locator("main h1")).toBeVisible();
   const banner = page.getByTestId("pipeline-steps-failed");
   await expect(banner).toBeVisible();
-  await expect(banner).toContainText("CPE identifiers");
+  await expect(banner).toContainText("CPE identifier enrichment");
   await expect(banner).toContainText("some-future-step");
 });
 
