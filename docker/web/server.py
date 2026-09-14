@@ -2493,6 +2493,7 @@ _SIBLING_MODES = ("FIRMWARE", "AIBOM", "ANALYZE", "SOURCE", "IMAGE", "ROOTFS", "
 # environment or a docker-run argv.
 _USAGE_CONTEXTS = ("internal", "product", "redistribute", "outputs-only")
 _CONFORMANCE_PROFILES = ("default", "skt-submission")
+_REPORT_LANGS = ("en", "ko")
 
 
 def _valid_image_ref(ref):
@@ -2724,6 +2725,10 @@ def run_sibling_scan(image, mode, out_dir, on_log, *, upload_file=None, model_id
     # with.
     if env.get("CONFORMANCE_PROFILE") in _CONFORMANCE_PROFILES:
         args += ["-e", "CONFORMANCE_PROFILE=%s" % env["CONFORMANCE_PROFILE"]]
+    # Same closed-allowlist re-derive as CONFORMANCE_PROFILE above, not the raw
+    # env string: this decides which language the sibling's own generated
+    # reports (notice, conformance, security, AI profile) render in.
+    args += ["-e", "REPORT_LANG=%s" % (env.get("REPORT_LANG") if env.get("REPORT_LANG") in _REPORT_LANGS else "en")]
     # Opt-in OSV advisories for firmware: forward only the two fixed control
     # values the UI may have set on the firmware path. We re-derive each from a
     # closed allowlist (never the env string itself) so no user-influenced text
@@ -4184,6 +4189,17 @@ class Handler(BaseHTTPRequestHandler):
                   f"recognized; using the per-mode default.", file=sys.stderr)
             conformance_profile = ""
 
+        # Report language (--lang on the CLI): which language the pipeline's own
+        # generated prose renders in (notice, conformance, security, AI-profile
+        # reports; the model/dataset risk assessment's reason sentences). The
+        # request decides it, not this server's own locale -- the web UI sends
+        # whatever language its shell is currently showing. Anything outside the
+        # closed allowlist, or absent, is English; a typo in a query param is
+        # not a reason to fail a scan.
+        report_lang = g("lang").strip()
+        if report_lang not in _REPORT_LANGS:
+            report_lang = "en"
+
         # Per-run output folder OUTPUT_DIR/<run_id>/ (matches scan-sbom.sh). The
         # default run_id is the {prefix}; with ?timestamp=true the folder name
         # gets a _{YYYYMMDD-HHMMSS} suffix so repeat scans don't overwrite each
@@ -4331,6 +4347,7 @@ class Handler(BaseHTTPRequestHandler):
             "PROJECT_VERSION": version,
             "PROJECT_LICENSE": outbound_license,
             "SBOM_AUTHOR": sbom_author,
+            "REPORT_LANG": report_lang,
             "UPLOAD_ENABLED": "false",
             "HOST_OUTPUT_DIR": run_out,
             # entrypoint.sh's own cdxgen-sibling cancel handler uses the same

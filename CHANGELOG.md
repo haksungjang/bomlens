@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - A source scan leaves out the manifests under test, fixture, example, benchmark and demo folders and the GitHub Actions workflows in `.github/workflows` by default, and records the patterns and the files it left out in the `bomlens:excluded-paths` and `bomlens:excluded-manifests` properties. `BOMLENS_INCLUDE_NON_SHIPPED=1` keeps them.
+- A web UI scan now generates its conformance report, security report, AI-profile report and the model/dataset risk assessment's reason text in whichever language the web UI is currently showing (English or Korean), the same as `--lang` on the CLI, instead of always English. The generated SBOM and its third-party notice are unaffected, those are not localized either way.
 
 ### Fixed
 

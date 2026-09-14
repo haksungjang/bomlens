@@ -76,7 +76,6 @@ _security_epss.json     :: yes :: yes :: _security_epss\.json
 _vendored.cdx.json      :: yes :: yes :: _vendored\.cdx\.json
 _ai-profile.json        :: yes :: yes :: _ai-profile
 _ai-profile.md          :: yes :: yes :: _ai-profile
-_ai-profile.html        :: no  :: yes :: skip
 _modelica.cdx.json      :: no  :: yes :: skip
 _cocoapods.cdx.json     :: no  :: yes :: skip
 _security_cvebintool.json :: no :: yes :: skip
