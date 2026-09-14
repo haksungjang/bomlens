@@ -862,6 +862,12 @@ MAX_ASSESS_MODELS = 50  # assessed model entries in the AI profile card
 MAX_ASSESS_REASONS = 20  # reason strings per assessed model
 MAX_ASSESS_CONDITIONS = 20  # license conditions listed per assessed model
 MAX_ASSESS_URLS = 8  # license source links per assessed model
+# bomlens:pipeline-step-failed values come from the SBOM itself, which for an
+# --analyze run is a document a supplier submitted, so untrusted input. Cap
+# both the length of one step id and how many are shown, same as every other
+# supplier-controlled list surfaced in this file.
+MAX_PIPELINE_STEP_LEN = 100  # chars per step id
+MAX_PIPELINE_STEPS = 20  # step ids listed; the rest are counted, not shown
 
 # Severity ranking for picking a component's worst vulnerability.
 _SEV_RANK = {"CRITICAL": 5, "HIGH": 4, "MEDIUM": 3, "LOW": 2, "UNKNOWN": 1}
@@ -1423,6 +1429,25 @@ def sbom_summary(run_id):
         ),
         None,
     )
+    # pipeline-step-failed: set by docker/lib/pipeline-step.sh's
+    # mark_pipeline_warning for every best-effort post-process step that
+    # failed (normalize, CPE/EOL/malicious enrichment, conformance, notice
+    # generation and the like). A valid SBOM was still produced, but that
+    # step's output may be missing. Unlike sbom-tool-degraded, this property
+    # can appear more than once (one entry per failed step), so it is
+    # collected, not looked up with next(). mark_pipeline_warning can also
+    # record the same step twice (e.g. a re-analyzed document), so duplicates
+    # are dropped, order preserved. Drives a result banner.
+    pipeline_steps_seen = []
+    for p in meta_props:
+        if p.get("name") != "bomlens:pipeline-step-failed":
+            continue
+        value = p.get("value")
+        if not value or value in pipeline_steps_seen:
+            continue
+        pipeline_steps_seen.append(value[:MAX_PIPELINE_STEP_LEN])
+    pipeline_steps_failed_more = max(0, len(pipeline_steps_seen) - MAX_PIPELINE_STEPS)
+    pipeline_steps_failed = pipeline_steps_seen[:MAX_PIPELINE_STEPS]
     # sbom-oversized: set by entrypoint.sh when the finished document is over
     # the same 100 MB budget this server's own upload path enforces (MAX_BYTES
     # above) — a scan run against --target never goes through that upload
@@ -1500,6 +1525,8 @@ def sbom_summary(run_id):
         "truncated": len(comps) > MAX_COMPONENT_ROWS,
         "suggestIdentifyVendored": suggest,
         "sbomToolDegraded": degraded,
+        "pipelineStepsFailed": pipeline_steps_failed,
+        "pipelineStepsFailedMore": pipeline_steps_failed_more,
         "sbomOversizedBytes": oversized_bytes,
         # CycloneDX root component type — drives the honest scan-kind subtitle and
         # works on re-open too, where the scan MODE isn't stored.
