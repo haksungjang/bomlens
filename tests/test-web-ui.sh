@@ -2896,6 +2896,7 @@ echo "[stub] scanning ${PROJECT_NAME} ${PROJECT_VERSION} (mode=$mode)"
   echo "AI_USAGE_CONTEXT=${AI_USAGE_CONTEXT:-}"
   echo "CONFORMANCE_PROFILE=${CONFORMANCE_PROFILE:-}"
   echo "PROJECT_LICENSE=${PROJECT_LICENSE:-}"
+  echo "SBOM_AUTHOR=${SBOM_AUTHOR:-}"
   echo "MODE=${MODE:-}"
   echo "TARGET_FILE=${TARGET_FILE:-}"
   echo "TARGET_DIR=${TARGET_DIR:-}"
@@ -3346,6 +3347,77 @@ if [ -z "$(sed -n 's/^PROJECT_LICENSE=//p' "$WORK/stub-env")" ]; then
     pass "no license param -> PROJECT_LICENSE stays empty (conflict check off)"
 else
     fail "PROJECT_LICENSE was set without a license param" "$(cat "$WORK/stub-env")"
+fi
+
+echo "== sbom_author: the SBOM author reaches the scan env verbatim, and only when given =="
+# URL-encode via Python (comma/space/parens/ampersand/Korean all need it; the
+# ampersand especially, or it would be read as a second query parameter).
+urlenc() { python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"; }
+rm -f "$WORK/stub-env"
+sse_events "project=auth1&version=1.0&source=current-dir&sbom_author=$(urlenc "ACME Corp")" >/dev/null
+if [ "$(sed -n 's/^SBOM_AUTHOR=//p' "$WORK/stub-env")" = "ACME Corp" ]; then
+    pass "sbom_author=ACME Corp -> SBOM_AUTHOR in the run-scan env"
+else
+    fail "SBOM author did not reach the scan env" "$(cat "$WORK/stub-env")"
+fi
+rm -f "$WORK/stub-env"
+sse_events "project=auth2&version=1.0&source=current-dir" >/dev/null
+if [ -z "$(sed -n 's/^SBOM_AUTHOR=//p' "$WORK/stub-env")" ]; then
+    pass "no sbom_author param -> SBOM_AUTHOR stays empty (left out of the SBOM)"
+else
+    fail "SBOM_AUTHOR was set without a sbom_author param" "$(cat "$WORK/stub-env")"
+fi
+# This path (the in-process scan) is a subprocess env var, not a docker-run
+# argv or a shell command line, so a legal entity name reaches it byte for
+# byte -- no comma/parens/ampersand stripping, matching --sbom-author on the
+# CLI (see stamp-document-metadata.sh's jq --arg, and scan-sbom.sh's own
+# printf %q path, both verified end to end for the same two values below).
+rm -f "$WORK/stub-env"
+sse_events "project=auth3&version=1.0&source=current-dir&sbom_author=$(urlenc 'SK Telecom Co., Ltd.')" >/dev/null
+if [ "$(sed -n 's/^SBOM_AUTHOR=//p' "$WORK/stub-env")" = "SK Telecom Co., Ltd." ]; then
+    pass "a legal-entity name with a comma reaches SBOM_AUTHOR unchanged"
+else
+    fail "SK Telecom Co., Ltd. was mangled" "$(cat "$WORK/stub-env")"
+fi
+rm -f "$WORK/stub-env"
+sse_events "project=auth4&version=1.0&source=current-dir&sbom_author=$(urlenc '(주)에스케이 & 파트너스')" >/dev/null
+if [ "$(sed -n 's/^SBOM_AUTHOR=//p' "$WORK/stub-env")" = "(주)에스케이 & 파트너스" ]; then
+    pass "a Korean legal-entity name with parens/ampersand reaches SBOM_AUTHOR unchanged"
+else
+    fail "(주)에스케이 & 파트너스 was mangled" "$(cat "$WORK/stub-env")"
+fi
+echo "== _env_flag_value: sanitizer for the sibling docker-run -e argument =="
+if python3 - "$ROOT_DIR" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+
+# A legal entity name keeps the punctuation it actually needs -- this is the
+# same sanitizer PROJECT_NAME goes through, so widening it here also fixes a
+# name like "SK Telecom Co., Ltd." losing its comma there.
+assert server._env_flag_value("SK Telecom Co., Ltd.") == "SK Telecom Co., Ltd.", server._env_flag_value("SK Telecom Co., Ltd.")
+assert server._env_flag_value("(주)에스케이 & 파트너스") == "(주)에스케이 & 파트너스", server._env_flag_value("(주)에스케이 & 파트너스")
+assert server._env_flag_value("O'Reilly Media") == "O'Reilly Media", server._env_flag_value("O'Reilly Media")
+
+# $ and backticks are still stripped -- the two bytes that actually start a
+# command substitution -- even though the now-wider charset keeps the
+# parentheses around them (a legal entity name may need those too, e.g. a
+# "(주)" prefix); the result is inert literal text, not two bytes short of a
+# shell command. This value is not a shell string anywhere it goes (see the
+# SBOM_AUTHOR forwarding tests above and scan-sbom.sh's own printf %q path),
+# but the sanitizer keeps stripping $ and ` anyway as its own docstring's
+# defense-in-depth describes.
+mangled = server._env_flag_value("Evil $(touch /tmp/PWNED) `touch /tmp/PWNED2`")
+assert "$" not in mangled and "`" not in mangled, mangled
+assert mangled == "Evil (touch /tmp/PWNED) touch /tmp/PWNED2", mangled
+
+# Still bounded.
+assert len(server._env_flag_value("x" * 300)) == 256
+PY
+then
+    pass "_env_flag_value keeps legal-entity punctuation and still strips shell metacharacters"
+else
+    fail "_env_flag_value sanitizer check failed (see assertion above)"
 fi
 
 echo "== upload: web upload params map to the run-scan env (token via single-use cred) =="

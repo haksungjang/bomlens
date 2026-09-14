@@ -426,6 +426,13 @@ for (const lang of ["en", "ko"] as Lang[]) {
   const s = STR[lang];
 
   test(`@capture advanced toggle - ${lang}`, async ({ page }) => {
+    // The expanded disclosure below can run taller than the default 720px
+    // viewport (it already does in English). An element screenshot taller
+    // than the viewport makes Playwright scroll and stitch the capture, and
+    // that stitching has come out with a blank band at the bottom for this
+    // element before, so a plain height bump avoids needing more than one
+    // scroll position in the first place.
+    await page.setViewportSize({ width: 1280, height: 1400 });
     await seedLang(page, lang);
     await stub(page, { firmware: false, scanoss: true, docker: true });
     await page.goto("/#/new");

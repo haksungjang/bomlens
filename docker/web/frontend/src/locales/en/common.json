@@ -102,7 +102,9 @@
     "upload": "Upload to a server",
     "uploadHint": "Send the generated SBOM to a Dependency-Track or TRUSCA server after the scan. The server URL and token are used for this run only and never stored.",
     "outboundLicense": "Outbound license (optional)",
-    "outboundLicenseHint": "The SPDX id your project ships under, e.g. Apache-2.0. Dependencies whose terms clash with it are then flagged. A source scan cannot infer this, so without it the check stays off."
+    "outboundLicenseHint": "The SPDX id your project ships under, e.g. Apache-2.0. Dependencies whose terms clash with it are then flagged. A source scan cannot infer this, so without it the check stays off.",
+    "sbomAuthor": "SBOM author (optional)",
+    "sbomAuthorHint": "The organisation or person running this scan, not the tool and not whoever wrote the software. Use the full legal name, no acronyms. Left out of the SBOM when empty."
   },
   "upload": {
     "target": "Destination",
