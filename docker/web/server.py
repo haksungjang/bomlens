@@ -3176,6 +3176,44 @@ def _pull_image(image, on_log, on_progress=None, cancel=None):
     return code, classify_pull_failure("\n".join(tail), "exit")
 
 
+# The architecture this daemon reports, normalized to the spelling manifest
+# platform entries use (arm64/amd64, not uname's aarch64/x86_64), so
+# _image_download_bytes() can pick the size for what would actually be pulled.
+# Only a value actually read from `docker version` is cached: the daemon does
+# not change architecture mid-process, but the daemon itself (Docker Desktop,
+# Colima) may not be up yet on the first call, e.g. right after the web UI or
+# the desktop app starts. Caching that failure's "amd64" fallback would show
+# the wrong size for the rest of the process on an arm64 host; instead each
+# failed call returns "amd64" for that one call only and tries again next time.
+_host_arch_cache = None
+
+_ARCH_ALIASES = {
+    "x86_64": "amd64",
+    "x86-64": "amd64",
+    "aarch64": "arm64",
+}
+
+
+def _host_docker_architecture():
+    global _host_arch_cache
+    if _host_arch_cache is not None:
+        return _host_arch_cache
+    if shutil.which("docker"):
+        try:
+            r = subprocess.run(["docker", "version", "--format", "{{.Server.Arch}}"],
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                               timeout=10)
+            if r.returncode == 0:
+                out = r.stdout.decode("utf-8", "replace").strip()
+                if out:
+                    arch = _ARCH_ALIASES.get(out, out)
+                    _host_arch_cache = arch
+                    return arch
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return "amd64"
+
+
 # Compressed download size for an image, read from the registry manifest, or None.
 #
 # This is the number of bytes the user waits for, which is what they need before
@@ -3187,7 +3225,11 @@ def _pull_image(image, on_log, on_progress=None, cancel=None):
 #
 # Cached because it is a network round trip; the value for a tag changes only when
 # the tag is republished, and a stale value costs a wrong size estimate, not a
-# wrong action.
+# wrong action. Not cached, however, when the size was picked using an amd64
+# guess because the host architecture itself could not be read (see
+# _host_docker_architecture): that guess is not a fact about the manifest, and
+# caching it would show the wrong size for the rest of the process on an arm64
+# host that just started before its own Docker daemon was up.
 _download_size_cache = {}
 
 
@@ -3195,6 +3237,7 @@ def _image_download_bytes(image):
     if image in _download_size_cache:
         return _download_size_cache[image]
     size = None
+    cache_result = True
     if _valid_image_ref(image) and shutil.which("docker"):
         try:
             r = subprocess.run(["docker", "manifest", "inspect", "--verbose", image],
@@ -3203,22 +3246,32 @@ def _image_download_bytes(image):
             if r.returncode == 0:
                 data = json.loads(r.stdout.decode("utf-8", "replace"))
                 entries = data if isinstance(data, list) else [data]
+                by_arch = {}
                 for e in entries:
                     desc = (e.get("Descriptor") or {})
                     plat = (desc.get("platform") or {})
-                    # A multi-arch tag lists every platform; the one that matters is
-                    # the one this daemon would pull. amd64/linux is the published
-                    # platform (the registry publishes amd64 only).
-                    if plat and plat.get("architecture") not in (None, "amd64"):
-                        continue
                     layers = ((e.get("SchemaV2Manifest") or {}).get("layers") or [])
                     total = sum(int(l.get("size") or 0) for l in layers)
-                    if total > 0:
-                        size = total
-                        break
+                    if total <= 0:
+                        continue
+                    arch = plat.get("architecture") if plat else None
+                    by_arch.setdefault(arch or "amd64", total)
+                # A multi-arch tag lists every platform; the one that matters is
+                # the one this daemon would actually pull. A manifest that has
+                # not published that architecture yet (firmware/deep-cve before
+                # their arm64 rollout) falls back to the amd64 size, the same
+                # estimate this returned before host architecture matching.
+                # _host_arch_cache is set only when the architecture was
+                # actually read, so it also tells us whether that fallback (if
+                # any) is a confirmed fact about the manifest or a guess made
+                # because the read itself failed just now.
+                host_arch = _host_docker_architecture()
+                cache_result = _host_arch_cache is not None
+                size = by_arch.get(host_arch) or by_arch.get("amd64")
         except (OSError, ValueError, subprocess.SubprocessError):
             size = None
-    _download_size_cache[image] = size
+    if cache_result:
+        _download_size_cache[image] = size
     return size
 
 
