@@ -939,6 +939,325 @@ MFILTER_JS
     rm -f "$_mflt"
 fi
 
+# Maven non-deployed-module filter: the scope filter above keeps a component the
+# moment ANY reactor module needs it at compile/runtime scope, but cdxgen tags
+# scope once per component for the whole reactor -- it does not know that the
+# one module reaching a dependency at that scope is itself never deployed (a
+# test-support or demo module some projects keep in the same reactor, distinct
+# from a source-tree TEST FOLDER, which the source-scan exclusion earlier in
+# this file already leaves out of cdxgen's input entirely). Find those modules
+# from the pom tree itself (maven-deploy-plugin's effective `skip`, walking
+# parent/relativePath and resolving `${property}` references with no `mvn`
+# invocation), then drop only what is reachable from one of
+# them and NOT reachable from any module that does deploy. A component no
+# reactor module's dependency graph reaches at all is left alone (cdxgen may
+# simply not have recorded that edge, not that nothing needs it), and a kept
+# module cdxgen gave no dependency-graph entry to at all makes the whole graph
+# untrustworthy for this pass, so the filter stands down rather than guess.
+# BOMLENS_MAVEN_FULL_GRAPH=1 (the same switch as the scope filter above) opts
+# out, since both exist to answer the same "give me the full reactor graph"
+# request.
+#
+# Runs under this same file's own `command -v node` (this file already runs
+# node for the scope filter above and several other passes), inside the
+# cdxgen sibling container -- the CLI's stage-1 container and the web UI's
+# entrypoint.sh-launched sibling both run from a cdxgen image, and cdxgen
+# itself is a Node.js CLI, so node is present at both the places this file
+# runs from by construction, not by a separate check.
+if [ "${rc:-1}" -eq 0 ] && [ -f pom.xml ] && ! opted_out "${BOMLENS_MAVEN_FULL_GRAPH:-}" \
+   && [ -f "$OUT" ] && command -v node >/dev/null 2>&1; then
+    _mndf=$(mktemp).js
+    cat > "$_mndf" <<'MNDF_JS'
+const fs = require('fs');
+const path = require('path');
+const [bomPath] = process.argv.slice(2);
+let bom;
+try { bom = JSON.parse(fs.readFileSync(bomPath, 'utf8')); } catch (e) { process.exit(0); }
+if (!Array.isArray(bom.components) || !Array.isArray(bom.dependencies)) process.exit(0);
+
+// Minimal recursive-descent XML parser (no deps): elements, nested elements,
+// direct text, comments, <?xml?>, self-closing tags, CDATA (skipped whole --
+// nothing this script reads lives inside one; an antrun plugin's
+// <replacevalue> can legitimately hold Java source with its own < and >, a
+// real construct real pom.xml files use). Does not handle entities beyond the
+// five XML builtins -- pom.xml needs no more for the fields this reads
+// (parent/relativePath, modules, properties, plugin config).
+//
+// The tag matcher uses a sticky regex against a fixed lastIndex rather than
+// `src.slice(i)`: slicing copies everything from i to the end of the file on
+// EVERY tag, which is O(n) per tag and O(n^2) over a whole real pom.xml (a
+// large multi-module reactor's shared parent pom, read once per descendant
+// walking its chain, made this seconds-to-minutes rather than milliseconds).
+// The close-tag check uses `startsWith` at a position for the same reason.
+// A construct this parser does not recognize (as CDATA is handled, this is
+// now only something stranger still, like a stray processing instruction)
+// must never leave `i` unmoved -- that would spin forever rather than just
+// skip one node, so progress is asserted explicitly, at both the recursive
+// and the top level.
+// Belt and suspenders beyond CDATA handling and the progress checks below: a
+// pom.xml this parser has some OTHER, still-unknown way to mishandle must
+// never be able to hang the whole scan or exhaust memory on it. A byte cap
+// (real pom.xml files are a few KB to a couple hundred KB; the reactor's own
+// files here top out under 60KB) and a wall-clock budget checked periodically
+// during parsing (real parses finish in low single-digit milliseconds) turn
+// "unknown parser bug on someone's pom.xml" into "this module's skip status
+// could not be determined", which safely resolves to false -- not a hang.
+const POM_MAX_BYTES = 2 * 1024 * 1024;
+const POM_PARSE_BUDGET_MS = 2000;
+const TAG_RE = /<([A-Za-z_][\w.:-]*)((?:\s+[^>]*?)?)(\/?)>/y;
+function parseXml(src) {
+  if (src.length > POM_MAX_BYTES) return null;
+  src = src.replace(/<\?[\s\S]*?\?>/g, '').replace(/<!--[\s\S]*?-->/g, '');
+  let i = 0;
+  const n = src.length;
+  const deadline = Date.now() + POM_PARSE_BUDGET_MS;
+  let steps = 0;
+  function overBudget() { return (++steps & 0xfff) === 0 && Date.now() > deadline; }
+  function skipWs() { while (i < n && /\s/.test(src[i])) i++; }
+  function parseNode() {
+    skipWs();
+    if (src[i] !== '<') return null;
+    TAG_RE.lastIndex = i;
+    const m = TAG_RE.exec(src);
+    if (!m || m.index !== i) return null;
+    i = TAG_RE.lastIndex;
+    const tag = m[1];
+    const node = { tag, children: [], text: '' };
+    if (m[3] === '/') return node;
+    const closeTag = '</' + tag + '>';
+    while (i < n) {
+      if (overBudget()) throw new Error('parse budget exceeded');
+      skipWs();
+      if (src.startsWith(closeTag, i)) { i += closeTag.length; return node; }
+      if (src[i] === '<') {
+        if (src.startsWith('</', i)) { const end = src.indexOf('>', i); i = end < 0 ? n : end + 1; return node; }
+        if (src.startsWith('<![CDATA[', i)) {
+          const end = src.indexOf(']]>', i);
+          i = end < 0 ? n : end + 3;
+          continue;
+        }
+        const beforeChild = i;
+        const child = parseNode();
+        if (child) node.children.push(child);
+        if (i === beforeChild) { const end = src.indexOf('>', i); i = end < 0 ? n : end + 1; }
+      } else {
+        const next = src.indexOf('<', i);
+        node.text += next < 0 ? src.slice(i) : src.slice(i, next);
+        i = next < 0 ? n : next;
+      }
+    }
+    return node;
+  }
+  try {
+    const roots = [];
+    while (i < n) {
+      if (overBudget()) throw new Error('parse budget exceeded');
+      skipWs();
+      if (i >= n) break;
+      const before = i;
+      const node = parseNode();
+      if (node) roots.push(node);
+      if (i === before) break;
+    }
+    return roots.find(r => r.tag === 'project') || null;
+  } catch (e) {
+    return null;
+  }
+}
+const decodeEntities = s => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&apos;/g, "'");
+const directChild = (node, tag) => node ? (node.children.find(c => c.tag === tag) || null) : null;
+const directChildren = (node, tag) => node ? node.children.filter(c => c.tag === tag) : [];
+const directText = node => node ? decodeEntities(node.text).trim() : '';
+
+// pom loading + parent-chain walk (nearest first). A missing or unresolvable
+// parent (remote-only relativePath, a cycle) stops the chain there -- the
+// caller then finds no more signal and resolves to "not skipped".
+function loadChain(moduleDir, seen) {
+  seen = seen || new Set();
+  const pomPath = path.join(moduleDir, 'pom.xml');
+  const real = path.resolve(pomPath);
+  if (seen.has(real)) return [];
+  seen.add(real);
+  let text;
+  try { text = fs.readFileSync(pomPath, 'utf8'); } catch (e) { return []; }
+  const project = parseXml(text);
+  if (!project) return [];
+  const chain = [{ dir: moduleDir, project }];
+  const parent = directChild(project, 'parent');
+  if (parent) {
+    const relPathNode = directChild(parent, 'relativePath');
+    const relPath = relPathNode ? directText(relPathNode) : '../pom.xml';
+    if (relPath !== '') chain.push(...loadChain(path.dirname(path.join(moduleDir, relPath)), seen));
+  }
+  return chain;
+}
+function findProperty(project, name) {
+  const props = directChild(project, 'properties');
+  const node = props ? directChild(props, name) : null;
+  return node ? directText(node) : undefined;
+}
+// Never descends into <profiles> -- a profile's activation cannot be known
+// offline, so config that lives only there is invisible here and falls
+// through to "not skipped".
+function findPluginSkip(project, underPluginManagement) {
+  const build = directChild(project, 'build');
+  if (!build) return undefined;
+  const pluginsHolder = underPluginManagement ? directChild(build, 'pluginManagement') : build;
+  const plugins = pluginsHolder ? directChild(pluginsHolder, 'plugins') : null;
+  if (!plugins) return undefined;
+  for (const plugin of directChildren(plugins, 'plugin')) {
+    const artifactId = directChild(plugin, 'artifactId');
+    if (!artifactId || directText(artifactId) !== 'maven-deploy-plugin') continue;
+    const config = directChild(plugin, 'configuration');
+    const skip = config ? directChild(config, 'skip') : null;
+    if (skip) return directText(skip);
+  }
+  return undefined;
+}
+function resolveValue(raw, chain) {
+  raw = (raw || '').trim();
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  const m = /^\$\{([^}]+)\}$/.exec(raw);
+  if (!m) return false;
+  for (const { project } of chain) {
+    const v = findProperty(project, m[1]);
+    if (v !== undefined) return v.trim() === 'true';
+  }
+  return false;
+}
+// Effective maven-deploy-plugin skip for one module: direct <plugins> config
+// (nearest pom in the chain wins) first, then <pluginManagement> (still
+// applies -- deploy is bound to the default lifecycle regardless of an
+// explicit <plugins> entry), then the standard maven.deploy.skip property
+// alone. Anything this cannot resolve comes back false: under-excluding is
+// the safe direction, not over-excluding.
+function resolveSkip(moduleDir) {
+  const chain = loadChain(moduleDir);
+  if (chain.length === 0) return false;
+  for (const { project } of chain) { const v = findPluginSkip(project, false); if (v !== undefined) return resolveValue(v, chain); }
+  for (const { project } of chain) { const v = findPluginSkip(project, true); if (v !== undefined) return resolveValue(v, chain); }
+  for (const { project } of chain) { const v = findProperty(project, 'maven.deploy.skip'); if (v !== undefined) return v.trim() === 'true'; }
+  return false;
+}
+function gaOfProject(project) {
+  const artifactId = directChild(project, 'artifactId');
+  let groupId = directChild(project, 'groupId');
+  if (!groupId) { const parent = directChild(project, 'parent'); groupId = parent ? directChild(parent, 'groupId') : null; }
+  return (groupId ? directText(groupId) : '?') + ':' + (artifactId ? directText(artifactId) : '?');
+}
+function enumerateModules(rootDir) {
+  const out = [];
+  function walk(dir) {
+    let text;
+    try { text = fs.readFileSync(path.join(dir, 'pom.xml'), 'utf8'); } catch (e) { return; }
+    const project = parseXml(text);
+    if (!project) return;
+    out.push({ dir, project });
+    const modulesNode = directChild(project, 'modules');
+    if (!modulesNode) return;
+    for (const modNode of directChildren(modulesNode, 'module')) {
+      const rel = directText(modNode);
+      if (rel) walk(path.join(dir, rel));
+    }
+  }
+  walk(rootDir);
+  return out;
+}
+
+// 1. which reactor modules are never deployed
+const modules = enumerateModules('.');
+const excludedGAs = new Set();
+for (const { dir, project } of modules) { if (resolveSkip(dir)) excludedGAs.add(gaOfProject(project)); }
+if (excludedGAs.size === 0) process.exit(0);
+
+// 2. map reactor modules onto the SBOM's own maven components
+const gaOfPurl = purl => { const m = /^pkg:maven\/([^/]+)\/([^@?]+)/.exec(purl || ''); return m ? decodeURIComponent(m[1]) + ':' + decodeURIComponent(m[2]) : null; };
+const refOf = c => c['bom-ref'] || c.purl;
+const allModuleGAs = new Set(modules.map(m => gaOfProject(m.project)));
+const moduleRefByGA = new Map();
+for (const c of bom.components) { const g = gaOfPurl(c.purl); if (g && allModuleGAs.has(g)) moduleRefByGA.set(g, refOf(c)); }
+const mc = bom.metadata && bom.metadata.component;
+const mcRef = mc ? refOf(mc) : null;
+if (mc) { const g = gaOfPurl(mc.purl); if (g && allModuleGAs.has(g)) moduleRefByGA.set(g, mcRef); }
+if (moduleRefByGA.size === 0) process.exit(0);
+
+const adj = new Map();
+for (const d of bom.dependencies) adj.set(d.ref, d.dependsOn || []);
+
+// metadata.component's own dependsOn should name the reactor's modules; if it
+// does not (an aggregate root cdxgen did not wire that way), fall back to
+// every module this pom tree's own <modules> lists found in the SBOM.
+const moduleRefSet = new Set(moduleRefByGA.values());
+const mcModuleDeps = (mcRef ? (adj.get(mcRef) || []) : []).filter(r => moduleRefSet.has(r));
+const reactorRefs = mcModuleDeps.length > 0 ? new Set(mcModuleDeps) : moduleRefSet;
+
+const keepRoots = [];
+const excludeRoots = [];
+for (const [g, ref] of moduleRefByGA) {
+  if (!reactorRefs.has(ref)) continue;
+  (excludedGAs.has(g) ? excludeRoots : keepRoots).push(ref);
+}
+if (keepRoots.length === 0 || excludeRoots.length === 0) process.exit(0);
+
+const incomplete = keepRoots.filter(r => !adj.has(r));
+if (incomplete.length > 0) {
+  process.stderr.write('[build-prep] maven: dependency graph incomplete for a kept module; skipping the non-deployed-module filter\n');
+  process.exit(0);
+}
+
+function bfs(starts) {
+  const seen = new Set(starts);
+  const queue = starts.slice();
+  while (queue.length) {
+    const cur = queue.shift();
+    for (const next of (adj.get(cur) || [])) if (!seen.has(next)) { seen.add(next); queue.push(next); }
+  }
+  return seen;
+}
+const reachedFromKeep = bfs(keepRoots);
+const reachedFromExclude = bfs(excludeRoots);
+const dropRefs = new Set(excludeRoots);
+for (const r of reachedFromExclude) if (!reachedFromKeep.has(r)) dropRefs.add(r);
+if (mcRef) dropRefs.delete(mcRef);
+if (dropRefs.size === 0) process.exit(0);
+
+// 3. apply, mirroring the scope filter's own graph-pruning style
+const droppedPurls = bom.components.filter(c => dropRefs.has(refOf(c))).map(c => c.purl || refOf(c));
+const before = bom.components.length;
+bom.components = bom.components.filter(c => !dropRefs.has(refOf(c)));
+const keptRefs = new Set(bom.components.map(refOf));
+if (mcRef) keptRefs.add(mcRef);
+bom.dependencies = bom.dependencies
+  .filter(d => keptRefs.has(d.ref))
+  .map(d => Array.isArray(d.dependsOn) ? Object.assign({}, d, { dependsOn: d.dependsOn.filter(r => keptRefs.has(r)) }) : d);
+
+// 4. record what was excluded, same shape as bomlens:excluded-paths/-manifests
+const LIMIT = 50;
+bom.metadata = bom.metadata || {};
+const props = (bom.metadata.properties || []).filter(p => p.name !== 'bomlens:excluded-modules' && p.name !== 'bomlens:excluded-components');
+// Every skip=true module actually present in this scan's reactor, not just the
+// ones used to seed the BFS above (a nested excluded module, e.g. one two
+// levels under an already-excluded parent, is reached through its parent and
+// never becomes its own root, but it is still a module this scan excluded).
+const excludedList = [...excludedGAs].filter(g => moduleRefByGA.has(g)).sort();
+let modVal = excludedList.slice(0, LIMIT).join(', ');
+if (excludedList.length > LIMIT) modVal += ` (+${excludedList.length - LIMIT} more)`;
+props.push({ name: 'bomlens:excluded-modules', value: modVal });
+if (droppedPurls.length) {
+  let compVal = droppedPurls.slice(0, LIMIT).join(', ');
+  if (droppedPurls.length > LIMIT) compVal += ` (+${droppedPurls.length - LIMIT} more)`;
+  props.push({ name: 'bomlens:excluded-components', value: compVal });
+}
+bom.metadata.properties = props;
+
+fs.writeFileSync(bomPath, JSON.stringify(bom, null, 2));
+process.stderr.write('[build-prep] maven: excluded ' + excludedList.length + ' non-deployed module(s), dropped ' + (before - bom.components.length) + ' of ' + before + ' components\n');
+MNDF_JS
+    node "$_mndf" "$OUT" || log "maven: non-deployed-module filter skipped (non-fatal)"
+    rm -f "$_mndf"
+fi
+
 # Python license evidence: settle each PyPI component's license on what the
 # installed distribution actually ships, rather than on the summary PyPI serves.
 #
