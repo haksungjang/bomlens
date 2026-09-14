@@ -48,9 +48,14 @@ case "$(uname -s 2>/dev/null)" in
     MINGW*|MSYS*|CYGWIN*)
         DOCKER_MSYS="MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' "
         DOCKER_ENV=(env MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*')
-        hostpath() { cygpath -m -- "$1" 2>/dev/null || printf '%s' "$1"; } ;;
+        hostpath() { cygpath -m -- "$1" 2>/dev/null || printf '%s' "$1"; }
+        # A POSIX path this shell can mkdir/read directly; hostpath() (above)
+        # still does the cygpath -m conversion when this needs to reach a
+        # docker -v flag, same as every other mount in this script.
+        GUARD_STATE_DIR="$(cygpath -u "${LOCALAPPDATA:-$HOME/AppData/Local}" 2>/dev/null)/bomlens/guard" ;;
     *)
-        hostpath() { printf '%s' "$1"; } ;;
+        hostpath() { printf '%s' "$1"; }
+        GUARD_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/bomlens/guard" ;;
 esac
 
 POSTPROCESS_IMAGE="${SBOM_SCANNER_IMAGE:-ghcr.io/sktelecom/bomlens:latest}"           # legacy aliases: sbom-generator, sbom-scanner
@@ -489,7 +494,14 @@ if [ "$UI_MODE" = "true" ]; then
     docker_check
     # The web UI owns per-run subfolders itself (server.py creates them under the
     # mounted base). Honor --output-dir as that base; default to the current dir.
-    UI_BASE="${OUTPUT_BASE:-$(pwd)}"
+    # Resolved with pwd -P, the same as the CLI's own guard-state key (below):
+    # a "current-dir" scan of a symlinked path must hash to the same key a CLI
+    # scan of that path would, so a scan interrupted from one side is still
+    # found and cleaned up by a rescan from the other. mkdir -p first: an
+    # --output-dir that does not exist yet previously relied on docker's own
+    # bind-mount auto-create, which cd here would otherwise break.
+    mkdir -p "${OUTPUT_BASE:-$(pwd)}" || { echo "[ERROR] cannot create output dir: ${OUTPUT_BASE:-$(pwd)}"; exit 1; }
+    UI_BASE="$(cd "${OUTPUT_BASE:-$(pwd)}" && pwd -P)"
     # Extra --mount dirs become read-only rootfs scan targets under
     # /scan-targets/<name>. SBOM_UI_SCAN_ROOTS carries "<container>|<host>"
     # lines so server.py can allow-list them and the UI can label them by
@@ -534,10 +546,18 @@ if [ "$UI_MODE" = "true" ]; then
     # must reach server.py inside the UI container (it reads the env var
     # itself; a host-side default here would never be seen there).
     CANCEL_ENV_FLAGS=(-e BOMLENS_CANCEL_GRACE)
+    # /bomlens-state (5-P PR 2): the same host-persistent guard-state directory
+    # the CLI path uses, so a directory scan launched through --ui can also
+    # recover a source tree a prior, too-hard-killed scan left dirty. entrypoint.sh
+    # inside this container reads SOURCE_ROOT_HOST (set below) and carries this
+    # mount to the cdxgen sibling itself via --volumes-from.
+    UI_GUARD_FLAGS=()
+    mkdir -p "$GUARD_STATE_DIR" 2>/dev/null && UI_GUARD_FLAGS=(-v "$(hostpath "$GUARD_STATE_DIR")":/bomlens-state)
     ensure_image_fresh "$POSTPROCESS_IMAGE"
     exec "${DOCKER_ENV[@]}" docker run --rm "${TTY_FLAGS[@]}" -p "${UI_BIND_ADDRESS}:${UI_PORT}:8080" \
         -v "$(hostpath "$UI_BASE")":/src -v "$(hostpath "$UI_BASE")":/host-output \
         "${MOUNT_FLAGS[@]}" "${HF_FLAGS[@]}" "${GO_ENV_FLAGS[@]}" "${PREP_ENV_FLAGS[@]}" "${CANCEL_ENV_FLAGS[@]}" \
+        "${UI_GUARD_FLAGS[@]}" \
         -v /var/run/docker.sock:/var/run/docker.sock \
         -e MODE=UI -e UI_PORT=8080 -e SBOM_UI_HOST_DIR="$(hostpath "$UI_BASE")" \
         -e SBOM_UI_SCAN_ROOTS="$SCAN_ROOTS" -e EXTERNAL_LOOKUP="$EXTERNAL_LOOKUP" \
@@ -654,6 +674,93 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 RUNNING_CONTAINER_NAME=""
+
+# Host-persistent guard state (5-P PR 2): when a scan is interrupted hard
+# enough that build-prep.sh's own trap never runs (SIGKILL, OOM, a host
+# crash), resolver output for ecosystems that cannot be redirected outside
+# the tree (npm's node_modules is the clearest case) can survive in the
+# source tree. This records, OUTSIDE that tree, exactly what such a run would
+# need to clean up if it never got the chance — read by build-prep.sh's
+# restore-only mode (BOMLENS_GUARD_ID, BOMLENS_GUARD_RESTORE_ONLY) below.
+# Named _ID, not _KEY: cdxgen's own security audit flagged "KEY" as
+# credential-like in a supplier's scan log, which would be a confusing thing
+# to see about an internal bookkeeping value.
+#
+# Scope: only a stable, repeatedly-scanned host path (--target / current
+# folder). A --git clone or zip extract goes into a fresh temp dir every run
+# (CLEANUP_DIRS is non-empty for those), so there is no "next scan of the
+# same tree" to hand a stale record to — setup_guard_state is a no-op there.
+#
+# The state directory is keyed by a hash of the resolved path, but a hash
+# collision (or, with the weaker cksum, a real one) must never make this
+# clean up the wrong folder's files: the recorded path is checked for an
+# exact match before anything is touched.
+guard_hash() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum 2>/dev/null | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 2>/dev/null | awk '{print $1}'
+    else
+        return 1
+    fi
+}
+GUARD_ID=""
+setup_guard_state() {
+    [ "${#CLEANUP_DIRS[@]}" -eq 0 ] || return 0
+    mkdir -p "$GUARD_STATE_DIR" 2>/dev/null || return 0
+    local target_real key owner_file owner ps_out ps_rc recorded_path recorded_image cleanup_image
+    target_real=$(cd "$SCAN_INPUT_DIR" 2>/dev/null && pwd -P) || return 0
+    key=$(printf '%s' "$target_real" | guard_hash) || return 0
+    [ -n "$key" ] || return 0
+    owner_file="$GUARD_STATE_DIR/$key/owner"
+    if [ -f "$owner_file" ]; then
+        owner=$(cat "$owner_file" 2>/dev/null)
+        recorded_path=$(cat "$GUARD_STATE_DIR/$key/path" 2>/dev/null)
+        if [ -z "$owner" ] || [ "$recorded_path" != "$target_real" ] || ! command -v docker >/dev/null 2>&1; then
+            echo "[WARN] found a leftover-cleanup record for this folder that does not match it (or cannot be confirmed); leaving it in place."
+            return 0
+        fi
+        ps_out=$("${DOCKER_ENV[@]}" docker ps --filter "name=^${owner}\$" --format '{{.Names}}' 2>/dev/null)
+        ps_rc=$?
+        if [ "$ps_rc" -ne 0 ]; then
+            echo "[WARN] could not confirm whether a previous scan of this folder ($owner) is still running; leaving its leftovers in place this time."
+            return 0
+        fi
+        if [ -n "$ps_out" ]; then
+            echo "[WARN] a previous scan of this folder ($owner) appears to still be running; not touching its leftovers."
+            return 0
+        fi
+        # Confirmed gone and the path matches: finish what it started
+        # (guard_restore, reused via build-prep.sh's restore-only mode)
+        # before this run's own guard takes over the same slot. Reuses that
+        # run's own cdxgen image (recorded below), or the already-local
+        # postprocess image, rather than pulling anything new just for
+        # cleanup — an offline host must not fail a scan over this.
+        recorded_image=$(cat "$GUARD_STATE_DIR/$key/image" 2>/dev/null)
+        cleanup_image=""
+        if [ -n "$recorded_image" ] && "${DOCKER_ENV[@]}" docker image inspect "$recorded_image" >/dev/null 2>&1; then
+            cleanup_image="$recorded_image"
+        elif "${DOCKER_ENV[@]}" docker image inspect "$POSTPROCESS_IMAGE" >/dev/null 2>&1; then
+            cleanup_image="$POSTPROCESS_IMAGE"
+        fi
+        if [ -z "$cleanup_image" ]; then
+            echo "[WARN] no locally available image to clean up a previous interrupted scan's leftovers with; leaving them in place."
+            return 0
+        fi
+        echo "[INFO] cleaning up build artifacts a previous, interrupted scan of this folder left behind..."
+        "${DOCKER_ENV[@]}" docker run --rm -u 0:0 \
+            -v "$(hostpath "$SCAN_INPUT_DIR")":/app \
+            -v "$(hostpath "$GUARD_STATE_DIR")":/bomlens-state \
+            -v "$(hostpath "$BUILD_PREP")":/tmp/build-prep.sh:ro \
+            -e BOMLENS_GUARD_RESTORE_ONLY=1 -e "BOMLENS_GUARD_ID=$key" \
+            --entrypoint sh "$cleanup_image" /tmp/build-prep.sh /app >/dev/null 2>&1 || true
+    fi
+    mkdir -p "$GUARD_STATE_DIR/$key" 2>/dev/null || return 0
+    printf '%s\n' "$RUNNING_CONTAINER_NAME" > "$GUARD_STATE_DIR/$key/owner" 2>/dev/null || return 0
+    printf '%s\n' "$target_real" > "$GUARD_STATE_DIR/$key/path" 2>/dev/null || return 0
+    printf '%s\n' "$CDX_IMG" > "$GUARD_STATE_DIR/$key/image" 2>/dev/null || return 0
+    GUARD_ID="$key"
+}
 
 # A reproducible (--byte-stable) build must not resolve dependency licenses over
 # the network: registry availability (e.g. pkg.go.dev) varies between runs, so a
@@ -1655,12 +1762,18 @@ if [ "$MODE" = "SOURCE" ]; then
     # time). Invoking the script file directly makes it PID 1, so its trap is
     # what the SIGTERM actually reaches.
     RUNNING_CONTAINER_NAME="bomlens-scan-$$"
+    setup_guard_state
+    GUARD_STATE_ARGS=""
+    if [ -n "$GUARD_ID" ]; then
+        GUARD_STATE_ARGS="-v \"$(hostpath "$GUARD_STATE_DIR")\":/bomlens-state -e BOMLENS_GUARD_ID=\"$GUARD_ID\""
+    fi
     eval "$DOCKER_MSYS"docker run --rm -u 0:0 \
         --name "\"$RUNNING_CONTAINER_NAME\"" \
         -v "\"$(hostpath "$SCAN_INPUT_DIR")\"":/app \
         -v "\"$(hostpath "$OUTPUT_HOST_DIR")\"":/out \
         -v "\"$(hostpath "$BUILD_PREP")\"":/tmp/build-prep.sh:ro \
         $CACHE_MOUNTS \
+        $GUARD_STATE_ARGS \
         -e HOME=/tmp/sbomhome \
         -e MAVEN_OPTS=-Dmaven.repo.local=/tmp/sbomhome/.m2 \
         -e FETCH_LICENSE="$FETCH_LICENSE" \

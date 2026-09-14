@@ -75,7 +75,17 @@ guard_paths() {
 
 guard_snapshot() {
     opted_out "${BOMLENS_KEEP_BUILD_OUTPUT:-}" && { log "source-tree guard off (BOMLENS_KEEP_BUILD_OUTPUT)"; return 0; }
-    GUARD_DIR=$(mktemp -d 2>/dev/null) || { GUARD_DIR=""; return 0; }
+    # Host-persistent guard state (BOMLENS_GUARD_ID, /bomlens-state -- see the
+    # restore-only branch near the bottom of this file): when the caller wired
+    # both up, this snapshot survives a SIGKILL that never lets guard_restore
+    # run, so a later invocation can finish the restore. Falls back to the
+    # normal ephemeral dir when either is absent (unset key, older caller,
+    # no /bomlens-state mount) -- unchanged from before this existed.
+    if [ -n "${BOMLENS_GUARD_ID:-}" ] && [ -d /bomlens-state ]; then
+        GUARD_DIR="/bomlens-state/$BOMLENS_GUARD_ID"
+        mkdir -p "$GUARD_DIR" 2>/dev/null || GUARD_DIR=""
+    fi
+    [ -n "$GUARD_DIR" ] || GUARD_DIR=$(mktemp -d 2>/dev/null) || { GUARD_DIR=""; return 0; }
     guard_paths f > "$GUARD_DIR/files.before" 2>/dev/null
     guard_paths d > "$GUARD_DIR/dirs.before" 2>/dev/null
     while IFS= read -r _f; do
@@ -255,6 +265,21 @@ stop_supervised() {
     fi
     _cg_pid=""; _cg_pgid=""
 }
+
+# Cleanup-only invocation (BOMLENS_GUARD_RESTORE_ONLY=1): a prior run recorded
+# its snapshot at /bomlens-state/$BOMLENS_GUARD_ID and never got to restore
+# it -- SIGKILL, OOM, a host crash, anything that skips the traps below. The
+# caller (scan-sbom.sh / entrypoint.sh) already confirmed that run's container
+# is gone before asking us to finish what it started; this reuses
+# guard_restore's own diff logic instead of reimplementing it host-side. No
+# resolvers, no cdxgen -- filesystem cleanup only, and fast.
+if opted_out "${BOMLENS_GUARD_RESTORE_ONLY:-}"; then
+    if [ -n "${BOMLENS_GUARD_ID:-}" ] && [ -d "/bomlens-state/$BOMLENS_GUARD_ID" ]; then
+        GUARD_DIR="/bomlens-state/$BOMLENS_GUARD_ID"
+        guard_restore
+    fi
+    exit 0
+fi
 
 guard_snapshot
 trap 'stop_supervised; guard_restore' EXIT

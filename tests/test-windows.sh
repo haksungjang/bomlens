@@ -217,6 +217,117 @@ in_log "-e BOMLENS_CANCEL_GRACE" \
   && pass "BOMLENS_CANCEL_GRACE passed to the web UI container" \
   || { fail "BOMLENS_CANCEL_GRACE passed to the web UI container" "rc=$RC"; show; }
 
+# --------------------------------------------------------
+section "Host-persistent guard state (5-P PR 2)"
+# --------------------------------------------------------
+# The web UI container needs /bomlens-state mounted so entrypoint.sh (running
+# inside it) can find the same host-persistent record the CLI path writes.
+d="$(new_proj uiguardmount)"
+scan_in "$d" --ui --output-dir "$d"
+in_log ":/bomlens-state" \
+  && pass "web UI container mounts /bomlens-state" \
+  || { fail "web UI container mounts /bomlens-state" "rc=$RC"; show; }
+
+# scan-sbom.sh's own GUARD_STATE_DIR branch (mirrored here so a test can both
+# override it, portably, and know where to look/plant a record): Windows/MSYS
+# keys off LOCALAPPDATA, everywhere else it is XDG_STATE_HOME (or
+# $HOME/.local/state) -- both end in .../bomlens/guard, but a different env
+# var, so a test cannot just set XDG_STATE_HOME and assume it took effect.
+is_windows_bash() {
+    case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) return 0 ;; *) return 1 ;; esac
+}
+# $1 = the POSIX dir a test wants scan-sbom.sh to use as its guard-state root.
+# Exports the right override var for this platform in the CALLING shell (no
+# $(...) here -- a subshell's export never reaches scan_in afterward) and sets
+# GUARD_OVERRIDE_DIR to the on-disk path (…/bomlens/guard) to plant a record
+# under.
+guard_state_dir_override() {
+    if is_windows_bash; then
+        LOCALAPPDATA="$(cygpath -w "$1" 2>/dev/null || printf '%s' "$1")"
+        export LOCALAPPDATA
+    else
+        XDG_STATE_HOME="$1"
+        export XDG_STATE_HOME
+    fi
+    GUARD_OVERRIDE_DIR="$1/bomlens/guard"
+}
+
+# --output-dir reaches the container resolved (pwd -P), not as the symlink the
+# user passed: a "current-dir" scan of a symlinked path must hash to the same
+# guard-state key a CLI scan of the resolved path would (both use pwd -P), so
+# a scan interrupted from one side is still found by a rescan from the other.
+# Skipped where `ln -s` cannot make a real symlink (e.g. Git Bash on a Windows
+# runner without symlink privilege falls back to a plain-file stand-in) --
+# nothing this test exercises would be true of a copy.
+d="$(new_proj uisymlinktarget)"
+d_real="$(cd "$d" && pwd -P)"
+LINK="$WORK/ui-symlink-in.$N"
+ln -s "$d" "$LINK" 2>/dev/null
+if [ -L "$LINK" ]; then
+    # hostpath() in scan-sbom.sh runs the resolved path through `cygpath -m`
+    # before it reaches -v (Windows drive form, e.g. C:/Users/...), not the
+    # POSIX form (/c/Users/...) pwd -P itself returns on Git Bash.
+    if command -v cygpath >/dev/null 2>&1; then
+        d_real_host="$(cygpath -m -- "$d_real" 2>/dev/null || printf '%s' "$d_real")"
+    else
+        d_real_host="$d_real"
+    fi
+    scan_in "$d" --ui --output-dir "$LINK"
+    if in_log "$d_real_host:/src"; then
+        pass "--ui --output-dir resolves a symlinked path before mounting it"
+    else
+        fail "--ui --output-dir resolves a symlinked path before mounting it" \
+            "expected '$d_real_host:/src'; docker invocation was: $(cat "$LOG" 2>/dev/null)"
+        show
+    fi
+else
+    skip "--ui --output-dir resolves a symlinked path before mounting it (ln -s did not make a real symlink here)"
+fi
+
+# A leftover guard-state record only names a folder's own leftovers as safe to
+# clean up when the recorded absolute path matches this scan's target exactly
+# (defense against a hash collision or a stale/tampered record naming the
+# wrong folder). A mismatch must be left untouched, not treated as clearable.
+guard_hash_of() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        printf '%s' "$1" | sha256sum | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        printf '%s' "$1" | shasum -a 256 | awk '{print $1}'
+    else
+        return 1
+    fi
+}
+if command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1; then
+    _prev_xdg="${XDG_STATE_HOME-__unset__}"; _prev_lad="${LOCALAPPDATA-__unset__}"
+    d="$(new_proj guardmismatch)"; printf '{"name":"a"}' > "$d/package.json"
+    d_real="$(cd "$d" && pwd -P)"
+    key="$(guard_hash_of "$d_real")"
+    guard_home="$WORK/guard-state-home"
+    guard_state_dir_override "$guard_home"
+    guard_dir="$GUARD_OVERRIDE_DIR"
+    mkdir -p "$guard_dir/$key"
+    printf 'stale-owner-container\n' > "$guard_dir/$key/owner"
+    printf '/some/unrelated/other/path\n' > "$guard_dir/$key/path"
+    printf 'ghcr.io/sktelecom/bomlens:cdxgen-node20\n' > "$guard_dir/$key/image"
+
+    scan_in "$d" --project Pguardmismatch --version 1.0.0 --generate-only
+    ok=1
+    [ "$RC" -eq 0 ] || ok=0
+    in_out "does not match" || ok=0
+    [ "$(cat "$guard_dir/$key/path" 2>/dev/null)" = "/some/unrelated/other/path" ] || ok=0
+    [ "$(cat "$guard_dir/$key/owner" 2>/dev/null)" = "stale-owner-container" ] || ok=0
+    if [ "$ok" = 1 ]; then
+        pass "a guard-state record naming a different path is left untouched"
+    else
+        fail "a guard-state record naming a different path is left untouched" \
+            "rc=$RC guard_dir=$guard_dir key=$key; scan output: $(cat "$OUT" 2>/dev/null)"
+    fi
+    [ "$_prev_xdg" = "__unset__" ] && unset XDG_STATE_HOME || export XDG_STATE_HOME="$_prev_xdg"
+    [ "$_prev_lad" = "__unset__" ] && unset LOCALAPPDATA || export LOCALAPPDATA="$_prev_lad"
+else
+    skip "a guard-state record naming a different path is left untouched (no sha256sum/shasum)"
+fi
+
 # .NET needs a *.csproj glob, swift needs Package.swift — handled specially.
 d="$(new_proj dotnet)"; printf '<Project></Project>' > "$d/app.csproj"
 scan_in "$d" --project Pdotnet --version 1.0.0 --generate-only
