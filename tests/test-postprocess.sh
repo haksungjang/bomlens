@@ -3716,6 +3716,78 @@ else
 fi
 unset HOST_OUTPUT_DIR OUT_PREFIX BOMLENS_ARTIFACT_CLEANUP
 
+echo "== 0-components diagnostic names a nested rootfs candidate =="
+# Extracted verbatim from docker/entrypoint.sh, so this tracks the shipped
+# logic rather than a hand-copied duplicate that could silently drift from it.
+sed -n "/^# Warn (don't fail) when the SBOM has no components\./,/^# ========================================================/p" \
+    "$ROOT_DIR/docker/entrypoint.sh" | sed '$d' > "$WORK/nested-rootfs-warn.sh"
+NRH_SNIPPET_LINES="$(wc -l < "$WORK/nested-rootfs-warn.sh" | tr -d '[:space:]')"
+if [ ! -s "$WORK/nested-rootfs-warn.sh" ]; then
+    fail "could not extract the 0-components diagnostic from entrypoint.sh (did its anchor comments move?)"
+elif [ -z "$NRH_SNIPPET_LINES" ] || [ "$NRH_SNIPPET_LINES" -gt 40 ]; then
+    fail "0-components diagnostic snippet is $NRH_SNIPPET_LINES lines (expected well under 40) -- the end anchor likely did not match" \
+        "did the section-divider comment after it move?"
+elif grep -q '^[[:space:]]*exit\b' "$WORK/nested-rootfs-warn.sh"; then
+    fail "0-components diagnostic snippet contains an exit statement -- refusing to source it into this test process" \
+        "$(cat "$WORK/nested-rootfs-warn.sh")"
+else
+    printf '{"components":[]}' > "$WORK/empty.json"
+    printf '{"components":[{"type":"library","name":"x","version":"1"}]}' > "$WORK/nonempty.json"
+
+    # Empty SBOM + a well-formed hint: both the generic warning and the
+    # rootfs-specific note appear.
+    # shellcheck disable=SC2034  # read by the sourced snippet
+    OUTPUT_FILE="$WORK/empty.json"
+    # shellcheck disable=SC2034  # read by the sourced snippet
+    NESTED_ROOTFS_HINT="release-20260919/rootfs"
+    NRH_LOG1="$(. "$WORK/nested-rootfs-warn.sh" 2>&1)"
+    if printf '%s' "$NRH_LOG1" | grep -qF "release-20260919/rootfs (inside the scanned folder) looks like a root filesystem."; then
+        pass "an empty SBOM with a nested-rootfs hint names the candidate folder"
+    else
+        fail "the nested-rootfs candidate was not named" "$NRH_LOG1"
+    fi
+
+    # Empty SBOM, no hint at all: only the generic warning, no rootfs note --
+    # the ordinary case (missing lockfile, empty source) reads the same as always.
+    unset NESTED_ROOTFS_HINT
+    NRH_LOG2="$(. "$WORK/nested-rootfs-warn.sh" 2>&1)"
+    if printf '%s' "$NRH_LOG2" | grep -q "SBOM has 0 components" \
+        && ! printf '%s' "$NRH_LOG2" | grep -q "looks like a root filesystem"; then
+        pass "no hint set -> only the generic 0-components warning, no rootfs note invented"
+    else
+        fail "output did not match the no-hint case" "$NRH_LOG2"
+    fi
+
+    # A malformed hint (path separator escaping upward) must be ignored, not
+    # trusted -- it degrades to the generic warning, never to an unsafe value
+    # echoed verbatim.
+    # shellcheck disable=SC2034  # read by the sourced snippet
+    NESTED_ROOTFS_HINT="../../etc/passwd"
+    NRH_LOG3="$(. "$WORK/nested-rootfs-warn.sh" 2>&1)"
+    if printf '%s' "$NRH_LOG3" | grep -q "SBOM has 0 components" \
+        && ! printf '%s' "$NRH_LOG3" | grep -q "looks like a root filesystem"; then
+        pass "a malformed hint (.. segment) is ignored, not echoed"
+    else
+        fail "a malformed hint was echoed instead of ignored" "$NRH_LOG3"
+    fi
+
+    # The whole diagnostic block, hint included, is gated on 0 components: a
+    # source repo that happens to hold a rootfs-shaped fixture folder but still
+    # resolves real components must never see this note (the false-positive
+    # risk the auto-switch design was rejected over -- here it can't recur,
+    # because the note only ever fires once the scan is already empty).
+    # shellcheck disable=SC2034  # read by the sourced snippet
+    OUTPUT_FILE="$WORK/nonempty.json"
+    NRH_LOG4="$(. "$WORK/nested-rootfs-warn.sh" 2>&1)"
+    if [ -z "$NRH_LOG4" ]; then
+        pass "a non-empty SBOM prints nothing, even with a nested-rootfs hint set"
+    else
+        fail "a non-empty SBOM still printed the 0-components diagnostic" "$NRH_LOG4"
+    fi
+    unset NESTED_ROOTFS_HINT
+fi
+unset OUTPUT_FILE
+
 echo "== node-scope: production filter drops the devDependencies tree =="
 # Guards docker/lib/build-prep.sh's node production-scope filter: cdxgen pulls a
 # deployed app's devDependencies (jest/eslint/@babel/...) into the SBOM, and the

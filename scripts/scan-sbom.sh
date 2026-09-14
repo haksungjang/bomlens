@@ -76,7 +76,7 @@ UPLOAD_TARGET="${UPLOAD_TARGET:-dependency-track}"
 TRUSCA_PROJECT_ID="${TRUSCA_PROJECT_ID:-}"
 TRUSCA_REF="${TRUSCA_REF:-}"; TRUSCA_RELEASE="${TRUSCA_RELEASE:-}"
 
-GENERATE_ONLY="false"; TARGET=""; PROJECT_NAME=""; PROJECT_VERSION=""
+GENERATE_ONLY="false"; TARGET=""; PROJECT_NAME=""; PROJECT_VERSION=""; NESTED_ROOTFS_HINT=""
 GENERATE_NOTICE="false"; GENERATE_SECURITY="false"; GENERATE_SPDX="false"; DEEP_LICENSE="false"
 # Tracks an EXPLICIT --security/--all, as opposed to the risk-report default
 # turning security on: only an explicit request is worth answering when a mode
@@ -1151,6 +1151,29 @@ find_rootfs_dir() {
     return 1
 }
 
+# A plain directory --target that is not itself a root filesystem may still
+# have one a level or two below it (a delivery folder wrapping the actual
+# rootfs) -- the common shape find_rootfs_dir already searches for archives.
+# This does NOT change routing: auto-switching a directory --target to ROOTFS
+# on this alone would repeat, in the other direction, the bug #47 fixed (every
+# directory --target used to hard-route to ROOTFS regardless of contents,
+# silently dropping cdxgen's resolved deps/licenses/hashes) -- a source repo
+# that happens to hold a rootfs-shaped fixture folder would now be silently
+# rerouted away from a scan that would otherwise have found real components.
+# Returns nothing (and fails) when $1 is itself a rootfs -- that path already
+# routes to ROOTFS on its own, so a caller only ever needs this for the
+# directory that is NOT one, to decide whether a diagnostic is worth naming.
+#
+# docker/web/server.py has its own nested_rootfs_hint for the web UI's deep
+# source scan (scan-target-src) -- kept in sync deliberately, same shape
+# check, same fixtures in tests/test-input-routing.sh and tests/test-web-ui.sh.
+nested_rootfs_hint() {
+    local d="$1" found
+    _is_rootfs_dir "$d" && return 1
+    found=$(find_rootfs_dir "$d") || return 1
+    printf '%s' "${found#"$d"/}"
+}
+
 # Does the root filesystem record its own packages? syft reads apk/dpkg/rpm and
 # reports the installed set exactly; without one of these there is nothing for it
 # to read, and only binary signature identification (the firmware image) will
@@ -1563,6 +1586,12 @@ elif [ -n "$TARGET" ]; then
             # survives any later `cd`.
             MODE="SOURCE"
             SCAN_INPUT_DIR="$(cd "$TARGET" && pwd)"
+            # This folder is not itself a rootfs, but one may sit a level
+            # or two below it (nested_rootfs_hint), which is why the resulting
+            # SBOM can come back with 0 components. entrypoint.sh names it in
+            # that warning, but only once the scan is confirmed empty, never
+            # just because the folder exists.
+            NESTED_ROOTFS_HINT="$(nested_rootfs_hint "$SCAN_INPUT_DIR" || true)"
         fi
     else MODE="IMAGE"; fi
 elif [ "$FORCE_FIRMWARE" = "true" ]; then
@@ -1816,7 +1845,7 @@ if [ "$MODE" = "SOURCE" ]; then
         -v "\"$(hostpath "$SCAN_INPUT_DIR")\"":/src -v "\"$(hostpath "$OUTPUT_HOST_DIR")\"":/host-output \
         -w /host-output \
         --add-host=host.docker.internal:host-gateway \
-        -e MODE=POSTPROCESS -e BOMLENS_RUN_INPUT="$OUTPUT_FILE" $(pp_env)$(cosign_run) \
+        -e MODE=POSTPROCESS -e BOMLENS_RUN_INPUT="$OUTPUT_FILE" -e NESTED_ROOTFS_HINT="\"$NESTED_ROOTFS_HINT\"" $(pp_env)$(cosign_run) \
         "\"$POSTPROCESS_IMAGE\""
 else
     # image / binary / rootfs / firmware / aibom / analyze / merge: scanner image

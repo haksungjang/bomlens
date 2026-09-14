@@ -32,7 +32,7 @@ extract_fn() {
     ' "$SCRIPT"
 }
 
-for fn in _is_rootfs_dir find_rootfs_dir has_package_db is_container_archive is_archive; do
+for fn in _is_rootfs_dir find_rootfs_dir nested_rootfs_hint has_package_db is_container_archive is_archive; do
     body="$(extract_fn "$fn")"
     if [ -z "$body" ]; then
         echo "[ERROR] could not lift $fn out of scan-sbom.sh (was it renamed?)"; exit 1
@@ -77,6 +77,42 @@ if find_rootfs_dir "$WORK/nodeps" >/dev/null; then
     fail "a plain source tree was routed to ROOTFS"
 else
     pass "a tree without etc/ stays source"
+fi
+
+echo "== nested_rootfs_hint: naming a nested rootfs without changing routing =="
+
+# A directory --target that is itself a rootfs already routes to ROOTFS on its
+# own (_is_rootfs_dir), so the hint -- meant only for the SOURCE branch's
+# 0-components diagnostic -- has nothing to add there.
+if nested_rootfs_hint "$WORK/flat" >/dev/null; then
+    fail "nested_rootfs_hint returned something for a directory that is itself a rootfs"
+else
+    pass "a directory that is itself a rootfs gets no hint (nothing to add)"
+fi
+
+# The common wrapped-delivery shape, relative to the folder the user pointed
+# --target at -- what a re-run's --target would need appended.
+mkdir -p "$WORK/delivery/release-20260919/rootfs"/{etc,bin,usr}
+if [ "$(nested_rootfs_hint "$WORK/delivery")" = "release-20260919/rootfs" ]; then
+    pass "a rootfs one release-folder down is named, relative to --target"
+else
+    fail "nested_rootfs_hint did not find the wrapped rootfs" \
+        "got: $(nested_rootfs_hint "$WORK/delivery" || echo none)"
+fi
+
+mkdir -p "$WORK/onelevel/rootfs"/{etc,bin,var}
+if [ "$(nested_rootfs_hint "$WORK/onelevel")" = "rootfs" ]; then
+    pass "a rootfs one level down is named"
+else
+    fail "nested_rootfs_hint did not find a one-level-down rootfs" \
+        "got: $(nested_rootfs_hint "$WORK/onelevel" || echo none)"
+fi
+
+# No nested rootfs anywhere -- no hint, same as an ordinary source tree.
+if nested_rootfs_hint "$WORK/nodeps" >/dev/null; then
+    fail "nested_rootfs_hint invented a candidate where none exists"
+else
+    pass "an ordinary source tree with nothing nested gets no hint"
 fi
 
 echo "== the package database decides which scanner can say anything =="
