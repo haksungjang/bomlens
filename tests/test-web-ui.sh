@@ -4116,6 +4116,178 @@ else
     fail "firmware/AI sibling cancel did not use docker-stop-style argv"
 fi
 
+echo "== image download size estimate matches the host docker architecture =="
+# _image_download_bytes() used to always read the amd64 entry off a multi-arch
+# manifest, regardless of the daemon that would actually pull the image. A
+# fake `docker` on PATH stands in both for `docker version` (the daemon's
+# reported architecture) and `docker manifest inspect --verbose` (the
+# per-platform layer sizes), so this checks host-architecture matching,
+# aarch64/x86_64 alias normalization, and the amd64 fallback (a manifest that
+# has not published the host's architecture yet, or a daemon that cannot be
+# asked) without a real docker or registry.
+FAKEDOCKER2="$WORK/fakedockerbin2"; mkdir -p "$FAKEDOCKER2"
+MANIFEST_MULTI="$WORK/manifest-multi.json"
+cat > "$MANIFEST_MULTI" <<'JSON'
+[
+  {"Descriptor": {"platform": {"architecture": "amd64", "os": "linux"}},
+   "SchemaV2Manifest": {"layers": [{"size": 100000000}]}},
+  {"Descriptor": {"platform": {"architecture": "arm64", "os": "linux"}},
+   "SchemaV2Manifest": {"layers": [{"size": 222000000}]}}
+]
+JSON
+MANIFEST_SINGLE_AMD64="$WORK/manifest-single-amd64.json"
+cat > "$MANIFEST_SINGLE_AMD64" <<'JSON'
+{"Descriptor": {"platform": {"architecture": "amd64", "os": "linux"}},
+ "SchemaV2Manifest": {"layers": [{"size": 50000000}]}}
+JSON
+cat > "$FAKEDOCKER2/docker" <<'STUB'
+#!/usr/bin/env bash
+case "${1:-}" in
+  version)
+    if [ "${DOCKER_STUB_VERSION_FAIL:-0}" = "1" ]; then
+      echo "Error: cannot connect to the Docker daemon" >&2
+      exit 1
+    fi
+    if [ -n "${VERSION_FAIL_ONCE_MARKER:-}" ] && [ ! -f "$VERSION_FAIL_ONCE_MARKER" ]; then
+      : > "$VERSION_FAIL_ONCE_MARKER"
+      echo "Error: cannot connect to the Docker daemon (not up yet)" >&2
+      exit 1
+    fi
+    echo "${DOCKER_STUB_ARCH:-amd64}"
+    exit 0
+    ;;
+  manifest)
+    case "${4:-}" in
+      *multi-arch-image*) cat "$MANIFEST_MULTI_FILE" ;;
+      *single-arch-image*) cat "$MANIFEST_SINGLE_FILE" ;;
+      *) echo '{}' ;;
+    esac
+    exit 0
+    ;;
+  *) exit 0 ;;
+esac
+STUB
+chmod +x "$FAKEDOCKER2/docker"
+
+if SBOM_OUTPUT_DIR="$OUT" PATH="$FAKEDOCKER2:$PATH" \
+   MANIFEST_MULTI_FILE="$MANIFEST_MULTI" MANIFEST_SINGLE_FILE="$MANIFEST_SINGLE_AMD64" \
+   DOCKER_STUB_ARCH=arm64 python3 - "$ROOT_DIR" <<'PY'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+
+multi = server._image_download_bytes("ghcr.io/sktelecom/multi-arch-image:latest")
+assert multi == 222000000, multi
+single = server._image_download_bytes("ghcr.io/sktelecom/single-arch-image:latest")
+assert single == 50000000, single
+PY
+then
+    pass "an arm64 daemon gets the arm64 entry, and falls back to the amd64 entry when arm64 was never published"
+else
+    fail "arm64-daemon size selection did not match expectations"
+fi
+
+if SBOM_OUTPUT_DIR="$OUT" PATH="$FAKEDOCKER2:$PATH" \
+   MANIFEST_MULTI_FILE="$MANIFEST_MULTI" MANIFEST_SINGLE_FILE="$MANIFEST_SINGLE_AMD64" \
+   DOCKER_STUB_ARCH=aarch64 python3 - "$ROOT_DIR" <<'PY'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+
+size = server._image_download_bytes("ghcr.io/sktelecom/multi-arch-image:latest")
+assert size == 222000000, size
+PY
+then
+    pass "a daemon reporting uname-style aarch64 is normalized to the arm64 manifest entry"
+else
+    fail "aarch64-to-arm64 normalization did not select the arm64 entry"
+fi
+
+if SBOM_OUTPUT_DIR="$OUT" PATH="$FAKEDOCKER2:$PATH" \
+   MANIFEST_MULTI_FILE="$MANIFEST_MULTI" MANIFEST_SINGLE_FILE="$MANIFEST_SINGLE_AMD64" \
+   DOCKER_STUB_ARCH=x86_64 python3 - "$ROOT_DIR" <<'PY'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+
+size = server._image_download_bytes("ghcr.io/sktelecom/multi-arch-image:latest")
+assert size == 100000000, size
+PY
+then
+    pass "a daemon reporting uname-style x86_64 is normalized to the amd64 manifest entry"
+else
+    fail "x86_64-to-amd64 normalization did not select the amd64 entry"
+fi
+
+if SBOM_OUTPUT_DIR="$OUT" PATH="$FAKEDOCKER2:$PATH" \
+   MANIFEST_MULTI_FILE="$MANIFEST_MULTI" MANIFEST_SINGLE_FILE="$MANIFEST_SINGLE_AMD64" \
+   DOCKER_STUB_VERSION_FAIL=1 python3 - "$ROOT_DIR" <<'PY'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+
+size = server._image_download_bytes("ghcr.io/sktelecom/multi-arch-image:latest")
+assert size == 100000000, size
+PY
+then
+    pass "a daemon that cannot report its architecture falls back to the amd64 entry"
+else
+    fail "a failed docker version call did not fall back to the amd64 entry"
+fi
+
+# The failure above must not be cached: the web UI or desktop app can start
+# before Docker Desktop/Colima itself is up, so the first `docker version`
+# call can fail transiently. Only a value actually read gets cached; a failed
+# call falls back to amd64 for that one call and tries again next time.
+if SBOM_OUTPUT_DIR="$OUT" PATH="$FAKEDOCKER2:$PATH" \
+   MANIFEST_MULTI_FILE="$MANIFEST_MULTI" MANIFEST_SINGLE_FILE="$MANIFEST_SINGLE_AMD64" \
+   VERSION_FAIL_ONCE_MARKER="$WORK/version-fail-once-marker" DOCKER_STUB_ARCH=arm64 \
+   python3 - "$ROOT_DIR" <<'PY'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+
+first = server._host_docker_architecture()
+assert first == "amd64", first
+assert server._host_arch_cache is None, server._host_arch_cache
+
+second = server._host_docker_architecture()
+assert second == "arm64", second
+assert server._host_arch_cache == "arm64", server._host_arch_cache
+PY
+then
+    pass "a docker version call that fails once (daemon not up yet) is not cached, so the next call reads the real architecture"
+else
+    fail "a transient docker-version failure poisoned the architecture cache with amd64"
+fi
+
+# The same failure, one level up: _image_download_bytes() must not cache the
+# amd64-guess size it computes while the architecture read is still failing,
+# or the process would show that wrong size for this image forever even once
+# the daemon comes up.
+if SBOM_OUTPUT_DIR="$OUT" PATH="$FAKEDOCKER2:$PATH" \
+   MANIFEST_MULTI_FILE="$MANIFEST_MULTI" MANIFEST_SINGLE_FILE="$MANIFEST_SINGLE_AMD64" \
+   VERSION_FAIL_ONCE_MARKER="$WORK/version-fail-once-marker-2" DOCKER_STUB_ARCH=arm64 \
+   python3 - "$ROOT_DIR" <<'PY'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+
+image = "ghcr.io/sktelecom/multi-arch-image:latest"
+first = server._image_download_bytes(image)
+assert first == 100000000, first  # amd64 guess: the daemon was not up yet
+assert image not in server._download_size_cache, server._download_size_cache
+
+second = server._image_download_bytes(image)
+assert second == 222000000, second  # daemon is up now: the real arm64 size
+assert server._download_size_cache[image] == 222000000, server._download_size_cache
+PY
+then
+    pass "a download-size estimate made while the daemon was not up yet is not cached, and is recomputed correctly once it is"
+else
+    fail "an amd64 guess from a not-yet-ready daemon was cached as the image's download size"
+fi
+
 echo "== external vulnerability lookup (GET /advisory, GET /package-advisories) =="
 # Three dedicated server instances so these tests never touch the real
 # api.osv.dev: one backed by a canned stub (success paths + input validation,
