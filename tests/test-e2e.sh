@@ -986,6 +986,12 @@ else
     # interrupt a real window to land in.
     swiftsrc="$EXAMPLES/swift"
     if [ -d "$swiftsrc" ]; then
+        # Pull the cdxgen swift image outside the timed window below: this is
+        # the only test in this file that uses it, so on a fresh CI runner
+        # (no local layer cache) the pull itself can take longer than a
+        # resolve step would, and the wait below is measuring build-prep.sh's
+        # own responsiveness, not network/registry variance.
+        docker pull -q "ghcr.io/cyclonedx/cdxgen-debian-swift:${CDXGEN_TAG:-v12}" >/dev/null 2>&1
         w="$(mktemp -d "$WORK_ROOT/interrupt.XXXXXX")"
         out="$(mktemp -d "$WORK_ROOT/interrupt-out.XXXXXX")"
         cp -R "$swiftsrc/." "$w/"
@@ -996,13 +1002,17 @@ else
             > "$out/_scan.log" 2>&1 &
         scan_pid=$!
 
+        # examples/swift has no committed Package.resolved, so build-prep.sh
+        # itself runs a real `swift package resolve` (cloning its two
+        # dependencies from GitHub) before cdxgen even starts — budget for
+        # that network step too, not just the image pull above.
         n=0
-        while ! grep -q '\[build-prep\] cdxgen' "$out/_scan.log" 2>/dev/null && [ "$n" -lt 300 ]; do
+        while ! grep -q '\[build-prep\] cdxgen' "$out/_scan.log" 2>/dev/null && [ "$n" -lt 1200 ]; do
             sleep 0.1; n=$((n + 1))
         done
 
         if ! grep -q '\[build-prep\] cdxgen' "$out/_scan.log" 2>/dev/null; then
-            fail "G-16/G-18: scan never reached the cdxgen stage within 30s (test setup, not the fix)" \
+            fail "G-16/G-18: scan never reached the cdxgen stage within 120s (test setup, not the fix)" \
                  "$(tail -20 "$out/_scan.log")"
             kill -KILL "$scan_pid" 2>/dev/null
         else
