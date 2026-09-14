@@ -5608,6 +5608,116 @@ else
     fail "multiline uses() was not parsed" "$(jq -c '.components' "$MODIR/multiline/out.json" 2>/dev/null)"
 fi
 
+echo "== conda: environment.yml is read structurally, standard 2-space indent only =="
+CONDADIR="$WORK/conda"
+rm -rf "$CONDADIR"
+mkdir -p "$CONDADIR"/{normal,pip3space,dep4space,flowstyle,nested3,mixedtab,stablediff,none}
+
+conda_n() { jq '.components | length' "$1/out.json" 2>/dev/null; }
+conda_get() { jq -r --arg n "$2" --arg f "$3" '[.components[]|select(.name==$n)][0][$f] // "NONE"' "$1/out.json" 2>/dev/null; }
+
+cat > "$CONDADIR/normal/environment.yml" <<'YMLEOF'
+name: myproject
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy=1.26.4
+  - pip:
+    - requests==2.31.0
+YMLEOF
+python3 "$LIB/identify-conda.py" "$CONDADIR/normal" "$CONDADIR/normal/out.json" "1.0" >/dev/null 2>&1
+[ "$(conda_n "$CONDADIR/normal")" = "3" ] \
+    && pass "conda: standard environment.yml parses to 3 components" \
+    || fail "conda: normal case component count" "$(conda_n "$CONDADIR/normal")"
+[ "$(conda_get "$CONDADIR/normal" numpy purl)" = "pkg:conda/numpy@1.26.4?channel=conda-forge" ] \
+    && pass "conda: single declared channel becomes a purl qualifier" \
+    || fail "conda: numpy purl" "$(conda_get "$CONDADIR/normal" numpy purl)"
+[ "$(conda_get "$CONDADIR/normal" requests purl)" = "pkg:pypi/requests@2.31.0" ] \
+    && pass "conda: pip: sub-list becomes pkg:pypi/ purls" \
+    || fail "conda: requests purl" "$(conda_get "$CONDADIR/normal" requests purl)"
+
+# Non-standard indentation: pip: sub-items at 3 spaces (standard is 4).
+printf 'name: x\ndependencies:\n  - python=3.11\n  - pip:\n   - requests==2.31.0\n' \
+    > "$CONDADIR/pip3space/environment.yml"
+python3 "$LIB/identify-conda.py" "$CONDADIR/pip3space" "$CONDADIR/pip3space/out.json" "1.0" >/dev/null 2>&1
+[ "$(conda_n "$CONDADIR/pip3space")" = "0" ] \
+    && pass "conda: pip: sub-list at 3 spaces (not 4) leaves the file unread" \
+    || fail "conda: pip3space component count" "$(conda_n "$CONDADIR/pip3space")"
+
+# Non-standard indentation: dependencies: items at 4 spaces (standard is 2).
+printf 'name: x\ndependencies:\n    - python=3.11\n    - numpy=1.26.4\n' \
+    > "$CONDADIR/dep4space/environment.yml"
+python3 "$LIB/identify-conda.py" "$CONDADIR/dep4space" "$CONDADIR/dep4space/out.json" "1.0" >/dev/null 2>&1
+[ "$(conda_n "$CONDADIR/dep4space")" = "0" ] \
+    && pass "conda: dependencies: items at 4 spaces (not 2) leaves the file unread" \
+    || fail "conda: dep4space component count" "$(conda_n "$CONDADIR/dep4space")"
+
+# Flow-style dependencies list.
+printf 'name: x\ndependencies: [numpy, pandas]\n' > "$CONDADIR/flowstyle/environment.yml"
+python3 "$LIB/identify-conda.py" "$CONDADIR/flowstyle" "$CONDADIR/flowstyle/out.json" "1.0" >/dev/null 2>&1
+[ "$(conda_n "$CONDADIR/flowstyle")" = "0" ] \
+    && pass "conda: flow-style dependencies: [...] leaves the file unread" \
+    || fail "conda: flowstyle component count" "$(conda_n "$CONDADIR/flowstyle")"
+
+# A third level of nesting under pip:.
+printf 'name: x\ndependencies:\n  - python=3.11\n  - pip:\n    - extras:\n      - requests==2.31.0\n' \
+    > "$CONDADIR/nested3/environment.yml"
+python3 "$LIB/identify-conda.py" "$CONDADIR/nested3" "$CONDADIR/nested3/out.json" "1.0" >/dev/null 2>&1
+[ "$(conda_n "$CONDADIR/nested3")" = "0" ] \
+    && pass "conda: a third level of nesting under pip: leaves the file unread" \
+    || fail "conda: nested3 component count" "$(conda_n "$CONDADIR/nested3")"
+
+# A file that starts out standard, then a tab-indented line -- the whole file
+# must be discarded, not just the offending line (no partial parsing).
+printf 'name: x\ndependencies:\n  - python=3.11\n  - numpy=1.26.4\n\t- tqdm\n' \
+    > "$CONDADIR/mixedtab/environment.yml"
+python3 "$LIB/identify-conda.py" "$CONDADIR/mixedtab" "$CONDADIR/mixedtab/out.json" "1.0" >/dev/null 2>&1
+[ "$(conda_n "$CONDADIR/mixedtab")" = "0" ] \
+    && pass "conda: a tab-indented line after a standard start discards the whole file" \
+    || fail "conda: mixedtab component count (partial parse leaked through)" "$(conda_n "$CONDADIR/mixedtab")"
+
+# No environment.yml at all: empty result, not a failure.
+python3 "$LIB/identify-conda.py" "$CONDADIR/none" "$CONDADIR/none/out.json" "1.0" >/dev/null 2>&1
+[ "$(conda_n "$CONDADIR/none")" = "0" ] \
+    && pass "conda: no environment.yml present is a plain empty result" \
+    || fail "conda: none-case component count" "$(conda_n "$CONDADIR/none")"
+
+# A representative excerpt matching a real ML project's shape (conda
+# packages, a pip: sub-list with both exact and range pins, and editable git
+# installs) -- the case that motivated this script: a plain "torch" with no
+# version in setup.py resolved, in cdxgen's actual output on the real
+# project, to that day's PyPI latest instead of the pytorch=1.11.0 this file
+# pins. Confirms the range operator (">=") and editable-install lines do not
+# fail the whole file, and that the real declared name/version is read.
+cat > "$CONDADIR/stablediff/environment.yaml" <<'YMLEOF'
+name: ldm
+channels:
+  - pytorch
+  - defaults
+dependencies:
+  - python=3.8.5
+  - pytorch=1.11.0
+  - numpy=1.19.2
+  - pip:
+    - transformers==4.19.2
+    - streamlit>=0.73.1
+    - -e git+https://github.com/CompVis/taming-transformers.git@master#egg=taming-transformers
+YMLEOF
+python3 "$LIB/identify-conda.py" "$CONDADIR/stablediff" "$CONDADIR/stablediff/out.json" "1.0" >/dev/null 2>&1
+[ "$(conda_n "$CONDADIR/stablediff")" = "5" ] \
+    && pass "conda: multiple channels (no qualifier) + range pin + editable install = 5 real components" \
+    || fail "conda: stable-diffusion-shaped component count" "$(conda_n "$CONDADIR/stablediff")"
+[ "$(conda_get "$CONDADIR/stablediff" pytorch purl)" = "pkg:conda/pytorch@1.11.0" ] \
+    && pass "conda: pytorch is read as declared (1.11.0), not cdxgen's setup.py substitute" \
+    || fail "conda: pytorch purl" "$(conda_get "$CONDADIR/stablediff" pytorch purl)"
+[ "$(conda_get "$CONDADIR/stablediff" streamlit version)" = "NONE" ] \
+    && pass "conda: a range-pinned pip entry (streamlit>=0.73.1) has no fixed version" \
+    || fail "conda: streamlit version" "$(conda_get "$CONDADIR/stablediff" streamlit version)"
+[ "$(conda_get "$CONDADIR/stablediff" torch purl)" = "NONE" ] \
+    && pass "conda: no 'torch' component (that name only exists in setup.py, not environment.yaml)" \
+    || fail "conda: unexpected torch component" "$(conda_get "$CONDADIR/stablediff" torch purl)"
+
 echo "== \$PROJECT is escaped in generated HTML reports, not injected =="
 # Regression: generate-notice.sh, scan-security.sh, generate-risk-report.sh and
 # validate-sbom.sh all interpolate the project name into an HTML <title>/meta

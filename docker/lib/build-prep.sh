@@ -637,6 +637,39 @@ set -- -r --spec-version "$SPEC" -o "$OUT"
 if find . -name Podfile -type f 2>/dev/null | grep -q .; then
     set -- "$@" --exclude-type cocoapods
 fi
+# conda: cdxgen has no conda cataloger and does not know environment.yml at
+# all (confirmed: neither `--type conda` against the file nor against a
+# synthesized conda-meta/ install directory produces anything -- this image
+# has no conda/mamba binary for it to shell out to). Left alone, cdxgen's
+# python auto-detection reads whatever OTHER python manifest happens to sit
+# in the same tree (setup.py, requirements.txt, ...) instead, which can be
+# actively wrong rather than merely incomplete: measured on a real project,
+# an unpinned setup.py install_requires resolved to that day's PyPI latest,
+# with zero overlap against what environment.yml actually pins (see
+# identify-conda.py's own header for the full account). Parse environment.yml
+# here, before cdxgen runs, and only silence cdxgen's python cataloger when
+# our own parse actually produced something to use instead -- a parse that
+# comes back empty (no environment.yml, or one that does not match the shape
+# identify-conda.py knows) leaves cdxgen's python step running exactly as
+# before, since an inaccurate python-derived SBOM still beats an empty one.
+CONDA_ENV_FILE=""
+[ -f "environment.yml" ] && CONDA_ENV_FILE="environment.yml"
+[ -z "$CONDA_ENV_FILE" ] && [ -f "environment.yaml" ] && CONDA_ENV_FILE="environment.yaml"
+if [ -n "$CONDA_ENV_FILE" ] && command -v python3 >/dev/null 2>&1; then
+    CONDA_SBOM="${OUT%_bom.json}_conda.cdx.json"
+    if python3 /tmp/identify-conda.py "$SRC" "$CONDA_SBOM" "${PROJECT_VERSION:-unknown}"; then
+        CONDA_N=$(node -e '
+            try { const d = require(process.argv[1]); process.stdout.write(String((d.components||[]).length)); }
+            catch (e) { process.stdout.write("0"); }
+        ' "$CONDA_SBOM" 2>/dev/null || echo 0)
+        if [ "${CONDA_N:-0}" -gt 0 ]; then
+            log "conda: $CONDA_ENV_FILE parsed ($CONDA_N components); excluding cdxgen's python cataloger"
+            set -- "$@" --exclude-type python
+        else
+            log "conda: $CONDA_ENV_FILE present but not parsed; leaving cdxgen's python cataloger as-is"
+        fi
+    fi
+fi
 # Non-shipped trees: manifests under test, fixture, example, benchmark and demo
 # folders, and the GitHub Actions workflows, are left out of the SBOM because
 # none of it ships with the product. The two lists below are copies of the ones

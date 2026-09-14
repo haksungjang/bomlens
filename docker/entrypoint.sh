@@ -98,7 +98,7 @@ KNOWN_ARTIFACT_SUFFIXES=(
     _scancode.json _files.json _source.json _input.json
     _yocto_vex.json _security_epss.json _vendored.cdx.json
     _ai-profile.json _ai-profile.md
-    _modelica.cdx.json _cocoapods.cdx.json
+    _modelica.cdx.json _cocoapods.cdx.json _conda.cdx.json
     _security_cvebintool.json _security_grype.json _security_yocto.json
 )
 # Only a caller that knows about this cleanup runs it at all. An old
@@ -868,6 +868,35 @@ if [ "$SOURCE_SCAN" = "true" ] && [ -d "$COCOA_SRC" ] \
                     echo "[WARN] merge of CocoaPods components failed; keeping the original SBOM." >&2
                     rm -f "${OUTPUT_FILE}.merged"
                 fi
+            fi
+        fi
+    fi
+fi
+
+# ========================================================
+# conda environment.yml dependencies. identify-conda.py already ran in
+# build-prep.sh (stage 1, before cdxgen), not here: whether cdxgen's python
+# cataloger gets excluded has to be decided before cdxgen runs, and only when
+# the parse actually produced something (see identify-conda.py's own header
+# and build-prep.sh's own conda block for why). This step reads that already-
+# written sidecar and merges it in -- the same /out directory both stages
+# mount, so it is still here to read. Re-parsing environment.yml a second
+# time would only ever reproduce the same result, since nothing about the
+# source tree changes between the two stages. No-op when the main scan
+# already carries a pkg:layer=conda component, so this never double-counts.
+# ========================================================
+CONDA_SBOM="${OUT_PREFIX}_conda.cdx.json"
+if [ -f "$CONDA_SBOM" ]; then
+    HAS_CONDA=$(jq '[.components[]? | select(.properties[]? | select(.name=="bomlens:layer" and .value=="conda"))] | length' "$OUTPUT_FILE" 2>/dev/null || echo 0)
+    if [ "${HAS_CONDA:-0}" -eq 0 ]; then
+        CONDA_N=$(jq '[.components[]?] | length' "$CONDA_SBOM" 2>/dev/null || echo 0)
+        if [ "${CONDA_N:-0}" -gt 0 ]; then
+            echo "[INFO] conda environment.yml dependencies identified: $CONDA_N, merging into SBOM."
+            if bash "$LIBDIR/merge-sbom.sh" "${OUTPUT_FILE}.merged" "$PROJECT_NAME" "$PROJECT_VERSION" "$OUTPUT_FILE" "$CONDA_SBOM"; then
+                mv "${OUTPUT_FILE}.merged" "$OUTPUT_FILE"
+            else
+                echo "[WARN] merge of conda components failed; keeping the original SBOM." >&2
+                rm -f "${OUTPUT_FILE}.merged"
             fi
         fi
     fi
