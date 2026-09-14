@@ -3038,7 +3038,7 @@ bash "$LIB/validate-sbom.sh" "$WORK/tv-old.spdx" "$WORK/tvo" "supplier" >/dev/nu
 tvo=$(jq -r '"\(.checks[] | select(.id=="spec-version") | .status)/\(.result)"' "$WORK/tvo_conformance.json")
 [ "$tvo" = "fail/fail" ] && pass "Tag-Value SPDX-2.1 fails the spec-version check" || fail "Tag-Value spec-version: '$tvo', expected fail/fail"
 
-echo "== conformance: pipelineStepsFailed surfaces a supplier document's own failed-step markers (F-17) =="
+echo "== conformance: pipelineStepsFailed surfaces a supplier document's own failed-step markers =="
 # docker/lib/pipeline-step.sh's mark_pipeline_warning stamps a
 # bomlens:pipeline-step-failed metadata property on the SBOM itself for every
 # best-effort post-process step that failed. validate-sbom.sh reads it
@@ -3858,8 +3858,8 @@ else
     fi
     unset BOMLENS_ARTIFACT_CLEANUP
 
-    # BOMLENS_RUN_INPUT (scan-sbom.sh's stage 1 -> stage 2 handoff, F-92
-    # follow-up): stage 1 already wrote this run's own _bom.json before this
+    # BOMLENS_RUN_INPUT (scan-sbom.sh's stage 1 -> stage 2 handoff): stage 1
+    # already wrote this run's own _bom.json before this
     # container started, so it must survive even though it matches a known
     # suffix -- unlike an actually-stale leftover of a different suffix,
     # which is still removed in the same pass.
@@ -4975,7 +4975,7 @@ BOMLENS_KEEP_BUILD_OUTPUT=1 PATH="$GUARD_ROOT/bin:$PATH" \
     || fail "the opt-out did not keep the resolved tree"
 
 echo "== source-tree guard: an interrupt stops the resolver instead of waiting it out =="
-# Regression for G-16/G-18: a plain foreground `cdxgen "$@"` deferred INT/TERM
+# Regression: a plain foreground `cdxgen "$@"` deferred INT/TERM
 # handling until cdxgen finished on its own (measured: a 5-minute `docker stop`
 # grace never let cleanup run). build-prep.sh now runs cdxgen backgrounded and
 # waits on it explicitly (run_supervised), so a signal is handled the moment it
@@ -5048,7 +5048,7 @@ fi
     || fail "build dir left behind after an interrupted scan" "$(cd "$INT_ROOT/src" && find . | sort | tr '\n' ' ')"
 
 echo "== prep_step: a failed preprocessing step is logged with its stderr and recorded on the SBOM =="
-# Regression for G-2/G-7: cargo/go/bundle/gradle/android/swift/npm/pip all ran
+# Regression: cargo/go/bundle/gradle/android/swift/npm/pip all ran
 # with their stderr discarded and no time limit, so a failure or a stuck
 # network call left no trace anywhere. Every one of those steps now goes
 # through prep_step, which logs the failure (with the command's own stderr)

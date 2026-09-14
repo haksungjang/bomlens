@@ -11,7 +11,7 @@ describe("pipelineStepLabelKey", () => {
     expect(pipelineStepLabelKey("generate-notice")).toBe("pipelineSteps.generateNotice");
   });
 
-  it("covers every step id the dependency-lock designs (5-B/5-F) and firmware (#82) use", () => {
+  it("covers every step id the dependency-lock designs and firmware (#82) use", () => {
     for (const step of [
       "firmware-packages",
       "firmware-extra-roots",

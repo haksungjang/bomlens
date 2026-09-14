@@ -1905,7 +1905,7 @@ def conformance_summary(run_id):
             if how or how_ko:
                 row["reviewGuide"] = {"how": how, "howKo": how_ko, "docUrl": rg_url}
         checks.append(row)
-    # pipelineStepsFailed/pipelineStepsFailedMore: validate-sbom.sh (F-17) already
+    # pipelineStepsFailed/pipelineStepsFailedMore: validate-sbom.sh already
     # dedupes, orders, and caps these at MAX_PIPELINE_STEPS ids of
     # MAX_PIPELINE_STEP_LEN chars each, the same numbers this file uses for
     # pipeline_steps_seen above (kept in sync deliberately). Re-applied here

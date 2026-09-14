@@ -82,7 +82,7 @@ export function defaultOutputDir() {
   return override && override.trim() ? override : path.join(os.homedir(), "sbom-output");
 }
 
-// 호스트에 영구히 남는 가드 상태 폴더(5-P PR 2). "디렉터리 경로" 스캔이 너무 거칠게 죽어
+// 호스트에 영구히 남는 가드 상태 폴더. "디렉터리 경로" 스캔이 너무 거칠게 죽어
 // (강제 종료, OOM, 호스트 재부팅) entrypoint.sh의 정상 정리조차 돌지 못했을 때, 같은 폴더의
 // 다음 스캔이 이 폴더에 남은 기록으로 소스 트리에 남은 산출물을 마저 치운다. scan-sbom.sh의
 // GUARD_STATE_DIR과 같은 규칙(XDG_STATE_HOME 우선, 없으면 홈 아래 .local/state; Windows는
