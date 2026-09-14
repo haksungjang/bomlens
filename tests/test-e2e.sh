@@ -1064,7 +1064,7 @@ else
         skip "examples/nodejs not found"
     fi
 
-    # 3e: G-16/G-18 regression, driven through the real script path (not a
+    # 3e: interrupt regression, driven through the real script path (not a
     # stub): interrupt a SOURCE scan while cdxgen is actually mid-resolve and
     # confirm neither the cdxgen container nor build artifacts in the source
     # tree survive it. swiftsrc has no committed Package.resolved, so cdxgen
@@ -1110,7 +1110,7 @@ else
         done
 
         if [ -z "$stage1_log" ] || ! grep -q '\[build-prep\] cdxgen' "$stage1_log" 2>/dev/null; then
-            fail "G-16/G-18: scan never reached the cdxgen stage within 120s (test setup, not the fix)" \
+            fail "scan never reached the cdxgen stage within 120s (test setup, not the fix)" \
                  "$(tail -20 "$out/_scan.log") $(tail -20 "$stage1_log" 2>/dev/null)"
             kill -KILL "$scan_pid" 2>/dev/null
         else
@@ -1118,10 +1118,10 @@ else
             n=0
             while kill -0 "$scan_pid" 2>/dev/null && [ "$n" -lt 400 ]; do sleep 0.1; n=$((n + 1)); done
             if kill -0 "$scan_pid" 2>/dev/null; then
-                fail "G-16/G-18: interrupted scan-sbom.sh did not exit within 40s of SIGTERM"
+                fail "interrupted scan-sbom.sh did not exit within 40s of SIGTERM"
                 kill -KILL "$scan_pid" 2>/dev/null
             else
-                pass "G-16/G-18: interrupted scan-sbom.sh exited promptly"
+                pass "interrupted scan-sbom.sh exited promptly"
             fi
 
             # small grace: --rm's own removal can lag a moment behind `docker
@@ -1134,16 +1134,16 @@ else
                 sleep 0.2; n=$((n + 1))
             done
             if [ -z "$leftover" ]; then
-                pass "G-16/G-18: no bomlens-scan-* container left running after the interrupt"
+                pass "no bomlens-scan-* container left running after the interrupt"
             else
-                fail "G-16/G-18: a bomlens-scan-* container was left behind after the interrupt" "$leftover"
+                fail "a bomlens-scan-* container was left behind after the interrupt" "$leftover"
                 docker rm -f $leftover >/dev/null 2>&1 || true
             fi
 
             if [ -z "$(cd "$w" && git status --ignored --short)" ]; then
-                pass "G-16/G-18: the source tree is clean (git status --ignored) after the interrupt"
+                pass "the source tree is clean (git status --ignored) after the interrupt"
             else
-                fail "G-16/G-18: the source tree is not clean after the interrupt" \
+                fail "the source tree is not clean after the interrupt" \
                      "$(cd "$w" && git status --ignored --short)"
             fi
         fi

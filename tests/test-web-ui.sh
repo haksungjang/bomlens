@@ -1888,7 +1888,7 @@ else
     echo "  SKIP: jq not available for conformance generation"
 fi
 
-echo "== conformance_summary passes through pipelineStepsFailed (F-17) =="
+echo "== conformance_summary passes through pipelineStepsFailed =="
 # validate-sbom.sh already dedupes/orders/caps this off the SBOM's own
 # bomlens:pipeline-step-failed properties; conformance_summary must pass it
 # through, and default to []/0 for a report generated before this field
@@ -4327,7 +4327,7 @@ else
 fi
 
 echo "== firmware/AI sibling cancel: docker-stop-style, not raw docker kill =="
-# Regression for G-16/G-18: _stream_cmd used to send a signal-less `docker
+# Regression: _stream_cmd used to send a signal-less `docker
 # kill` (immediate SIGKILL, zero grace) when a firmware/AI scan's client
 # disconnected, giving the sibling's own cleanup no chance to run. It now
 # sends `docker stop -t CANCEL_GRACE_SECONDS`, the same grace every other

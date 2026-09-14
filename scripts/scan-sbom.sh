@@ -548,7 +548,7 @@ if [ "$UI_MODE" = "true" ]; then
     # must reach server.py inside the UI container (it reads the env var
     # itself; a host-side default here would never be seen there).
     CANCEL_ENV_FLAGS=(-e BOMLENS_CANCEL_GRACE)
-    # /bomlens-state (5-P PR 2): the same host-persistent guard-state directory
+    # /bomlens-state: the same host-persistent guard-state directory
     # the CLI path uses, so a directory scan launched through --ui can also
     # recover a source tree a prior, too-hard-killed scan left dirty. entrypoint.sh
     # inside this container reads SOURCE_ROOT_HOST (set below) and carries this
@@ -693,7 +693,7 @@ cleanup() {
     # RUNNING_CONTAINER_NAME is set only while stage 1 (SOURCE mode) is
     # waiting on its cdxgen container, so a Ctrl+C or `kill` reaching this
     # script here still stops that container instead of leaving it to run
-    # unsupervised (measured — see G-16/G-18: neither one nor two Ctrl+Cs
+    # unsupervised (measured -- neither one nor two Ctrl+Cs
     # stopped it on their own, and a foreground `docker run` gives this
     # trap no chance to run until the container exits by itself).
     if [ -n "$RUNNING_CONTAINER_NAME" ] && command -v docker >/dev/null 2>&1; then
@@ -719,7 +719,7 @@ trap cleanup EXIT INT TERM
 RUNNING_CONTAINER_NAME=""
 STAGE1_FALLBACK_SCRIPT=""
 
-# Host-persistent guard state (5-P PR 2): when a scan is interrupted hard
+# Host-persistent guard state: when a scan is interrupted hard
 # enough that build-prep.sh's own trap never runs (SIGKILL, OOM, a host
 # crash), resolver output for ecosystems that cannot be redirected outside
 # the tree (npm's node_modules is the clearest case) can survive in the
@@ -1819,8 +1819,8 @@ if [ "$MODE" = "SOURCE" ]; then
     # Run in the background and wait explicitly, instead of foreground, so a
     # Ctrl+C or `kill` is handled the moment it arrives: a shell only acts on a
     # trap once it regains control, and while blocked on a foreground command
-    # that does not happen until the command finishes on its own (measured —
-    # see G-16/G-18). `wait` returns as soon as the signal arrives, letting
+    # that does not happen until the command finishes on its own (measured).
+    # `wait` returns as soon as the signal arrives, letting
     # cleanup() (which reads RUNNING_CONTAINER_NAME) stop the container right
     # away instead of leaving it to run unsupervised.
     #

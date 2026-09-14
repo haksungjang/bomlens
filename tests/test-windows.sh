@@ -283,7 +283,7 @@ scan_in "$d" --project Psweepnone --version 1.0.0 --generate-only
   || { fail "no leftover found means nothing named by the sweep query is removed" "rc=$RC"; show; }
 
 # --------------------------------------------------------
-section "Host-persistent guard state (5-P PR 2)"
+section "Host-persistent guard state"
 # --------------------------------------------------------
 # The web UI container needs /bomlens-state mounted so entrypoint.sh (running
 # inside it) can find the same host-persistent record the CLI path writes.

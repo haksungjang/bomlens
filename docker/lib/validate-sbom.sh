@@ -882,7 +882,7 @@ N_UNTRACEABLE=$(echo "$CHECKS" | jq -r '([.[] | select(.id=="no-generic")][0].de
 # entry per failed step (bomlens:pipeline-step-failed). A conformance PASS
 # computed over an SBOM whose upstream steps did not all succeed may be
 # judging incomplete data, so the report says so as a document-level note --
-# never a lowered check status (F-01: an artificially lowered, correctly
+# never a lowered check status (an artificially lowered, correctly
 # computed check reads as an unjust rejection).
 #
 # Read straight from $SBOM (the document under test itself), not
@@ -1142,7 +1142,7 @@ else
     C_PILL_UNTRACE="Untraceable (pkg:generic):"
 fi
 
-# Pipeline-steps-failed line for md/html (F-17). Built once here, in whichever
+# Pipeline-steps-failed line for md/html. Built once here, in whichever
 # language was chosen above, then just emitted where empty. The step ids come
 # straight off $SBOM -- untrusted supplier input under --analyze -- so each is
 # escaped/stripped for its target format (never interpolated raw): html gets

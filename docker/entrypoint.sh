@@ -187,7 +187,7 @@ stop_sibling() {
     docker stop -t "$BOMLENS_CANCEL_GRACE" "$SIBLING_CID" >/dev/null 2>&1 || true
 }
 
-# Host-persistent guard state (5-P PR 2): mirrors scripts/scan-sbom.sh's
+# Host-persistent guard state: mirrors scripts/scan-sbom.sh's
 # setup_guard_state for the web UI's SOURCE scans. Whoever launched this
 # container (scan-sbom.sh --ui, the desktop app) mounts a host directory at
 # GUARD_STATE_DIR; --volumes-from "$self" below already carries that mount
@@ -338,7 +338,7 @@ generate_sbom_cdxgen() {
     # cancel (server.py's proc.terminate()) is handled the moment it arrives:
     # a shell only acts on a trap once it regains control, and while blocked on
     # a foreground command that does not happen until the command finishes on
-    # its own (measured — see G-16/G-18). `wait` returns as soon as the signal
+    # its own (measured). `wait` returns as soon as the signal
     # arrives, so the trap below can stop the sibling right away instead of
     # leaving it to run to completion unsupervised.
     local logf cidf rcf; logf=$(mktemp); cidf=$(mktemp); rcf=$(mktemp); rm -f "$cidf"
