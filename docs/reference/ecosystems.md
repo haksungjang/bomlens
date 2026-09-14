@@ -158,6 +158,8 @@ Detected file: `composer.lock`
 
 Detected file: `Cargo.lock`
 
+> Note: a Cargo workspace member registered in `Cargo.lock` survives the file-level exclusion above even when its own directory sits under an excluded tree, because cdxgen reads `Cargo.lock` directly. Such a member's own component is left out too, along with a dependency only that member needs, unless a kept member reaches it as well (any way at all). `BOMLENS_INCLUDE_NON_SHIPPED=1` (the same switch as the file-level exclusion above) keeps everything this leaves out. The excluded members and the components dropped because of them are recorded on the SBOM as `bomlens:excluded-members` and `bomlens:excluded-components`.
+
 ---
 
 ## .NET

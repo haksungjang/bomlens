@@ -1258,6 +1258,316 @@ MNDF_JS
     rm -f "$_mndf"
 fi
 
+# Cargo workspace-member filter: the file-level exclusion above (the --exclude
+# globs built from NON_SHIPPED_DIRS) narrows what cdxgen crawls, but cdxgen
+# reads Cargo.lock directly for Rust, independent of that crawl -- a crate
+# registered as a workspace member in Cargo.lock survives even when its own
+# directory sits under an excluded tree (an examples-only crate, say). Drop
+# such a member's own component, and a dependency only that member needs,
+# unless a kept member reaches it too (any way at all -- Cargo.lock's own
+# dependency list carries no normal/dev/build distinction, and there is no
+# principled reason to treat them differently here anyway: reaching it at all
+# is enough to keep it, same as everywhere else in this file).
+# BOMLENS_INCLUDE_NON_SHIPPED=1 (the same switch the file-level exclusion
+# above uses) opts out, since this extends that same exclusion to the lock
+# file.
+#
+# Member/path discovery uses `cargo metadata --no-deps --offline`, confirmed
+# to need no network at all (it reads only the Cargo.toml files already on
+# disk, workspace inheritance and all). The dependency graph itself is NOT
+# read from a full `cargo metadata` resolve -- that needs to download every
+# crate's source even when Cargo.lock already pins exact versions, which is
+# slow and fails outright offline. Instead this reads Cargo.lock's own flat,
+# machine-generated package list directly: a single forward pass over its
+# lines, no recursion, so the stuck-parser bug the pom parser above once had
+# (a child parse that never advances the cursor) cannot recur here by
+# construction. A byte-size cap and a wall-clock budget still bound it, and
+# any dependency-list entry that cannot be traced to exactly one package
+# block (Cargo.lock's three reference forms: bare name, "name version", or
+# "name version (source)") stands the whole pass down rather than guess.
+if [ "${rc:-1}" -eq 0 ] && [ -f Cargo.toml ] && [ -f Cargo.lock ] \
+   && [ -n "$EXCLUDE_NON_SHIPPED" ] \
+   && [ -f "$OUT" ] && command -v node >/dev/null 2>&1 && command -v cargo >/dev/null 2>&1; then
+    _cwmeta=$(prep_step cargo-workspace-metadata "$PREP_TIMEOUT_DEFAULT" cargo metadata --no-deps --format-version 1 --offline)
+    _cwmeta_rc=$?
+    if [ "$_cwmeta_rc" -eq 0 ] && [ -n "$_cwmeta" ]; then
+        _cwmetaf=$(mktemp)
+        printf '%s' "$_cwmeta" > "$_cwmetaf"
+        _cwmf=$(mktemp).js
+        cat > "$_cwmf" <<'CWMF_JS'
+const fs = require('fs');
+const path = require('path');
+const [bomPath, metaPath, lockPath, dirsStr] = process.argv.slice(2);
+let bom;
+try { bom = JSON.parse(fs.readFileSync(bomPath, 'utf8')); } catch (e) { process.exit(0); }
+if (!Array.isArray(bom.components) || !Array.isArray(bom.dependencies)) process.exit(0);
+
+let meta;
+try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf8')); } catch (e) { process.exit(0); }
+const members = Array.isArray(meta.workspace_members) ? meta.workspace_members : [];
+if (members.length === 0) process.exit(0);
+const pkgById = new Map();
+for (const p of (meta.packages || [])) pkgById.set(p.id, p);
+
+const NON_SHIPPED_DIRS = new Set((dirsStr || '').split(/\s+/).filter(Boolean));
+// realpath both sides: cargo (and process.cwd()) resolve symlinks, so a raw
+// string comparison can spuriously disagree on any host where the scan root
+// is reached through one (macOS routes its own tmp dir through /private,
+// for one).
+let cwd;
+try { cwd = fs.realpathSync(process.cwd()); } catch (e) { cwd = process.cwd(); }
+function relDir(manifestPath) {
+  let dir = path.dirname(manifestPath);
+  try { dir = fs.realpathSync(dir); } catch (e) { /* use the raw path */ }
+  return path.relative(cwd, dir);
+}
+function underExcludedTree(manifestPath) {
+  const rel = relDir(manifestPath);
+  if (!rel || rel.startsWith('..')) return false;
+  return rel.split(path.sep).some(seg => NON_SHIPPED_DIRS.has(seg));
+}
+
+const memberInfo = [];
+for (const id of members) {
+  const p = pkgById.get(id);
+  if (!p || !p.name || !p.manifest_path) process.exit(0);   // metadata shape unexpected: bail
+  memberInfo.push({ name: p.name, manifestPath: p.manifest_path,
+                    excluded: underExcludedTree(p.manifest_path) });
+}
+const excludedMembers = memberInfo.filter(m => m.excluded);
+if (excludedMembers.length === 0) process.exit(0);
+const keptMembers = memberInfo.filter(m => !m.excluded);
+if (keptMembers.length === 0) process.exit(0);
+
+// --- Cargo.lock: single forward pass over its lines, no recursion ---
+const LOCK_MAX_BYTES = 8 * 1024 * 1024;
+const PARSE_BUDGET_MS = 3000;
+let lockText;
+try { lockText = fs.readFileSync(lockPath, 'utf8'); } catch (e) { process.exit(0); }
+if (lockText.length > LOCK_MAX_BYTES) process.exit(0);
+
+const deadline = Date.now() + PARSE_BUDGET_MS;
+let steps = 0;
+function overBudget() { return (++steps & 0xfff) === 0 && Date.now() > deadline; }
+
+function quoted(s) {
+  const m = /^"((?:[^"\\]|\\.)*)"\s*,?\s*$/.exec(s.trim());
+  return m ? m[1].replace(/\\(.)/g, '$1') : null;
+}
+
+const lines = lockText.split('\n');
+let lockVersion = null;
+const blocks = [];
+let cur = null;
+let inDeps = false;
+let malformed = false;
+for (let i = 0; i < lines.length && !malformed; i++) {
+  if (overBudget()) { malformed = true; break; }
+  const trimmed = lines[i].trim();
+  if (lockVersion === null && !cur) {
+    const m = /^version\s*=\s*(\d+)\s*$/.exec(trimmed);
+    if (m) lockVersion = m[1];
+  }
+  if (trimmed === '[[package]]') {
+    if (inDeps) { malformed = true; break; }   // unterminated dependencies array
+    if (cur) blocks.push(cur);
+    cur = { name: null, version: null, source: null, deps: [] };
+    continue;
+  }
+  if (!cur) continue;
+  if (inDeps) {
+    if (trimmed === ']' || trimmed === '],') { inDeps = false; continue; }
+    const item = quoted(trimmed);
+    if (item === null) { malformed = true; break; }
+    cur.deps.push(item);
+    continue;
+  }
+  let m;
+  if ((m = /^name\s*=\s*"((?:[^"\\]|\\.)*)"\s*$/.exec(trimmed))) { cur.name = m[1]; continue; }
+  if ((m = /^version\s*=\s*"((?:[^"\\]|\\.)*)"\s*$/.exec(trimmed))) { cur.version = m[1]; continue; }
+  if ((m = /^source\s*=\s*"((?:[^"\\]|\\.)*)"\s*$/.exec(trimmed))) { cur.source = m[1]; continue; }
+  if (/^dependencies\s*=\s*\[\s*\]\s*$/.test(trimmed)) { continue; }
+  if ((m = /^dependencies\s*=\s*\[(.*)\]\s*$/.exec(trimmed))) {
+    const inner = m[1].trim();
+    if (inner) {
+      for (const part of inner.split(',')) {
+        const item = quoted(part);
+        if (item === null) { malformed = true; break; }
+        cur.deps.push(item);
+      }
+    }
+    continue;
+  }
+  if (/^dependencies\s*=\s*\[\s*$/.test(trimmed)) { inDeps = true; continue; }
+  // any other line (checksum, replace, ...) is ignored
+}
+if (!malformed && cur && !inDeps) blocks.push(cur);
+if (malformed || inDeps || lockVersion === null || (lockVersion !== '3' && lockVersion !== '4')) process.exit(0);
+if (blocks.some(b => !b.name || !b.version)) process.exit(0);
+
+// Canonical key per Cargo.lock's own reference precedence: bare name if that
+// name is unique in this lock, else "name version", else "name version
+// (source)". A dependency-list item, resolved the same way, must land on
+// exactly one block or the whole pass stands down.
+const nameCount = new Map();
+const nvCount = new Map();
+for (const b of blocks) {
+  nameCount.set(b.name, (nameCount.get(b.name) || 0) + 1);
+  const nv = b.name + '|' + b.version;
+  nvCount.set(nv, (nvCount.get(nv) || 0) + 1);
+}
+function canonicalKey(b) {
+  if (nameCount.get(b.name) === 1) return b.name;
+  if (nvCount.get(b.name + '|' + b.version) === 1) return b.name + ' ' + b.version;
+  return b.name + ' ' + b.version + ' (' + (b.source || '') + ')';
+}
+const keyOf = new Map();
+const blockByKey = new Map();
+for (const b of blocks) { const k = canonicalKey(b); keyOf.set(b, k); blockByKey.set(k, b); }
+if (blockByKey.size !== blocks.length) process.exit(0);   // two blocks collided on their key
+
+const byName = new Map();
+const byNameVersion = new Map();
+const byNameVersionSource = new Map();
+for (const b of blocks) {
+  (byName.get(b.name) || byName.set(b.name, []).get(b.name)).push(b);
+  const nv = b.name + '|' + b.version;
+  (byNameVersion.get(nv) || byNameVersion.set(nv, []).get(nv)).push(b);
+  const nvs = nv + '|' + (b.source || '');
+  (byNameVersionSource.get(nvs) || byNameVersionSource.set(nvs, []).get(nvs)).push(b);
+}
+function resolveDepItem(item) {
+  let m = /^(\S+) (\S+) \((.+)\)$/.exec(item);
+  if (m) {
+    const c = byNameVersionSource.get(m[1] + '|' + m[2] + '|' + m[3]) || [];
+    return c.length === 1 ? c[0] : null;
+  }
+  m = /^(\S+) (\S+)$/.exec(item);
+  if (m) {
+    const c = byNameVersion.get(m[1] + '|' + m[2]) || [];
+    return c.length === 1 ? c[0] : null;
+  }
+  const c = byName.get(item) || [];
+  return c.length === 1 ? c[0] : null;
+}
+
+const adj = new Map();
+for (const b of blocks) {
+  if (overBudget()) process.exit(0);
+  const targets = [];
+  for (const item of b.deps) {
+    const target = resolveDepItem(item);
+    if (!target) process.exit(0);   // an unresolved reference: stand the whole pass down
+    targets.push(keyOf.get(target));
+  }
+  adj.set(keyOf.get(b), targets);
+}
+
+// Workspace members are local path packages; a real workspace cannot have two
+// members share a name, so this must resolve to exactly one block.
+function memberKey(m) {
+  const c = byName.get(m.name) || [];
+  return c.length === 1 ? keyOf.get(c[0]) : null;
+}
+const keptRoots = [];
+for (const m of keptMembers) { const k = memberKey(m); if (!k) process.exit(0); keptRoots.push(k); }
+const excludeRoots = [];
+for (const m of excludedMembers) { const k = memberKey(m); if (!k) process.exit(0); excludeRoots.push(k); }
+
+function bfs(starts) {
+  const seen = new Set(starts);
+  const queue = starts.slice();
+  while (queue.length) {
+    if (overBudget()) return null;
+    const cur = queue.shift();
+    for (const next of (adj.get(cur) || [])) if (!seen.has(next)) { seen.add(next); queue.push(next); }
+  }
+  return seen;
+}
+const reachedFromKeep = bfs(keptRoots);
+const reachedFromExclude = bfs(excludeRoots);
+if (!reachedFromKeep || !reachedFromExclude) process.exit(0);
+
+const dropKeys = new Set(excludeRoots);
+for (const k of reachedFromExclude) if (!reachedFromKeep.has(k)) dropKeys.add(k);
+if (dropKeys.size === 0) process.exit(0);
+
+// purl matching only carries name@version, not source, so collapse drop/keep
+// sets to name@version pairs; a pair reachable from a kept root under ANY of
+// its blocks counts as kept -- conservative when the same name@version
+// exists under two different sources and only one of them is excluded.
+const nvOf = k => { const b = blockByKey.get(k); return b.name + '@' + b.version; };
+const keptNV = new Set([...reachedFromKeep].map(nvOf));
+const dropNV = new Set();
+for (const k of dropKeys) { const nv = nvOf(k); if (!keptNV.has(nv)) dropNV.add(nv); }
+if (dropNV.size === 0) process.exit(0);
+
+// --- apply to the SBOM ---
+const refOf = c => c['bom-ref'] || c.purl;
+const nvOfPurl = purl => {
+  const m = /^pkg:cargo\/([^@]+)@([^?]+)/.exec(purl || '');
+  return m ? decodeURIComponent(m[1]) + '@' + decodeURIComponent(m[2]) : null;
+};
+const droppedPurls = [];
+const keep = c => {
+  const nv = nvOfPurl(c.purl);
+  if (!nv || !dropNV.has(nv)) return true;
+  droppedPurls.push(c.purl);
+  return false;
+};
+const before = bom.components.length;
+bom.components = bom.components.filter(keep);
+if (droppedPurls.length === 0) process.exit(0);
+
+const mc = bom.metadata && bom.metadata.component;
+const keptRefs = new Set(bom.components.map(refOf));
+if (mc) keptRefs.add(mc['bom-ref'] || mc.purl);
+bom.dependencies = bom.dependencies
+  .filter(d => keptRefs.has(d.ref))
+  .map(d => Array.isArray(d.dependsOn) ? Object.assign({}, d, { dependsOn: d.dependsOn.filter(r => keptRefs.has(r)) }) : d);
+
+// Record, merging into whatever another exclusion pass in this same scan
+// already wrote to the same shared bomlens:excluded-components property
+// (a polyglot repo could also trip the Maven non-deployed-module filter
+// above). The prior value is itself a capped display string, so the merge
+// is best-effort: it recovers the prior shown items and total count from
+// the "(+N more)" suffix and re-caps over the combined total.
+function mergeCapped(existing, additions, limit) {
+  let shown = [];
+  let priorTotal = 0;
+  if (existing) {
+    const m = /^(.*?)(?: \(\+(\d+) more\))?$/.exec(existing);
+    shown = m[1] ? m[1].split(', ').filter(Boolean) : [];
+    priorTotal = shown.length + (m[2] ? parseInt(m[2], 10) : 0);
+  }
+  const merged = shown.concat(additions);
+  const total = priorTotal + additions.length;
+  let val = merged.slice(0, limit).join(', ');
+  if (total > limit) val += ' (+' + (total - Math.min(limit, merged.length)) + ' more)';
+  return val;
+}
+const LIMIT = 50;
+bom.metadata = bom.metadata || {};
+const existingProps = bom.metadata.properties || [];
+const priorMembers = (existingProps.find(p => p.name === 'bomlens:excluded-members') || {}).value || null;
+const priorComponents = (existingProps.find(p => p.name === 'bomlens:excluded-components') || {}).value || null;
+const memberList = excludedMembers.map(m =>
+  'cargo:' + relDir(m.manifestPath).split(path.sep).join('/') + ' (' + m.name + ')');
+const props = existingProps.filter(p => p.name !== 'bomlens:excluded-members' && p.name !== 'bomlens:excluded-components');
+props.push({ name: 'bomlens:excluded-members', value: mergeCapped(priorMembers, memberList, LIMIT) });
+props.push({ name: 'bomlens:excluded-components', value: mergeCapped(priorComponents, droppedPurls, LIMIT) });
+bom.metadata.properties = props;
+
+fs.writeFileSync(bomPath, JSON.stringify(bom, null, 2));
+process.stderr.write('[build-prep] cargo: excluded ' + excludedMembers.length + ' workspace member(s), dropped ' + (before - bom.components.length) + ' of ' + before + ' components\n');
+CWMF_JS
+        node "$_cwmf" "$OUT" "$_cwmetaf" Cargo.lock "$NON_SHIPPED_DIRS" || log "cargo: workspace-member filter skipped (non-fatal)"
+        rm -f "$_cwmf" "$_cwmetaf"
+    else
+        log "cargo: could not resolve workspace members offline; skipping workspace-member filter"
+    fi
+fi
+
 # Python license evidence: settle each PyPI component's license on what the
 # installed distribution actually ships, rather than on the summary PyPI serves.
 #
