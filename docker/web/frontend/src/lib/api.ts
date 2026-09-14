@@ -381,6 +381,13 @@ export interface ConformanceSummary {
    *  Present only on AI SBOMs; the key is omitted for non-AI SBOMs. Drives the
    *  "Regulatory crosswalk" sub-block inside the conformance panel. */
   regulatoryCrosswalk?: RegulatoryCrosswalk;
+  /** Best-effort post-process step ids validate-sbom.sh saw failed while this
+   *  SBOM was generated (bomlens:pipeline-step-failed), same shape as the
+   *  top-level SBOM summary's field of the same name. Empty/0 on a report
+   *  from before this field existed. */
+  pipelineStepsFailed?: string[];
+  /** How many more failed steps exist past the cap in pipelineStepsFailed. */
+  pipelineStepsFailedMore?: number;
 }
 
 /** One G7 cluster's coverage counts in the aiProfile card. */
