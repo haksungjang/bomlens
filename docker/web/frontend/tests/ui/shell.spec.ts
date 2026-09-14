@@ -1024,6 +1024,43 @@ test("Overview shows what changed since the previous scan of the same project", 
   await expect(page.getByTestId("vuln-diff-all-link")).toBeVisible();
 });
 
+test("Overview comparison card's names jump into the filtered section", async ({ page }) => {
+  await stubAndRunWithPreviousScan(page);
+  await expect(page.locator("main h1")).toBeVisible();
+  await page.getByTestId("comp-change-summary").click();
+
+  const openssl = page.getByRole("link", { name: "openssl@3.0.0" });
+  await expect(openssl).toHaveAttribute("href", /#\/scan\/.*\/components\?q=openssl$/);
+
+  // Keyboard focus lands on the link and stays visible (focus-visible ring,
+  // not outline: none with nothing to replace it): a reader tabbing through
+  // this list needs to see where they are.
+  await openssl.focus();
+  await expect(openssl).toBeFocused();
+  // Scoped to the new list, not the whole page: the severity-trend text
+  // beside it has a pre-existing contrast issue unrelated to this change.
+  const axe = await new AxeBuilder({ page })
+    .include('[data-testid="comp-change-details"]')
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  expect(axe.violations).toEqual([]);
+
+  await openssl.click();
+  await expect(page.getByRole("link", { name: /^Components/ })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByText("openssl", { exact: true })).toBeVisible();
+  await expect(page.getByText("readline", { exact: true })).toHaveCount(0);
+
+  await page.goto("/?ui=next#/new");
+  await stubAndRunWithPreviousScan(page);
+  await page.getByTestId("vuln-change-summary").click();
+  const cve = page.getByRole("link", { name: "CVE-2024-0001 (openssl)" });
+  await expect(cve).toHaveAttribute("href", /#\/scan\/.*\/vulnerabilities\?q=CVE-2024-0001$/);
+  await cve.click();
+  await expect(page.getByRole("link", { name: /^Vulnerabilities/ })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByText("CVE-2024-0001").first()).toBeVisible();
+  await expect(page.getByText("CVE-2024-0002")).toHaveCount(0);
+});
+
 test("Overview warns when the SBOM degraded to syft (disk space)", async ({ page }) => {
   await page.route("**/capabilities", (r) =>
     r.fulfill({ contentType: "application/json", body: JSON.stringify({ firmware: false, scanoss: false, docker: true }) }),

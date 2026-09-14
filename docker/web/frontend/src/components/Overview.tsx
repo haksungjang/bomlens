@@ -125,6 +125,20 @@ function capList<T>(items: T[]): { shown: T[]; more: number } {
   return { shown: items.slice(0, DIFF_LIST_CAP), more: Math.max(0, items.length - DIFF_LIST_CAP) };
 }
 
+/** A comparison-card diff entry's name, linking into the section it names
+ *  filtered to that name (the same free-text `q` filter TopRisk's rows use).
+ *  text-brand-strong, not text-primary: --primary equals --foreground in both
+ *  themes (plain body text colour), so a link using it is indistinguishable
+ *  from surrounding text until hovered. text-brand-strong is the token built
+ *  for brand-red-as-text on a card background (4.5:1+ in both themes); a
+ *  handful of other screens still use text-primary for the same purpose and
+ *  share this bug, tracked separately. Underlined at rest, not just on hover:
+ *  the "moved from X to Y" line sets this link next to plain muted-foreground
+ *  text, and that colour pair is only 1.21:1 apart, far under the 3:1 axe
+ *  requires to tell a link from prose by colour alone. */
+const DIFF_ITEM_LINK_CLASS =
+  "rounded text-brand-strong underline underline-offset-2 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
 /** Severity tone for the risk badge, matching the components table. */
 const SEV_TONE: Record<Severity, "critical" | "high" | "medium" | "low" | "info"> = {
   CRITICAL: "critical",
@@ -417,7 +431,7 @@ export function Overview({
                   summaryClassName="items-start"
                 >
                   {changes && (
-                    <div className="mt-2 space-y-3 pl-5 text-xs">
+                    <div className="mt-2 space-y-3 pl-5 text-xs" data-testid="comp-change-details">
                       {(() => {
                         const added = capList(changes.components.added);
                         const removed = capList(changes.components.removed);
@@ -430,11 +444,22 @@ export function Overview({
                                   {t("overview.compAddedHeading")}
                                 </div>
                                 <ul className="mt-1 space-y-0.5 font-mono text-muted-foreground">
-                                  {added.shown.map((c) => (
-                                    <li key={compLabel(c)}>
-                                      {compLabel(c)}@{c.version}
-                                    </li>
-                                  ))}
+                                  {added.shown.map((c) =>
+                                    scanId ? (
+                                      <li key={compLabel(c)}>
+                                        <a
+                                          href={scanHash(scanId, "components", { q: compLabel(c) })}
+                                          className={DIFF_ITEM_LINK_CLASS}
+                                        >
+                                          {compLabel(c)}@{c.version}
+                                        </a>
+                                      </li>
+                                    ) : (
+                                      <li key={compLabel(c)}>
+                                        {compLabel(c)}@{c.version}
+                                      </li>
+                                    ),
+                                  )}
                                 </ul>
                                 {added.more > 0 && (
                                   <p className="mt-1 font-sans text-muted-foreground">
@@ -449,11 +474,22 @@ export function Overview({
                                   {t("overview.compRemovedHeading")}
                                 </div>
                                 <ul className="mt-1 space-y-0.5 font-mono text-muted-foreground">
-                                  {removed.shown.map((c) => (
-                                    <li key={compLabel(c)}>
-                                      {compLabel(c)}@{c.version}
-                                    </li>
-                                  ))}
+                                  {removed.shown.map((c) =>
+                                    scanId ? (
+                                      <li key={compLabel(c)}>
+                                        <a
+                                          href={scanHash(scanId, "components", { q: compLabel(c) })}
+                                          className={DIFF_ITEM_LINK_CLASS}
+                                        >
+                                          {compLabel(c)}@{c.version}
+                                        </a>
+                                      </li>
+                                    ) : (
+                                      <li key={compLabel(c)}>
+                                        {compLabel(c)}@{c.version}
+                                      </li>
+                                    ),
+                                  )}
                                 </ul>
                                 {removed.more > 0 && (
                                   <p className="mt-1 font-sans text-muted-foreground">
@@ -468,15 +504,24 @@ export function Overview({
                                   {t("overview.compChangedHeading")}
                                 </div>
                                 <ul className="mt-1 space-y-0.5 text-muted-foreground">
-                                  {upgraded.shown.map((c) => (
-                                    <li key={`${c.group}/${c.name}`} className="font-mono">
-                                      {t("overview.compChangedLine", {
-                                        name: c.group ? `${c.group}/${c.name}` : c.name,
-                                        from: c.from,
-                                        to: c.to,
-                                      })}
-                                    </li>
-                                  ))}
+                                  {upgraded.shown.map((c) => {
+                                    const name = c.group ? `${c.group}/${c.name}` : c.name;
+                                    return (
+                                      <li key={name} className="font-mono">
+                                        {scanId ? (
+                                          <a
+                                            href={scanHash(scanId, "components", { q: name })}
+                                            className={DIFF_ITEM_LINK_CLASS}
+                                          >
+                                            {name}
+                                          </a>
+                                        ) : (
+                                          name
+                                        )}{" "}
+                                        {t("overview.compChangedSuffix", { from: c.from, to: c.to })}
+                                      </li>
+                                    );
+                                  })}
                                 </ul>
                                 {upgraded.more > 0 && (
                                   <p className="mt-1 font-sans text-muted-foreground">
@@ -489,7 +534,7 @@ export function Overview({
                               <a
                                 href={scanHash(scanId, "components")}
                                 data-testid="comp-diff-all-link"
-                                className="inline-block rounded text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                className="inline-block rounded text-brand-strong underline underline-offset-2 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                               >
                                 {t("overview.topRiskAll")}
                               </a>
@@ -522,7 +567,7 @@ export function Overview({
                   summaryClassName="items-start"
                 >
                   {changes && (
-                    <div className="mt-2 space-y-3 pl-5 text-xs">
+                    <div className="mt-2 space-y-3 pl-5 text-xs" data-testid="vuln-change-details">
                       {(() => {
                         const news = capList(changes.vulns.new);
                         const resolved = capList(changes.vulns.resolved);
@@ -534,11 +579,22 @@ export function Overview({
                                   {t("overview.vulnNewHeading")}
                                 </div>
                                 <ul className="mt-1 space-y-0.5 font-mono text-muted-foreground">
-                                  {news.shown.map((v) => (
-                                    <li key={v.id}>
-                                      {v.id} ({v.pkg})
-                                    </li>
-                                  ))}
+                                  {news.shown.map((v) =>
+                                    scanId ? (
+                                      <li key={v.id}>
+                                        <a
+                                          href={scanHash(scanId, "vulnerabilities", { q: v.id })}
+                                          className={DIFF_ITEM_LINK_CLASS}
+                                        >
+                                          {v.id} ({v.pkg})
+                                        </a>
+                                      </li>
+                                    ) : (
+                                      <li key={v.id}>
+                                        {v.id} ({v.pkg})
+                                      </li>
+                                    ),
+                                  )}
                                 </ul>
                                 {news.more > 0 && (
                                   <p className="mt-1 font-sans text-muted-foreground">
@@ -553,11 +609,22 @@ export function Overview({
                                   {t("overview.vulnResolvedHeading")}
                                 </div>
                                 <ul className="mt-1 space-y-0.5 font-mono text-muted-foreground">
-                                  {resolved.shown.map((v) => (
-                                    <li key={v.id}>
-                                      {v.id} ({v.pkg})
-                                    </li>
-                                  ))}
+                                  {resolved.shown.map((v) =>
+                                    scanId ? (
+                                      <li key={v.id}>
+                                        <a
+                                          href={scanHash(scanId, "vulnerabilities", { q: v.id })}
+                                          className={DIFF_ITEM_LINK_CLASS}
+                                        >
+                                          {v.id} ({v.pkg})
+                                        </a>
+                                      </li>
+                                    ) : (
+                                      <li key={v.id}>
+                                        {v.id} ({v.pkg})
+                                      </li>
+                                    ),
+                                  )}
                                 </ul>
                                 {resolved.more > 0 && (
                                   <p className="mt-1 font-sans text-muted-foreground">
@@ -570,7 +637,7 @@ export function Overview({
                               <a
                                 href={scanHash(scanId, "vulnerabilities")}
                                 data-testid="vuln-diff-all-link"
-                                className="inline-block rounded text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                className="inline-block rounded text-brand-strong underline underline-offset-2 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                               >
                                 {t("overview.allVulnerabilities")}
                               </a>

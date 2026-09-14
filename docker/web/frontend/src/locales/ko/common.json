@@ -574,7 +574,7 @@
     "compAddedHeading": "신규",
     "compRemovedHeading": "제거됨",
     "compChangedHeading": "버전 변경",
-    "compChangedLine": "{{name}} 버전 {{from}}에서 {{to}}로 변경",
+    "compChangedSuffix": "버전 {{from}}에서 {{to}}로 변경",
     "vulnChangeLabel": "변경된 취약점",
     "vulnChangeSummary": "신규 {{added}} · 해소 {{resolved}}",
     "vulnNewHeading": "신규",
