@@ -4705,7 +4705,13 @@ class Handler(BaseHTTPRequestHandler):
                 mode = "SOURCE"
                 env["MODE"] = "SOURCE"
                 env["SOURCE_ROOT"] = scan_root_of(cleanup_dir)
-                hint = nested_rootfs_hint(scan_dir)
+                # Same reasoning as the copy above: a deep scan always builds
+                # the whole picked folder, so the hint is looked for there too
+                # (not the request-derived scan_dir) -- both for the same
+                # server's-own-record-over-request-input reason, and because
+                # that is the folder the scan (and so the empty-SBOM outcome)
+                # actually covers.
+                hint = nested_rootfs_hint(picked["path"])
                 if hint:
                     env["NESTED_ROOTFS_HINT"] = hint
 

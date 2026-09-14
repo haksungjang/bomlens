@@ -1153,6 +1153,23 @@ else
     fail "nested_rootfs_hint parity with scan-sbom.sh failed (see assertion above)"
 fi
 
+# A deep source scan always copies and builds the whole picked scan root
+# (picked["path"]), never the request-derived scan_dir a caller may have
+# pointed at a subfolder of it -- copy_scan_target_tree already makes this
+# choice explicitly (its own comment: request input must not reach the
+# copytree sink). nested_rootfs_hint must look in the same place the scan
+# actually covers, for the same reason and so the CLI/web-UI diagnostics
+# agree on what "one or two levels below the scanned folder" means. A CodeQL
+# alert on the earlier scan_dir-based call is closed by this source fix, not
+# by dismissal -- this guards the fix by source text rather than re-running
+# the request handler (no scan-target-src integration harness exists yet to
+# drive it end to end).
+if grep -qF 'hint = nested_rootfs_hint(picked["path"])' "$ROOT_DIR/docker/web/server.py"; then
+    pass "the deep-scan nested-rootfs hint is looked up from the picked scan root, not the request path"
+else
+    fail "the deep-scan nested-rootfs hint call no longer uses picked[\"path\"] -- did it regress to the request-derived scan_dir?"
+fi
+
 echo "== upload round-trip (the regression that shows as 'Failed to fetch') =="
 echo "hello" > "$WORK/payload.txt"
 ( cd "$WORK" && zip -q sample.zip payload.txt )
