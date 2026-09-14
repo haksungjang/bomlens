@@ -530,10 +530,14 @@ if [ "$UI_MODE" = "true" ]; then
     # Source-scan options for build-prep.sh; the UI container's entrypoint passes
     # them on to the cdxgen container.
     read -ra PREP_ENV_FLAGS <<< "$(build_prep_env_args)"
+    # Name-only, same reason: a host override of the scan-cancel grace period
+    # must reach server.py inside the UI container (it reads the env var
+    # itself; a host-side default here would never be seen there).
+    CANCEL_ENV_FLAGS=(-e BOMLENS_CANCEL_GRACE)
     ensure_image_fresh "$POSTPROCESS_IMAGE"
     exec "${DOCKER_ENV[@]}" docker run --rm "${TTY_FLAGS[@]}" -p "${UI_BIND_ADDRESS}:${UI_PORT}:8080" \
         -v "$(hostpath "$UI_BASE")":/src -v "$(hostpath "$UI_BASE")":/host-output \
-        "${MOUNT_FLAGS[@]}" "${HF_FLAGS[@]}" "${GO_ENV_FLAGS[@]}" "${PREP_ENV_FLAGS[@]}" \
+        "${MOUNT_FLAGS[@]}" "${HF_FLAGS[@]}" "${GO_ENV_FLAGS[@]}" "${PREP_ENV_FLAGS[@]}" "${CANCEL_ENV_FLAGS[@]}" \
         -v /var/run/docker.sock:/var/run/docker.sock \
         -e MODE=UI -e UI_PORT=8080 -e SBOM_UI_HOST_DIR="$(hostpath "$UI_BASE")" \
         -e SBOM_UI_SCAN_ROOTS="$SCAN_ROOTS" -e EXTERNAL_LOOKUP="$EXTERNAL_LOOKUP" \
@@ -638,8 +642,18 @@ cleanup() {
                 rm -rf -- "/cleanup/$(basename "$d")" >/dev/null 2>&1 || true
         fi
     done
+    # RUNNING_CONTAINER_NAME is set only while stage 1 (SOURCE mode) is
+    # waiting on its cdxgen container, so a Ctrl+C or `kill` reaching this
+    # script here still stops that container instead of leaving it to run
+    # unsupervised (measured — see G-16/G-18: neither one nor two Ctrl+Cs
+    # stopped it on their own, and a foreground `docker run` gives this
+    # trap no chance to run until the container exits by itself).
+    if [ -n "$RUNNING_CONTAINER_NAME" ] && command -v docker >/dev/null 2>&1; then
+        "${DOCKER_ENV[@]}" docker stop -t "${BOMLENS_CANCEL_GRACE:-30}" "$RUNNING_CONTAINER_NAME" >/dev/null 2>&1 || true
+    fi
 }
 trap cleanup EXIT INT TERM
+RUNNING_CONTAINER_NAME=""
 
 # A reproducible (--byte-stable) build must not resolve dependency licenses over
 # the network: registry availability (e.g. pkg.go.dev) varies between runs, so a
@@ -1622,7 +1636,27 @@ if [ "$MODE" = "SOURCE" ]; then
     esac
     # Names only (see build_prep_env_args), so this is safe inside the eval.
     PREP_ENV_ARGS=$(build_prep_env_args)
+    # Run in the background and wait explicitly, instead of foreground, so a
+    # Ctrl+C or `kill` is handled the moment it arrives: a shell only acts on a
+    # trap once it regains control, and while blocked on a foreground command
+    # that does not happen until the command finishes on its own (measured —
+    # see G-16/G-18). `wait` returns as soon as the signal arrives, letting
+    # cleanup() (which reads RUNNING_CONTAINER_NAME) stop the container right
+    # away instead of leaving it to run unsupervised.
+    #
+    # build-prep.sh runs as "sh /tmp/build-prep.sh ARGS", not the previous
+    # "sh -c 'sh /tmp/build-prep.sh ARGS'": the extra -c layer made
+    # build-prep.sh a CHILD of the container's PID 1 instead of PID 1 itself.
+    # A container's PID 1 only gets a signal's default action when it has
+    # installed its own handler for that signal (standard Linux PID 1
+    # behavior) — the wrapper sh had none, so `docker stop`'s SIGTERM was
+    # silently dropped and build-prep.sh's own trap never ran, regardless of
+    # grace (measured: a 30s grace still ended in a forced SIGKILL every
+    # time). Invoking the script file directly makes it PID 1, so its trap is
+    # what the SIGTERM actually reaches.
+    RUNNING_CONTAINER_NAME="bomlens-scan-$$"
     eval "$DOCKER_MSYS"docker run --rm -u 0:0 \
+        --name "\"$RUNNING_CONTAINER_NAME\"" \
         -v "\"$(hostpath "$SCAN_INPUT_DIR")\"":/app \
         -v "\"$(hostpath "$OUTPUT_HOST_DIR")\"":/out \
         -v "\"$(hostpath "$BUILD_PREP")\"":/tmp/build-prep.sh:ro \
@@ -1636,8 +1670,12 @@ if [ "$MODE" = "SOURCE" ]; then
         -e HOST_GOTOOLCHAIN="\"$HOST_GOTOOLCHAIN\"" -e GOPROXY -e GOSUMDB \
         $PREP_ENV_ARGS \
         --entrypoint sh "\"$CDX_IMG\"" \
-        -c "'sh /tmp/build-prep.sh /app \"/out/$OUTPUT_FILE\" $CDX_SPEC_VERSION'" \
-        || { echo "[ERROR] SBOM generation failed (stage 1)"; exit 1; }
+        /tmp/build-prep.sh /app "\"/out/$OUTPUT_FILE\"" "$CDX_SPEC_VERSION" &
+    STAGE1_PID=$!
+    STAGE1_RC=0
+    wait "$STAGE1_PID" || STAGE1_RC=$?
+    RUNNING_CONTAINER_NAME=""
+    [ "$STAGE1_RC" -eq 0 ] || { echo "[ERROR] SBOM generation failed (stage 1)"; exit 1; }
 
     echo "[2/2] Post-processing..."
     # Mount the scanned tree as /src (so deep-license/vendored see the real source)

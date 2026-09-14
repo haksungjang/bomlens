@@ -3852,6 +3852,38 @@ else
     fail "SPDX sibling refresh case failed (see assertion above)"
 fi
 
+echo "== firmware/AI sibling cancel: docker-stop-style, not raw docker kill =="
+# Regression for G-16/G-18: _stream_cmd used to send a signal-less `docker
+# kill` (immediate SIGKILL, zero grace) when a firmware/AI scan's client
+# disconnected, giving the sibling's own cleanup no chance to run. It now
+# sends `docker stop -t CANCEL_GRACE_SECONDS`, the same grace every other
+# cancel path uses, driven against the real _stream_cmd (not a fake) with a
+# fake docker on PATH so the actual argv it constructs is what gets checked.
+: > "$FAKE_DOCKER_LOG"
+if SBOM_OUTPUT_DIR="$OUT" PATH="$FAKEDOCKER:$PATH" FAKE_DOCKER_LOG="$FAKE_DOCKER_LOG" \
+   python3 - "$ROOT_DIR" <<'PY'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+
+logs = []
+rc = server._stream_cmd(
+    ["sh", "-c", "echo hi; sleep 30"],
+    logs.append,
+    cancel=lambda: True,
+    container="fake-container-123",
+)
+with open(os.environ["FAKE_DOCKER_LOG"]) as fh:
+    calls = fh.read()
+assert "docker kill" not in calls, calls
+assert "docker stop -t %d fake-container-123" % server.CANCEL_GRACE_SECONDS in calls, calls
+PY
+then
+    pass "cancelling a firmware/AI sibling scan emits docker stop, not docker kill"
+else
+    fail "firmware/AI sibling cancel did not use docker-stop-style argv"
+fi
+
 echo "== external vulnerability lookup (GET /advisory, GET /package-advisories) =="
 # Three dedicated server instances so these tests never touch the real
 # api.osv.dev: one backed by a canned stub (success paths + input validation,
