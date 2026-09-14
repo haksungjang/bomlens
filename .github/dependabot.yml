@@ -16,6 +16,8 @@ updates:
       # Action majors are pinned to SHAs; bump them deliberately, not automatically.
       - dependency-name: "*"
         update-types: [version-update:semver-major]
+    cooldown:
+      default-days: 14
 
   # Electron desktop app. Hold majors (electron/electron-builder) for a deliberate,
   # tested bump; batch the rest. electron/electron-builder are pinned to exact
@@ -63,6 +65,8 @@ updates:
         update-types:
           - version-update:semver-minor
           - version-update:semver-patch
+    cooldown:
+      default-days: 14
 
   # Base images for the post-process scanner image. Hold base-image majors
   # (e.g. node, python) for a deliberate, tested bump.
@@ -76,6 +80,8 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: [version-update:semver-major]
+    cooldown:
+      default-days: 14
 
   # Base images for the Android SDK images.
   - package-ecosystem: docker
@@ -88,3 +94,5 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: [version-update:semver-major]
+    cooldown:
+      default-days: 14
