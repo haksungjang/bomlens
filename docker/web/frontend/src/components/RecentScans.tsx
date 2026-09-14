@@ -115,8 +115,11 @@ const TH = "whitespace-nowrap px-4 py-3 text-left font-medium";
  *  for everyone else, so it is not decorative. */
 function TrendArrow({ up, label }: { up: boolean; label: string }) {
   const Icon = up ? TrendingUp : TrendingDown;
+  // Colours the aria-hidden Icon below via currentColor; the only visible
+  // text in this span is the sr-only label, read aloud, never seen.
+  const toneClass = up ? "text-risk-high" : "text-risk-low"; // token-lint-ignore
   return (
-    <span title={label} className={up ? "text-risk-high" : "text-risk-low"}>
+    <span title={label} className={toneClass}>
       <Icon className="h-3.5 w-3.5" aria-hidden />
       <span className="sr-only">{label}</span>
     </span>

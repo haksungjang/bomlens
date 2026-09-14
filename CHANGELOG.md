@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The desktop app's Docker-missing screen ran shell commands into plain sentences instead of showing them as code.
 - Cancelling a scan from the CLI or the web UI stops its containers within a grace period and restores the scanned source tree.
 - A firmware scan whose syft package pass fails prints syft's error in the scan log and records the failed pass in the SBOM as `bomlens:pipeline-step-failed` (`firmware-packages` or `firmware-extra-roots`).
+- The Overview comparison card's "more severe than before" text failed WCAG AA contrast in light mode. A token-lint rule now catches a risk-severity color token used on body text instead of its text-safe variant.
 
 ## [v1.11.11] - 2026-09-14
 
