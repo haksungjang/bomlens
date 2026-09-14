@@ -1326,7 +1326,7 @@ fi
 # it only for the modes that can carry a machine-learning-model component.
 if [ "$AI_MODEL_SCAN" = "true" ] || [ "$SCAN_MODE" = "ANALYZE" ]; then
     if bash "$LIBDIR/generate-ai-profile.sh" "$OUT_PREFIX" "$PROJECT_NAME"; then
-        for ext in json md html; do
+        for ext in json md; do
             [ -f "${OUT_PREFIX}_ai-profile.${ext}" ] && ARTIFACTS+=("${OUT_PREFIX}_ai-profile.${ext}")
         done
     fi

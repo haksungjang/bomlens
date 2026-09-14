@@ -671,6 +671,13 @@ export interface ScanParams {
    *  for ANALYZE (see showSbomAuthor): that mode converts a document someone
    *  else authored. */
   sbomAuthor?: string;
+  /** Which language the pipeline's own generated prose (notice, conformance,
+   *  security, AI-profile reports; the model/dataset risk assessment's reason
+   *  sentences) renders in. Read server-side as the exact `lang` parameter;
+   *  anything other than "en"/"ko", or omitted, falls back to "en". Not seeded
+   *  from a re-scan's saved config on purpose: it should track whichever
+   *  language the shell is showing right now, not a stale scan-time choice. */
+  lang?: string;
   /** AI-model scans only: the intended usage the assessment should grade
    *  against. Read server-side as the exact `usage` query parameter; omitted
    *  (sent empty) when unspecified or for any other source. */
@@ -1120,6 +1127,7 @@ export function startScan(params: ScanParams, handlers: ScanHandlers): EventSour
     conformance_profile: params.conformanceProfile ?? "",
     license: params.license ?? "",
     sbom_author: params.sbomAuthor ?? "",
+    lang: params.lang ?? "",
     usage: params.usage ?? "",
     deep_cve: String(params.deepCve),
     upload_target: params.uploadTarget ?? "",

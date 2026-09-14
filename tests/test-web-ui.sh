@@ -2897,6 +2897,7 @@ echo "[stub] scanning ${PROJECT_NAME} ${PROJECT_VERSION} (mode=$mode)"
   echo "CONFORMANCE_PROFILE=${CONFORMANCE_PROFILE:-}"
   echo "PROJECT_LICENSE=${PROJECT_LICENSE:-}"
   echo "SBOM_AUTHOR=${SBOM_AUTHOR:-}"
+  echo "REPORT_LANG=${REPORT_LANG:-}"
   echo "MODE=${MODE:-}"
   echo "TARGET_FILE=${TARGET_FILE:-}"
   echo "TARGET_DIR=${TARGET_DIR:-}"
@@ -3386,6 +3387,39 @@ if [ "$(sed -n 's/^SBOM_AUTHOR=//p' "$WORK/stub-env")" = "(주)에스케이 & �
 else
     fail "(주)에스케이 & 파트너스 was mangled" "$(cat "$WORK/stub-env")"
 fi
+
+echo "== lang: the request's language decides REPORT_LANG, not this server's own locale =="
+rm -f "$WORK/stub-env"
+sse_events "project=lang1&version=1.0&source=current-dir&lang=ko" >/dev/null
+if [ "$(sed -n 's/^REPORT_LANG=//p' "$WORK/stub-env")" = "ko" ]; then
+    pass "lang=ko -> REPORT_LANG=ko in the run-scan env"
+else
+    fail "lang=ko did not reach the scan env as REPORT_LANG" "$(cat "$WORK/stub-env")"
+fi
+rm -f "$WORK/stub-env"
+sse_events "project=lang2&version=1.0&source=current-dir&lang=en" >/dev/null
+if [ "$(sed -n 's/^REPORT_LANG=//p' "$WORK/stub-env")" = "en" ]; then
+    pass "lang=en -> REPORT_LANG=en in the run-scan env"
+else
+    fail "lang=en did not reach the scan env as REPORT_LANG" "$(cat "$WORK/stub-env")"
+fi
+# Omitted and out-of-allowlist both fall back to en -- a typo in the query
+# param is not a reason to fail a scan, same rule as conformance_profile.
+rm -f "$WORK/stub-env"
+sse_events "project=lang3&version=1.0&source=current-dir" >/dev/null
+if [ "$(sed -n 's/^REPORT_LANG=//p' "$WORK/stub-env")" = "en" ]; then
+    pass "no lang param -> REPORT_LANG defaults to en"
+else
+    fail "REPORT_LANG did not default to en with no lang param" "$(cat "$WORK/stub-env")"
+fi
+rm -f "$WORK/stub-env"
+sse_events "project=lang4&version=1.0&source=current-dir&lang=fr" >/dev/null
+if [ "$(sed -n 's/^REPORT_LANG=//p' "$WORK/stub-env")" = "en" ]; then
+    pass "lang=fr (not en/ko) falls back to REPORT_LANG=en"
+else
+    fail "an out-of-allowlist lang value did not fall back to en" "$(cat "$WORK/stub-env")"
+fi
+
 echo "== _env_flag_value: sanitizer for the sibling docker-run -e argument =="
 if python3 - "$ROOT_DIR" <<'PY'
 import sys, os

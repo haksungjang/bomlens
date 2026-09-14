@@ -33,7 +33,6 @@ bom.json
 *_security_yocto.json
 *_ai-profile.json
 *_ai-profile.md
-*_ai-profile.html
 *_security_cvebintool.json
 *_security_grype.json
 *.wfp

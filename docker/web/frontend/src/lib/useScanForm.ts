@@ -23,6 +23,7 @@ import {
   type UploadKind,
   type UsageContext,
 } from "@/lib/api";
+import i18n from "@/lib/i18n";
 import { DEFAULT_VERSION, parseSbomIdentity, suggestIdentity } from "@/lib/scanDefaults";
 
 export const UPLOAD_KIND: Partial<Record<SourceType, UploadKind>> = {
@@ -468,6 +469,11 @@ export function useScanForm({
       token,
       cred,
       scanossCred,
+      // Which language the pipeline's own generated prose (notice, conformance,
+      // security, AI-profile reports, model/dataset risk reasons) renders in.
+      // The scan reads whatever language this shell is showing right now, not
+      // a server-side setting; server.py falls back to "en" for anything else.
+      lang: i18n.resolvedLanguage ?? i18n.language,
       // ANALYZE forces notice+security on (needed for the risk report), and so
       // does turning deep CVE on (see securityForced above). AI-model scans
       // have no package CVEs, so security is off there regardless.
