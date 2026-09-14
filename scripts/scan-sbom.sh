@@ -52,7 +52,7 @@ case "$(uname -s 2>/dev/null)" in
         # A POSIX path this shell can mkdir/read directly; hostpath() (above)
         # still does the cygpath -m conversion when this needs to reach a
         # docker -v flag, same as every other mount in this script.
-        GUARD_STATE_DIR="$(cygpath -u "${LOCALAPPDATA:-$HOME/AppData/Local}" 2>/dev/null)/bomlens/state" ;;
+        GUARD_STATE_DIR="$(cygpath -u "${LOCALAPPDATA:-$HOME/AppData/Local}" 2>/dev/null)/bomlens/guard" ;;
     *)
         hostpath() { printf '%s' "$1"; }
         GUARD_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/bomlens/guard" ;;
