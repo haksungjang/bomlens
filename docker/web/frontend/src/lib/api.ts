@@ -220,6 +220,10 @@ export interface VulnItem {
   nvdSeverity?: Severity;
   /** When the advisory was first published (ISO 8601), when known. */
   publishedDate?: string;
+  /** Normalized purl of the affected component, when Trivy resolved one.
+   *  Disambiguates `pkg`+`installed` collisions across unrelated components
+   *  that happen to share both. */
+  purl?: string;
 }
 
 /** Severity counts (CRITICAL…UNKNOWN + TOTAL) plus the per-CVE detail rows. */
