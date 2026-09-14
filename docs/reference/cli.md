@@ -183,9 +183,13 @@ docker system prune -f
 
 With Rancher Desktop or Docker Desktop, the same cleanup is also available from the app's own Preferences screen.
 
-### Leftover files from an earlier scan
+### Interrupted build artifacts in the source tree
 
-Re-scanning the same `--project`/`--version` reuses its output folder. If an earlier scan there did not finish (a forced kill, an out-of-memory kill, a host crash) and left files a run with today's mode or options would not produce, the next scan of that folder removes them before writing its own artifacts, so nothing survives to be mistaken for this run's output.
+A source scan (`--target <dir>`, the web UI's folder scan, or the desktop app) runs build steps (`cargo generate-lockfile`, `go mod tidy`, `npm install`, and the like) against the scanned tree, then restores it: every file a build step changed or added is put back or removed. If that scan ends by SIGKILL, an out-of-memory kill, or a host crash, the restore never runs and the changes stay. The next scan of that same source tree restores them first, before doing anything else, once it has confirmed the earlier scan's container is no longer running.
+
+### Leftover output-folder artifacts on re-scan
+
+Re-scanning the same `--project`/`--version` reuses its output folder, however the earlier scan there ended. Before writing its own artifacts, the new scan removes any of BomLens's own files under that project/version that today's mode or options will not produce, so nothing from an earlier run with different options survives to be mistaken for this run's output. A file you placed in the folder yourself, or a different version's artifacts, is left alone.
 
 ### Anything else
 
