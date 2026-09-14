@@ -48,6 +48,23 @@ components[]
   ├── version      version
   ├── purl         Package URL (unique identifier)
   └── licenses[]   license info (SPDX ID)
+compositions[]     dependency-graph completeness (see below)
 ```
 
 For the per-language PURL format, see [Supported ecosystems](ecosystems.md).
+
+## Dependency-graph completeness
+
+A generated SBOM carries a `compositions[0].aggregate` entry stating how complete its dependency graph is:
+
+| Value | Meaning |
+|-------|---------|
+| `complete` | The scan found positive evidence the graph was fully resolved: an ecosystem's lock/resolve step succeeded, or a lockfile was already committed, plus at least one dependency edge. |
+| `incomplete` | A known failure affected the scan: the syft fallback ran instead of cdxgen, or a firmware package-cataloging step failed. |
+| `unknown` | Nothing in the SBOM confirms the graph is complete. This is the default whenever there is no positive evidence either way, for example an image/rootfs/firmware/binary scan (syft alone cannot see inter-package dependencies), an AI-model, dataset or merged SBOM, or a Maven source scan (no reliable signal tells a resolved graph apart from a degraded one). `unknown` is not a defect; it means the tool found no basis to judge, not that something went wrong. |
+
+An analyzed supplier SBOM's own `compositions` declaration, if it has one, is never overwritten.
+
+The conformance report's transitive-dependency check notes the declared value in its detail text (e.g. "12 edge(s), declared complete"), without changing the check's pass/fail status.
+
+A preprocessing label that ran, or was satisfied by an already-committed lockfile, is recorded in the `bomlens:prep-step-applied` property regardless of success or failure; `bomlens:pipeline-step-failed` records only the failures. `aggregate` above is decided from both together.

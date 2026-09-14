@@ -217,6 +217,11 @@ cdx_checks() {
     | ((\$c | map(select((.licenses // []) | length > 0)) | length)) as \$lic_ok
     | ((\$c | map(select((.hashes // []) | length > 0)) | length)) as \$hash_ok
     | ([ .dependencies[]? | .dependsOn[]? ] | length) as \$dep_edges
+    # The graph-completeness self-declaration BomLens writes to
+    # compositions[0].aggregate (complete/incomplete/unknown), when present.
+    # Advisory only, folded into the transitive-dependencies detail text below
+    # -- never changes this check's status/required, so it cannot move RESULT.
+    | ((.compositions[0].aggregate // \"\")) as \$agg
     | (.metadata.timestamp // \"\") as \$ts
     | (.metadata.component // {}) as \$top
     | (\$ptot - (\$miss_purl|length)) as \$purl_ok
@@ -302,8 +307,11 @@ cdx_checks() {
         source:(if \$tot==0 then \"na\" else \"auto\" end),
         naKind:(if \$tot==0 then \"not-applicable\" else \"\" end),
         status:(if \$dep_edges>0 then \"pass\" elif \$tot==0 then \"warn\" else \"fail\" end),
-        detail:(if \$dep_edges==0 and \$tot==0 then \"nothing to relate\"
-                else \"\(\$dep_edges) edge(s)\" end), missing:[]},
+        detail:((if \$dep_edges==0 and \$tot==0 then \"nothing to relate\"
+                 else \"\(\$dep_edges) edge(s)\" end)
+                + (if \$agg==\"\" then \"\"
+                   elif \$agg==\"unknown\" then \", graph completeness unknown (no positive evidence found, not a defect)\"
+                   else \", declared \(\$agg)\" end)), missing:[]},
        {id:\"license\", label:\"License coverage (>= \(\$licmin)%, recommended)\", required:false,
         source:(if \$tot==0 then \"na\" else \"auto\" end),
         naKind:(if \$tot==0 then \"not-applicable\" else \"\" end),
