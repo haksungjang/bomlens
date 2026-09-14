@@ -45,6 +45,7 @@ import {
   riskyComponentCount,
   topRiskComponents,
 } from "@/lib/overview";
+import { pipelineStepLabelKey } from "@/lib/pipelineSteps";
 import { type ProvenanceKind, provenanceOf } from "@/lib/provenance";
 import { formatRelativeTime, scanComparison } from "@/lib/recent";
 import { conformanceCount, inputSbomFileName, isAiScan, sbomFileName } from "@/lib/results";
@@ -608,6 +609,29 @@ export function Overview({
                 : "result.zeroComponentsBody",
             )}
           </p>
+        </div>
+      )}
+
+      {/* Best-effort post-process steps that failed (docker/lib/pipeline-step.sh),
+          stamped on the SBOM itself rather than only logged, so it still shows
+          on a re-open, a re-analyzed document, or one shared without its scan
+          log, unlike scanWarnings below, which only exists for this run. Shown
+          first: a fact recorded in the document outranks this run's own log. */}
+      {(result.sbom?.pipelineStepsFailed?.length ?? 0) > 0 && (
+        <div
+          className="rounded-md border border-warning-border/60 bg-warning-surface px-4 py-3 text-warning dark:border-warning-border/20 dark:bg-warning-surface/30"
+          data-testid="pipeline-steps-failed"
+        >
+          <div className="text-sm font-medium">{t("result.pipelineFailedTitle")}</div>
+          <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs">
+            {result.sbom?.pipelineStepsFailed?.map((step) => {
+              const key = pipelineStepLabelKey(step);
+              return (
+                <li key={step}>{key ? t(key) : <span className="font-mono">{step}</span>}</li>
+              );
+            })}
+          </ul>
+          <p className="mt-1 text-xs">{t("result.pipelineFailedHint")}</p>
         </div>
       )}
 

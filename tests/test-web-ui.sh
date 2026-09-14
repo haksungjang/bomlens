@@ -1929,6 +1929,31 @@ else
 fi
 rm -f "$OUT"/deg_1.0_* "$OUT"/clean_1.0_*
 
+echo "== pipeline-step-failed property (sbom_summary) =="
+# mark_pipeline_warning (docker/lib/pipeline-step.sh) appends one
+# bomlens:pipeline-step-failed property per failed best-effort step, so the
+# same name can repeat; sbom_summary must collect all of them, not just the
+# first. A document with none must surface an empty list, not a missing key.
+cat > "$OUT/pipefail_1.0_bom.json" <<'JSON'
+{"bomFormat":"CycloneDX","metadata":{"component":{"name":"pipefail","version":"1.0"},"properties":[{"name":"bomlens:pipeline-step-failed","value":"enrich-cpe"},{"name":"bomlens:pipeline-step-failed","value":"generate-notice"}]},"components":[{"name":"flask","version":"2.0","type":"library","purl":"pkg:pypi/flask@2.0"}]}
+JSON
+cat > "$OUT/pipeok_1.0_bom.json" <<'JSON'
+{"bomFormat":"CycloneDX","metadata":{"component":{"name":"pipeok","version":"1.0"}},"components":[{"name":"flask","version":"2.0","type":"library","purl":"pkg:pypi/flask@2.0"}]}
+JSON
+if SBOM_OUTPUT_DIR="$OUT" python3 - "$ROOT_DIR" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+assert server.sbom_summary("pipefail_1.0")["pipelineStepsFailed"] == ["enrich-cpe", "generate-notice"]
+assert server.sbom_summary("pipeok_1.0")["pipelineStepsFailed"] == []
+PY
+then
+    pass "pipelineStepsFailed collects every occurrence (empty list when none)"
+else
+    fail "pipelineStepsFailed not surfaced correctly"
+fi
+rm -f "$OUT"/pipefail_1.0_* "$OUT"/pipeok_1.0_*
+
 echo "== sbom-oversized property (sbom_summary) =="
 # When entrypoint.sh's size-cap check stamps bomlens:sbom-oversized, the
 # summary must surface it too; absent -> None.

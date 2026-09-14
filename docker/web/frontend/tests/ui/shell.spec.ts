@@ -1070,6 +1070,53 @@ for (const { theme, lang } of COMBOS) {
   });
 }
 
+// One mapped step id (renders translated) and one not yet in pipelineSteps.ts
+// (renders as-is): the fallback is the point, a step id shipped before its
+// label lands here must still show something instead of nothing or breaking.
+const PIPELINE_FAILED_DONE = {
+  ...DONE,
+  sbom: { ...DONE.sbom, pipelineStepsFailed: ["enrich-cpe", "some-future-step"] },
+};
+
+async function stubAndRunPipelineFailed(page: Page, theme: Theme = "light", lang: Lang = "en") {
+  await seedThemeLang(page, theme, lang);
+  await page.route("**/capabilities", (r) =>
+    r.fulfill({ contentType: "application/json", body: JSON.stringify({ firmware: false, scanoss: false, docker: true }) }),
+  );
+  await page.route("**/results", (r) => r.fulfill({ contentType: "application/json", body: "[]" }));
+  await page.route("**/file**", (r) =>
+    r.fulfill({ contentType: "application/json", body: JSON.stringify(SBOM) }),
+  );
+  await page.route("**/scan-stream**", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: `event: done\ndata: ${JSON.stringify(PIPELINE_FAILED_DONE)}\n\n`,
+    }),
+  );
+  await page.goto("/?ui=next#/new");
+  await page.fill("#project", "demo");
+  await page.fill("#version", "1.0");
+  await page.getByTestId("run-scan").click();
+}
+
+test("Overview shows which post-process steps failed, unmapped ids included", async ({ page }) => {
+  await stubAndRunPipelineFailed(page);
+  await expect(page.locator("main h1")).toBeVisible();
+  const banner = page.getByTestId("pipeline-steps-failed");
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText("CPE identifiers");
+  await expect(banner).toContainText("some-future-step");
+});
+
+for (const { theme, lang } of COMBOS) {
+  test(`overview pipeline-failed banner matches baseline: ${theme}/${lang} @visual`, async ({ page }) => {
+    await stubAndRunPipelineFailed(page, theme, lang);
+    await expect(page.locator("main h1")).toBeVisible();
+    await expect(page.getByTestId("pipeline-steps-failed")).toBeVisible();
+    await captureMain(page, "overview-pipeline-failed", theme, lang);
+  });
+}
+
 for (const { theme, lang } of COMBOS) {
   test(`overview section matches baseline — ${theme}/${lang} @visual`, async ({ page }) => {
     await stubAndRun(page, theme, lang);

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The Overview screen now shows when a best-effort post-process step (CPE/EOL/malicious enrichment, conformance validation, notice generation, and the like) failed during a scan, naming which one, instead of a valid but silently incomplete SBOM giving no visible sign of it.
+
 ### Fixed
 
 - The desktop app's declared minimum `electron` and `electron-builder` versions fell inside ranges with known vulnerabilities (a critical Electron advisory, high-severity advisories in electron-builder's dependencies). Both are now pinned to exact versions past their fixed versions.

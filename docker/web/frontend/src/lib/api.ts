@@ -133,6 +133,13 @@ export interface SbomSummary {
    *  only): "oom" | "disk-space" | "network" | "cdxgen-unavailable". Drives a
    *  result banner. */
   sbomToolDegraded?: string | null;
+  /** Best-effort post-process steps that failed during this scan (docker/lib/
+   *  pipeline-step.sh's bomlens:pipeline-step-failed property), by step id: a
+   *  valid SBOM was still produced, but that step's output may be missing or
+   *  incomplete. Stamped on the document itself, so it survives a re-open, a
+   *  re-`--analyze`, or the SBOM being shared without its scan log. Empty when
+   *  nothing failed. */
+  pipelineStepsFailed?: string[];
   /** CycloneDX root component type (application/firmware/container/…) — drives
    *  the honest scan-kind subtitle, available on re-open (unlike the MODE). */
   componentType?: string | null;

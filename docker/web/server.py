@@ -1423,6 +1423,18 @@ def sbom_summary(run_id):
         ),
         None,
     )
+    # pipeline-step-failed: set by docker/lib/pipeline-step.sh's
+    # mark_pipeline_warning for every best-effort post-process step that
+    # failed (normalize, CPE/EOL/malicious enrichment, conformance, notice
+    # generation and the like). A valid SBOM was still produced, but that
+    # step's output may be missing. Unlike sbom-tool-degraded, this property
+    # can appear more than once (one entry per failed step), so it is
+    # collected, not looked up with next(). Drives a result banner.
+    pipeline_steps_failed = [
+        p.get("value")
+        for p in meta_props
+        if p.get("name") == "bomlens:pipeline-step-failed" and p.get("value")
+    ]
     # sbom-oversized: set by entrypoint.sh when the finished document is over
     # the same 100 MB budget this server's own upload path enforces (MAX_BYTES
     # above) — a scan run against --target never goes through that upload
@@ -1500,6 +1512,7 @@ def sbom_summary(run_id):
         "truncated": len(comps) > MAX_COMPONENT_ROWS,
         "suggestIdentifyVendored": suggest,
         "sbomToolDegraded": degraded,
+        "pipelineStepsFailed": pipeline_steps_failed,
         "sbomOversizedBytes": oversized_bytes,
         # CycloneDX root component type — drives the honest scan-kind subtitle and
         # works on re-open too, where the scan MODE isn't stored.
