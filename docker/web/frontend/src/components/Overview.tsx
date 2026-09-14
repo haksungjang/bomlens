@@ -127,11 +127,17 @@ function capList<T>(items: T[]): { shown: T[]; more: number } {
 
 /** A comparison-card diff entry's name, linking into the section it names
  *  filtered to that name (the same free-text `q` filter TopRisk's rows use).
- *  The established inline-link style ("All components" below, "View in
- *  Components" in VulnerabilitiesTable): primary colour at rest, so a reader
- *  can tell it's a link without having to hover first. */
+ *  text-brand-strong, not text-primary: --primary equals --foreground in both
+ *  themes (plain body text colour), so a link using it is indistinguishable
+ *  from surrounding text until hovered. text-brand-strong is the token built
+ *  for brand-red-as-text on a card background (4.5:1+ in both themes); a
+ *  handful of other screens still use text-primary for the same purpose and
+ *  share this bug, tracked separately. Underlined at rest, not just on hover:
+ *  the "moved from X to Y" line sets this link next to plain muted-foreground
+ *  text, and that colour pair is only 1.21:1 apart, far under the 3:1 axe
+ *  requires to tell a link from prose by colour alone. */
 const DIFF_ITEM_LINK_CLASS =
-  "rounded text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+  "rounded text-brand-strong underline underline-offset-2 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 /** Severity tone for the risk badge, matching the components table. */
 const SEV_TONE: Record<Severity, "critical" | "high" | "medium" | "low" | "info"> = {
@@ -528,7 +534,7 @@ export function Overview({
                               <a
                                 href={scanHash(scanId, "components")}
                                 data-testid="comp-diff-all-link"
-                                className="inline-block rounded text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                className="inline-block rounded text-brand-strong underline underline-offset-2 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                               >
                                 {t("overview.topRiskAll")}
                               </a>
@@ -631,7 +637,7 @@ export function Overview({
                               <a
                                 href={scanHash(scanId, "vulnerabilities")}
                                 data-testid="vuln-diff-all-link"
-                                className="inline-block rounded text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                className="inline-block rounded text-brand-strong underline underline-offset-2 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                               >
                                 {t("overview.allVulnerabilities")}
                               </a>
