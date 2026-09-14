@@ -126,6 +126,115 @@ mark_sbom_excluded() {
     fi
 }
 
+# Record that the SBOM came from the shallow syft fallback (direct deps only),
+# with the reason, so the web UI can explain why the dependency graph is thin.
+# Mirrors the other bomlens:* metadata signals the server reads (survives
+# stamp/normalize like bomlens:suggest-identify-vendored does). Shared by
+# entrypoint.sh (web UI) and, through the MODE=SOURCE-FALLBACK entrypoint.sh
+# branch, scan-sbom.sh (CLI) -- both run this inside the scanner image, where
+# jq is guaranteed, rather than depending on a host jq.
+mark_sbom_degraded() {
+    local file="$1" reason="$2" tmp
+    [ -f "$file" ] || return 0
+    command -v jq >/dev/null 2>&1 || return 0
+    tmp="${file}.degraded.tmp"
+    if jq --arg r "$reason" \
+        '(.metadata.properties) = ((.metadata.properties // []) + [{name:"bomlens:sbom-tool-degraded", value:$r}])' \
+        "$file" > "$tmp" 2>/dev/null; then
+        mv "$tmp" "$file"
+    else
+        rm -f "$tmp"
+    fi
+}
+
+# package.json files the syft fallback's quality gate reads: the root and, if
+# it declares workspaces, each workspace member. npm/yarn workspaces come from
+# package.json's own "workspaces" field (array, or "packages" under an
+# object); pnpm's come from pnpm-workspace.yaml's "packages:" list. Globs are
+# resolved with a plain shell glob, not full workspace semantics (no
+# negation, no nested globstars) -- enough to tell "nothing declared" from
+# "something declared", which is all the gate needs.
+_node_workspace_package_jsons() {
+    local root="$1" glob dir
+    if [ -f "$root/pnpm-workspace.yaml" ]; then
+        while IFS= read -r glob; do
+            [ -n "$glob" ] || continue
+            for dir in "$root"/$glob; do
+                [ -f "$dir/package.json" ] && printf '%s\n' "$dir/package.json"
+            done
+        done <<EOF
+$(sed -n "s/^[[:space:]]*-[[:space:]]*['\"]\\{0,1\\}\\([^'\"]*\\)['\"]\\{0,1\\}[[:space:]]*\$/\\1/p" "$root/pnpm-workspace.yaml")
+EOF
+    elif [ -f "$root/package.json" ] && command -v jq >/dev/null 2>&1; then
+        while IFS= read -r glob; do
+            [ -n "$glob" ] || continue
+            for dir in "$root"/$glob; do
+                [ -f "$dir/package.json" ] && printf '%s\n' "$dir/package.json"
+            done
+        done <<EOF
+$(jq -r '.workspaces? | if type=="array" then .[] elif type=="object" then (.packages // [])[] else empty end' "$root/package.json" 2>/dev/null)
+EOF
+    fi
+}
+
+# Declared dependency names (dependencies + devDependencies, deduplicated)
+# from the root package.json and every workspace member found above.
+_node_declared_dep_names() {
+    local root="$1" pkg names=""
+    command -v jq >/dev/null 2>&1 || return 0
+    for pkg in "$root/package.json" $(_node_workspace_package_jsons "$root"); do
+        [ -f "$pkg" ] || continue
+        names="$names
+$(jq -r '((.dependencies // {}) + (.devDependencies // {})) | keys[]?' "$pkg" 2>/dev/null)"
+    done
+    printf '%s\n' "$names" | sed '/^$/d' | LC_ALL=C sort -u
+}
+
+# Node/npm quality gate for the syft fallback (direct deps only, no build):
+# syft's pnpm-lock.yaml parsing can miss every real dependency and return only
+# its own platform tooling -- a "successful" scan that in fact describes
+# nothing about the project. If not one declared name (root or any workspace
+# member) shows up in the fallback SBOM, the result is not usable.
+# Returns 0 (fallback covers at least one declared name, keep it), 1 (covers
+# none -- discard it), or 2 (no package.json/no declared names anywhere, or no
+# jq -- the gate does not apply, accept the fallback as-is).
+node_fallback_covers_declared_deps() {
+    local root="$1" sbom="$2" names found
+    command -v jq >/dev/null 2>&1 || return 2
+    [ -f "$sbom" ] || return 2
+    names=$(_node_declared_dep_names "$root")
+    [ -n "$names" ] || return 2
+    found=$(jq -r '[.components[]?.name] | unique | .[]?' "$sbom" 2>/dev/null)
+    while IFS= read -r n; do
+        [ -n "$n" ] || continue
+        printf '%s\n' "$found" | grep -qxF "$n" && return 0
+    done <<EOF
+$names
+EOF
+    return 1
+}
+
+# Applies the gate above to a just-written syft-fallback SBOM: removes it and
+# prints actionable guidance on the stream named by $3 (usually stderr) if it
+# covers none of the declared dependencies, leaves it alone otherwise. $1 the
+# SBOM file, $2 the scanned root. Returns 0 (kept) or 1 (discarded).
+apply_node_fallback_quality_gate() {
+    local file="$1" root="$2" stream="${3:-2}"
+    node_fallback_covers_declared_deps "$root" "$file"
+    case $? in
+        1)
+            rm -f "$file"
+            {
+                echo "[ERROR] The dependency resolver failed and the fallback scan found none of the project's declared dependencies (direct-deps-only manifest reading), so the result would misrepresent the scan as covering the dependency tree when it covers none of it."
+                echo "        Commit a lockfile (package-lock.json, npm-shrinkwrap.json, yarn.lock or pnpm-lock.yaml) that matches package.json if one is missing, or run 'npm install'/'pnpm install' once so a resolvable lockfile is present, then re-scan."
+                echo "        Or scan from an environment where cdxgen itself can run (Docker access for the web UI's source scan; a working docker.sock for the CLI's transitive resolution) instead of relying on this direct-deps-only fallback."
+            } >&"$stream"
+            return 1
+            ;;
+        *) return 0 ;;
+    esac
+}
+
 # Prints the first file under $1, at most $2 levels deep, that matches the find
 # tests after them. VCS data, installed dependencies and build output are not
 # walked, nor are the non-shipped folders when NON_SHIPPED_DIRS is defined.

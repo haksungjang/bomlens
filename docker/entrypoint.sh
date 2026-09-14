@@ -393,8 +393,12 @@ generate_sbom_cdxgen() {
             CDXGEN_FAIL_REASON="network"
             echo "[WARN] cdxgen couldn't reach the network while resolving dependencies (rc=$rc). Check proxy/firewall access to the package registries from the Docker engine and re-scan for full transitive dependencies."
         else
-            CDXGEN_FAIL_REASON="cdxgen-unavailable"
-            echo "[WARN] cdxgen sibling container failed (rc=$rc)."
+            # Not a resource/network failure this container could see: cdxgen
+            # ran and exited non-zero on its own, most often an internal
+            # exception or its own schema validator rejecting the document
+            # (raw Node stack trace or validation errors, both in $logf only).
+            CDXGEN_FAIL_REASON="cdxgen-crash"
+            echo "[WARN] cdxgen failed processing the dependency data (rc=$rc)."
         fi
         [ -n "$cid" ] && docker rm -f "$cid" >/dev/null 2>&1
         rm -f "$logf" "$cidf"
@@ -410,24 +414,6 @@ generate_sbom_cdxgen() {
         echo "[WARN] cdxgen produced no SBOM at $bom_path."; return 1
     fi
     return 0
-}
-
-# Record that the SBOM came from the shallow syft fallback (direct deps only),
-# with the reason, so the web UI can explain why the dependency graph is thin.
-# Mirrors the other bomlens:* metadata signals the server reads (survives
-# stamp/normalize like bomlens:suggest-identify-vendored does).
-mark_sbom_degraded() {
-    local file="$1" reason="$2" tmp
-    [ -f "$file" ] || return 0
-    command -v jq >/dev/null 2>&1 || return 0
-    tmp="${file}.degraded.tmp"
-    if jq --arg r "$reason" \
-        '(.metadata.properties) = ((.metadata.properties // []) + [{name:"bomlens:sbom-tool-degraded", value:$r}])' \
-        "$file" > "$tmp" 2>/dev/null; then
-        mv "$tmp" "$file"
-    else
-        rm -f "$tmp"
-    fi
 }
 
 # Observability helpers for best-effort post-process steps (run_optional_step /
@@ -497,6 +483,7 @@ case "$SCAN_MODE" in
                 echo "[WARN] cdxgen path failed; falling back to syft (direct deps only)."
                 syft "dir:$SRC_ROOT" "${SYFT_EXCLUDE[@]}" -o "cyclonedx-json@$CDX_SPEC_VERSION" > "$OUTPUT_FILE" 2>/dev/null \
                     || { echo "[ERROR] syft source scan failed."; exit 1; }
+                apply_node_fallback_quality_gate "$OUTPUT_FILE" "$SRC_ROOT" 2 || exit 1
                 mark_sbom_degraded "$OUTPUT_FILE" "${CDXGEN_FAIL_REASON:-cdxgen-unavailable}"
                 mark_sbom_excluded "$OUTPUT_FILE" "$SRC_ROOT"
             fi
@@ -504,6 +491,7 @@ case "$SCAN_MODE" in
             echo "[1/2] syft: source dir $SRC_ROOT (manifest-only; docker.sock/CLI/host-path unavailable)"
             syft "dir:$SRC_ROOT" "${SYFT_EXCLUDE[@]}" -o "cyclonedx-json@$CDX_SPEC_VERSION" > "$OUTPUT_FILE" 2>/dev/null \
                 || { echo "[ERROR] syft source scan failed."; exit 1; }
+            apply_node_fallback_quality_gate "$OUTPUT_FILE" "$SRC_ROOT" 2 || exit 1
             mark_sbom_degraded "$OUTPUT_FILE" "cdxgen-unavailable"
             mark_sbom_excluded "$OUTPUT_FILE" "$SRC_ROOT"
         fi

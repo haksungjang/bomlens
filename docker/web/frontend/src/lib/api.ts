@@ -130,8 +130,9 @@ export interface SbomSummary {
    *  hinting the user to re-run with --identify-vendored. Drives a result banner. */
   suggestIdentifyVendored?: boolean;
   /** Set when cdxgen couldn't run and the scan fell back to syft (direct deps
-   *  only): "oom" | "disk-space" | "network" | "cdxgen-unavailable". Drives a
-   *  result banner. */
+   *  only): "oom" | "disk-space" | "network" | "cdxgen-crash" (cdxgen ran and
+   *  failed on its own) | "cdxgen-unavailable" (cdxgen never ran at all).
+   *  Drives a result banner. */
   sbomToolDegraded?: string | null;
   /** Best-effort post-process steps that failed during this scan (docker/lib/
    *  pipeline-step.sh's bomlens:pipeline-step-failed property), by step id: a
