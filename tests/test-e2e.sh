@@ -1721,23 +1721,204 @@ else
 fi
 
 # --------------------------------------------------------
-# Group 8: ROOTFS mode E2E (directory target -> syft, requires image)
+# Group 8: ROOTFS mode E2E (real distribution root filesystems)
 # --------------------------------------------------------
+# The previous version of this group pointed --target at examples/nodejs,
+# which has no etc/, so _is_rootfs_dir (scripts/scan-sbom.sh) was false and
+# the scan actually took the SOURCE branch -- "ROOTFS mode E2E" never
+# exercised ROOTFS mode. This version scans real exported root filesystems
+# instead, so syft's dir: cataloger, its distro-qualified purls, and the
+# operating-system component it synthesizes from etc/os-release are all
+# exercised for real, once per package family (deb/apk/rpm).
 section "Rootfs mode E2E"
 if [ "$have_image" != 1 ]; then
     skip "rootfs mode (scanner image not available)"
 else
-    w="$(mktemp -d "$WORK_ROOT/rfs.XXXXXX")"
-    # A directory target routes to ROOTFS (syft on the tree). The bundled example
-    # has no lockfile, so component discovery may be empty — what matters here is
-    # that the directory path produces a valid, project-stamped SBOM.
+    # Digest-pinned (index/multi-arch digest, same convention as
+    # docker/Dockerfile's base images): a moved tag would silently change the
+    # library-count ranges and purl distro= values asserted below.
+    ROOTFS_DEBIAN_IMG="debian:12-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171"
+    ROOTFS_ALPINE_IMG="alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
+    ROOTFS_ROCKY_IMG="rockylinux:9-minimal@sha256:305de618a5681ff75b1d608fd22b10f362867dff2f550a4f1d427d21cd7f42b4"
+    ROOTFS_BUSYBOX_IMG="busybox:musl@sha256:32b5cdad7cce41dfd53d0ae06baebcf8357a147ee7694dc706911c373bc30c37"
+
+    # Always removes the exported container and the (up to a few hundred MB)
+    # extracted rootfs, on pass, fail, or an early return -- a CI runner
+    # cannot be left to accumulate these across reruns. A real rootfs export
+    # (rockylinux especially) carries read-only directories from its own
+    # package database (e.g. rpm-owned usr/sbin, usr/lib at 0555): plain
+    # `rm -rf` cannot unlink through those without write permission on the
+    # parent directory first, and silently leaves the tree behind.
+    _rootfs_cleanup() {
+        [ -n "${ROOTFS_CID:-}" ] && docker rm -f "$ROOTFS_CID" >/dev/null 2>&1
+        if [ -n "${ROOTFS_WORK:-}" ] && [ -d "$ROOTFS_WORK" ]; then
+            chmod -R u+w "$ROOTFS_WORK" 2>/dev/null
+            rm -rf "$ROOTFS_WORK"
+        fi
+        ROOTFS_CID=""; ROOTFS_WORK=""
+    }
+    # A RETURN trap set inside a function outlives that function: it stays
+    # registered on the shell and fires again the next time ANY function
+    # returns, not just this one. Each case below self-clears it as the first
+    # thing the handler does. A RETURN trap also never fires at all if the
+    # process is killed (CI cancellation) or the script exits mid-case, so an
+    # EXIT trap backs it up -- set once, here, since this is the only trap in
+    # this file; _rootfs_cleanup is a no-op once the RETURN trap has already
+    # cleared ROOTFS_WORK/ROOTFS_CID.
+    trap _rootfs_cleanup EXIT
+
+    # docker export the image's index digest into a directory. Echoes the
+    # extracted rootfs path, or nothing (and fails) if the pull itself fails.
+    _rootfs_export() {
+        local image="$1" dest="$2"
+        mkdir -p "$dest"
+        if ! docker pull -q "$image" >/dev/null 2>&1; then return 1; fi
+        ROOTFS_CID="$(docker create "$image")"
+        docker export "$ROOTFS_CID" | tar -x -C "$dest"
+        docker rm "$ROOTFS_CID" >/dev/null 2>&1; ROOTFS_CID=""
+    }
+
+    # One real distro rootfs end to end: MODE=ROOTFS, syft's distro-qualified
+    # library purls, and the operating-system component it derives from
+    # etc/os-release. One function per distro family, parameterized, so a
+    # later addition can extend the same case with its own assertions instead
+    # of duplicating the scan.
+    #   label image purl_type distro_value os_name os_version lo hi
+    rootfs_distro_case() {
+        local label="$1" image="$2" purl_type="$3" distro_value="$4" \
+              os_name="$5" os_version="$6" lo="$7" hi="$8"
+        ROOTFS_WORK="$(mktemp -d "$WORK_ROOT/rfs-$label.XXXXXX")"
+        ROOTFS_CID=""
+        trap 'trap - RETURN; _rootfs_cleanup' RETURN
+
+        if ! _rootfs_export "$image" "$ROOTFS_WORK/rootfs"; then
+            skip "rootfs ($label): could not pull $image (network?)"
+            return
+        fi
+
+        ( cd "$ROOTFS_WORK" && SBOM_SCANNER_IMAGE="$SCANNER_IMG" bash "$SCAN" \
+            --project "rootfs$label" --version "1.0" \
+            --target "$ROOTFS_WORK/rootfs" --generate-only \
+        ) > "$ROOTFS_WORK/_scan.log" 2>&1
+        local bom="$ROOTFS_WORK/rootfs${label}_1.0_bom.json"
+        if [ ! -f "$bom" ]; then
+            fail "rootfs ($label): scan produced a bom" "$(tail -5 "$ROOTFS_WORK/_scan.log")"
+            show_log_if_verbose "$ROOTFS_WORK"; return
+        fi
+
+        if grep -q "Mode: ROOTFS" "$ROOTFS_WORK/_scan.log"; then
+            pass "rootfs ($label): a real rootfs directory routes to ROOTFS mode"
+        else
+            fail "rootfs ($label): a real rootfs directory routes to ROOTFS mode"
+        fi
+
+        local libn; libn=$(jq '[.components[]? | select(.type=="library")] | length' "$bom")
+        if [ "$libn" -ge "$lo" ] 2>/dev/null && [ "$libn" -le "$hi" ] 2>/dev/null; then
+            pass "rootfs ($label): library component count in range ($libn, expected $lo-$hi)"
+        else
+            fail "rootfs ($label): library component count in range" "got $libn, expected $lo-$hi"
+        fi
+
+        if [ "$libn" -gt 0 ] 2>/dev/null && jq -e --arg pt "pkg:$purl_type/" --arg dv "distro=$distro_value" \
+            '[.components[]? | select(.type=="library") | select((.purl // "") | (startswith($pt) and contains($dv)) | not)] | length == 0' \
+            "$bom" >/dev/null 2>&1; then
+            pass "rootfs ($label): every library purl is pkg:$purl_type/... with distro=$distro_value"
+        else
+            fail "rootfs ($label): every library purl is pkg:$purl_type/... with distro=$distro_value"
+        fi
+
+        local os_count; os_count=$(jq '[.components[]? | select(.type=="operating-system")] | length' "$bom")
+        if [ "$os_count" = "1" ] && jq -e --arg n "$os_name" --arg v "$os_version" \
+            '.components[] | select(.type=="operating-system") | .name==$n and .version==$v' \
+            "$bom" >/dev/null 2>&1; then
+            pass "rootfs ($label): one operating-system component, $os_name $os_version"
+        else
+            fail "rootfs ($label): one operating-system component, $os_name $os_version" "found $os_count"
+        fi
+    }
+
+    rootfs_distro_case "debian" "$ROOTFS_DEBIAN_IMG" "deb" "debian-12.15" "debian" "12.15" 40 200
+    rootfs_distro_case "alpine" "$ROOTFS_ALPINE_IMG" "apk" "alpine-3.20.10" "alpine" "3.20.10" 5 40
+    rootfs_distro_case "rocky" "$ROOTFS_ROCKY_IMG" "rpm" "rocky-9.3" "rocky" "9" 50 250
+
+    # A rootfs with no apk/dpkg/rpm database still routes to ROOTFS (etc/ plus
+    # two of bin/sbin/usr/lib/var is enough), but has no packages to read --
+    # legitimately near-zero library components, and the host-side
+    # has_package_db warning should name that, rather than the generic
+    # "SBOM has 0 components" warning misleadingly suggesting the scan found
+    # nothing at all (file-type components still populate it).
+    rootfs_nopkgdb_case() {
+        ROOTFS_WORK="$(mktemp -d "$WORK_ROOT/rfs-nopkgdb.XXXXXX")"
+        ROOTFS_CID=""
+        trap 'trap - RETURN; _rootfs_cleanup' RETURN
+
+        if ! _rootfs_export "$ROOTFS_BUSYBOX_IMG" "$ROOTFS_WORK/rootfs"; then
+            skip "rootfs (no package db): could not pull $ROOTFS_BUSYBOX_IMG (network?)"
+            return
+        fi
+        ( cd "$ROOTFS_WORK" && SBOM_SCANNER_IMAGE="$SCANNER_IMG" bash "$SCAN" \
+            --project "rootfsnopkgdb" --version "1.0" \
+            --target "$ROOTFS_WORK/rootfs" --generate-only \
+        ) > "$ROOTFS_WORK/_scan.log" 2>&1
+        if grep -q "no package database" "$ROOTFS_WORK/_scan.log"; then
+            pass "rootfs (no package db): has_package_db warning fires"
+        else
+            fail "rootfs (no package db): has_package_db warning fires"
+        fi
+        if grep -q "SBOM has 0 components" "$ROOTFS_WORK/_scan.log"; then
+            fail "rootfs (no package db): no misleading 0-components warning"
+        else
+            pass "rootfs (no package db): no misleading 0-components warning"
+        fi
+    }
+    rootfs_nopkgdb_case
+
+    # Archive input: the same real rootfs, packed as a .tar.gz instead of
+    # passed as a directory. find_rootfs_dir (scripts/scan-sbom.sh) must find
+    # it at the archive root and route to ROOTFS the same way; the two-level
+    # nested-in-a-release-folder case is already covered at the shell-function
+    # level by tests/test-input-routing.sh, so this only needs the flat case.
+    rootfs_archive_case() {
+        ROOTFS_WORK="$(mktemp -d "$WORK_ROOT/rfs-archive.XXXXXX")"
+        ROOTFS_CID=""
+        trap 'trap - RETURN; _rootfs_cleanup' RETURN
+
+        if ! _rootfs_export "$ROOTFS_DEBIAN_IMG" "$ROOTFS_WORK/rootfs"; then
+            skip "rootfs (archive): could not pull $ROOTFS_DEBIAN_IMG (network?)"
+            return
+        fi
+        tar -czf "$ROOTFS_WORK/rootfs.tar.gz" -C "$ROOTFS_WORK/rootfs" .
+        ( cd "$ROOTFS_WORK" && SBOM_SCANNER_IMAGE="$SCANNER_IMG" bash "$SCAN" \
+            --project "rootfsarchive" --version "1.0" \
+            --target "$ROOTFS_WORK/rootfs.tar.gz" --generate-only \
+        ) > "$ROOTFS_WORK/_scan.log" 2>&1
+        local bom="$ROOTFS_WORK/rootfsarchive_1.0_bom.json"
+        local libn; libn=$(jq '[.components[]? | select(.type=="library")] | length' "$bom" 2>/dev/null || echo 0)
+        if grep -q "scanning as ROOTFS" "$ROOTFS_WORK/_scan.log" && [ "$libn" -ge 40 ] 2>/dev/null; then
+            pass "rootfs (archive): a .tar.gz root filesystem routes to ROOTFS ($libn library components)"
+        else
+            fail "rootfs (archive): a .tar.gz root filesystem routes to ROOTFS" "$(tail -5 "$ROOTFS_WORK/_scan.log")"
+            show_log_if_verbose "$ROOTFS_WORK"
+        fi
+    }
+    rootfs_archive_case
+
+    # Contrast case: a plain source directory passed via --target (not itself
+    # a rootfs, no nested one either) must NOT take the ROOTFS branch above --
+    # this is the one place in this suite that exercises --target pointed at a
+    # directory other than the cwd (run_source_scan always scans the cwd), so
+    # it is kept, corrected to assert what it actually exercises now that the
+    # ROOTFS name above no longer covers it.
+    w="$(mktemp -d "$WORK_ROOT/rfs-source.XXXXXX")"
     ( cd "$w" && SBOM_SCANNER_IMAGE="$SCANNER_IMG" bash "$SCAN" \
-        --project "rootfstest" --version "1.0" --target "$EXAMPLES/nodejs" --generate-only ) > "$w/_scan.log" 2>&1
-    bom="$w/rootfstest_1.0_bom.json"
-    if [ -f "$bom" ] && jq -e '.bomFormat=="CycloneDX" and .metadata.component.name=="rootfstest"' "$bom" >/dev/null 2>&1; then
-        pass "rootfs: valid CycloneDX with project metadata"
+        --project "rootfssourcedir" --version "1.0" --target "$EXAMPLES/nodejs" --generate-only ) > "$w/_scan.log" 2>&1
+    bom="$w/rootfssourcedir_1.0_bom.json"
+    if [ -f "$bom" ] && grep -q "Mode: SOURCE" "$w/_scan.log" \
+        && jq -e '.bomFormat=="CycloneDX" and .metadata.component.name=="rootfssourcedir"' "$bom" >/dev/null 2>&1; then
+        pass "rootfs (contrast): a --target directory that is not a rootfs stays on SOURCE"
     else
-        fail "rootfs: valid CycloneDX with project metadata" "$(tail -5 "$w/_scan.log" 2>/dev/null)"; show_log_if_verbose "$w"
+        fail "rootfs (contrast): a --target directory that is not a rootfs stays on SOURCE" "$(tail -5 "$w/_scan.log" 2>/dev/null)"
+        show_log_if_verbose "$w"
     fi
     rm -rf "$w"
 fi
