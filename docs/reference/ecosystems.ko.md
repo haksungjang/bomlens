@@ -66,6 +66,8 @@ jq '.components | length' NodeExample_1.0.0/NodeExample_1.0.0_bom.json
 > `<optional>true</optional>`로 선언한 runtime 의존성도 cdxgen이 test 스코프와 같은 태그를 붙이므로 함께 빠집니다.
 > 멀티 모듈 리액터에는 배포되는 모듈과 함께, 데모처럼 한 번도 배포되지 않는 모듈이 섞여 있을 수 있습니다(`maven-deploy-plugin`의 `skip`이 어떤 방식으로 설정됐든 결국 `true`로 풀리는 모듈). 그런 모듈 자신의 컴포넌트는 빠집니다. 그 모듈만 필요로 하는 의존성도 함께 빠지지만, 같은 리액터의 배포되는 모듈이 어떤 스코프로도 그 의존성을 선언하지 않을 때만 그렇습니다(배포되는 모듈의 `provided`나 `test` 선언 하나만 있어도, `compile`·`runtime`이 아니어도, 남습니다). SBOM의 의존성 그래프가 각 연결이 어떤 스코프인지 따로 기록하지 않기 때문입니다. `BOMLENS_MAVEN_FULL_GRAPH=1`로 이렇게 빠지는 것을 모두 그대로 둘 수 있습니다. 제외한 모듈과 그 때문에 빠진 컴포넌트는 SBOM에 각각 `bomlens:excluded-modules`, `bomlens:excluded-components`로 기록됩니다.
 
+> 주의: cdxgen은 Maven 컴포넌트의 라이선스를 그 컴포넌트 자신의 `pom.xml`에서만 읽으므로, `<licenses>`를 선언하지 않고 부모 POM의 Maven 상속에 기대는 컴포넌트는 라이선스가 빈 채로 넘어옵니다. BomLens는 이제 그 부모 체인을 직접 따라가(리액터 자신의 모듈부터, 리액터 밖 부모는 로컬 저장소에서) 처음으로 라이선스를 선언한 조상의 값을 채우고, 어느 조상도 선언하지 않았거나 이미 라이선스가 있는 컴포넌트는 그대로 둡니다. 채운 컴포넌트에는 `bomlens:licenseSource` 속성이 `parent POM` 값으로 기록됩니다.
+
 ---
 
 ## Java (Gradle)

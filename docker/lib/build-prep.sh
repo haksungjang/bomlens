@@ -1820,6 +1820,246 @@ CWMF_JS
     fi
 fi
 
+# Maven parent-POM license inheritance: a project commonly declares
+# <licenses> once, on a parent pom, and leaves the child silent about it,
+# relying on Maven's own effective-POM inheritance. cdxgen reads each
+# component's own pom.xml, not the effective one, so a component this reads
+# as having no license at all -- correct for that one file, wrong for what it
+# actually ships under. Applies to any Maven component in the SBOM, not only
+# the scanned project's own reactor modules: a dependency resolved from the
+# local repository (spring-boot-starter-web's own transitive jul-to-slf4j,
+# say) has this exact shape just as often, its <parent> naming a coordinate
+# (spring-boot-starter-parent) with no reactor directory to walk to at all.
+#
+# Walks the parent chain like the non-deployed-module filter above, but a
+# link can point two different places: a <relativePath> that resolves to an
+# actual pom.xml on disk (a reactor module's parent, most often), or --
+# whenever that does not resolve, including when relativePath is absent
+# entirely -- the parent's own group/artifact/version looked up in this run's
+# own local repository, populated as a side effect of cdxgen's own Maven
+# resolve above. Maven itself needs every ancestor's pom to compute an
+# effective POM, so the chain is there to read, offline, no `mvn` invocation
+# needed either way.
+#
+# Runs independently of BOMLENS_MAVEN_FULL_GRAPH -- that switch is about
+# whether non-deployed modules get dropped from the graph, an unrelated
+# question from whether a license gets filled in. A depth cap backstops the
+# visited set: a long but non-cyclic chain, which a visited set alone would
+# never catch, still terminates. Only fills a component whose OWN pom.xml
+# declares no <licenses> at all (checked on the parsed pom.xml itself, not
+# merely the SBOM component -- one that does declare one but that cdxgen
+# failed to carry through is a cdxgen gap, not a case this fills over with a
+# possibly different parent value) and only when an ancestor's pom.xml does
+# declare one.
+if [ "${rc:-1}" -eq 0 ] && [ -f pom.xml ] && [ -f "$OUT" ] && command -v node >/dev/null 2>&1; then
+    log "maven: inheriting missing licenses from a parent POM"
+    _mlic=$(mktemp).js
+    cat > "$_mlic" <<'MLIC_JS'
+const fs = require('fs');
+const path = require('path');
+const [bomPath, m2Root] = process.argv.slice(2);
+let bom;
+try { bom = JSON.parse(fs.readFileSync(bomPath, 'utf8')); } catch (e) { process.exit(0); }
+if (!Array.isArray(bom.components)) process.exit(0);
+
+const POM_MAX_BYTES = 2 * 1024 * 1024;
+const POM_PARSE_BUDGET_MS = 2000;
+const TAG_RE = /<([A-Za-z_][\w.:-]*)((?:\s+[^>]*?)?)(\/?)>/y;
+function parseXml(src) {
+  if (src.length > POM_MAX_BYTES) return null;
+  src = src.replace(/<\?[\s\S]*?\?>/g, '').replace(/<!--[\s\S]*?-->/g, '');
+  let i = 0;
+  const n = src.length;
+  const deadline = Date.now() + POM_PARSE_BUDGET_MS;
+  let steps = 0;
+  function overBudget() { return (++steps & 0xfff) === 0 && Date.now() > deadline; }
+  function skipWs() { while (i < n && /\s/.test(src[i])) i++; }
+  function parseNode() {
+    skipWs();
+    if (src[i] !== '<') return null;
+    TAG_RE.lastIndex = i;
+    const m = TAG_RE.exec(src);
+    if (!m || m.index !== i) return null;
+    i = TAG_RE.lastIndex;
+    const tag = m[1];
+    const node = { tag, children: [], text: '' };
+    if (m[3] === '/') return node;
+    const closeTag = '</' + tag + '>';
+    while (i < n) {
+      if (overBudget()) throw new Error('parse budget exceeded');
+      skipWs();
+      if (src.startsWith(closeTag, i)) { i += closeTag.length; return node; }
+      if (src[i] === '<') {
+        if (src.startsWith('</', i)) { const end = src.indexOf('>', i); i = end < 0 ? n : end + 1; return node; }
+        if (src.startsWith('<![CDATA[', i)) {
+          const end = src.indexOf(']]>', i);
+          i = end < 0 ? n : end + 3;
+          continue;
+        }
+        const beforeChild = i;
+        const child = parseNode();
+        if (child) node.children.push(child);
+        if (i === beforeChild) { const end = src.indexOf('>', i); i = end < 0 ? n : end + 1; }
+      } else {
+        const next = src.indexOf('<', i);
+        node.text += next < 0 ? src.slice(i) : src.slice(i, next);
+        i = next < 0 ? n : next;
+      }
+    }
+    return node;
+  }
+  try {
+    const roots = [];
+    while (i < n) {
+      if (overBudget()) throw new Error('parse budget exceeded');
+      skipWs();
+      if (i >= n) break;
+      const before = i;
+      const node = parseNode();
+      if (node) roots.push(node);
+      if (i === before) break;
+    }
+    return roots.find(r => r.tag === 'project') || null;
+  } catch (e) {
+    return null;
+  }
+}
+const decodeEntities = s => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&apos;/g, "'");
+const directChild = (node, tag) => node ? (node.children.find(c => c.tag === tag) || null) : null;
+const directChildren = (node, tag) => node ? node.children.filter(c => c.tag === tag) : [];
+const directText = node => node ? decodeEntities(node.text).trim() : '';
+
+const MAX_PARENT_DEPTH = 10;
+
+// A location is either a reactor directory ({dir}) or a local-repository
+// coordinate ({gav}) -- the two places a pom.xml can actually be read from
+// offline. The local repository layout names a group/artifact/version's pom
+// deterministically: group with dots turned to path segments, then
+// artifact/version/artifact-version.pom, no classifier.
+function m2PomPath(gav) {
+  return path.join(m2Root, ...gav.group.split('.'), gav.artifact, gav.version,
+    gav.artifact + '-' + gav.version + '.pom');
+}
+function locationKey(loc) {
+  return loc.dir ? 'dir:' + path.resolve(loc.dir)
+                 : 'gav:' + loc.gav.group + ':' + loc.gav.artifact + ':' + loc.gav.version;
+}
+function loadPom(loc) {
+  const pomPath = loc.dir ? path.join(loc.dir, 'pom.xml') : m2PomPath(loc.gav);
+  let text;
+  try { text = fs.readFileSync(pomPath, 'utf8'); } catch (e) { return null; }
+  const project = parseXml(text);
+  return project ? { dir: loc.dir || null, project } : null;
+}
+// Where a <parent> points next: relativePath if it names an actual pom.xml
+// on disk (only possible from a reactor directory), else the parent
+// coordinate's own pom in the local repository.
+function parentLocation(project, currentDir) {
+  const parent = directChild(project, 'parent');
+  if (!parent) return null;
+  if (currentDir !== null) {
+    const relPathNode = directChild(parent, 'relativePath');
+    const relPath = relPathNode ? directText(relPathNode) : '../pom.xml';
+    if (relPath !== '') {
+      const candidateDir = path.dirname(path.join(currentDir, relPath));
+      if (fs.existsSync(path.join(candidateDir, 'pom.xml'))) return { dir: candidateDir };
+    }
+  }
+  const g = directText(directChild(parent, 'groupId'));
+  const a = directText(directChild(parent, 'artifactId'));
+  const v = directText(directChild(parent, 'version'));
+  return (g && a && v) ? { gav: { group: g, artifact: a, version: v } } : null;
+}
+function loadChain(startLoc, seen, depth) {
+  seen = seen || new Set();
+  depth = depth || 0;
+  if (depth >= MAX_PARENT_DEPTH) return [];
+  const key = locationKey(startLoc);
+  if (seen.has(key)) return [];
+  seen.add(key);
+  const loaded = loadPom(startLoc);
+  if (!loaded) return [];
+  const chain = [loaded];
+  const next = parentLocation(loaded.project, loaded.dir);
+  if (next) chain.push(...loadChain(next, seen, depth + 1));
+  return chain;
+}
+function enumerateModules(rootDir) {
+  const out = [];
+  function walk(dir) {
+    let text;
+    try { text = fs.readFileSync(path.join(dir, 'pom.xml'), 'utf8'); } catch (e) { return; }
+    const project = parseXml(text);
+    if (!project) return;
+    out.push({ dir, project });
+    const modulesNode = directChild(project, 'modules');
+    if (!modulesNode) return;
+    for (const modNode of directChildren(modulesNode, 'module')) {
+      const rel = directText(modNode);
+      if (rel) walk(path.join(dir, rel));
+    }
+  }
+  walk(rootDir);
+  return out;
+}
+function gaOfProject(project) {
+  const artifactId = directChild(project, 'artifactId');
+  let groupId = directChild(project, 'groupId');
+  if (!groupId) { const parent = directChild(project, 'parent'); groupId = parent ? directChild(parent, 'groupId') : null; }
+  return (groupId ? directText(groupId) : '?') + ':' + (artifactId ? directText(artifactId) : '?');
+}
+function licensesOf(project) {
+  const lics = directChild(project, 'licenses');
+  if (!lics) return [];
+  const out = [];
+  for (const lic of directChildren(lics, 'license')) {
+    const name = directText(directChild(lic, 'name'));
+    if (name) out.push(name);
+  }
+  return out;
+}
+
+// A reactor module's own directory, keyed by group:artifact so a component
+// resolved from the local build (version always matches what was just
+// built) starts its chain on the actual checkout rather than a redundant
+// .m2 copy; anything else starts straight from its own .m2 coordinate.
+const reactorDirByGA = new Map();
+for (const { dir, project } of enumerateModules('.')) reactorDirByGA.set(gaOfProject(project), dir);
+
+const MAVEN_PURL_RE = /^pkg:maven\/([^/]+)\/([^@]+)@([^?]+)/;
+function gavOfPurl(purl) {
+  const m = MAVEN_PURL_RE.exec(purl || '');
+  return m ? { group: decodeURIComponent(m[1]), artifact: decodeURIComponent(m[2]), version: decodeURIComponent(m[3]) } : null;
+}
+
+let filled = 0;
+for (const c of bom.components) {
+  if (Array.isArray(c.licenses) && c.licenses.length > 0) continue;
+  const gav = gavOfPurl(c.purl);
+  if (!gav) continue;
+  const reactorDir = reactorDirByGA.get(gav.group + ':' + gav.artifact);
+  const chain = loadChain(reactorDir ? { dir: reactorDir } : { gav });
+  if (chain.length === 0 || licensesOf(chain[0].project).length > 0) continue;
+  let names = [];
+  for (let i = 1; i < chain.length; i++) {
+    names = licensesOf(chain[i].project);
+    if (names.length) break;
+  }
+  if (!names.length) continue;
+  c.licenses = names.map(name => ({ license: { name } }));
+  c.properties = (c.properties || []).filter(p => p.name !== 'bomlens:licenseSource')
+    .concat([{ name: 'bomlens:licenseSource', value: 'parent POM' }]);
+  filled++;
+}
+if (filled) {
+  fs.writeFileSync(bomPath, JSON.stringify(bom, null, 2));
+  process.stderr.write('[build-prep] maven: inherited a parent POM license for ' + filled + ' component(s)\n');
+}
+MLIC_JS
+    node "$_mlic" "$OUT" "/tmp/sbomhome/.m2" || log "maven: parent-POM license inheritance skipped (non-fatal)"
+    rm -f "$_mlic"
+fi
+
 # Python license evidence: settle each PyPI component's license on what the
 # installed distribution actually ships, rather than on the summary PyPI serves.
 #
