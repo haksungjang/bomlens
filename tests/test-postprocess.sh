@@ -3794,6 +3794,13 @@ else
     # A file the user placed in the folder themselves -- must survive.
     echo "keep me" > "$CLEANDIR/README.md"
     echo "keep me too" > "$CLEANDIR/proj_1.0_notes.txt"
+    # A supplier's own recorded CVE judgements (POST /vex-verdict) -- must
+    # survive too, even though it is a known suffix (scripts/check-artifact-
+    # registry-sync.sh's CLEANUP_EXEMPT). Every other known suffix here is
+    # scan output regenerated fresh each run, which is why the cleanup sweeps
+    # it; this one is hand-entered and would otherwise be silently destroyed
+    # by re-scanning the same project and version.
+    echo "supplier's recorded judgements" > "$CLEANDIR/proj_1.0_vex.json"
     # A DIFFERENT version's artifact sharing this run's prefix as a string
     # prefix ("proj_1.0" is a string-prefix of "proj_1.0.1") -- must survive.
     # The cleanup matches "${OUT_PREFIX}${suffix}" as one exact filename, never
@@ -3828,6 +3835,11 @@ else
         pass "a file the user placed in the folder (no known suffix) is left alone"
     else
         fail "cleanup removed a file it should not have" "$remaining"
+    fi
+    if printf '%s\n' "$remaining" | grep -qFx "proj_1.0_vex.json"; then
+        pass "a re-scan does not destroy a supplier's previously recorded VEX judgements"
+    else
+        fail "cleanup swept the VEX verdict sidecar -- a re-scan would silently lose recorded judgements" "$remaining"
     fi
     if printf '%s\n' "$remaining" | grep -qFx "proj_1.0.1_bom.json"; then
         pass "a different version's artifact sharing this run's prefix as a string prefix is left alone"

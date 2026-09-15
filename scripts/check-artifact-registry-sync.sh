@@ -76,12 +76,25 @@ _security_epss.json     :: yes :: yes :: _security_epss\.json
 _vendored.cdx.json      :: yes :: yes :: _vendored\.cdx\.json
 _ai-profile.json        :: yes :: yes :: _ai-profile
 _ai-profile.md          :: yes :: yes :: _ai-profile
+_vex.json               :: yes :: yes :: _vex\.json
 _modelica.cdx.json      :: no  :: yes :: skip
 _cocoapods.cdx.json     :: no  :: yes :: skip
 _conda.cdx.json         :: no  :: yes :: skip
 _security_cvebintool.json :: no :: yes :: skip
 _security_grype.json    :: no  :: yes :: skip
 _security_yocto.json    :: no  :: yes :: skip
+"
+
+# _vex.json is deliberately absent from entrypoint.sh's KNOWN_ARTIFACT_SUFFIXES
+# below, and that is not an oversight for the forward check to catch: it is
+# the one entry here the scan pipeline never writes at all (POST /vex-verdict
+# in server.py does, after a scan is already done) and the one entry that
+# must NOT be swept by a re-scan's stale-artifact cleanup. A CVE judgement a
+# supplier recorded against last week's scan of this project/version has to
+# survive scanning it again today; every other suffix here is regenerated
+# fresh each run, which is exactly why the cleanup sweeps it first.
+CLEANUP_EXEMPT="
+_vex.json
 "
 
 [ -f "$SERVER" ] || { echo "ERROR: $SERVER not found"; exit 2; }
@@ -202,6 +215,9 @@ if [ -z "$cleanup_suffixes" ]; then
 else
     while IFS= read -r suf; do
         [ -z "$suf" ] && continue
+        if printf '%s\n' "$CLEANUP_EXEMPT" | grep -qFx "$suf"; then
+            continue
+        fi
         if ! printf '%s\n' "$cleanup_suffixes" | grep -qFx "$suf"; then
             echo "FAIL: $suf is in the REGISTRY but missing from entrypoint.sh's KNOWN_ARTIFACT_SUFFIXES, so a re-scan would not clean up a stale one."
             fail=1

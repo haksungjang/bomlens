@@ -224,6 +224,34 @@ export interface VulnItem {
    *  Disambiguates `pkg`+`installed` collisions across unrelated components
    *  that happen to share both. */
   purl?: string;
+  /** The supplier's own triage of this CVE (POST /vex-verdict), separate from
+   *  `status` above (the vendor/advisory's own disposition). Absent until one
+   *  is saved for this component + CVE. */
+  vexState?: VexState;
+  /** Optional note recorded alongside vexState. */
+  vexDetail?: string;
+  /** ISO 8601 timestamp of when vexState was last saved. */
+  vexUpdatedAt?: string;
+}
+
+/** A supplier's own judgement of one CVE against one component, in the same
+ *  four terms CycloneDX VEX analysis.state uses (affected/not_affected/
+ *  resolved/in_triage), spelled the way this UI already spells `fixed`
+ *  elsewhere rather than introducing a second vocabulary for the same idea. */
+export const VEX_STATES = ["affected", "not_affected", "fixed", "under_investigation"] as const;
+export type VexState = (typeof VEX_STATES)[number];
+
+/** The stored record POST /vex-verdict returns after a save. */
+export interface VexVerdict {
+  purl: string;
+  pkg: string;
+  installed: string;
+  cve: string;
+  state: VexState;
+  detail: string;
+  source: string;
+  firstRecordedAt: string;
+  updatedAt: string;
 }
 
 /** Severity counts (CRITICAL…UNKNOWN + TOTAL) plus the per-CVE detail rows. */
@@ -1075,6 +1103,52 @@ export async function deleteScan(id: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** Record a supplier's own judgement of one CVE against one component. Prefer
+ *  the vuln's purl when it has one; pkg+installed is only a fallback for a
+ *  finding Trivy resolved no purl for, and the server keys on purl whenever
+ *  one is given, so send it alone rather than "just in case" alongside a
+ *  pkg/installed that might not describe the same component. Throws
+ *  ApiError with the server's message on a rejected or failed save. */
+export async function saveVexVerdict(
+  scanId: string,
+  input: {
+    cve: string;
+    state: VexState;
+    detail?: string;
+    purl?: string;
+    pkg?: string;
+    installed?: string;
+  },
+): Promise<VexVerdict> {
+  if (IS_STATIC_DEMO) demoWriteRefused();
+  const body = input.purl
+    ? { cve: input.cve, state: input.state, detail: input.detail, purl: input.purl }
+    : {
+        cve: input.cve,
+        state: input.state,
+        detail: input.detail,
+        pkg: input.pkg,
+        installed: input.installed,
+      };
+  const res = await fetch(`/vex-verdict?id=${encodeURIComponent(scanId)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let msg = `could not save (${res.status})`;
+    try {
+      const j = await res.json();
+      if (j && j.error) msg = j.error;
+    } catch {
+      /* keep default */
+    }
+    throw new ApiError(msg, res.status);
+  }
+  const j = (await res.json()) as { ok: boolean; verdict: VexVerdict };
+  return j.verdict;
 }
 
 /** Re-open a past scan by run_id; null if it is gone or invalid. */

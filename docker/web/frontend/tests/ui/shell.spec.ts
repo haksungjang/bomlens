@@ -2199,6 +2199,53 @@ test("Vulnerabilities table shows the disposition status and NVD severity, when 
   expect(results.violations).toEqual([]);
 });
 
+test("a supplier can record their own judgement, separate from the vendor status", async ({ page }) => {
+  await stubVexAndRun(page);
+  let savedBody: Record<string, unknown> | null = null;
+  await page.route("**/vex-verdict**", (r) => {
+    savedBody = r.request().postDataJSON();
+    r.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        verdict: {
+          ...savedBody,
+          source: "user",
+          firstRecordedAt: "2026-09-15T00:00:00Z",
+          updatedAt: "2026-09-15T00:00:00Z",
+        },
+      }),
+    });
+  });
+  await page.getByRole("link", { name: /^Vulnerabilities/ }).first().click();
+
+  const row1 = page.locator("tr", { has: page.getByText("CVE-2024-1111") });
+  await page.getByText("CVE-2024-1111").click();
+  await page.getByLabel("Judgement").selectOption("affected");
+  await page.getByLabel("Notes (optional)").fill("used behind an internal-only endpoint");
+  await page.getByRole("button", { name: "Save" }).click();
+
+  await expect(page.getByText("Judgement saved")).toBeVisible();
+  // The request carried pkg+installed (this fixture's finding has no purl),
+  // not a purl the client never had.
+  expect(savedBody).toMatchObject({
+    cve: "CVE-2024-1111",
+    state: "affected",
+    detail: "used behind an internal-only endpoint",
+    pkg: "openssl",
+    installed: "3.0.0",
+  });
+  expect(savedBody).not.toHaveProperty("purl");
+
+  // The new badge sits beside the pre-existing vendor Status badge ("Fixed")
+  // rather than replacing it -- the two are different axes.
+  await expect(row1.getByText("Fixed", { exact: true })).toBeVisible();
+  await expect(row1.getByText("Judgement: Affected")).toBeVisible();
+
+  const results = await new AxeBuilder({ page }).include("main").analyze();
+  expect(results.violations).toEqual([]);
+});
+
 // Two CVEs on the same installed package that share the same fixed version
 // look, in the table alone, like two unrelated rows: the reader has to notice
 // the coincidence by comparing the Fixed column by hand. The bundle summary

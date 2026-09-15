@@ -4650,6 +4650,155 @@ else
     fail "an amd64 guess from a not-yet-ready daemon was cached as the image's download size"
 fi
 
+echo "== supplier VEX verdicts (POST /vex-verdict) =="
+# vex_1.0: one finding with a purl (foo), one Trivy resolved no PkgIdentifier
+# for (bar) -- exercises both join keys _vex_verdict_index uses.
+cat > "$OUT/vex_1.0_bom.json" <<'JSON'
+{"bomFormat":"CycloneDX","metadata":{"component":{"name":"vex","version":"1.0"}},
+ "components":[{"name":"foo","version":"1.0","type":"library","purl":"pkg:npm/foo@1.0"},
+               {"name":"bar","version":"2.0","type":"library"}]}
+JSON
+cat > "$OUT/vex_1.0_security.json" <<'JSON'
+{"Results":[{"Vulnerabilities":[
+  {"VulnerabilityID":"CVE-2024-10001","Severity":"HIGH","PkgName":"foo","InstalledVersion":"1.0",
+   "PkgIdentifier":{"PURL":"pkg:npm/foo@1.0"}},
+  {"VulnerabilityID":"CVE-2024-10002","Severity":"LOW","PkgName":"bar","InstalledVersion":"2.0"}
+]}]}
+JSON
+
+# -- adversarial cases: none of these may write vex_1.0_vex.json --
+bad_id=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Content-Type: application/json" \
+    -d '{"cve":"CVE-2024-10001","state":"fixed","purl":"pkg:npm/foo@1.0"}' \
+    "$BASE/vex-verdict?id=../../etc/passwd")
+[ "$bad_id" = "400" ] && pass "/vex-verdict blocks a traversal scan id (400)" || fail "traversal id returned $bad_id (expected 400)"
+
+missing_scan=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Content-Type: application/json" \
+    -d '{"cve":"CVE-2024-10001","state":"fixed","purl":"pkg:npm/foo@1.0"}' \
+    "$BASE/vex-verdict?id=vex_nosuchscan_1.0")
+[ "$missing_scan" = "404" ] && pass "/vex-verdict 404s for a scan with no _bom.json" || fail "nonexistent scan returned $missing_scan (expected 404)"
+
+bad_json=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Content-Type: application/json" \
+    -d '{not json' "$BASE/vex-verdict?id=vex_1.0")
+[ "$bad_json" = "400" ] && pass "/vex-verdict rejects malformed JSON (400)" || fail "malformed JSON returned $bad_json (expected 400)"
+
+bad_state=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Content-Type: application/json" \
+    -d '{"cve":"CVE-2024-10001","state":"definitely_affected","purl":"pkg:npm/foo@1.0"}' \
+    "$BASE/vex-verdict?id=vex_1.0")
+[ "$bad_state" = "400" ] && pass "/vex-verdict rejects an unrecognized state (400)" || fail "bad state returned $bad_state (expected 400)"
+
+bad_cve=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Content-Type: application/json" \
+    -d '{"cve":"not-an-advisory-id","state":"fixed","purl":"pkg:npm/foo@1.0"}' \
+    "$BASE/vex-verdict?id=vex_1.0")
+[ "$bad_cve" = "400" ] && pass "/vex-verdict rejects a CVE id outside the known advisory namespaces (400)" || fail "bad cve id returned $bad_cve (expected 400)"
+
+no_identity=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Content-Type: application/json" \
+    -d '{"cve":"CVE-2024-10001","state":"fixed"}' "$BASE/vex-verdict?id=vex_1.0")
+[ "$no_identity" = "400" ] && pass "/vex-verdict rejects a verdict with neither purl nor pkg+installed (400)" || fail "no component identity returned $no_identity (expected 400)"
+
+big_detail=$(python3 -c "import json; print(json.dumps({'cve':'CVE-2024-10001','state':'fixed','purl':'pkg:npm/foo@1.0','detail':'x'*3000}))")
+oversized=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Content-Type: application/json" \
+    -d "$big_detail" "$BASE/vex-verdict?id=vex_1.0")
+[ "$oversized" = "400" ] && pass "/vex-verdict rejects a detail note over the length cap (400)" || fail "oversized detail returned $oversized (expected 400)"
+
+cross_origin=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Content-Type: application/json" \
+    -H "Origin: http://evil.example" \
+    -d '{"cve":"CVE-2024-10001","state":"fixed","purl":"pkg:npm/foo@1.0"}' \
+    "$BASE/vex-verdict?id=vex_1.0")
+[ "$cross_origin" = "403" ] && pass "a cross-site Origin on /vex-verdict is rejected (403)" || fail "cross-site Origin returned $cross_origin (expected 403)"
+
+[ -f "$OUT/vex_1.0_vex.json" ] && fail "an adversarial /vex-verdict request wrote a sidecar anyway" "$(cat "$OUT/vex_1.0_vex.json")" \
+    || pass "no _vex.json sidecar was written by any of the rejected requests above"
+
+# -- a real save, then read it back through the same summary the UI consumes --
+save_resp=$(curl -fsS -X POST -H "Content-Type: application/json" \
+    -d '{"cve":"CVE-2024-10001","state":"not_affected","purl":"pkg:npm/foo@1.0","detail":"not reachable from our code"}' \
+    "$BASE/vex-verdict?id=vex_1.0")
+echo "$save_resp" | python3 -c "
+import sys, json
+r = json.load(sys.stdin)
+assert r['ok'] is True, r
+v = r['verdict']
+assert v['state'] == 'not_affected', v
+assert v['detail'] == 'not reachable from our code', v
+assert v['source'] == 'user', v
+assert v['firstRecordedAt'] == v['updatedAt'], v  # first save: identical
+" && pass "a valid /vex-verdict save returns the stored record" || fail "save response is wrong" "$save_resp"
+
+# The fallback-keyed CVE (no purl in the Trivy finding) saved by pkg+installed.
+curl -fsS -X POST -H "Content-Type: application/json" \
+    -d '{"cve":"CVE-2024-10002","state":"under_investigation","pkg":"bar","installed":"2.0"}' \
+    "$BASE/vex-verdict?id=vex_1.0" >/dev/null
+
+if curl -fsS "$BASE/scan?id=vex_1.0" 2>/dev/null | python3 -c "
+import sys, json
+vulns = {v['id']: v for v in json.load(sys.stdin)['security']['vulnerabilities']}
+assert vulns['CVE-2024-10001']['vexState'] == 'not_affected', vulns['CVE-2024-10001']
+assert vulns['CVE-2024-10001']['vexDetail'] == 'not reachable from our code', vulns['CVE-2024-10001']
+assert vulns['CVE-2024-10002']['vexState'] == 'under_investigation', vulns['CVE-2024-10002']
+# the vendor Status axis (absent here) and the supplier's own vexState are
+# separate fields -- saving one must not invent or touch the other.
+assert 'status' not in vulns['CVE-2024-10001'], vulns['CVE-2024-10001']
+"; then
+    pass "saved verdicts are joined onto the matching vulnerability rows (purl and pkg+installed both)"
+else
+    fail "verdicts did not join back onto /scan?id= as expected"
+fi
+
+# Editing the same (purl, cve) verdict updates in place -- one record, not two
+# -- and keeps the original firstRecordedAt.
+first_recorded=$(python3 -c "import json; print(json.load(open('$OUT/vex_1.0_vex.json'))['verdicts'][0]['firstRecordedAt'])")
+curl -fsS -X POST -H "Content-Type: application/json" \
+    -d '{"cve":"CVE-2024-10001","state":"affected","purl":"pkg:npm/foo@1.0","detail":"reassessed"}' \
+    "$BASE/vex-verdict?id=vex_1.0" >/dev/null
+if python3 -c "
+import json
+d = json.load(open('$OUT/vex_1.0_vex.json'))
+matching = [v for v in d['verdicts'] if v['cve'] == 'CVE-2024-10001']
+assert len(matching) == 1, matching  # updated in place, not appended
+v = matching[0]
+assert v['state'] == 'affected', v
+assert v['detail'] == 'reassessed', v
+assert v['firstRecordedAt'] == '$first_recorded', v
+assert v['updatedAt'] >= v['firstRecordedAt'], v
+"; then
+    pass "re-saving the same verdict updates it in place and keeps firstRecordedAt"
+else
+    fail "re-saving the same verdict duplicated it or lost firstRecordedAt"
+fi
+
+# When a request carries both purl and pkg+installed, purl decides the key on
+# write, exactly as it does on read (a row is looked up by its own purl first,
+# falling back to name+installed only when the row has none). A mismatched
+# pkg/installed sent alongside the real purl must not fork off a second record
+# or move the join off the purl-keyed one.
+curl -fsS -X POST -H "Content-Type: application/json" \
+    -d '{"cve":"CVE-2024-10001","state":"fixed","purl":"pkg:npm/foo@1.0","pkg":"someone-elses-name","installed":"9.9.9"}' \
+    "$BASE/vex-verdict?id=vex_1.0" >/dev/null
+if python3 -c "
+import json
+d = json.load(open('$OUT/vex_1.0_vex.json'))
+matching = [v for v in d['verdicts'] if v['cve'] == 'CVE-2024-10001']
+assert len(matching) == 1, matching  # still one record, updated not forked
+assert matching[0]['state'] == 'fixed', matching[0]
+"; then
+    pass "purl and pkg+installed sent together key on purl alone, on write"
+else
+    fail "sending purl alongside a mismatched pkg+installed forked the record"
+fi
+if curl -fsS "$BASE/scan?id=vex_1.0" 2>/dev/null | python3 -c "
+import sys, json
+vulns = {v['id']: v for v in json.load(sys.stdin)['security']['vulnerabilities']}
+assert vulns['CVE-2024-10001']['vexState'] == 'fixed', vulns['CVE-2024-10001']
+"; then
+    pass "the purl-keyed write above still joins back through the purl-keyed read"
+else
+    fail "the purl-preferring write did not join back on read"
+fi
+
+curl -fsS -X POST "$BASE/scan-delete?id=vex_1.0" >/dev/null 2>&1
+[ -f "$OUT/vex_1.0_vex.json" ] && fail "/scan-delete left the VEX sidecar behind" \
+    || pass "/scan-delete removes the VEX verdict sidecar along with the rest of the scan"
+
 echo "== external vulnerability lookup (GET /advisory, GET /package-advisories) =="
 # Three dedicated server instances so these tests never touch the real
 # api.osv.dev: one backed by a canned stub (success paths + input validation,
