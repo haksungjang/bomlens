@@ -99,7 +99,7 @@ MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
   ghcr.io/sktelecom/bomlens:latest
 ```
 
-In direct runs, `SOURCE` mode has syft read the package manifests inside the container, so it may only capture direct dependencies. If you need transitive dependencies, use `scan-sbom.sh`, which routes to the per-language cdxgen images.
+In direct runs, `SOURCE` mode has syft read the package manifests inside the container, so it may only capture direct dependencies. If you need transitive dependencies, use `scan-sbom.sh`, which routes to the per-language cdxgen images. Syft's manifest readers need a lockfile (`package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml` for Node, and the equivalent for other ecosystems) to resolve any of a project's declared dependencies; without one, direct-run SOURCE mode has nothing to read and the scan fails with guidance rather than reporting an empty result as complete.
 
 ### Notice and reports in one run
 

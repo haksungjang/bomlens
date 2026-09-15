@@ -99,7 +99,7 @@ MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
   ghcr.io/sktelecom/bomlens:latest
 ```
 
-직접 실행의 `SOURCE` 모드는 컨테이너 안에서 syft가 패키지 매니페스트를 읽는 방식이라 직접 의존성만 잡힐 수 있습니다. 전이 의존성까지 필요하면 cdxgen 언어 이미지를 라우팅하는 `scan-sbom.sh`를 쓰세요.
+직접 실행의 `SOURCE` 모드는 컨테이너 안에서 syft가 패키지 매니페스트를 읽는 방식이라 직접 의존성만 잡힐 수 있습니다. 전이 의존성까지 필요하면 cdxgen 언어 이미지를 라우팅하는 `scan-sbom.sh`를 쓰세요. syft의 매니페스트 판독기는 의존성을 하나라도 풀어내려면 락파일(Node는 `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, 다른 생태계도 마찬가지)이 있어야 합니다. 락파일이 없으면 직접 실행의 `SOURCE` 모드는 읽을 것이 없어, 빈 결과를 완료로 보고하는 대신 안내와 함께 실패합니다.
 
 ### 고지문과 보고서까지 한 번에
 
