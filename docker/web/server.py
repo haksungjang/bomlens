@@ -39,7 +39,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 from collections import OrderedDict
-from datetime import datetime
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 WEB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -200,6 +200,10 @@ ARTIFACT_SUFFIXES = (
     # page that re-aggregates the G7 status, regulatory crosswalk and flagged
     # licenses. User-facing report in three formats, so list/download it.
     "_ai-profile.json", "_ai-profile.md",
+    # Supplier-recorded VEX verdicts (POST /vex-verdict): the only artifact
+    # this server writes itself rather than the scan pipeline. User-facing
+    # judgement data, so list/download/delete it like any other result.
+    "_vex.json",
 )
 
 # Recent-scans sidebar shows the newest N; older scans stay on disk but are not
@@ -324,6 +328,43 @@ def run_artifact_path(run_id, name):
         if cand.startswith(droot + os.sep) and os.path.isfile(cand):
             return cand
     return safe_output_path(base)
+
+
+def vex_sidecar_write_path(run_id):
+    """Resolve where this run's VEX-verdict sidecar (`<prefix>_vex.json`) should
+    be written, matching the `{prefix}` its other artifacts already use.
+
+    Unlike run_file (which only finds an artifact that already exists), a
+    verdict save may be the first one for this run, so the target has to be
+    derived rather than globbed for. The prefix comes from the run's own
+    _bom.json name (entrypoint.sh may name artifacts differently from the run
+    folder on a timestamped run) -- requiring that file to exist means a
+    verdict can never be filed against a run_id that is not a real, completed
+    scan. Returns None when the run has no bom (nothing to attach a verdict
+    to) or run_id fails the same traversal checks run_dir/safe_prefix_path
+    already enforce elsewhere."""
+    bom = run_file(run_id, "_bom.json")
+    # run_file's legacy-layout fallback (safe_prefix_path) returns a computed
+    # path whether or not the file is actually there -- unlike its new-layout
+    # glob branch, which only ever returns a hit. isfile is the real gate.
+    if not bom or not os.path.isfile(bom):
+        return None
+    base = os.path.basename(bom)
+    if not base.endswith("_bom.json"):
+        return None
+    prefix = base[: -len("_bom.json")]
+    d = run_dir(run_id)
+    if d and os.path.isdir(d):
+        droot = os.path.realpath(d)
+        target = os.path.realpath(os.path.join(d, prefix + "_vex.json"))
+        if target.startswith(droot + os.sep):
+            return target
+        return None
+    # Legacy flat layout: run_id IS the prefix (list_scans constructs it that
+    # way), so this also covers the case where prefix happens to differ from
+    # run_id for some other reason -- safe_prefix_path re-validates it either
+    # way.
+    return safe_prefix_path(prefix, "_vex.json")
 
 
 # Extra read-only scan-target mounts from `scan-sbom.sh --ui --mount <dir>`
@@ -1104,6 +1145,7 @@ def security_summary(run_id):
     except (OSError, json.JSONDecodeError):
         return None
     priority = _epss_kev_map(run_id)
+    vex_by_purl, vex_by_nv = _vex_verdict_index(run_id)
     sev = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "UNKNOWN": 0}
     vulns = []
     kernel = 0
@@ -1175,6 +1217,22 @@ def security_summary(run_id):
                 published = v.get("PublishedDate")
                 if isinstance(published, str) and published:
                     row["publishedDate"] = published
+                # The supplier's own triage of this CVE against this component,
+                # if one was saved (POST /vex-verdict). Same purl-then-(name,
+                # installed) lookup as the risk index, so a verdict recorded
+                # against a specific purl is never surfaced on an unrelated
+                # component that merely shares a name and version.
+                verdict = row.get("purl") and vex_by_purl.get((row["purl"], cid))
+                if not verdict:
+                    verdict = vex_by_nv.get(
+                        ((v.get("PkgName") or "").lower(), v.get("InstalledVersion") or "", cid)
+                    )
+                if verdict:
+                    row["vexState"] = verdict.get("state")
+                    if verdict.get("detail"):
+                        row["vexDetail"] = verdict["detail"]
+                    if verdict.get("updatedAt"):
+                        row["vexUpdatedAt"] = verdict["updatedAt"]
                 vulns.append(row)
     sev["TOTAL"] = sum(sev.values())
     sev["vulnerabilities"] = vulns
@@ -1234,6 +1292,55 @@ def _component_risk_index(run_id):
             name = (v.get("PkgName") or "").lower()
             if name:
                 bump(by_nv, (name, v.get("InstalledVersion") or ""), sev)
+    return by_purl, by_nv
+
+
+# A supplier's own triage of one CVE against one component, distinct from the
+# vendor/advisory `Status` Trivy reports (VulnerabilitiesTable.tsx keeps the two
+# in separate badges). Named after CycloneDX's VEX analysis.state, minus the
+# pedigree/false-positive states this UI has no use for.
+VEX_STATES = ("affected", "not_affected", "fixed", "under_investigation")
+MAX_VEX_DETAIL = 2000  # chars; a short justification, not a report
+
+# Serializes read-modify-write on one run's *_vex.json. A single global lock
+# is fine: saves are rare, human-paced actions, never a hot path.
+_vex_write_lock = threading.Lock()
+
+
+def _load_vex_verdicts(run_id):
+    """Saved verdict records for a run, as a raw list. [] when there is no
+    sidecar yet or it fails to parse -- never raises, matching every other
+    sidecar reader here."""
+    p = run_file(run_id, "_vex.json")
+    if not p or not os.path.isfile(p):
+        return []
+    try:
+        with open(p) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    verdicts = data.get("verdicts") if isinstance(data, dict) else None
+    return [v for v in verdicts if isinstance(v, dict)] if isinstance(verdicts, list) else []
+
+
+def _vex_verdict_index(run_id):
+    """Saved verdicts keyed the same two ways _component_risk_index joins
+    Trivy findings to components: by normalized purl when the verdict was
+    recorded against one, else by (name, installed version) -- never both, so
+    a verdict recorded with a purl is never matched by name alone. Returns
+    (by_purl, by_nv); both empty with no sidecar."""
+    by_purl, by_nv = {}, {}
+    for v in _load_vex_verdicts(run_id):
+        cve = v.get("cve")
+        if not cve:
+            continue
+        purl = v.get("purl")
+        if purl:
+            by_purl[(_norm_purl(purl), cve)] = v
+        else:
+            name = (v.get("pkg") or "").lower()
+            if name:
+                by_nv[(name, v.get("installed") or "", cve)] = v
     return by_purl, by_nv
 
 
@@ -3973,6 +4080,8 @@ class Handler(BaseHTTPRequestHandler):
             self._git_cred()
         elif parsed.path == "/scan-delete":
             self._scan_delete(urllib.parse.parse_qs(parsed.query))
+        elif parsed.path == "/vex-verdict":
+            self._vex_verdict_save(urllib.parse.parse_qs(parsed.query))
         else:
             self._send(404, json.dumps({"error": "not found"}))
 
@@ -4014,6 +4123,122 @@ class Handler(BaseHTTPRequestHandler):
             for slot in [k for k in _scans_cache if k[0] == sid]:
                 del _scans_cache[slot]
         self._send(200, json.dumps({"deleted": sid, "removed": removed}))
+
+    def _vex_verdict_save(self, qs):
+        """Record a supplier's own triage of one CVE against one component
+        (POST /vex-verdict?id=<scan id>): affected / not_affected / fixed /
+        under_investigation, with an optional note. Stored separately from the
+        vendor/advisory `Status` Trivy reports (security_summary keeps both,
+        VulnerabilitiesTable.tsx shows both) and never rewrites the SBOM or the
+        Trivy report.
+
+        The first write endpoint whose body can change something on disk, so
+        every check below runs before the write it guards, in order: scan id,
+        then body size, then JSON shape, then each field, and only then the
+        sidecar path is resolved and the file replaced atomically. A rejection
+        at any step touches nothing that was already on disk."""
+        sid = (qs.get("id") or [""])[0]
+        if not scan_id_ok(sid):
+            self._send(400, json.dumps({"error": "bad scan id"}))
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        if length <= 0 or length > 8192:
+            self._send(400, json.dumps({"error": "bad request"}))
+            return
+        try:
+            data = json.loads(self.rfile.read(length) or b"{}")
+        except (ValueError, OSError):
+            self._send(400, json.dumps({"error": "invalid JSON"}))
+            return
+        if not isinstance(data, dict):
+            self._send(400, json.dumps({"error": "invalid JSON"}))
+            return
+
+        def field(key):
+            v = data.get(key)
+            return v.strip() if isinstance(v, str) else ""
+
+        # The CVE id shares its shape with GET /advisory's: same namespace
+        # prefixes, same charset, same length cap. Reusing the check keeps the
+        # two endpoints from drifting on what an "id" is allowed to look like.
+        cve = data.get("cve")
+        if not _advisory_id_ok(cve):
+            self._send(400, json.dumps({"error": "bad cve id"}))
+            return
+        state = data.get("state")
+        if state not in VEX_STATES:
+            self._send(400, json.dumps({"error": "bad state"}))
+            return
+        purl, pkg, installed = field("purl"), field("pkg"), field("installed")
+        if len(purl) > 512 or len(pkg) > 512 or len(installed) > 128:
+            self._send(400, json.dumps({"error": "bad request"}))
+            return
+        if not purl and not (pkg and installed):
+            self._send(400, json.dumps({"error": "purl or pkg+installed required"}))
+            return
+        detail = data.get("detail", "")
+        if not isinstance(detail, str) or len(detail) > MAX_VEX_DETAIL:
+            self._send(400, json.dumps({"error": "bad detail"}))
+            return
+
+        target = vex_sidecar_write_path(sid)
+        if not target:
+            self._send(404, json.dumps({"error": "scan not found"}))
+            return
+
+        norm = _norm_purl(purl) if purl else ""
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with _vex_write_lock:
+            verdicts = _load_vex_verdicts(sid)
+            match = None
+            for existing in verdicts:
+                if existing.get("cve") != cve:
+                    continue
+                if norm:
+                    if _norm_purl(existing.get("purl") or "") == norm:
+                        match = existing
+                        break
+                elif (
+                    not existing.get("purl")
+                    and (existing.get("pkg") or "").lower() == pkg.lower()
+                    and (existing.get("installed") or "") == installed
+                ):
+                    match = existing
+                    break
+            record = {
+                "purl": purl,
+                "pkg": pkg,
+                "installed": installed,
+                "cve": cve,
+                "state": state,
+                "detail": detail,
+                "source": "user",
+                # Preserved across an edit to the same verdict; only updatedAt
+                # moves, so a supplier can tell "recorded" from "last touched".
+                "firstRecordedAt": (match or {}).get("firstRecordedAt") or now,
+                "updatedAt": now,
+            }
+            if match is not None:
+                verdicts[verdicts.index(match)] = record
+            else:
+                verdicts.append(record)
+            tmp_path = target + ".tmp"
+            try:
+                with open(tmp_path, "w", encoding="utf-8") as fh:
+                    json.dump({"verdicts": verdicts}, fh, indent=2)
+                    fh.write("\n")
+                os.replace(tmp_path, target)
+            except OSError:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+                self._send(500, json.dumps({"error": "could not save"}))
+                return
+        self._send(200, json.dumps({"ok": True, "verdict": record}))
 
     def _git_cred(self):
         """Stash a private-repo token; return a single-use credId."""
