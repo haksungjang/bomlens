@@ -6818,6 +6818,133 @@ else
     echo "  SKIP: node not installed; cargo+npm merge not exercised"
 fi
 
+echo "== pnpm workspace-member filter: dependency-tree reachability =="
+if command -v node >/dev/null 2>&1; then
+    sed -n "/<<'PWMF_JS'/,/^PWMF_JS\$/p" "$PREP" | sed '1d;$d' > "$WORK/pwmf.js"
+    NON_SHIPPED_DIRS=$(grep -m1 '^NON_SHIPPED_DIRS=' "$PREP" | sed 's/^NON_SHIPPED_DIRS="\(.*\)"$/\1/')
+
+    # A workspace with a kept root (app), a kept diamond dependency
+    # (lib-shared, reached from both app and the excluded member), and an
+    # excluded member (playground/demo) that alone reaches: a plain external
+    # package (left-pad, dropped) and two packages that are "deduped": true
+    # everywhere they occur in this fixture, so this pass never once sees
+    # their own dependencies -- an overrides-style alias (obug, mirroring a
+    # real workspace's `debug -> npm:obug@^1.0.2` override) and pnpm's own
+    # ESM/CJS-compat "-cjs" key aliasing (string-width-cjs, whose "from" is
+    # the real package name "string-width"). Both must survive (protected),
+    # even though the only member that reaches either one is excluded.
+    PW="$WORK/pnpm-reactor"
+    mkdir -p "$PW/app" "$PW/lib-shared" "$PW/playground/demo"
+    cat > "$WORK/pwmf-tree.json" <<TREE
+[
+  { "name": "app", "version": "1.0.0", "path": "$PW/app", "private": true,
+    "dependencies": {
+      "lib-shared": { "from": "lib-shared", "version": "link:../lib-shared", "path": "$PW/lib-shared" },
+      "is-odd": { "from": "is-odd", "version": "3.0.1",
+        "resolved": "https://registry.npmjs.org/is-odd/-/is-odd-3.0.1.tgz",
+        "dependencies": { "is-number": { "from": "is-number", "version": "6.0.0",
+          "resolved": "https://registry.npmjs.org/is-number/-/is-number-6.0.0.tgz" } } }
+    } },
+  { "name": "lib-shared", "version": "1.0.0", "path": "$PW/lib-shared", "private": true,
+    "dependencies": {
+      "is-number": { "from": "is-number", "version": "6.0.0",
+        "resolved": "https://registry.npmjs.org/is-number/-/is-number-6.0.0.tgz" }
+    } },
+  { "name": "@ex/demo", "version": "1.0.0", "path": "$PW/playground/demo", "private": true,
+    "dependencies": {
+      "lib-shared": { "from": "lib-shared", "version": "link:../../lib-shared", "path": "$PW/lib-shared" },
+      "left-pad": { "from": "left-pad", "version": "1.3.0",
+        "resolved": "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz" },
+      "obug": { "from": "obug", "version": "1.0.2",
+        "resolved": "https://registry.npmjs.org/obug/-/obug-1.0.2.tgz",
+        "deduped": true, "dedupedDependenciesCount": 1 },
+      "string-width-cjs": { "from": "string-width", "version": "4.2.3",
+        "resolved": "https://registry.npmjs.org/string-width/-/string-width-4.2.3.tgz",
+        "deduped": true, "dedupedDependenciesCount": 1 }
+    } }
+]
+TREE
+    cat > "$WORK/pwmf-bom-orig.json" <<'JSON'
+{
+  "metadata": { "component": { "bom-ref": "root", "purl": "pkg:npm/root-ws@0.0.0" } },
+  "components": [
+    { "bom-ref": "app", "purl": "pkg:npm/app@1.0.0", "type": "library" },
+    { "bom-ref": "libshared", "purl": "pkg:npm/lib-shared@1.0.0", "type": "library" },
+    { "bom-ref": "demo", "purl": "pkg:npm/%40ex%2Fdemo@1.0.0", "type": "library" },
+    { "bom-ref": "isodd", "purl": "pkg:npm/is-odd@3.0.1", "type": "library" },
+    { "bom-ref": "isnumber", "purl": "pkg:npm/is-number@6.0.0", "type": "library" },
+    { "bom-ref": "leftpad", "purl": "pkg:npm/left-pad@1.3.0", "type": "library" },
+    { "bom-ref": "obug", "purl": "pkg:npm/obug@1.0.2", "type": "library" },
+    { "bom-ref": "stringwidth", "purl": "pkg:npm/string-width@4.2.3", "type": "library" }
+  ],
+  "dependencies": []
+}
+JSON
+    cp "$WORK/pwmf-bom-orig.json" "$WORK/pwmf-bom.json"
+    ( cd "$PW" && node "$WORK/pwmf.js" "$WORK/pwmf-bom.json" "$WORK/pwmf-tree.json" "$NON_SHIPPED_DIRS" ) >/dev/null 2>&1
+    if jq -e '
+        ([.components[].purl]) as $kept
+        | ($kept | index("pkg:npm/%40ex%2Fdemo@1.0.0") | not)
+        and ($kept | index("pkg:npm/left-pad@1.3.0") | not)
+        and ($kept | index("pkg:npm/lib-shared@1.0.0"))
+        and ($kept | index("pkg:npm/is-number@6.0.0"))
+        and ($kept | index("pkg:npm/app@1.0.0"))
+        and ($kept | index("pkg:npm/obug@1.0.2"))
+        and ($kept | index("pkg:npm/string-width@4.2.3"))
+    ' "$WORK/pwmf-bom.json" >/dev/null 2>&1; then
+        pass "diamond dep (lib-shared) survives, member-only dep drops, always-deduped packages are protected"
+    else
+        fail "pnpm workspace-member filter result unexpected" "$(jq -c '.components[].purl' "$WORK/pwmf-bom.json" 2>&1)"
+    fi
+    if jq -e '
+        ([.metadata.properties[] | select(.name=="bomlens:excluded-members") | .value][0]
+          == "pnpm:playground/demo (@ex/demo)")
+        and ([.metadata.properties[] | select(.name=="bomlens:excluded-components") | .value][0]) as $c
+        | ($c | contains("%40ex%2Fdemo@1.0.0")) and ($c | contains("left-pad@1.3.0"))
+          and ($c | contains("obug") | not) and ($c | contains("string-width") | not)
+    ' "$WORK/pwmf-bom.json" >/dev/null 2>&1; then
+        pass "excluded workspace member and dropped component (including the scoped member itself) are recorded, protected packages excluded from the list"
+    else
+        fail "bomlens:excluded-members/-components recording unexpected" "$(jq -c '.metadata.properties' "$WORK/pwmf-bom.json" 2>&1)"
+    fi
+
+    # A tree that is not a JSON array, and one whose entries lack "path",
+    # both leave the SBOM untouched rather than guess.
+    printf '{"not":"an array"}' > "$WORK/pwmf-tree-bad1.json"
+    cp "$WORK/pwmf-bom-orig.json" "$WORK/pwmf-bom-bad1.json"
+    ( cd "$PW" && node "$WORK/pwmf.js" "$WORK/pwmf-bom-bad1.json" "$WORK/pwmf-tree-bad1.json" "$NON_SHIPPED_DIRS" ) >/dev/null 2>&1
+    printf '[{"name":"x"}]' > "$WORK/pwmf-tree-bad2.json"
+    cp "$WORK/pwmf-bom-orig.json" "$WORK/pwmf-bom-bad2.json"
+    ( cd "$PW" && node "$WORK/pwmf.js" "$WORK/pwmf-bom-bad2.json" "$WORK/pwmf-tree-bad2.json" "$NON_SHIPPED_DIRS" ) >/dev/null 2>&1
+    if diff -q "$WORK/pwmf-bom-bad1.json" "$WORK/pwmf-bom-orig.json" >/dev/null 2>&1 \
+       && diff -q "$WORK/pwmf-bom-bad2.json" "$WORK/pwmf-bom-orig.json" >/dev/null 2>&1; then
+        pass "a non-array tree and an entry missing \"path\" both leave the SBOM untouched"
+    else
+        fail "malformed pnpm tree should leave the SBOM untouched" "diffs above"
+    fi
+
+    # A link dependency whose target path matches no known workspace member
+    # (a stale or out-of-tree reference) drops that one edge rather than
+    # failing the whole pass.
+    node -e '
+      const fs = require("fs");
+      const tree = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      const demo = tree.find(p => p.name === "@ex/demo");
+      demo.dependencies.ghost = { from: "ghost", version: "link:../../nonexistent", path: process.argv[2] };
+      fs.writeFileSync(process.argv[3], JSON.stringify(tree));
+    ' "$WORK/pwmf-tree.json" "$PW/nonexistent" "$WORK/pwmf-tree-ghost.json"
+    cp "$WORK/pwmf-bom-orig.json" "$WORK/pwmf-bom-ghost.json"
+    ( cd "$PW" && node "$WORK/pwmf.js" "$WORK/pwmf-bom-ghost.json" "$WORK/pwmf-tree-ghost.json" "$NON_SHIPPED_DIRS" ) >/dev/null 2>&1
+    if jq -e '([.components[].purl]) as $kept | ($kept | index("pkg:npm/left-pad@1.3.0") | not) and ($kept | index("pkg:npm/lib-shared@1.0.0"))' \
+        "$WORK/pwmf-bom-ghost.json" >/dev/null 2>&1; then
+        pass "an unresolvable link target drops that one edge, not the whole pass"
+    else
+        fail "unresolvable link target should not affect the rest of the filter" "$(jq -c '.components[].purl' "$WORK/pwmf-bom-ghost.json" 2>&1)"
+    fi
+else
+    echo "  SKIP: node not installed; pnpm workspace-member filter not exercised"
+fi
+
 echo "== Node/npm fallback quality gate: a syft fallback covering none of the declared deps is discarded =="
 # syft's pnpm-lock.yaml parsing can miss every real dependency and return only
 # its own platform tooling -- a "successful" scan that in fact describes
