@@ -5387,17 +5387,18 @@ fi
 
 # PHP: composer.lock present vs. absent. With composer.lock present, the
 # must-not-run stub aliased as "composer" below proves the resolve step
-# (guarded on [ ! -f composer.lock ]) never shells out. Without one and no
-# composer on PATH at all here, this is just the tool-unavailable case the
-# resolve step below also covers -- the plain existence check still applies
-# either way.
+# (guarded on [ ! -f composer.lock ]) never shells out. Without one, the
+# must-not-run stub aliased as "composer" stands in for the tool-unavailable
+# case deterministically (a host that happens to have a real composer on
+# PATH must not turn this into a network resolve): it is found, invoked,
+# fails loudly, and -- exactly like a genuinely missing tool -- writes no
+# lock, so composer-lock-committed still reads absent either way.
 mkdir -p "$CA2_ROOT/php-with/src" "$CA2_ROOT/php-with/out" "$CA2_ROOT/php-without/src" "$CA2_ROOT/php-without/out"
 printf '{"require":{}}\n' > "$CA2_ROOT/php-with/src/composer.json"
 printf '{"packages":[]}\n' > "$CA2_ROOT/php-with/src/composer.lock"
 printf '{"require":{}}\n' > "$CA2_ROOT/php-without/src/composer.json"
 ln -sf must-not-run "$CA2_ROOT/bin/composer"
 PATH="$CA2_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$CA2_ROOT/php-with/src" "$CA2_ROOT/php-with/out/bom.json" >/dev/null 2>&1
-rm -f "$CA2_ROOT/bin/composer"
 PATH="$CA2_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$CA2_ROOT/php-without/src" "$CA2_ROOT/php-without/out/bom.json" >/dev/null 2>&1
 if jq -e '[.metadata.properties[]? | select(.name=="bomlens:prep-step-applied" and .value=="composer-lock-committed")] | length == 1' \
     "$CA2_ROOT/php-with/out/bom.json" >/dev/null 2>&1; then
@@ -5416,7 +5417,10 @@ fi
 # shape -- a Symfony-style monorepo has no root composer.lock but a lock per
 # src/*/Component, and cdxgen's -r scan resolves everything from those). The
 # check must be recursive, not root-only, or a fully-resolved monorepo like
-# this reads as unknown for no reason (measured: root-only missed it).
+# this reads as unknown for no reason (measured: root-only missed it). The
+# must-not-run "composer" stub is still aliased from above, so a root resolve
+# attempt (there is no root lock either) fails safely instead of depending on
+# whatever composer, if any, the host happens to have.
 mkdir -p "$CA2_ROOT/php-monorepo/src/components/a" "$CA2_ROOT/php-monorepo/out"
 printf '{"require":{}}\n' > "$CA2_ROOT/php-monorepo/src/composer.json"
 printf '{"packages":[]}\n' > "$CA2_ROOT/php-monorepo/src/components/a/composer.lock"
@@ -5427,6 +5431,7 @@ if jq -e '[.metadata.properties[]? | select(.name=="bomlens:prep-step-applied" a
 else
     fail "a nested composer.lock in a monorepo layout was not recorded" "$(jq -c '.metadata.properties' "$CA2_ROOT/php-monorepo/out/bom.json" 2>&1)"
 fi
+rm -f "$CA2_ROOT/bin/composer"
 
 # PHP: a root composer.json with no committed composer.lock, composer on
 # PATH -- the resolve step must actually run it (not just check for the
