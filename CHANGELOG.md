@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v1.12.0] - 2026-09-15
+
 ### Added
 
 - The Overview screen now shows when a best-effort post-process step (CPE/EOL/malicious enrichment, conformance validation, notice generation, and the like) failed during a scan, naming which one, instead of a valid but silently incomplete SBOM giving no visible sign of it.
