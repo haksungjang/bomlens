@@ -109,7 +109,13 @@ export function SeverityBar({ security, selected = "", onSelect }: Props) {
                     security[s] === 0
                       ? "cursor-not-allowed opacity-40"
                       : "cursor-pointer hover:opacity-80",
-                    isSel && "ring-2 ring-foreground ring-offset-1",
+                    // A rest-state ring, not just on hover/select: this badge sits
+                    // in a filter row next to identical-looking but inert badges
+                    // elsewhere on the page (e.g. a table's own severity cell), so
+                    // it needs to read as pressable before the reader hovers it.
+                    isSel
+                      ? "ring-2 ring-foreground ring-offset-1"
+                      : "ring-1 ring-border",
                     Boolean(selected) && !isSel && "opacity-60",
                   )}
                 >

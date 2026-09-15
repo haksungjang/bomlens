@@ -96,7 +96,7 @@ export function BarList({
                 type="button"
                 title={activateHint}
                 onClick={() => onActivate(it.key)}
-                className={cn(rowButton, "hover:opacity-90")}
+                className={cn(rowButton, "hover:ring-1 hover:ring-border hover:shadow-sm")}
               >
                 {inner}
               </button>
@@ -114,7 +114,9 @@ export function BarList({
               onClick={() => onSelect?.(it.key)}
               className={cn(
                 rowButton,
-                sel ? "ring-2 ring-foreground ring-offset-1" : "hover:opacity-90",
+                sel
+                  ? "ring-2 ring-foreground ring-offset-1"
+                  : "hover:ring-1 hover:ring-border hover:shadow-sm",
               )}
             >
               {inner}

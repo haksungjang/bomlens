@@ -361,7 +361,9 @@ function KindChip({
         "rounded-full transition duration-fast ease-out-soft",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
         count === 0 ? "cursor-not-allowed opacity-40" : "cursor-pointer hover:opacity-80",
-        isSel && "ring-2 ring-foreground ring-offset-1",
+        // Rest-state ring so this reads as pressable next to identical-looking
+        // but inert badges elsewhere (see SeverityBar's own).
+        isSel ? "ring-2 ring-foreground ring-offset-1" : "ring-1 ring-border",
         Boolean(selected) && !isSel && "opacity-60",
       )}
     >

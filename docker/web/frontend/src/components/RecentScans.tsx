@@ -142,10 +142,11 @@ function FilterChip({
       aria-pressed={active}
       onClick={onClick}
       className={cn(
-        "inline-flex h-9 items-center rounded-full border px-3.5 text-sm transition-colors duration-fast ease-out-soft",
+        "inline-flex h-9 items-center rounded-full border px-3.5 text-sm",
+        "transition-[color,border-color,background-color,box-shadow] duration-fast ease-out-soft",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
         active
-          ? "border-brand bg-brand/10 font-medium text-foreground"
+          ? "ring-2 ring-foreground ring-offset-1 font-medium text-foreground"
           : "border-input text-muted-foreground hover:bg-muted hover:text-foreground",
       )}
     >
