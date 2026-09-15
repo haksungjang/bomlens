@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A PHP (Composer) source scan whose root `composer.json` has no committed `composer.lock` now resolves one itself (`composer update --no-dev --no-scripts --no-interaction`), the same as Ruby's `bundle lock` step already does for a missing `Gemfile.lock`. Previously nothing resolved it, and cdxgen came back with zero components and no indication anything was wrong. A resolve failure is now recorded on the SBOM instead of failing silently.
+
 ## [v1.12.0] - 2026-09-15
 
 ### Added

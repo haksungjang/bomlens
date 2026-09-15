@@ -425,6 +425,23 @@ if [ -f Gemfile ]; then
     fi
 fi
 
+# PHP (Composer): resolve a lockfile when the root manifest has none.
+# Unlike Ruby/Cargo/Go/Python above, cdxgen never resolves composer.json on
+# its own: a root manifest with no committed composer.lock (a library-shaped
+# package that does not commit one at all, confirmed against Symfony's
+# HttpFoundation component) has nothing for cdxgen to read and the scan
+# comes back with zero components, no different from a project that
+# genuinely has no dependencies. --no-dev keeps the resolve at deployable
+# scope, the same principle PHP_SCOPE_FILTER below applies when a lock is
+# already there. composer.lock already committed at the root, or found
+# nested under a monorepo component with none at the root, is unaffected --
+# that positive lock evidence is recorded further down this file
+# (composer-lock-committed), unchanged by this step.
+if [ -f composer.json ] && [ ! -f composer.lock ] && command -v composer >/dev/null 2>&1; then
+    log "composer update"
+    prep_step composer-install "$PREP_TIMEOUT_DEFAULT" composer update --no-dev --no-scripts --no-interaction
+fi
+
 # Maven — no pre-resolve step. cdxgen invokes maven itself (dependency:tree /
 # the cyclonedx plugin) to build the full transitive graph, so a separate
 # `mvn dependency:resolve` here is redundant. It also failed noisily: the run is
