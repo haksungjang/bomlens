@@ -385,6 +385,17 @@ if [ -f pom.xml ] && ! opted_out "${BOMLENS_MAVEN_FULL_GRAPH:-}"; then
     MAVEN_SCOPE_FILTER=1
 fi
 
+# PHP/Composer scope over-scan: the same mechanism as the Maven filter above.
+# cdxgen already tags each composer component's resolved scope (require ->
+# required, require-dev -> optional), so no composer run or second resolve is
+# needed here either, confirmed against the pinned cdxgen PHP image and not
+# just assumed from cdxgen's own upstream behavior. BOMLENS_PHP_FULL_GRAPH=1
+# opts out (keep the require+require-dev superset).
+PHP_SCOPE_FILTER=""
+if [ -f composer.json ] && ! opted_out "${BOMLENS_PHP_FULL_GRAPH:-}"; then
+    PHP_SCOPE_FILTER=1
+fi
+
 # Gradle (java-gradle / Android) — resolve so cdxgen sees the full graph.
 # For Android, ANDROID_HOME is set in the android-sdk image, enabling AGP.
 #
@@ -1183,27 +1194,34 @@ NWMF_JS
     rm -f "$_nwmf"
 fi
 
-# Maven scope filter: cdxgen tags each maven component with its resolved scope
-# (compile/runtime -> required, test -> optional, provided/system -> excluded).
-# Drop the non-deployable ones, keeping non-maven components, the app root, and
-# anything cdxgen left unscoped. Prune the dependency graph to the kept refs.
-# Guard: only act when cdxgen actually populated scopes (at least one maven node
-# marked "required") — the syft fallback path emits no scope, and dropping there
-# would gut the BOM, so we leave it untouched and recall never regresses.
-if [ "${rc:-1}" -eq 0 ] && [ -n "${MAVEN_SCOPE_FILTER:-}" ] \
-   && [ -f "$OUT" ] && command -v node >/dev/null 2>&1; then
-    log "maven: filtering SBOM to deployable scope"
-    _mflt=$(mktemp).js
-    cat > "$_mflt" <<'MFILTER_JS'
+# Scope filter (Maven, PHP/Composer): cdxgen tags each component's resolved
+# scope itself (Maven: compile/runtime -> required, test -> optional,
+# provided/system -> excluded; Composer: require -> required, require-dev ->
+# optional). Both ecosystems reduce to the same post-filter: drop the
+# non-deployable nodes under the ecosystem's own purl prefix, keeping every
+# other component, the app root, and anything cdxgen left unscoped, then prune
+# the dependency graph to what remains. Guard: only act when cdxgen actually
+# populated scopes (at least one node of that purl prefix marked "required")
+# -- the syft fallback path emits no scope, and dropping there would gut the
+# BOM, so we leave it untouched and recall never regresses.
+run_scope_filter() {
+    _sf_purl_prefix="$1"
+    _sf_label="$2"
+    [ "${rc:-1}" -eq 0 ] || return 0
+    [ -f "$OUT" ] || return 0
+    command -v node >/dev/null 2>&1 || return 0
+    log "$_sf_label: filtering SBOM to deployable scope"
+    _sflt=$(mktemp).js
+    cat > "$_sflt" <<'SFILTER_JS'
 const fs = require('fs');
-const [bomPath] = process.argv.slice(2);
+const [bomPath, purlPrefix] = process.argv.slice(2);
 let bom;
 try { bom = JSON.parse(fs.readFileSync(bomPath, 'utf8')); } catch (e) { process.exit(0); }
 if (!Array.isArray(bom.components)) process.exit(0);
-const isMaven = c => (c.purl || '').startsWith('pkg:maven/');
-const hasScopes = bom.components.some(c => isMaven(c) && c.scope === 'required');
+const isTarget = c => (c.purl || '').startsWith(purlPrefix);
+const hasScopes = bom.components.some(c => isTarget(c) && c.scope === 'required');
 if (!hasScopes) process.exit(0);   // scopes not populated (e.g. syft fallback): leave as-is
-const keep = c => !isMaven(c) || (c.scope !== 'optional' && c.scope !== 'excluded');
+const keep = c => !isTarget(c) || (c.scope !== 'optional' && c.scope !== 'excluded');
 const before = bom.components.length;
 bom.components = bom.components.filter(keep);
 const mc = bom.metadata && bom.metadata.component;
@@ -1218,10 +1236,16 @@ if (Array.isArray(bom.dependencies)) {
       : d);
 }
 fs.writeFileSync(bomPath, JSON.stringify(bom, null, 2));
-process.stderr.write('[build-prep] maven: kept ' + bom.components.length + ' of ' + before + ' components\n');
-MFILTER_JS
-    node "$_mflt" "$OUT" || log "maven: filter skipped (non-fatal)"
-    rm -f "$_mflt"
+process.stderr.write('[build-prep] ' + purlPrefix + ': kept ' + bom.components.length + ' of ' + before + ' components\n');
+SFILTER_JS
+    node "$_sflt" "$OUT" "$_sf_purl_prefix" || log "$_sf_label: filter skipped (non-fatal)"
+    rm -f "$_sflt"
+}
+if [ -n "${MAVEN_SCOPE_FILTER:-}" ]; then
+    run_scope_filter "pkg:maven/" "maven"
+fi
+if [ -n "${PHP_SCOPE_FILTER:-}" ]; then
+    run_scope_filter "pkg:composer/" "php"
 fi
 
 # Maven non-deployed-module filter: the scope filter above keeps a component the
