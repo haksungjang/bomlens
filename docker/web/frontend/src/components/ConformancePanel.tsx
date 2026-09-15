@@ -358,10 +358,13 @@ function KindChip({
       aria-pressed={isSel}
       onClick={() => onSelect(kind)}
       className={cn(
-        "rounded-full transition duration-fast ease-out-soft",
+        "rounded-full border border-transparent transition-colors duration-fast ease-out-soft",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
         count === 0 ? "cursor-not-allowed opacity-40" : "cursor-pointer hover:opacity-80",
-        isSel && "ring-2 ring-foreground ring-offset-1",
+        // Rest-state border so this reads as pressable next to identical-looking
+        // but inert badges elsewhere (see SeverityBar's own for why this is a
+        // real `border`, not a low-contrast `ring`).
+        isSel ? "ring-2 ring-foreground ring-offset-1" : "border-border",
         Boolean(selected) && !isSel && "opacity-60",
       )}
     >

@@ -66,6 +66,19 @@ const TONE_ICON: Record<AttentionItem["tone"], string> = {
   high: "text-risk-high", // token-lint-ignore
   info: "text-risk-info", // token-lint-ignore
 };
+/** Left accent + faint tint on the "Needs attention" card, keyed to the worst
+ *  tone among its items (the list is already sorted most-urgent-first, see
+ *  needsAttention()), so the one card asking for action reads as more urgent
+ *  than the purely informational cards around it (severity/license
+ *  distribution), without borrowing the full-bleed treatment a failed scan
+ *  itself gets (that would misreport a successful scan as having failed).
+ *  `info` (e.g. vendored-source review only) stays neutral: nothing failed or
+ *  crossed a severity threshold, so it does not need to visually compete. */
+const ATTN_ACCENT: Record<AttentionItem["tone"], string> = {
+  critical: "border-l-4 border-l-risk-critical bg-risk-critical/5",
+  high: "border-l-4 border-l-risk-high bg-risk-high/5",
+  info: "",
+};
 const ATTN_ICON: Record<AttentionItem["id"], LucideIcon> = {
   malicious: Biohazard,
   conformance: FileCheck2,
@@ -820,7 +833,7 @@ export function Overview({
       />
 
       {attention.length > 0 && (
-        <Card>
+        <Card className={ATTN_ACCENT[attention[0].tone]}>
           <CardContent className="p-4">
             <div className="mb-2 text-sm font-semibold text-foreground">
               {t("overview.needsAttention")}
