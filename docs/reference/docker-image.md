@@ -16,7 +16,7 @@ For everyday use we recommend the [`scan-sbom.sh`](../reference/cli.md) script, 
 | `ghcr.io/sktelecom/bomlens-deep-cve` | Bundles grype for deep CVE matching (opt-in). Used by the CLI's `--deep-cve` and by the web UI's Deep CVE matching toggle, both of which pull it automatically as a sibling container when it is not already the running image |
 | `ghcr.io/sktelecom/bomlens-aibom` | Generates an AI-model ML-BOM (opt-in, legacy alias: sbom-scanner-aibom). Used by `--model`/`--model-file` and the web UI's AI model tile, pulled automatically as a sibling container |
 
-`latest` and version tags are available. `ghcr.io/sktelecom/bomlens` and `bomlens-aibom` (and their aliases) support both `linux/amd64` and `linux/arm64`; `bomlens-firmware` and `bomlens-deep-cve` are published for `linux/amd64` only, so pulling them on an `arm64` host (an Apple Silicon Mac, an Arm server) fails without an amd64 emulation layer. Images are signed with cosign before publishing.
+`latest` and version tags are available. All published images (`ghcr.io/sktelecom/bomlens`, `bomlens-firmware`, `bomlens-deep-cve`, `bomlens-aibom`, and their aliases) support both `linux/amd64` and `linux/arm64`, so pulling any of them on an `arm64` host (an Apple Silicon Mac, an Arm server) works natively. Images are signed with cosign before publishing.
 
 ```bash
 docker pull ghcr.io/sktelecom/bomlens:latest
