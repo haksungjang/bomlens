@@ -5316,11 +5316,9 @@ else
 fi
 
 echo "== committed lockfiles: a lockfile already in the tree is itself positive lock evidence, without a network resolve =="
-# Ruby, Swift, PHP and .NET have no separate prep_step to point to as evidence
-# a resolve happened (Ruby/Swift only resolve when NO lockfile is already
-# committed; PHP/.NET have no pre-resolve step at all). A committed lockfile
-# is checked once, unconditionally, and recorded straight onto
-# bomlens:prep-step-applied.
+# Ruby, Swift and PHP only resolve when NO lockfile is already committed;
+# .NET has no pre-resolve step at all. A committed lockfile is checked once,
+# unconditionally, and recorded straight onto bomlens:prep-step-applied.
 CA2_ROOT="$WORK/prep-applied-committed"
 mkdir -p "$CA2_ROOT/bin"
 cat > "$CA2_ROOT/bin/cdxgen" <<'STUB'
@@ -5387,13 +5385,19 @@ else
     fail "a fixture-only Package.resolved was wrongly treated as committed lock evidence" "$(cat "$CA2_ROOT/swift-fixture-only/log")"
 fi
 
-# PHP: composer.lock present vs. absent -- a plain existence check, no tool
-# invoked either way (cdxgen resolves Composer directly).
+# PHP: composer.lock present vs. absent. With composer.lock present, the
+# must-not-run stub aliased as "composer" below proves the resolve step
+# (guarded on [ ! -f composer.lock ]) never shells out. Without one and no
+# composer on PATH at all here, this is just the tool-unavailable case the
+# resolve step below also covers -- the plain existence check still applies
+# either way.
 mkdir -p "$CA2_ROOT/php-with/src" "$CA2_ROOT/php-with/out" "$CA2_ROOT/php-without/src" "$CA2_ROOT/php-without/out"
 printf '{"require":{}}\n' > "$CA2_ROOT/php-with/src/composer.json"
 printf '{"packages":[]}\n' > "$CA2_ROOT/php-with/src/composer.lock"
 printf '{"require":{}}\n' > "$CA2_ROOT/php-without/src/composer.json"
+ln -sf must-not-run "$CA2_ROOT/bin/composer"
 PATH="$CA2_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$CA2_ROOT/php-with/src" "$CA2_ROOT/php-with/out/bom.json" >/dev/null 2>&1
+rm -f "$CA2_ROOT/bin/composer"
 PATH="$CA2_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$CA2_ROOT/php-without/src" "$CA2_ROOT/php-without/out/bom.json" >/dev/null 2>&1
 if jq -e '[.metadata.properties[]? | select(.name=="bomlens:prep-step-applied" and .value=="composer-lock-committed")] | length == 1' \
     "$CA2_ROOT/php-with/out/bom.json" >/dev/null 2>&1; then
@@ -5423,6 +5427,56 @@ if jq -e '[.metadata.properties[]? | select(.name=="bomlens:prep-step-applied" a
 else
     fail "a nested composer.lock in a monorepo layout was not recorded" "$(jq -c '.metadata.properties' "$CA2_ROOT/php-monorepo/out/bom.json" 2>&1)"
 fi
+
+# PHP: a root composer.json with no committed composer.lock, composer on
+# PATH -- the resolve step must actually run it (not just check for the
+# file), at deployable scope, and the lock it writes is then picked up by
+# the same composer-lock-committed evidence check the tests above cover.
+# guard_restore treats a composer.lock this step wrote as a build artifact
+# and deletes it again once the SBOM is written (it must not linger in a
+# user's source tree), so this checks the invocation itself and the SBOM's
+# own recorded evidence, not the lock file's survival on disk.
+cat > "$CA2_ROOT/bin/composer" <<STUB
+#!/bin/sh
+printf '%s\n' "\$*" > "$CA2_ROOT/composer-args.txt"
+printf '{"packages":[]}\n' > composer.lock
+STUB
+chmod +x "$CA2_ROOT/bin/composer"
+mkdir -p "$CA2_ROOT/php-resolve/src" "$CA2_ROOT/php-resolve/out"
+printf '{"require":{"monolog/monolog":"^3.0"}}\n' > "$CA2_ROOT/php-resolve/src/composer.json"
+PATH="$CA2_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$CA2_ROOT/php-resolve/src" "$CA2_ROOT/php-resolve/out/bom.json" >/dev/null 2>&1
+if [ -f "$CA2_ROOT/composer-args.txt" ] \
+   && grep -q -- '--no-dev' "$CA2_ROOT/composer-args.txt" \
+   && grep -q -- '--no-scripts' "$CA2_ROOT/composer-args.txt" \
+   && grep -q -- '--no-interaction' "$CA2_ROOT/composer-args.txt"; then
+    pass "a root composer.json with no lock runs composer at deployable scope (--no-dev --no-scripts --no-interaction)"
+else
+    fail "composer was not invoked as expected" "args: $(cat "$CA2_ROOT/composer-args.txt" 2>/dev/null || echo '(never ran)')"
+fi
+if jq -e '[.metadata.properties[]? | select(.name=="bomlens:prep-step-applied") | .value] as $a
+    | ($a | index("composer-install")) and ($a | index("composer-lock-committed"))' \
+    "$CA2_ROOT/php-resolve/out/bom.json" >/dev/null 2>&1; then
+    pass "the resolve is recorded as composer-install, and the lock it wrote counts as composer-lock-committed"
+else
+    fail "resolved composer.lock was not recorded as applied lock evidence" "$(jq -c '.metadata.properties' "$CA2_ROOT/php-resolve/out/bom.json" 2>&1)"
+fi
+rm -f "$CA2_ROOT/bin/composer"
+
+# PHP: composer.lock already committed -- the must-not-run stub aliased as
+# "composer" proves the resolve step (guarded on the file's absence) is
+# never invoked, same principle as the Ruby/Swift committed-lockfile cases.
+mkdir -p "$CA2_ROOT/php-committed-no-invoke/src" "$CA2_ROOT/php-committed-no-invoke/out"
+printf '{"require":{}}\n' > "$CA2_ROOT/php-committed-no-invoke/src/composer.json"
+printf '{"packages":[]}\n' > "$CA2_ROOT/php-committed-no-invoke/src/composer.lock"
+ln -sf must-not-run "$CA2_ROOT/bin/composer"
+PATH="$CA2_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$CA2_ROOT/php-committed-no-invoke/src" "$CA2_ROOT/php-committed-no-invoke/out/bom.json" \
+    > "$CA2_ROOT/php-committed-no-invoke/log" 2>&1
+if grep -q 'must-not-run: this should never execute' "$CA2_ROOT/php-committed-no-invoke/log"; then
+    fail "a committed composer.lock still triggered a composer resolve" "$(cat "$CA2_ROOT/php-committed-no-invoke/log")"
+else
+    pass "a committed composer.lock does not trigger a composer resolve"
+fi
+rm -f "$CA2_ROOT/bin/composer"
 
 # .NET: packages.lock.json present vs. absent, same shape as PHP above.
 mkdir -p "$CA2_ROOT/dotnet-with/src" "$CA2_ROOT/dotnet-with/out" "$CA2_ROOT/dotnet-without/src" "$CA2_ROOT/dotnet-without/out"

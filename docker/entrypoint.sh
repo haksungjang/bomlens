@@ -451,7 +451,7 @@ mark_compositions_aggregate() {
     fi
     case "$SCAN_MODE" in
         SOURCE|POSTPROCESS)
-            info=$(jq -r --arg labels "npm-production-set pip-install go-mod-tidy cargo-lockfile bundle-lock swift-package-resolve gradle-dependencies android-release-classpath composer-lock-committed dotnet-lock-committed" '
+            info=$(jq -r --arg labels "npm-production-set pip-install go-mod-tidy cargo-lockfile bundle-lock swift-package-resolve gradle-dependencies android-release-classpath composer-install composer-lock-committed dotnet-lock-committed" '
                 ($labels | split(" ")) as $known
                 | (.metadata.properties // []) as $props
                 | ([$props[] | select(.name=="bomlens:prep-step-applied") | .value]) as $applied
