@@ -278,10 +278,20 @@ PREP_TIMEOUT_GRADLE="${BOMLENS_PREP_TIMEOUT:-1800}"
 # scan is interrupted. Failure or a timeout (rc 124) is logged with the
 # command's own stderr (last 20 lines) and recorded in PREP_FAILED, a
 # space-separated list of labels a caller stamps onto the SBOM once cdxgen has
-# run. Never aborts the script; returns the command's exit code.
+# run. Every label this scan actually calls, success or failure, also lands in
+# PREP_APPLIED regardless of outcome: a manifest this project does not have
+# (e.g. no go.mod) never calls prep_step at all, so PREP_APPLIED is what tells
+# a reader "this ecosystem's step ran here" apart from "it never applied" --
+# PREP_FAILED alone cannot, since both look the same (absent) to it. Never
+# aborts the script; returns the command's exit code.
 PREP_FAILED=""
+PREP_APPLIED=""
 prep_step() {
     _ps_label="$1"; _ps_timeout="$2"; shift 2
+    case " $PREP_APPLIED " in
+        *" $_ps_label "*) ;;
+        *) PREP_APPLIED="${PREP_APPLIED:+$PREP_APPLIED }$_ps_label" ;;
+    esac
     _ps_err=$(mktemp)
     run_supervised_timeout "$_ps_timeout" "$@" 2>"$_ps_err"
     _ps_rc=$?
@@ -304,6 +314,18 @@ prep_step() {
     return "$_ps_rc"
 }
 
+# Record LABEL into PREP_APPLIED directly, with no command to run: for a
+# manifest whose lock evidence is a file we only check for (a committed
+# Gemfile.lock/Package.resolved/composer.lock/packages.lock.json), not a
+# command whose failure prep_step would capture. Never touches PREP_FAILED --
+# there is nothing here that can fail.
+mark_prep_applied() {
+    case " $PREP_APPLIED " in
+        *" $1 "*) ;;
+        *) PREP_APPLIED="${PREP_APPLIED:+$PREP_APPLIED }$1" ;;
+    esac
+}
+
 # Cleanup-only invocation (BOMLENS_GUARD_RESTORE_ONLY=1): a prior run recorded
 # its snapshot at /bomlens-state/$BOMLENS_GUARD_ID and never got to restore
 # it -- SIGKILL, OOM, a host crash, anything that skips the traps below. The
@@ -323,6 +345,42 @@ guard_snapshot
 trap 'stop_supervised; guard_restore' EXIT
 trap 'stop_supervised; guard_restore; exit 130' INT
 trap 'stop_supervised; guard_restore; exit 143' TERM
+
+# Non-shipped trees: manifests under test, fixture, example, benchmark and demo
+# folders, and the GitHub Actions workflows, are left out of the SBOM because
+# none of it ships with the product. The two lists below are copies of the ones
+# in source-detect.sh (this file runs alone in the cdxgen container);
+# tests/test-postprocess.sh checks they stay equal.
+# BOMLENS_INCLUDE_NON_SHIPPED=1 (or true) keeps everything. Defined here,
+# ahead of every ecosystem block below, because the lock-evidence check each
+# one may run (mark_prep_applied / _lock_evidence_found) needs it too, not
+# just the cdxgen --exclude flags built from it further down.
+NON_SHIPPED_DIRS="test tests spec fixtures testdata __tests__ e2e example examples benches benchmarks playground samples"
+NON_SHIPPED_MANIFEST_RE='(^|/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|uv\.lock|Pipfile|Pipfile\.lock|setup\.py|setup\.cfg|environment\.ya?ml|pom\.xml|build\.gradle(\.kts)?|settings\.gradle(\.kts)?|gradle\.lockfile|go\.mod|go\.sum|Cargo\.toml|Cargo\.lock|Gemfile|Gemfile\.lock|[^/]+\.gemspec|composer\.json|composer\.lock|[^/]+\.(cs|fs|vb)proj|packages\.config|packages\.lock\.json|Directory\.Packages\.props|Package\.swift|Package\.resolved|Podfile|Podfile\.lock|conanfile\.txt|conanfile\.py|vcpkg\.json|METADATA|PKG-INFO)$'
+EXCLUDE_NON_SHIPPED=1
+if opted_out "${BOMLENS_INCLUDE_NON_SHIPPED:-}"; then
+    EXCLUDE_NON_SHIPPED=""
+    log "non-shipped trees kept (BOMLENS_INCLUDE_NON_SHIPPED)"
+fi
+
+# True when a lockfile named $1 exists anywhere under the scan root, outside
+# .git/node_modules/vendor (a dependency's OWN lockfile is not evidence about
+# THIS project) and the non-shipped test/fixture/example trees above (a
+# lockfile bundled as a fixture for testing unrelated tooling is not evidence
+# either -- and unpruned, this walks vendor/node_modules in full on every
+# call, which is slow on a real monorepo). Used by the Swift/PHP/.NET lock-
+# evidence checks below. Uses its own positional parameters, not "$@" (which
+# for most of this script's later ecosystem blocks is cdxgen's own argument
+# list being built) -- a function's `set --` only reassigns its own scope in
+# POSIX sh, so this never leaks into the caller's "$@".
+_lock_evidence_found() {
+    _lef_name="$1"
+    set -- -name .git -o -name node_modules -o -name vendor
+    if [ -n "$EXCLUDE_NON_SHIPPED" ]; then
+        for _lef_d in $NON_SHIPPED_DIRS; do set -- "$@" -o -name "$_lef_d"; done
+    fi
+    find . \( "$@" \) -prune -o -type f -name "$_lef_name" -print 2>/dev/null | grep -q .
+}
 
 # Rust — cdxgen does NOT auto-run cargo; lockfile is essential for transitive deps
 if [ -f Cargo.toml ] && command -v cargo >/dev/null 2>&1; then
@@ -355,10 +413,16 @@ if [ -f go.mod ] && command -v go >/dev/null 2>&1; then
 fi
 
 # Ruby — ensure a lockfile exists (cdxgen ruby images usually auto-resolve,
-# but a Gemfile.lock makes it deterministic)
-if [ -f Gemfile ] && [ ! -f Gemfile.lock ] && command -v bundle >/dev/null 2>&1; then
-    log "bundle lock"
-    prep_step bundle-lock "$PREP_TIMEOUT_DEFAULT" sh -c 'bundle lock || bundle install'
+# but a Gemfile.lock makes it deterministic). A Gemfile.lock already committed
+# is itself positive lock evidence -- record it the same as a step we ran
+# ourselves succeeding, without re-resolving over the network.
+if [ -f Gemfile ]; then
+    if [ -f Gemfile.lock ]; then
+        mark_prep_applied bundle-lock
+    elif command -v bundle >/dev/null 2>&1; then
+        log "bundle lock"
+        prep_step bundle-lock "$PREP_TIMEOUT_DEFAULT" sh -c 'bundle lock || bundle install'
+    fi
 fi
 
 # Maven — no pre-resolve step. cdxgen invokes maven itself (dependency:tree /
@@ -578,8 +642,11 @@ rm -f "$_pip_script"
 # needs no prep here — it is filled from the lockfile by syft in post-processing. NOTE:
 # UIKit/Xcode-driven resolution needs macOS; on Linux only non-platform Swift deps resolve.
 if [ -f Package.swift ] && command -v swift >/dev/null 2>&1; then
-    if find . -name Package.resolved -type f 2>/dev/null | grep -q .; then
+    if _lock_evidence_found Package.resolved; then
         log "swift: committed Package.resolved present; skipping network resolve"
+        # A committed Package.resolved is itself positive lock evidence, the
+        # same as running the resolve ourselves and it succeeding.
+        mark_prep_applied swift-package-resolve
     else
         log "swift package resolve (no committed Package.resolved)"
         prep_step swift-package-resolve "$PREP_TIMEOUT_DEFAULT" swift package resolve >/dev/null
@@ -681,24 +748,30 @@ if [ -n "$CONDA_ENV_FILE" ] && command -v python3 >/dev/null 2>&1; then
         fi
     fi
 fi
-# Non-shipped trees: manifests under test, fixture, example, benchmark and demo
-# folders, and the GitHub Actions workflows, are left out of the SBOM because
-# none of it ships with the product. The two lists below are copies of the ones
-# in source-detect.sh (this file runs alone in the cdxgen container);
-# tests/test-postprocess.sh checks they stay equal.
-# BOMLENS_INCLUDE_NON_SHIPPED=1 (or true) keeps everything.
-NON_SHIPPED_DIRS="test tests spec fixtures testdata __tests__ e2e example examples benches benchmarks playground samples"
-NON_SHIPPED_MANIFEST_RE='(^|/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|uv\.lock|Pipfile|Pipfile\.lock|setup\.py|setup\.cfg|environment\.ya?ml|pom\.xml|build\.gradle(\.kts)?|settings\.gradle(\.kts)?|gradle\.lockfile|go\.mod|go\.sum|Cargo\.toml|Cargo\.lock|Gemfile|Gemfile\.lock|[^/]+\.gemspec|composer\.json|composer\.lock|[^/]+\.(cs|fs|vb)proj|packages\.config|packages\.lock\.json|Directory\.Packages\.props|Package\.swift|Package\.resolved|Podfile|Podfile\.lock|conanfile\.txt|conanfile\.py|vcpkg\.json|METADATA|PKG-INFO)$'
-EXCLUDE_NON_SHIPPED=1
-if opted_out "${BOMLENS_INCLUDE_NON_SHIPPED:-}"; then
-    EXCLUDE_NON_SHIPPED=""
-    log "non-shipped trees kept (BOMLENS_INCLUDE_NON_SHIPPED)"
-fi
+# Non-shipped trees: leave out manifests under test, fixture, example,
+# benchmark and demo folders, and the GitHub Actions workflows -- none of it
+# ships with the product. NON_SHIPPED_DIRS/EXCLUDE_NON_SHIPPED are defined
+# near the top of this file (ahead of every ecosystem block, including the
+# lock-evidence checks that also read them); this is just where they get
+# turned into cdxgen's own --exclude flags.
 if [ -n "$EXCLUDE_NON_SHIPPED" ]; then
     for _d in $NON_SHIPPED_DIRS; do set -- "$@" --exclude "**/$_d/**"; done
     set -- "$@" --exclude "**/.github/workflows/**"
 fi
 set -- "$@" "$SRC"
+
+# PHP (Composer) / .NET - cdxgen resolves both directly with no pre-resolve step,
+# and neither leaves any signal telling a real resolve apart from a degraded
+# one. The only positive lock evidence available for them is a committed
+# lockfile, checked the same way as Swift's Package.resolved check above (both
+# use _lock_evidence_found, defined near the top of this file): a recursive,
+# pruned existence check, not a command that can fail. Recursive, not
+# root-only: a PHP monorepo (e.g. one lockfile per component under src/, no
+# lockfile at the root) still has cdxgen's `-r` scan resolving everything from
+# those nested lockfiles (measured), so a root-only check would call a
+# fully-resolved monorepo unknown for no reason.
+_lock_evidence_found composer.lock && mark_prep_applied composer-lock-committed
+_lock_evidence_found packages.lock.json && mark_prep_applied dotnet-lock-committed
 
 # --- correct the BSD license-name aliases cdxgen resolves against ---
 # cdxgen turns a license NAME into an SPDX id through two data files, and up to
@@ -851,6 +924,33 @@ process.stderr.write('[build-prep] recorded ' + list.length + ' failed preproces
 PREPFAIL_JS
     node "$_pf" "$OUT" "$PREP_FAILED" || log "prep-failed: recording skipped (non-fatal)"
     rm -f "$_pf"
+fi
+
+# Record every prep_step this scan actually called (PREP_APPLIED, space-separated
+# labels, success or failure) on the SBOM, one bomlens:prep-step-applied property
+# per label -- the "this ecosystem's lock step ran here" signal a reader combines
+# with the absence of the matching bomlens:pipeline-step-failed label above to
+# tell "resolved" apart from "never applicable" when compositions.aggregate is
+# later decided from this SBOM's properties.
+if [ "${rc:-1}" -eq 0 ] && [ -n "$PREP_APPLIED" ] && [ -f "$OUT" ] && command -v node >/dev/null 2>&1; then
+    _pa=$(mktemp).js
+    cat > "$_pa" <<'PREPAPPLIED_JS'
+const fs = require('fs');
+const [bomPath, labels] = process.argv.slice(2);
+let bom;
+try { bom = JSON.parse(fs.readFileSync(bomPath, 'utf8')); } catch (e) { process.exit(0); }
+bom.metadata = bom.metadata || {};
+const props = bom.metadata.properties || [];
+const list = labels.split(' ').filter(Boolean);
+for (const label of list) {
+  props.push({ name: 'bomlens:prep-step-applied', value: label });
+}
+bom.metadata.properties = props;
+fs.writeFileSync(bomPath, JSON.stringify(bom, null, 2));
+process.stderr.write('[build-prep] recorded ' + list.length + ' applied preprocessing step(s) on the SBOM: ' + list.join(', ') + '\n');
+PREPAPPLIED_JS
+    node "$_pa" "$OUT" "$PREP_APPLIED" || log "prep-applied: recording skipped (non-fatal)"
+    rm -f "$_pa"
 fi
 
 # Android release-scope filter: keep only components in the deployable release

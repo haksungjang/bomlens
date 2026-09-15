@@ -416,6 +416,84 @@ generate_sbom_cdxgen() {
     return 0
 }
 
+# Declare how complete this SBOM's dependency graph is, in CycloneDX's own
+# compositions.aggregate field (one document-level entry; assemblies/dependencies
+# refs stay empty). `complete` is used only when there is POSITIVE evidence
+# the graph is whole, never merely because nothing failed: an unresolved leaf
+# (e.g. one Maven coordinate cdxgen could not fetch) leaves no trace in the
+# SBOM or in any log, so "no failure seen" cannot mean "complete" (measured).
+#
+# SOURCE/POSTPROCESS: build-prep.sh already stamped bomlens:prep-step-applied
+# (a label per ecosystem lock step it ran or found already committed, success
+# or failure) and bomlens:pipeline-step-failed (labels that failed) onto this
+# same file -- read those instead of re-deriving anything here, since the
+# source tree itself is not mounted in POSTPROCESS. Maven has no such label at
+# all (no pre-resolve step, and its own cdxgen success signals do not tell
+# resolved apart from degraded, measured), so it can never satisfy the
+# lock-evidence condition below and stays `unknown`.
+#
+# IMAGE/ROOTFS/FIRMWARE/BINARY: syft only reads a package database, so success
+# alone is never positive evidence of a complete graph (it does not see
+# inter-package or static-linked dependencies) -- these stay `unknown` unless a
+# failure signal is present, then `incomplete`.
+#
+# AIBOM/MODELFILE/DATASET/MERGE: no signal this design defines a value for --
+# fixed `unknown`. ANALYZE with no compositions of its own is the same
+# (`unknown`); ANALYZE that already carries a supplier's own compositions is
+# never reached here at all (the early return below).
+mark_compositions_aggregate() {
+    local file="$1" aggregate="" info degraded lock_ok components edges tmp
+    [ -f "$file" ] || return 0
+    command -v jq >/dev/null 2>&1 || return 0
+    # A supplier's own declaration (ANALYZE) is never overwritten.
+    if jq -e '(.compositions // []) | length > 0' "$file" >/dev/null 2>&1; then
+        return 0
+    fi
+    case "$SCAN_MODE" in
+        SOURCE|POSTPROCESS)
+            info=$(jq -r --arg labels "npm-production-set pip-install go-mod-tidy cargo-lockfile bundle-lock swift-package-resolve gradle-dependencies android-release-classpath composer-lock-committed dotnet-lock-committed" '
+                ($labels | split(" ")) as $known
+                | (.metadata.properties // []) as $props
+                | ([$props[] | select(.name=="bomlens:prep-step-applied") | .value]) as $applied
+                | ([$props[] | select(.name=="bomlens:pipeline-step-failed") | .value]) as $failed
+                | (($props | map(select(.name=="bomlens:sbom-tool-degraded")) | length) > 0) as $degraded
+                | (([$known[] | select(. as $l | ($applied|index($l)) and (($failed|index($l))|not))] | length) > 0) as $lock_ok
+                | ((.components // []) | length) as $components
+                | ([(.dependencies // [])[]?.dependsOn[]?] | length) as $edges
+                | "\($degraded) \($lock_ok) \($components) \($edges)"
+            ' "$file" 2>/dev/null)
+            read -r degraded lock_ok components edges <<< "$info"
+            if [ "$degraded" = "true" ]; then
+                aggregate="incomplete"
+            elif [ "$lock_ok" = "true" ] && [ "${components:-0}" -ge 2 ] && [ "${edges:-0}" -ge 1 ]; then
+                aggregate="complete"
+            else
+                aggregate="unknown"
+            fi
+            ;;
+        IMAGE|ROOTFS|FIRMWARE|BINARY)
+            if jq -e '(.metadata.properties // []) | any(.name=="bomlens:pipeline-step-failed" and (.value=="firmware-packages" or .value=="firmware-extra-roots"))' "$file" >/dev/null 2>&1; then
+                aggregate="incomplete"
+            else
+                aggregate="unknown"
+            fi
+            ;;
+        AIBOM|MODELFILE|DATASET|MERGE|ANALYZE)
+            aggregate="unknown"
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+    [ -n "$aggregate" ] || return 0
+    tmp="${file}.compositions.tmp"
+    if jq --arg agg "$aggregate" '.compositions = [{aggregate: $agg}]' "$file" > "$tmp" 2>/dev/null; then
+        mv "$tmp" "$file"
+    else
+        rm -f "$tmp"
+    fi
+}
+
 # Observability helpers for best-effort post-process steps (run_optional_step /
 # mark_pipeline_warning): a failed enrichment/normalize/conformance step is now
 # logged and recorded on the SBOM instead of being swallowed by `... || true`.
@@ -1038,6 +1116,11 @@ if [ "${BYTE_STABLE:-false}" = "true" ]; then
 else
     run_optional_step normalize bash "$LIBDIR/normalize-sbom.sh" "$OUTPUT_FILE"
 fi
+
+# The component/dependency graph is final as of the normalize pass above; every
+# step below this point only enriches metadata (CPE, EOL, risk, ...) and must
+# not change compositions.aggregate's answer, so this runs once, here.
+mark_compositions_aggregate "$OUTPUT_FILE"
 
 # CPE enrichment: firmware/image/rootfs components often arrive with name+version
 # but no purl/cpe. enrich-cpe.sh attaches (or version-normalizes) a cpe:2.3 for

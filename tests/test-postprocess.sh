@@ -5263,6 +5263,13 @@ if command -v jq >/dev/null 2>&1 && [ -f "$PREP_OK_ROOT/out/bom.json" ]; then
         "$PREP_OK_ROOT/out/bom.json" >/dev/null 2>&1 \
         && pass "a successful scan carries no bomlens:pipeline-step-failed property" \
         || fail "an unexpected pipeline-step-failed property was recorded" "$(jq -c '.metadata.properties' "$PREP_OK_ROOT/out/bom.json" 2>&1)"
+    # A step that ran and succeeded is still positive lock evidence, so it
+    # must be recorded on its own track (bomlens:prep-step-applied), separate
+    # from the failure track checked just above.
+    jq -e '[.metadata.properties[]? | select(.name=="bomlens:prep-step-applied" and .value=="cargo-lockfile")] | length == 1' \
+        "$PREP_OK_ROOT/out/bom.json" >/dev/null 2>&1 \
+        && pass "a successful step is recorded on the SBOM as bomlens:prep-step-applied" \
+        || fail "the successful step was not recorded as applied lock evidence" "$(jq -c '.metadata.properties' "$PREP_OK_ROOT/out/bom.json" 2>&1)"
 fi
 
 echo "== prep_step: the same label failing more than once is recorded only once =="
@@ -5281,12 +5288,161 @@ else
     run_supervised_timeout() { shift; "$@"; }
     eval "$_body"
     PREP_FAILED=""
+    PREP_APPLIED=""
     prep_step dup-label 5 false
     prep_step dup-label 5 false
     prep_step other-label 5 false
     [ "$PREP_FAILED" = "dup-label other-label" ] \
         && pass "a label that fails repeatedly is recorded once, distinct labels each appear" \
         || fail "PREP_FAILED dedup is wrong" "got [$PREP_FAILED]"
+    # PREP_APPLIED tracks every label prep_step is called with, success or
+    # failure, so a reader can tell "this step ran here" apart from "it never
+    # applied" -- deduped the same way PREP_FAILED is, above.
+    [ "$PREP_APPLIED" = "dup-label other-label" ] \
+        && pass "PREP_APPLIED records every label called, once each, regardless of outcome" \
+        || fail "PREP_APPLIED dedup is wrong" "got [$PREP_APPLIED]"
+fi
+
+echo "== committed lockfiles: a lockfile already in the tree is itself positive lock evidence, without a network resolve =="
+# Ruby, Swift, PHP and .NET have no separate prep_step to point to as evidence
+# a resolve happened (Ruby/Swift only resolve when NO lockfile is already
+# committed; PHP/.NET have no pre-resolve step at all). A committed lockfile
+# is checked once, unconditionally, and recorded straight onto
+# bomlens:prep-step-applied.
+CA2_ROOT="$WORK/prep-applied-committed"
+mkdir -p "$CA2_ROOT/bin"
+cat > "$CA2_ROOT/bin/cdxgen" <<'STUB'
+#!/bin/sh
+out=""; prev=""
+for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+printf '{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"metadata":{},"components":[]}\n' > "$out"
+STUB
+chmod +x "$CA2_ROOT/bin/cdxgen"
+# A stub that fails loudly if it is ever actually invoked -- the committed-
+# lockfile branches must never shell out to bundle/swift at all.
+cat > "$CA2_ROOT/bin/must-not-run" <<'STUB'
+#!/bin/sh
+echo "must-not-run: this should never execute" >&2
+exit 1
+STUB
+chmod +x "$CA2_ROOT/bin/must-not-run"
+ln -sf must-not-run "$CA2_ROOT/bin/swift"
+
+# Ruby: Gemfile.lock already committed. No `bundle` on PATH at all -- the
+# outer guard for this branch is a plain file test, unlike Swift's below.
+mkdir -p "$CA2_ROOT/ruby/src" "$CA2_ROOT/ruby/out"
+printf 'source "https://rubygems.org"\n' > "$CA2_ROOT/ruby/src/Gemfile"
+printf 'GEM\n  remote: https://rubygems.org/\n' > "$CA2_ROOT/ruby/src/Gemfile.lock"
+PATH="$CA2_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$CA2_ROOT/ruby/src" "$CA2_ROOT/ruby/out/bom.json" \
+    > "$CA2_ROOT/ruby/log" 2>&1
+if jq -e '[.metadata.properties[]? | select(.name=="bomlens:prep-step-applied" and .value=="bundle-lock")] | length == 1' \
+    "$CA2_ROOT/ruby/out/bom.json" >/dev/null 2>&1; then
+    pass "a committed Gemfile.lock is recorded as bundle-lock applied, without running bundle"
+else
+    fail "committed Gemfile.lock was not recorded as applied lock evidence" "$(jq -c '.metadata.properties' "$CA2_ROOT/ruby/out/bom.json" 2>&1)"
+fi
+
+# Swift: Package.resolved already committed. `swift` on PATH is a stub that
+# fails if invoked, proving the resolve is skipped, not just fast.
+mkdir -p "$CA2_ROOT/swift/src" "$CA2_ROOT/swift/out"
+printf '// swift-tools-version:5.9\n' > "$CA2_ROOT/swift/src/Package.swift"
+printf '{"pins":[]}\n' > "$CA2_ROOT/swift/src/Package.resolved"
+PATH="$CA2_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$CA2_ROOT/swift/src" "$CA2_ROOT/swift/out/bom.json" \
+    > "$CA2_ROOT/swift/log" 2>&1
+if grep -q 'must-not-run: this should never execute' "$CA2_ROOT/swift/log"; then
+    fail "a committed Package.resolved still triggered a network resolve" "$(cat "$CA2_ROOT/swift/log")"
+elif jq -e '[.metadata.properties[]? | select(.name=="bomlens:prep-step-applied" and .value=="swift-package-resolve")] | length == 1' \
+    "$CA2_ROOT/swift/out/bom.json" >/dev/null 2>&1; then
+    pass "a committed Package.resolved is recorded as swift-package-resolve applied, without resolving"
+else
+    fail "committed Package.resolved was not recorded as applied lock evidence" "$(jq -c '.metadata.properties' "$CA2_ROOT/swift/out/bom.json" 2>&1)"
+fi
+
+# Swift: a Package.resolved that exists ONLY under a non-shipped fixture tree
+# (the same test/fixture/example trees NON_SHIPPED_DIRS already leaves out of
+# the SBOM) must NOT count as committed lock evidence, and must
+# NOT skip the real resolve either -- `swift` here is the same fail-if-invoked
+# stub as above, so the real resolve step running (and failing on that stub)
+# is itself the proof the fixture-only file was correctly ignored.
+mkdir -p "$CA2_ROOT/swift-fixture-only/src/tests/fixtures/sample" "$CA2_ROOT/swift-fixture-only/out"
+printf '// swift-tools-version:5.9\n' > "$CA2_ROOT/swift-fixture-only/src/Package.swift"
+printf '{"pins":[]}\n' > "$CA2_ROOT/swift-fixture-only/src/tests/fixtures/sample/Package.resolved"
+PATH="$CA2_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$CA2_ROOT/swift-fixture-only/src" "$CA2_ROOT/swift-fixture-only/out/bom.json" \
+    > "$CA2_ROOT/swift-fixture-only/log" 2>&1
+if grep -q 'must-not-run: this should never execute' "$CA2_ROOT/swift-fixture-only/log"; then
+    pass "a Package.resolved found only under a non-shipped fixture tree does not count as committed (the real resolve still ran)"
+else
+    fail "a fixture-only Package.resolved was wrongly treated as committed lock evidence" "$(cat "$CA2_ROOT/swift-fixture-only/log")"
+fi
+
+# PHP: composer.lock present vs. absent -- a plain existence check, no tool
+# invoked either way (cdxgen resolves Composer directly).
+mkdir -p "$CA2_ROOT/php-with/src" "$CA2_ROOT/php-with/out" "$CA2_ROOT/php-without/src" "$CA2_ROOT/php-without/out"
+printf '{"require":{}}\n' > "$CA2_ROOT/php-with/src/composer.json"
+printf '{"packages":[]}\n' > "$CA2_ROOT/php-with/src/composer.lock"
+printf '{"require":{}}\n' > "$CA2_ROOT/php-without/src/composer.json"
+PATH="$CA2_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$CA2_ROOT/php-with/src" "$CA2_ROOT/php-with/out/bom.json" >/dev/null 2>&1
+PATH="$CA2_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$CA2_ROOT/php-without/src" "$CA2_ROOT/php-without/out/bom.json" >/dev/null 2>&1
+if jq -e '[.metadata.properties[]? | select(.name=="bomlens:prep-step-applied" and .value=="composer-lock-committed")] | length == 1' \
+    "$CA2_ROOT/php-with/out/bom.json" >/dev/null 2>&1; then
+    pass "a committed composer.lock is recorded as composer-lock-committed"
+else
+    fail "committed composer.lock was not recorded" "$(jq -c '.metadata.properties' "$CA2_ROOT/php-with/out/bom.json" 2>&1)"
+fi
+if jq -e '[.metadata.properties[]? | select(.name=="bomlens:prep-step-applied" and .value=="composer-lock-committed")] | length == 0' \
+    "$CA2_ROOT/php-without/out/bom.json" >/dev/null 2>&1; then
+    pass "no composer.lock means no composer-lock-committed evidence"
+else
+    fail "composer-lock-committed was recorded despite no composer.lock" "$(jq -c '.metadata.properties' "$CA2_ROOT/php-without/out/bom.json" 2>&1)"
+fi
+
+# PHP monorepo: no lock at the root, but one per component underneath (a real
+# shape -- a Symfony-style monorepo has no root composer.lock but a lock per
+# src/*/Component, and cdxgen's -r scan resolves everything from those). The
+# check must be recursive, not root-only, or a fully-resolved monorepo like
+# this reads as unknown for no reason (measured: root-only missed it).
+mkdir -p "$CA2_ROOT/php-monorepo/src/components/a" "$CA2_ROOT/php-monorepo/out"
+printf '{"require":{}}\n' > "$CA2_ROOT/php-monorepo/src/composer.json"
+printf '{"packages":[]}\n' > "$CA2_ROOT/php-monorepo/src/components/a/composer.lock"
+PATH="$CA2_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$CA2_ROOT/php-monorepo/src" "$CA2_ROOT/php-monorepo/out/bom.json" >/dev/null 2>&1
+if jq -e '[.metadata.properties[]? | select(.name=="bomlens:prep-step-applied" and .value=="composer-lock-committed")] | length == 1' \
+    "$CA2_ROOT/php-monorepo/out/bom.json" >/dev/null 2>&1; then
+    pass "a composer.lock nested under a component (no root lock) is still recorded as composer-lock-committed"
+else
+    fail "a nested composer.lock in a monorepo layout was not recorded" "$(jq -c '.metadata.properties' "$CA2_ROOT/php-monorepo/out/bom.json" 2>&1)"
+fi
+
+# .NET: packages.lock.json present vs. absent, same shape as PHP above.
+mkdir -p "$CA2_ROOT/dotnet-with/src" "$CA2_ROOT/dotnet-with/out" "$CA2_ROOT/dotnet-without/src" "$CA2_ROOT/dotnet-without/out"
+printf '<Project Sdk="Microsoft.NET.Sdk"></Project>\n' > "$CA2_ROOT/dotnet-with/src/app.csproj"
+printf '{"version":1,"dependencies":{}}\n' > "$CA2_ROOT/dotnet-with/src/packages.lock.json"
+printf '<Project Sdk="Microsoft.NET.Sdk"></Project>\n' > "$CA2_ROOT/dotnet-without/src/app.csproj"
+PATH="$CA2_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$CA2_ROOT/dotnet-with/src" "$CA2_ROOT/dotnet-with/out/bom.json" >/dev/null 2>&1
+PATH="$CA2_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$CA2_ROOT/dotnet-without/src" "$CA2_ROOT/dotnet-without/out/bom.json" >/dev/null 2>&1
+if jq -e '[.metadata.properties[]? | select(.name=="bomlens:prep-step-applied" and .value=="dotnet-lock-committed")] | length == 1' \
+    "$CA2_ROOT/dotnet-with/out/bom.json" >/dev/null 2>&1; then
+    pass "a committed packages.lock.json is recorded as dotnet-lock-committed"
+else
+    fail "committed packages.lock.json was not recorded" "$(jq -c '.metadata.properties' "$CA2_ROOT/dotnet-with/out/bom.json" 2>&1)"
+fi
+if jq -e '[.metadata.properties[]? | select(.name=="bomlens:prep-step-applied" and .value=="dotnet-lock-committed")] | length == 0' \
+    "$CA2_ROOT/dotnet-without/out/bom.json" >/dev/null 2>&1; then
+    pass "no packages.lock.json means no dotnet-lock-committed evidence"
+else
+    fail "dotnet-lock-committed was recorded despite no packages.lock.json" "$(jq -c '.metadata.properties' "$CA2_ROOT/dotnet-without/out/bom.json" 2>&1)"
+fi
+
+# .NET solution: packages.lock.json commonly sits next to each project, not
+# at the solution root -- same recursive-vs-root-only concern as PHP above.
+mkdir -p "$CA2_ROOT/dotnet-monorepo/src/projects/a" "$CA2_ROOT/dotnet-monorepo/out"
+printf '<Solution></Solution>\n' > "$CA2_ROOT/dotnet-monorepo/src/app.sln"
+printf '{"version":1,"dependencies":{}}\n' > "$CA2_ROOT/dotnet-monorepo/src/projects/a/packages.lock.json"
+PATH="$CA2_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$CA2_ROOT/dotnet-monorepo/src" "$CA2_ROOT/dotnet-monorepo/out/bom.json" >/dev/null 2>&1
+if jq -e '[.metadata.properties[]? | select(.name=="bomlens:prep-step-applied" and .value=="dotnet-lock-committed")] | length == 1' \
+    "$CA2_ROOT/dotnet-monorepo/out/bom.json" >/dev/null 2>&1; then
+    pass "a packages.lock.json nested under a project (no root lock) is still recorded as dotnet-lock-committed"
+else
+    fail "a nested packages.lock.json was not recorded" "$(jq -c '.metadata.properties' "$CA2_ROOT/dotnet-monorepo/out/bom.json" 2>&1)"
 fi
 
 echo "== prep_step: every resolution step runs through it (no bare invocation left) =="
@@ -7262,6 +7418,214 @@ POM
 else
     echo "  SKIP: node not installed; maven parent-POM license inheritance not exercised"
 fi
+
+echo "== compositions.aggregate: mark_compositions_aggregate declares graph completeness per signal =="
+# mark_compositions_aggregate is extracted verbatim from docker/entrypoint.sh
+# (between its literal anchor comments), so this test tracks the shipped logic
+# rather than a hand-copied duplicate that could silently drift from it.
+# mark_sbom_degraded lives in docker/lib/source-detect.sh (a shared, side-effect-
+# free library already sourced directly elsewhere in this file) and is sourced
+# from there, so the syft-fallback case below composes the two real functions
+# instead of hand-setting the property mark_sbom_degraded is responsible for.
+sed -n "/^# Declare how complete this SBOM's dependency graph is,/,/^# Observability helpers for best-effort post-process steps/p" "$ROOT_DIR/docker/entrypoint.sh" \
+    | sed '$d' > "$WORK/mca-snippet.sh"
+MCA_SNIPPET_LINES="$(wc -l < "$WORK/mca-snippet.sh" | tr -d '[:space:]')"
+if [ ! -s "$WORK/mca-snippet.sh" ]; then
+    fail "could not extract mark_compositions_aggregate from entrypoint.sh (did its anchor comments move?)"
+elif [ -z "$MCA_SNIPPET_LINES" ] || [ "$MCA_SNIPPET_LINES" -gt 100 ]; then
+    fail "mark_compositions_aggregate snippet is $MCA_SNIPPET_LINES lines (expected well under 100) -- the end anchor likely did not match, and sourcing it would run the rest of entrypoint.sh" \
+        "did the '# Observability helpers for best-effort post-process steps' comment in docker/entrypoint.sh change?"
+elif grep -q '^[[:space:]]*exit\b' "$WORK/mca-snippet.sh"; then
+    fail "mark_compositions_aggregate snippet contains an exit statement -- refusing to source it into this test process" \
+        "$(cat "$WORK/mca-snippet.sh")"
+else
+    . "$ROOT_DIR/docker/lib/source-detect.sh"
+    . "$WORK/mca-snippet.sh"
+
+    mca_agg() { jq -r '.compositions[0].aggregate // "(none)"' "$1"; }
+
+    # SOURCE, positive lock evidence (an ecosystem step applied and did not
+    # fail) plus 2+ components and a real edge: the only path to `complete`.
+    cat > "$WORK/mca-source-complete.json" <<'JSON'
+{"metadata":{"properties":[{"name":"bomlens:prep-step-applied","value":"go-mod-tidy"}]},
+ "components":[{"name":"a"},{"name":"b"}],
+ "dependencies":[{"ref":"root","dependsOn":["a"]},{"ref":"a","dependsOn":["b"]}]}
+JSON
+    SCAN_MODE=SOURCE mark_compositions_aggregate "$WORK/mca-source-complete.json"
+    [ "$(mca_agg "$WORK/mca-source-complete.json")" = "complete" ] \
+        && pass "SOURCE with applied lock evidence + components + an edge declares complete" \
+        || fail "expected complete" "$(mca_agg "$WORK/mca-source-complete.json")"
+
+    # SOURCE, no matching prep-step-applied label at all -- Maven's shape: no
+    # signal distinguishes a resolved graph from a degraded one for it
+    # (measured), so it can never satisfy the lock-evidence condition above.
+    cat > "$WORK/mca-source-maven.json" <<'JSON'
+{"metadata":{"properties":[{"name":"cdx:bom:componentTypes","value":"maven"}]},
+ "components":[{"name":"a"},{"name":"b"}],
+ "dependencies":[{"ref":"root","dependsOn":["a"]},{"ref":"a","dependsOn":["b"]}]}
+JSON
+    SCAN_MODE=SOURCE mark_compositions_aggregate "$WORK/mca-source-maven.json"
+    [ "$(mca_agg "$WORK/mca-source-maven.json")" = "unknown" ] \
+        && pass "SOURCE with no lock-evidence label (Maven's shape) declares unknown, never complete" \
+        || fail "expected unknown" "$(mca_agg "$WORK/mca-source-maven.json")"
+
+    # SOURCE, lock evidence present but no edges -- the graph itself is too
+    # thin regardless of the lock signal (the positive-evidence rule applies
+    # to both conditions together, not either alone).
+    cat > "$WORK/mca-source-noedges.json" <<'JSON'
+{"metadata":{"properties":[{"name":"bomlens:prep-step-applied","value":"pip-install"}]},
+ "components":[{"name":"a"},{"name":"b"}],
+ "dependencies":[]}
+JSON
+    SCAN_MODE=SOURCE mark_compositions_aggregate "$WORK/mca-source-noedges.json"
+    [ "$(mca_agg "$WORK/mca-source-noedges.json")" = "unknown" ] \
+        && pass "SOURCE with lock evidence but zero edges still declares unknown" \
+        || fail "expected unknown" "$(mca_agg "$WORK/mca-source-noedges.json")"
+
+    # SOURCE, syft fallback (bomlens:sbom-tool-degraded): incomplete outranks
+    # a lock-evidence label that happens to also be present.
+    cat > "$WORK/mca-source-degraded.json" <<'JSON'
+{"metadata":{"properties":[{"name":"bomlens:sbom-tool-degraded","value":"cdxgen-unavailable"},
+                            {"name":"bomlens:prep-step-applied","value":"npm-production-set"}]},
+ "components":[{"name":"a"},{"name":"b"}],
+ "dependencies":[{"ref":"root","dependsOn":["a"]},{"ref":"a","dependsOn":["b"]}]}
+JSON
+    SCAN_MODE=SOURCE mark_compositions_aggregate "$WORK/mca-source-degraded.json"
+    [ "$(mca_agg "$WORK/mca-source-degraded.json")" = "incomplete" ] \
+        && pass "SOURCE with the syft-fallback signal declares incomplete, even with edges present" \
+        || fail "expected incomplete" "$(mca_agg "$WORK/mca-source-degraded.json")"
+
+    # Same case, composed from the real syft-fallback function instead of a
+    # hand-set property: mark_sbom_degraded stamps bomlens:sbom-tool-degraded
+    # the same way entrypoint.sh's own SOURCE fallback calls it, and
+    # mark_compositions_aggregate must read that real stamp as incomplete.
+    cat > "$WORK/mca-source-degraded-real.json" <<'JSON'
+{"metadata":{"properties":[{"name":"bomlens:prep-step-applied","value":"npm-production-set"}]},
+ "components":[{"name":"a"},{"name":"b"}],
+ "dependencies":[{"ref":"root","dependsOn":["a"]},{"ref":"a","dependsOn":["b"]}]}
+JSON
+    mark_sbom_degraded "$WORK/mca-source-degraded-real.json" cdxgen-unavailable
+    SCAN_MODE=SOURCE mark_compositions_aggregate "$WORK/mca-source-degraded-real.json"
+    [ "$(mca_agg "$WORK/mca-source-degraded-real.json")" = "incomplete" ] \
+        && pass "the real mark_sbom_degraded stamp composes correctly with mark_compositions_aggregate" \
+        || fail "expected incomplete" "$(mca_agg "$WORK/mca-source-degraded-real.json")"
+
+    # The CLI's two-stage flow reads MODE=POSTPROCESS, not SOURCE: when stage 1
+    # (the cdxgen sibling container) crashes, scan-sbom.sh's own syft-fallback
+    # helper calls this same mark_sbom_degraded (with a "cdxgen-crash" reason,
+    # one of several STAGE1_FAIL_REASON values) on the file POSTPROCESS then
+    # reads -- mark_compositions_aggregate must declare that incomplete too.
+    cat > "$WORK/mca-postprocess-degraded.json" <<'JSON'
+{"metadata":{"properties":[{"name":"bomlens:prep-step-applied","value":"pip-install"}]},
+ "components":[{"name":"a"},{"name":"b"}],
+ "dependencies":[{"ref":"root","dependsOn":["a"]},{"ref":"a","dependsOn":["b"]}]}
+JSON
+    mark_sbom_degraded "$WORK/mca-postprocess-degraded.json" cdxgen-crash
+    SCAN_MODE=POSTPROCESS mark_compositions_aggregate "$WORK/mca-postprocess-degraded.json"
+    [ "$(mca_agg "$WORK/mca-postprocess-degraded.json")" = "incomplete" ] \
+        && pass "the CLI two-stage POSTPROCESS path declares incomplete on the same real syft-fallback stamp" \
+        || fail "expected incomplete" "$(mca_agg "$WORK/mca-postprocess-degraded.json")"
+
+    # FIRMWARE, package cataloging failed: incomplete.
+    cat > "$WORK/mca-firmware-failed.json" <<'JSON'
+{"metadata":{"properties":[{"name":"bomlens:pipeline-step-failed","value":"firmware-packages"}]},
+ "components":[],"dependencies":[]}
+JSON
+    SCAN_MODE=FIRMWARE mark_compositions_aggregate "$WORK/mca-firmware-failed.json"
+    [ "$(mca_agg "$WORK/mca-firmware-failed.json")" = "incomplete" ] \
+        && pass "FIRMWARE with a firmware-packages failure declares incomplete" \
+        || fail "expected incomplete" "$(mca_agg "$WORK/mca-firmware-failed.json")"
+
+    # FIRMWARE, clean: syft success alone is never positive evidence of a
+    # complete graph (it only reads a package database).
+    cat > "$WORK/mca-firmware-ok.json" <<'JSON'
+{"metadata":{"properties":[]},"components":[{"name":"a"}],"dependencies":[]}
+JSON
+    SCAN_MODE=FIRMWARE mark_compositions_aggregate "$WORK/mca-firmware-ok.json"
+    [ "$(mca_agg "$WORK/mca-firmware-ok.json")" = "unknown" ] \
+        && pass "FIRMWARE with no failure signal still declares unknown, not complete" \
+        || fail "expected unknown" "$(mca_agg "$WORK/mca-firmware-ok.json")"
+
+    # AIBOM / MERGE: fixed unknown, no signal this design gives a value to.
+    for mode in AIBOM MERGE MODELFILE DATASET; do
+        cat > "$WORK/mca-$mode.json" <<'JSON'
+{"metadata":{"properties":[]},"components":[],"dependencies":[]}
+JSON
+        SCAN_MODE="$mode" mark_compositions_aggregate "$WORK/mca-$mode.json"
+        [ "$(mca_agg "$WORK/mca-$mode.json")" = "unknown" ] \
+            && pass "$mode declares a fixed unknown" \
+            || fail "$mode: expected unknown" "$(mca_agg "$WORK/mca-$mode.json")"
+    done
+
+    # ANALYZE, a supplier's own compositions already present: never overwritten.
+    cat > "$WORK/mca-analyze-supplied.json" <<'JSON'
+{"metadata":{"properties":[]},"components":[],"dependencies":[],
+ "compositions":[{"aggregate":"complete","assemblies":["urn:example"]}]}
+JSON
+    SCAN_MODE=ANALYZE mark_compositions_aggregate "$WORK/mca-analyze-supplied.json"
+    if jq -e '.compositions == [{"aggregate":"complete","assemblies":["urn:example"]}]' \
+        "$WORK/mca-analyze-supplied.json" >/dev/null 2>&1; then
+        pass "ANALYZE never overwrites a supplier's own compositions declaration"
+    else
+        fail "a supplier's compositions was overwritten" "$(jq -c '.compositions' "$WORK/mca-analyze-supplied.json")"
+    fi
+
+    # ANALYZE, no compositions in the converted document: unknown, same as
+    # AIBOM/MERGE above -- there is no basis to judge the supplier's graph.
+    cat > "$WORK/mca-analyze-none.json" <<'JSON'
+{"metadata":{"properties":[]},"components":[],"dependencies":[]}
+JSON
+    SCAN_MODE=ANALYZE mark_compositions_aggregate "$WORK/mca-analyze-none.json"
+    [ "$(mca_agg "$WORK/mca-analyze-none.json")" = "unknown" ] \
+        && pass "ANALYZE with no compositions of its own declares unknown" \
+        || fail "expected unknown" "$(mca_agg "$WORK/mca-analyze-none.json")"
+
+    # --byte-stable determinism: compositions is written AFTER normalize --stable
+    # in the real pipeline (entrypoint.sh), so two identical scans must still
+    # land on byte-identical output once both steps have run in that order.
+    cat > "$WORK/mca-bs1.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6",
+ "metadata":{"properties":[{"name":"bomlens:prep-step-applied","value":"go-mod-tidy"}]},
+ "components":[{"type":"library","name":"a","version":"1.0"},{"type":"library","name":"b","version":"1.0"}],
+ "dependencies":[{"ref":"root","dependsOn":["a"]},{"ref":"a","dependsOn":["b"]}]}
+JSON
+    cp "$WORK/mca-bs1.json" "$WORK/mca-bs2.json"
+    bash "$LIB/normalize-sbom.sh" "$WORK/mca-bs1.json" --stable >/dev/null 2>&1
+    bash "$LIB/normalize-sbom.sh" "$WORK/mca-bs2.json" --stable >/dev/null 2>&1
+    SCAN_MODE=SOURCE mark_compositions_aggregate "$WORK/mca-bs1.json"
+    SCAN_MODE=SOURCE mark_compositions_aggregate "$WORK/mca-bs2.json"
+    if diff -q "$WORK/mca-bs1.json" "$WORK/mca-bs2.json" >/dev/null 2>&1; then
+        pass "compositions written after --stable normalize is still byte-identical across two scans"
+    else
+        fail "compositions broke --byte-stable determinism" "$(diff "$WORK/mca-bs1.json" "$WORK/mca-bs2.json" | head)"
+    fi
+fi
+
+echo "== validate-sbom.sh folds compositions.aggregate into the transitive-dependencies detail =="
+# CycloneDX-only (compositions is a CycloneDX field; the SPDX check functions
+# never reference it). Advisory text only -- asserted against status too, to
+# guard against a future edit that lets it affect the verdict.
+jq '.compositions = [{"aggregate":"complete"}]' "$FIX/good-cyclonedx.json" > "$WORK/comp-complete.json"
+bash "$LIB/validate-sbom.sh" "$WORK/comp-complete.json" "$WORK/compc" "supplier" >/dev/null 2>&1
+cc=$(jq -r '.checks[] | select(.id=="transitive") | "\(.status)\t\(.detail)"' "$WORK/compc_conformance.json")
+case "$cc" in
+    pass*"declared complete") pass "a declared-complete graph is noted in the transitive check's detail, status unaffected" ;;
+    *) fail "transitive check detail/status wrong for a complete declaration" "$cc" ;;
+esac
+
+jq '.compositions = [{"aggregate":"unknown"}]' "$FIX/good-cyclonedx.json" > "$WORK/comp-unknown.json"
+bash "$LIB/validate-sbom.sh" "$WORK/comp-unknown.json" "$WORK/compu" "supplier" >/dev/null 2>&1
+cu=$(jq -r '.checks[] | select(.id=="transitive") | "\(.status)\t\(.detail)"' "$WORK/compu_conformance.json")
+case "$cu" in
+    pass*"not a defect"*) pass "an unknown declaration gets a not-a-defect note, status unaffected" ;;
+    *) fail "transitive check detail/status wrong for an unknown declaration" "$cu" ;;
+esac
+
+bash "$LIB/validate-sbom.sh" "$FIX/good-cyclonedx.json" "$WORK/compnone" "supplier" >/dev/null 2>&1
+cn=$(jq -r '.checks[] | select(.id=="transitive") | .detail' "$WORK/compnone_conformance.json")
+[ "$cn" = "1 edge(s)" ] \
+    && pass "no compositions declared leaves the transitive detail exactly as before" \
+    || fail "transitive detail changed with no compositions present" "$cn"
 
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed"
