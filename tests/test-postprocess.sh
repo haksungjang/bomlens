@@ -4062,6 +4062,122 @@ else
     echo "  SKIP: node unavailable — skipping node production-filter test"
 fi
 
+echo "== php-scope: composer scope filter drops require-dev, keeps require (shared with maven) =="
+# Guards docker/lib/build-prep.sh's run_scope_filter(): cdxgen already tags each
+# composer component with its resolved scope (require -> required, require-dev
+# -> optional), confirmed against the pinned cdxgen PHP image, so this reuses
+# the same JS the Maven scope filter runs (only the purl prefix differs).
+# Extract the real inlined filter JS from build-prep.sh (no logic duplication).
+if command -v node >/dev/null 2>&1; then
+    SFLT="$WORK/scope-filter.js"
+    sed -n "/<<'SFILTER_JS'/,/^SFILTER_JS\$/p" "$ROOT_DIR/docker/lib/build-prep.sh" \
+        | sed '1d;$d' > "$SFLT"
+    if [ -s "$SFLT" ]; then
+        cat > "$WORK/php-mixed-bom.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6",
+ "metadata":{"component":{"name":"app","version":"1.0.0","bom-ref":"root"}},
+ "components":[
+   {"name":"monolog","version":"3.5.0","purl":"pkg:composer/monolog/monolog@3.5.0","bom-ref":"monolog@3.5.0","scope":"required"},
+   {"name":"phpunit","version":"10.5.0","purl":"pkg:composer/phpunit/phpunit@10.5.0","bom-ref":"phpunit@10.5.0","scope":"optional"},
+   {"name":"somelib","version":"1.0","purl":"pkg:pypi/somelib@1.0","bom-ref":"pylib"}
+ ],
+ "dependencies":[
+   {"ref":"root","dependsOn":["monolog@3.5.0","phpunit@10.5.0"]},
+   {"ref":"monolog@3.5.0","dependsOn":[]},
+   {"ref":"phpunit@10.5.0","dependsOn":[]}
+ ]}
+JSON
+        node "$SFLT" "$WORK/php-mixed-bom.json" "pkg:composer/" 2>/dev/null
+        names=$(jq -r '[.components[].name]|sort|join(",")' "$WORK/php-mixed-bom.json")
+        [ "$names" = "monolog,somelib" ] \
+            && pass "require-dev dropped; require composer + non-composer kept (got: $names)" \
+            || fail "unexpected components after php scope filter" "$names"
+        if jq -e '[.dependencies[].ref] | index("phpunit@10.5.0")' "$WORK/php-mixed-bom.json" >/dev/null 2>&1; then
+            fail "dropped phpunit still has a dependency entry"
+        else
+            pass "dropped require-dev component removed from the dependency graph"
+        fi
+        jq -e '.dependencies[] | select(.ref=="root") | .dependsOn | index("monolog@3.5.0")' "$WORK/php-mixed-bom.json" >/dev/null 2>&1 \
+            && pass "kept require edge (root -> monolog) preserved" \
+            || fail "require edge wrongly dropped"
+
+        # No scope field at all (e.g. a syft fallback BOM): the guard must see
+        # zero components with scope === "required" and leave everything as-is,
+        # the same protection the Maven filter already relies on.
+        cat > "$WORK/php-noscope-bom.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6",
+ "metadata":{"component":{"name":"app","version":"1.0.0","bom-ref":"root"}},
+ "components":[
+   {"name":"monolog","version":"3.5.0","purl":"pkg:composer/monolog/monolog@3.5.0","bom-ref":"monolog@3.5.0"},
+   {"name":"phpunit","version":"10.5.0","purl":"pkg:composer/phpunit/phpunit@10.5.0","bom-ref":"phpunit@10.5.0"}
+ ],
+ "dependencies":[
+   {"ref":"root","dependsOn":["monolog@3.5.0","phpunit@10.5.0"]}
+ ]}
+JSON
+        node "$SFLT" "$WORK/php-noscope-bom.json" "pkg:composer/" 2>/dev/null
+        names=$(jq -r '[.components[].name]|sort|join(",")' "$WORK/php-noscope-bom.json")
+        [ "$names" = "monolog,phpunit" ] \
+            && pass "no scope field on any component: filter leaves the BOM untouched" \
+            || fail "filter changed a BOM with no scope field" "$names"
+
+        # require-dev only (no required component at all): the same guard that
+        # protects a scope-less BOM cannot tell this apart from "scopes were
+        # never populated", so it also leaves this one untouched. Inherited
+        # from the Maven filter (a maven-only reactor has the identical gap);
+        # documented here as known behavior, not fixed by this change.
+        cat > "$WORK/php-devonly-bom.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6",
+ "metadata":{"component":{"name":"app","version":"1.0.0","bom-ref":"root"}},
+ "components":[
+   {"name":"phpunit","version":"10.5.0","purl":"pkg:composer/phpunit/phpunit@10.5.0","bom-ref":"phpunit@10.5.0","scope":"optional"}
+ ],
+ "dependencies":[
+   {"ref":"root","dependsOn":["phpunit@10.5.0"]}
+ ]}
+JSON
+        node "$SFLT" "$WORK/php-devonly-bom.json" "pkg:composer/" 2>/dev/null
+        names=$(jq -r '[.components[].name]|sort|join(",")' "$WORK/php-devonly-bom.json")
+        [ "$names" = "phpunit" ] \
+            && pass "require-dev-only project (no required component): filter leaves the BOM untouched (known gap, shared with maven)" \
+            || fail "filter unexpectedly changed a require-dev-only BOM" "$names"
+    else
+        fail "could not extract SFILTER_JS from build-prep.sh"
+    fi
+else
+    echo "  SKIP: node unavailable, skipping php scope-filter test"
+fi
+
+echo "== php-scope: BOMLENS_PHP_FULL_GRAPH opts out, composer.json gates the trigger =="
+# Guards the shell-side trigger in build-prep.sh (not the JS filter above):
+# PHP_SCOPE_FILTER is only set when composer.json exists and the opt-out is
+# not on. Extract the real trigger block (no logic duplication) and drive it
+# under each combination.
+PREP="$ROOT_DIR/docker/lib/build-prep.sh"
+_opt_fn=$(sed -n '/^opted_out() /p' "$PREP")
+_trigger=$(sed -n '/^# PHP\/Composer scope over-scan/,/^fi$/p' "$PREP")
+if [ -z "$_trigger" ]; then
+    fail "could not extract the PHP_SCOPE_FILTER trigger block from build-prep.sh"
+else
+    _t_on=$(mkdir -p "$WORK/php-trigger-on" && cd "$WORK/php-trigger-on" && touch composer.json \
+        && bash -c "$_opt_fn; $_trigger; printf '%s' \"\$PHP_SCOPE_FILTER\"")
+    [ "$_t_on" = "1" ] \
+        && pass "composer.json present, BOMLENS_PHP_FULL_GRAPH unset: filter turns on" \
+        || fail "filter did not turn on for a plain composer.json project" "got [$_t_on]"
+
+    _t_off=$(mkdir -p "$WORK/php-trigger-off" && cd "$WORK/php-trigger-off" && touch composer.json \
+        && BOMLENS_PHP_FULL_GRAPH=1 bash -c "$_opt_fn; $_trigger; printf '%s' \"\$PHP_SCOPE_FILTER\"")
+    [ -z "$_t_off" ] \
+        && pass "BOMLENS_PHP_FULL_GRAPH=1: filter opts out (full require+require-dev graph kept)" \
+        || fail "BOMLENS_PHP_FULL_GRAPH=1 did not opt out" "got [$_t_off]"
+
+    _t_nocomposer=$(mkdir -p "$WORK/php-trigger-none" && cd "$WORK/php-trigger-none" \
+        && bash -c "$_opt_fn; $_trigger; printf '%s' \"\$PHP_SCOPE_FILTER\"")
+    [ -z "$_t_nocomposer" ] \
+        && pass "no composer.json: filter never turns on" \
+        || fail "filter turned on with no composer.json present" "got [$_t_nocomposer]"
+fi
+
 echo "== android-scope: release-config selection picks the right variant (flavored projects) =="
 # Guards docker/lib/build-prep.sh's Android config selection. The SCA benchmark
 # team found the old `{ grep -x releaseRuntimeClasspath || cat; }` idiom dropped

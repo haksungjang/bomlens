@@ -152,6 +152,8 @@ docker build --build-arg ANDROID_API=<API> -t bomlens-android-sdk<API> docker/an
 
 감지 파일: `composer.lock`
 
+> 주의: cdxgen은 이미 각 composer 컴포넌트에 해석된 스코프를 붙여서 줍니다(`require`는 required, `require-dev`는 optional). BomLens는 Maven과 같은 방식으로 이 정보를 이용해 SBOM을 required 대상으로 걸러냅니다. require와 require-dev를 합친 전체 그래프를 그대로 두려면 `BOMLENS_PHP_FULL_GRAPH=1`을 설정하세요([Docker 이미지 환경 변수](docker-image.ko.md#환경-변수)).
+
 ---
 
 ## Rust
