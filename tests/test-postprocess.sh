@@ -438,8 +438,12 @@ fi
 
 echo "== B-5: NOTICE shows source location + attribution per component =="
 # A component with a vcs externalReference, one with only a purl (registry inferred),
-# and one carrying component.copyright. Source must never be blank when a purl exists,
-# and attribution must never be blank (copyright, else an honest "not captured").
+# one carrying component.copyright, and a pypi component with a distribution
+# externalReference (a resolved-wheel URL cdxgen fills from the PyPI JSON API —
+# must be skipped in favor of the version-scoped pypi.org project page, since the
+# wheel's platform/ABI tag isn't verified against what this scan installed).
+# Source must never be blank when a purl exists. Copyright renders only when
+# component.copyright was actually captured; otherwise the line is omitted.
 cat > "$WORK/src.json" <<'JSON'
 {"components":[
  {"name":"logback","version":"1.4","purl":"pkg:maven/ch.qos.logback/logback@1.4",
@@ -448,7 +452,11 @@ cat > "$WORK/src.json" <<'JSON'
  {"name":"hikari","version":"5.0.1","purl":"pkg:maven/com.zaxxer/HikariCP@5.0.1",
   "licenses":[{"license":{"id":"Apache-2.0"}}]},
  {"name":"left-pad","version":"1.3.0","purl":"pkg:npm/left-pad@1.3.0",
-  "copyright":"Copyright (c) azer","licenses":[{"license":{"id":"MIT"}}]}
+  "copyright":"Copyright (c) azer","licenses":[{"license":{"id":"MIT"}}]},
+ {"name":"coverage","version":"7.16.0","purl":"pkg:pypi/coverage@7.16.0",
+  "externalReferences":[{"type":"distribution",
+    "url":"https://files.pythonhosted.org/packages/e5/fc/coverage-7.16.0-cp310-cp310-macosx_10_9_x86_64.whl"}],
+  "licenses":[{"license":{"id":"Apache-2.0"}}]}
 ]}
 JSON
 bash "$LIB/generate-notice.sh" "$WORK/src.json" "$WORK/srcn" "SrcProj" >/dev/null 2>&1
@@ -463,17 +471,29 @@ if [ -f "$STXT" ] && [ -f "$SHTML" ]; then
     grep -q "Source: https://www.npmjs.com/package/left-pad/v/1.3.0" "$STXT" \
         && pass "npm source location inferred from purl" \
         || fail "purl-inferred npm source missing"
+    grep -q "Source: https://pypi.org/project/coverage/7.16.0/" "$STXT" \
+        && pass "pypi source falls back to the version-scoped project page, not the resolved-wheel distribution URL" \
+        || fail "pypi source did not skip the distribution externalReference"
+    if grep -q "files.pythonhosted.org" "$STXT"; then
+        fail "pypi source used the platform-specific distribution URL"
+    else
+        pass "pypi source never surfaces the unverified platform-specific wheel URL"
+    fi
     grep -q "Copyright: Copyright (c) azer" "$STXT" \
         && pass "component.copyright shown verbatim as attribution" \
         || fail "copyright attribution missing"
-    if awk '/^  - hikari@5.0.1$/{f=1;next} /^  - /{f=0} f&&/Copyright: holders not captured/{ok=1} END{exit !ok}' "$STXT"; then
-        pass "attribution falls back to honest 'not captured' (never blank)"
+    if awk '/^  - hikari@5.0.1$/{f=1;next} /^  - /{f=0} f&&/^      Copyright:/{ok=1} END{exit !ok}' "$STXT"; then
+        fail "a Copyright line was printed for a component without component.copyright"
     else
-        fail "missing attribution fallback for a component without copyright"
+        pass "the Copyright line is omitted, not guessed, when component.copyright is absent"
     fi
     grep -q '<a href="https://github.com/qos-ch/logback" target="_blank"' "$SHTML" \
         && pass "http(s) source rendered as a link that opens in a new tab" \
         || fail "HTML source link missing or opens in place"
+    html_copyright_n=$(grep -o 'class="attr">Copyright' "$SHTML" | wc -l | tr -d ' ')
+    [ "$html_copyright_n" = "1" ] \
+        && pass "HTML renders exactly one Copyright span, for the component that has component.copyright" \
+        || fail "HTML Copyright span count = $html_copyright_n, expected 1 (left-pad only)"
 else
     fail "generate-notice.sh did not produce source/attribution NOTICE"
 fi
