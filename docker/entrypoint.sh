@@ -214,6 +214,26 @@ guard_hash() {
 #   $5 = the cdxgen image the caller is about to run (recorded for cleanup)
 GUARD_STATE_DIR="/bomlens-state"
 GUARD_ID=""
+
+# write_prep_file: place build-prep.sh's content ($1) in a file the cdxgen
+# sibling can run by path, and print that path. build-prep.sh has grown past
+# the kernel's single-argument limit (MAX_ARG_STRLEN, 128KiB on Linux --
+# Docker Desktop's Linux VM, Colima and GitHub Actions runners all enforce
+# it), so injecting it as `sh -c "$prep"` now fails with "argument list too
+# long" once the script crosses that line. GUARD_STATE_DIR is a host-
+# persistent directory both launch paths (scan-sbom.sh --ui, the desktop app)
+# always mount into this container and carry to the sibling via
+# --volumes-from, so a file written here is visible to the sibling at the
+# same path -- the same trick --volumes-from already does for the scanned
+# tree. Prints nothing when that mount is missing; callers fall back to the
+# old -c injection (defensive only, both launch paths always provide it).
+write_prep_file() {
+    [ -d "$GUARD_STATE_DIR" ] || return 1
+    mkdir -p "$GUARD_STATE_DIR/prep" 2>/dev/null || return 1
+    local f="$GUARD_STATE_DIR/prep/prep-$$.sh"
+    printf '%s' "$1" > "$f" 2>/dev/null || return 1
+    echo "$f"
+}
 setup_guard_state() {
     local self="$1" prep="$2" src="$3" next_owner="$4" next_image="$5"
     [ -n "${SOURCE_ROOT_HOST:-}" ] || return 0
@@ -254,11 +274,21 @@ setup_guard_state() {
             return 0
         fi
         echo "[INFO] cleaning up build artifacts a previous, interrupted scan of this folder left behind..."
-        docker run --rm -u 0:0 \
-            --volumes-from "$self" \
-            -e BOMLENS_GUARD_RESTORE_ONLY=1 -e "BOMLENS_GUARD_ID=$key" \
-            --entrypoint sh "$cleanup_image" \
-            -c "$prep" _ "$src" >/dev/null 2>&1 || true
+        local cleanup_prep_file; cleanup_prep_file=$(write_prep_file "$prep")
+        if [ -n "$cleanup_prep_file" ]; then
+            docker run --rm -u 0:0 \
+                --volumes-from "$self" \
+                -e BOMLENS_GUARD_RESTORE_ONLY=1 -e "BOMLENS_GUARD_ID=$key" \
+                --entrypoint sh "$cleanup_image" \
+                "$cleanup_prep_file" "$src" >/dev/null 2>&1 || true
+            rm -f "$cleanup_prep_file"
+        else
+            docker run --rm -u 0:0 \
+                --volumes-from "$self" \
+                -e BOMLENS_GUARD_RESTORE_ONLY=1 -e "BOMLENS_GUARD_ID=$key" \
+                --entrypoint sh "$cleanup_image" \
+                -c "$prep" _ "$src" >/dev/null 2>&1 || true
+        fi
     fi
     mkdir -p "$GUARD_STATE_DIR/$key" 2>/dev/null || return 0
     printf '%s\n' "$next_owner" > "$GUARD_STATE_DIR/$key/owner" 2>/dev/null || return 0
@@ -347,20 +377,42 @@ generate_sbom_cdxgen() {
     setup_guard_state "$self" "$prep" "$src" "$sibling_name" "$img"
     local guard_env=()
     [ -n "$GUARD_ID" ] && guard_env=(-e "BOMLENS_GUARD_ID=$GUARD_ID")
-    ( docker run -u 0:0 \
-        --name "$sibling_name" \
-        --cidfile "$cidf" \
-        --volumes-from "$self" \
-        -e HOME=/tmp/sbomhome \
-        -e MAVEN_OPTS=-Dmaven.repo.local=/tmp/sbomhome/.m2 \
-        -e FETCH_LICENSE="$FETCH_LICENSE" \
-        -e PROJECT_NAME="$PROJECT_NAME" \
-        -e PROJECT_VERSION="$PROJECT_VERSION" \
-        -e HOST_GOTOOLCHAIN="${GOTOOLCHAIN:-}" -e GOPROXY -e GOSUMDB \
-        "${prep_env[@]}" \
-        "${guard_env[@]}" \
-        --entrypoint sh "$img" \
-        -c "$prep" _ "$src" "$bom_path" "$CDX_SPEC_VERSION"; echo $? > "$rcf" ) 2>&1 | tee "$logf" &
+    # See write_prep_file above: run build-prep.sh by path when the guard-state
+    # mount is there (the normal case), fall back to the old -c injection
+    # otherwise (works as long as build-prep.sh stays under the kernel's
+    # 128KiB single-argument limit).
+    local prep_file; prep_file=$(write_prep_file "$prep")
+    ( if [ -n "$prep_file" ]; then
+        docker run -u 0:0 \
+            --name "$sibling_name" \
+            --cidfile "$cidf" \
+            --volumes-from "$self" \
+            -e HOME=/tmp/sbomhome \
+            -e MAVEN_OPTS=-Dmaven.repo.local=/tmp/sbomhome/.m2 \
+            -e FETCH_LICENSE="$FETCH_LICENSE" \
+            -e PROJECT_NAME="$PROJECT_NAME" \
+            -e PROJECT_VERSION="$PROJECT_VERSION" \
+            -e HOST_GOTOOLCHAIN="${GOTOOLCHAIN:-}" -e GOPROXY -e GOSUMDB \
+            "${prep_env[@]}" \
+            "${guard_env[@]}" \
+            --entrypoint sh "$img" \
+            "$prep_file" "$src" "$bom_path" "$CDX_SPEC_VERSION"
+      else
+        docker run -u 0:0 \
+            --name "$sibling_name" \
+            --cidfile "$cidf" \
+            --volumes-from "$self" \
+            -e HOME=/tmp/sbomhome \
+            -e MAVEN_OPTS=-Dmaven.repo.local=/tmp/sbomhome/.m2 \
+            -e FETCH_LICENSE="$FETCH_LICENSE" \
+            -e PROJECT_NAME="$PROJECT_NAME" \
+            -e PROJECT_VERSION="$PROJECT_VERSION" \
+            -e HOST_GOTOOLCHAIN="${GOTOOLCHAIN:-}" -e GOPROXY -e GOSUMDB \
+            "${prep_env[@]}" \
+            "${guard_env[@]}" \
+            --entrypoint sh "$img" \
+            -c "$prep" _ "$src" "$bom_path" "$CDX_SPEC_VERSION"
+      fi; echo $? > "$rcf" ) 2>&1 | tee "$logf" &
     local pipe_pid=$!
     # The cidfile appears as soon as the container is created, well before it
     # finishes, so a cancel arriving during the run still has a container id
@@ -401,11 +453,11 @@ generate_sbom_cdxgen() {
             echo "[WARN] cdxgen failed processing the dependency data (rc=$rc)."
         fi
         [ -n "$cid" ] && docker rm -f "$cid" >/dev/null 2>&1
-        rm -f "$logf" "$cidf"
+        rm -f "$logf" "$cidf" "$prep_file"
         return 1
     fi
     [ -n "$cid" ] && docker rm -f "$cid" >/dev/null 2>&1
-    rm -f "$logf" "$cidf"
+    rm -f "$logf" "$cidf" "$prep_file"
     if [ "$bom_path" != "$outdir/$out" ] && [ -f "$bom_path" ]; then
         mv "$bom_path" "$outdir/$out"
     fi

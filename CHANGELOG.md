@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A source scan launched through the web UI or the desktop app, in any language, could fail outright ("argument list too long") once `build-prep.sh` grew past the kernel's single-argument limit (128KiB on Linux, which every Docker host uses under the hood). It now runs from a file on the same shared mount the scanned tree already uses, instead of being passed inline as a single `sh -c` argument. The CLI path was unaffected (it already bind-mounts the file).
+
 ### Changed
 
 - A PHP (Composer) source scan whose root `composer.json` has no committed `composer.lock` now resolves one itself (`composer update --no-dev --no-scripts --no-interaction`), the same as Ruby's `bundle lock` step already does for a missing `Gemfile.lock`. Previously nothing resolved it, and cdxgen came back with zero components and no indication anything was wrong. A resolve failure is now recorded on the SBOM instead of failing silently.
