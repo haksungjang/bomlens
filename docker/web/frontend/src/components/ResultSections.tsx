@@ -114,6 +114,7 @@ export function ResultSection({
           scanId={scanId}
           query={query}
           onQueryChange={onQueryChange}
+          onResultsChange={onResultsChange}
           onPickComponent={
             onPick ? (name) => onPick("components", { term: name }) : undefined
           }

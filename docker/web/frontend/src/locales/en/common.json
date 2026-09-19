@@ -204,6 +204,10 @@
         "title": "AI compliance profile",
         "desc": "The G7 minimum elements, licenses needing review and regulatory crosswalk, gathered for this model."
       },
+      "vex": {
+        "title": "CVE judgements",
+        "desc": "Your own affected / not affected / fixed / under investigation calls, and the CycloneDX VEX file exported from them."
+      },
       "security": {
         "title": "Security report",
         "desc": "Known vulnerabilities (CVE) found in the components."
@@ -299,6 +303,10 @@
     "vexSaving": "Saving…",
     "vexSaved": "Judgement saved",
     "vexSaveFailed": "Could not save the judgement",
+    "vexExport": "Export VEX",
+    "vexExporting": "Building VEX…",
+    "vexExportFailed": "Could not export the judgements as VEX. The components you judged may not be in the SBOM",
+    "vexExportPartial": "{{skipped}} judgement(s) left out of the VEX: their component is not in the SBOM",
     "vexUpdatedAt": "Last updated {{date}}",
     "vulnRowToggle": "Show vulnerability details",
     "componentRowToggle": "Show component details",

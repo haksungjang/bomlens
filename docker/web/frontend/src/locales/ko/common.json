@@ -204,6 +204,10 @@
         "title": "AI 준수 프로필",
         "desc": "이 모델의 G7 최소 요소와 검토가 필요한 라이선스, 규제 대응표를 모은 문서입니다."
       },
+      "vex": {
+        "title": "CVE 판단",
+        "desc": "영향 있음, 영향 없음, 이미 고침, 조사 중으로 직접 남긴 판단과, 이를 내보낸 CycloneDX VEX 파일입니다."
+      },
       "security": {
         "title": "보안 보고서",
         "desc": "컴포넌트에서 발견된 알려진 취약점(CVE)입니다."
@@ -299,6 +303,10 @@
     "vexSaving": "저장 중…",
     "vexSaved": "판단을 저장했습니다",
     "vexSaveFailed": "판단을 저장하지 못했습니다",
+    "vexExport": "VEX 내보내기",
+    "vexExporting": "VEX 만드는 중…",
+    "vexExportFailed": "판단을 VEX로 내보내지 못했습니다. 판단한 컴포넌트가 SBOM에 없을 수 있습니다",
+    "vexExportPartial": "판단 {{skipped}}건은 SBOM에서 컴포넌트를 찾지 못해 VEX에서 뺐습니다",
     "vexUpdatedAt": "마지막 갱신 {{date}}",
     "vulnRowToggle": "취약점 상세 보기",
     "componentRowToggle": "컴포넌트 상세 보기",

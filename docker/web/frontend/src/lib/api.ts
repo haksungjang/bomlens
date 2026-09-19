@@ -279,6 +279,10 @@ export type SecuritySummary = Record<Severity, number> & {
   /** Engine failure message when the scan did not complete (scan-security.sh
    *  ScanError). Present => the counts above understate the real exposure. */
   scanError?: string;
+  /** How many CVE judgements are on file for this scan, present only when there
+   *  are some. Counts the sidecar, not the rows in view: a judgement outlives a
+   *  re-scan even when its CVE is no longer among the findings. */
+  vexCount?: number;
   /** Advisories filed against the kernel, counted apart from the severity figures
    *  above and from TOTAL. An old kernel carries thousands of them, nearly all
    *  for subsystems the image never compiled in, so mixing them in would make a
@@ -1050,6 +1054,37 @@ export async function exportSpdx(
     const res = await fetch(`/spdx-export?id=${encodeURIComponent(id)}`);
     if (!res.ok) return null;
     return (await res.json()) as { name: string; results: ResultFile[] };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Export the judgements recorded for a scan as a CycloneDX VEX document, built
+ * on the server from the saved judgements and rebuilt on every call (they keep
+ * changing after the scan). Resolves to the new artifact's name plus the
+ * refreshed listing, or null on failure (no judgement yet, or the server could
+ * not build it); the caller surfaces a toast.
+ */
+export async function exportVex(id: string): Promise<{
+  name: string;
+  /** Judgements written into the document, and those left out because their
+   *  component is not in the SBOM. */
+  exported: number;
+  skipped: number;
+  results: ResultFile[];
+} | null> {
+  // The static demo cannot record a judgement, so there is nothing to export.
+  if (IS_STATIC_DEMO) return null;
+  try {
+    const res = await fetch(`/vex-export?id=${encodeURIComponent(id)}`);
+    if (!res.ok) return null;
+    return (await res.json()) as {
+      name: string;
+      exported: number;
+      skipped: number;
+      results: ResultFile[];
+    };
   } catch {
     return null;
   }

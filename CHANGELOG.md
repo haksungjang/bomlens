@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The web UI can export the CVE judgements you recorded as a CycloneDX 1.6 VEX document (**Export VEX** on the Vulnerabilities screen, `GET /vex-export`), so another tool can read them. The four states map to CycloneDX `analysis.state` values, and each entry points at a copy of its component held in the document, so the file stands alone. The judgements and the export also get their own card on the Artifacts screen.
+
 ### Fixed
 
 - A source scan launched through the web UI or the desktop app, in any language, could fail outright ("argument list too long") once `build-prep.sh` grew past the kernel's single-argument limit (128KiB on Linux, which every Docker host uses under the hood). It now runs from a file on the same shared mount the scanned tree already uses, instead of being passed inline as a single `sh -c` argument. The CLI path was unaffected (it already bind-mounts the file).
