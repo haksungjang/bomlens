@@ -2008,6 +2008,72 @@ else
     echo "  SKIP: jq not available for conformance generation"
 fi
 
+echo "== sbom_summary reports the firmware scope from the SBOM's own properties =="
+# scan-firmware.sh stamps bomlens:firmware:* on the root component and lists
+# unblob among the tools. The summary exposes them as firmwareScope only for a
+# document that scan produced: a merged SBOM keeps the root component of an
+# earlier firmware scan, and a submitted one is a supplier's data, and neither may
+# present those numbers as its own. Values are accepted only if plainly numbers or
+# names, and it is null when nothing went unopened.
+FWPROPS='[
+  {"name":"bomlens:firmware:input-bytes","value":"1000000"},
+  {"name":"bomlens:firmware:unknown-bytes","value":"250000"},
+  {"name":"bomlens:firmware:unknown-top-level-percent","value":"25"},
+  {"name":"bomlens:firmware:extraction-failed","value":"2"},
+  {"name":"bomlens:firmware:encrypted-regions","value":"1"},
+  {"name":"bomlens:firmware:extraction-failed-formats","value":"ubi,squashfs_v4_le"},
+  {"name":"bomlens:firmware:missing-extractors","value":"sasquatch<img src=x>"}]'
+mkfw() { # name, tools-json, properties-json
+    jq -n --argjson t "$2" --argjson p "$3" \
+        '{bomFormat:"CycloneDX",specVersion:"1.6",metadata:{tools:{components:$t},component:{type:"firmware",name:"fw.bin",properties:$p}},components:[{name:"a",version:"1",type:"library"}]}' \
+        > "$OUT/$1_1.0_bom.json"
+}
+mkfw fwscope '[{"type":"application","name":"unblob"}]' "$FWPROPS"
+mkfw fwmerged '[{"type":"application","name":"bomlens-merge"}]' "$FWPROPS"
+mkfw fwfull '[{"type":"application","name":"unblob"}]' '[
+  {"name":"bomlens:firmware:input-bytes","value":"1000"},
+  {"name":"bomlens:firmware:unknown-bytes","value":"0"},
+  {"name":"bomlens:firmware:extraction-failed","value":"0"},
+  {"name":"bomlens:firmware:encrypted-regions","value":"0"}]'
+mkfw fwbad '[{"type":"application","name":"unblob"}]' '[
+  {"name":"bomlens:firmware:input-bytes","value":"1000"},
+  {"name":"bomlens:firmware:unknown-bytes","value":"-250000"},
+  {"name":"bomlens:firmware:unknown-top-level-percent","value":"1e999"},
+  {"name":"bomlens:firmware:extraction-failed","value":"0"},
+  {"name":"bomlens:firmware:encrypted-regions","value":"0"}]'
+mkfw fwmany '[{"type":"application","name":"unblob"}]' '[
+  {"name":"bomlens:firmware:input-bytes","value":"1000"},
+  {"name":"bomlens:firmware:extraction-failed-formats","value":"a,b,c,d,e,f,g,h,i,j,k,l"},
+  {"name":"bomlens:firmware:missing-extractors","value":"x"}]'
+cat > "$OUT/fwnone_1.0_bom.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6","components":[{"name":"a","version":"1","type":"library"}]}
+JSON
+if SBOM_OUTPUT_DIR="$OUT" python3 - "$ROOT_DIR" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+def scope(i): return server.sbom_summary(i + "_1.0")["firmwareScope"]
+f = scope("fwscope")
+assert f["unknownPercent"] == 25.0 and f["unknownBytes"] == 250000, f
+assert f["failedSteps"] == 2 and f["encryptedRegions"] == 1, f
+assert f["failedFormats"] == ["ubi", "squashfs_v4_le"], f
+assert f["missingExtractors"] == ["sasquatchimgsrcx"], ("markup not reduced", f["missingExtractors"])
+assert scope("fwmerged") is None, "a merged SBOM must not present an earlier scan's coverage as its own"
+assert scope("fwfull") is None, "an image opened in full must give no scope"
+assert scope("fwnone") is None, "a document with no properties must give no scope"
+b = scope("fwbad")
+assert b is None, ("a malformed number must be dropped, not repaired into a plausible one", b)
+m = scope("fwmany")
+assert len(m["failedFormats"]) == 10 and m["namesMore"] == 2, m
+PY
+then
+    pass "sbom_summary gives firmwareScope only for a scan that unpacked the image, and only from plain values"
+else
+    fail "sbom_summary firmwareScope contract"
+fi
+rm -f "$OUT"/fwscope_1.0_bom.json "$OUT"/fwmerged_1.0_bom.json "$OUT"/fwfull_1.0_bom.json \
+      "$OUT"/fwbad_1.0_bom.json "$OUT"/fwmany_1.0_bom.json "$OUT"/fwnone_1.0_bom.json
+
 echo "== conformance_summary passes through pipelineStepsFailed =="
 # validate-sbom.sh already dedupes/orders/caps this off the SBOM's own
 # bomlens:pipeline-step-failed properties; conformance_summary must pass it

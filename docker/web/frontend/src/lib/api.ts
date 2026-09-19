@@ -145,6 +145,20 @@ export interface SbomSummary {
   pipelineStepsFailed?: string[];
   /** How many more failed steps exist past the 20 in pipelineStepsFailed. */
   pipelineStepsFailedMore?: number;
+  /** How much of a firmware image the unpacker could open (the
+   *  bomlens:firmware:* properties scan-firmware.sh stamps). Null or absent when
+   *  the image was opened in full or the document carries none. A statement of
+   *  scope, not a failure: what sits in an unopened region is not in the SBOM. */
+  firmwareScope?: {
+    unknownPercent: number;
+    unknownBytes: number;
+    failedSteps: number;
+    encryptedRegions: number;
+    failedFormats: string[];
+    missingExtractors: string[];
+    /** Names past the cap in the two lists above. */
+    namesMore: number;
+  } | null;
   /** CycloneDX root component type (application/firmware/container/…) — drives
    *  the honest scan-kind subtitle, available on re-open (unlike the MODE). */
   componentType?: string | null;

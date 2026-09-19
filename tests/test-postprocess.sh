@@ -1102,6 +1102,19 @@ printf 'License: MIT\n' > "$WORK/riskfw3/proj_1.0_NOTICE.txt"
 grep -q 'display:none' "$WORK/riskfw3/proj_1.0_risk-report.html" \
     && fail "markup in a firmware property reached the HTML report" \
     || pass "markup in a firmware property is stripped before it reaches the report"
+# A number that is not plainly a number is dropped, not repaired into a plausible
+# one ("-250000" must not become 250000).
+mkdir -p "$WORK/riskfw4"
+jq '.metadata.component.properties = [
+      {"name":"bomlens:firmware:input-bytes","value":"1000"},
+      {"name":"bomlens:firmware:unknown-bytes","value":"-250000"},
+      {"name":"bomlens:firmware:unknown-top-level-percent","value":"1e999"}]' \
+    "$WORK/lc.json" > "$WORK/riskfw4/proj_1.0_bom.json"
+printf 'License: MIT\n' > "$WORK/riskfw4/proj_1.0_NOTICE.txt"
+( cd "$WORK/riskfw4" && bash "$LIB/generate-risk-report.sh" proj_1.0 proj FIRMWARE >/dev/null 2>&1 )
+grep -qi 'Firmware analysis scope' "$WORK/riskfw4/proj_1.0_risk-report.md" \
+    && fail "a malformed number was repaired into a firmware scope section" \
+    || pass "a malformed firmware number is dropped instead of repaired"
 # A supplier SBOM reviewed on the ANALYZE path is someone else's data: its
 # firmware properties are not this scan's statement about its own coverage.
 ( cd "$WORK/riskfw" && bash "$LIB/generate-risk-report.sh" proj_1.0 proj ANALYZE >/dev/null 2>&1 )
