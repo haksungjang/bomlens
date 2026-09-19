@@ -25,7 +25,7 @@ RUN npm run build
 # ---- Stage 2: post-process runtime ----
 # python 3.12: the base only needs stdlib (web server.py), but the opt-in scancode/
 # firmware tools (pinned) do not yet support newer Python, so we stay on 3.12.
-FROM python:3.12-slim@sha256:a39549e211a16149edf74e5fdc9ef03a6767e46cd987c5048b6659b6c9904c94
+FROM python:3.12-slim@sha256:23b5dc88c7dd47fec3f960b51dc30d19df9875cfbfc60f3b62d3e5b88cbccf62
 
 LABEL org.opencontainers.image.title="BomLens (post-process)"
 LABEL org.opencontainers.image.description="syft + Trivy + notice + signing + UI; SBOM generation delegated to cdxgen language images"
@@ -48,7 +48,7 @@ ENV BOMLENS_VERSION=${BOMLENS_VERSION}
 # Dependabot cannot see these ARG-pinned, curl/pip-installed tools. See
 # docs/internal/dependency-upgrade-policy.md.
 # renovate: datasource=github-releases depName=anchore/syft
-ARG SYFT_VERSION=v1.51.0
+ARG SYFT_VERSION=v1.52.0
 # renovate: datasource=github-releases depName=aquasecurity/trivy
 ARG TRIVY_VERSION=v0.74.0
 # renovate: datasource=github-releases depName=sigstore/cosign
@@ -100,7 +100,7 @@ ARG SASQUATCH_VERSION=sasquatch-v4.5.1-6
 # (~1.8 GB), so it is kept out of the base image. Apache-2.0.
 ARG SBOM_DEEP_CVE=false
 # renovate: datasource=github-releases depName=anchore/grype
-ARG GRYPE_VERSION=v0.117.0
+ARG GRYPE_VERSION=v0.119.0
 
 # AI SBOM generation (opt-in image `bomlens-aibom`). owasp-aibom-generator is
 # Apache-2.0 and fetches HuggingFace model-card metadata over the network at scan
@@ -130,9 +130,23 @@ ARG WEASYPRINT_VERSION=63.1
 # <image>.spdx.tar.zst beside the image document (parse-yocto-spdx.py reads it
 # through `zstd -dc`; python 3.12's tarfile cannot decompress zstd itself).
 # python3 + pip are already in the python:3.12-slim base (web UI + scancode).
-RUN apt-get update && apt-get install -y --no-install-recommends \
+#
+# `apt-get upgrade` runs first and on its own: the base image is pinned by
+# digest (renovate.json only enables custom.regex, not the Docker manager, so
+# that digest never gets a bump PR), and Debian's security archive keeps
+# publishing patched packages for the same release long after the digest was
+# built. Without this, glibc/openssl/pcre2/util-linux/curl etc. stay frozen at
+# whatever the pinned digest shipped, which is exactly the CVE backlog a
+# nightly `trivy image` scan (--ignore-unfixed) keeps finding — a fix already
+# exists in the Debian archive, this step is what actually pulls it in.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     jq curl wget ca-certificates bash tar file git zstd \
     && rm -rf /var/lib/apt/lists/*
+
+# pip itself ships pinned inside the base image and carries its own CVEs
+# (dependency resolver / archive-handling bugs) independent of anything we
+# install with it; nothing above upgrades it.
+RUN python3 -m pip install --no-cache-dir --upgrade pip
 
 # syft — image/binary/RootFS scanning (pinned)
 RUN curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \

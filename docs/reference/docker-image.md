@@ -28,7 +28,7 @@ It is a lightweight image (based on python 3.12 slim) without language toolchain
 
 | Tool | Version | Role |
 |------|------|------|
-| syft | v1.51.0 | Scans images, binaries, and directories |
+| syft | v1.52.0 | Scans images, binaries, and directories |
 | Trivy | v0.74.0 | Vulnerability report |
 | cosign | v3.1.3 | SBOM signing |
 | jq | — | SBOM normalization and notice generation |
