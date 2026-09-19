@@ -6177,7 +6177,7 @@ fi
 if jq -e '[.components[] | select(.name=="express")][0]
         | (.licenses[0].license.id == "MIT") and (.purl | startswith("pkg:npm/express@"))
           and (.type == "framework")
-          and ([.properties[]?.name] | index("SrcFile") != null)' \
+          and ([.properties[]?.name] | index("internal:SrcFile") != null)' \
     "$RUS" >/dev/null 2>&1; then
     pass "the fields our jq depends on (licenses[].license.id, purl, type, properties[]) are shaped as expected"
 else
