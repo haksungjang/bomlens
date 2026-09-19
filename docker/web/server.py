@@ -204,6 +204,10 @@ ARTIFACT_SUFFIXES = (
     # this server writes itself rather than the scan pipeline. User-facing
     # judgement data, so list/download/delete it like any other result.
     "_vex.json",
+    # The same judgements as a standalone CycloneDX VEX document, built on
+    # request by GET /vex-export (export-vex.py) and rebuilt every time, since
+    # the judgements it reflects change after the scan.
+    "_vex.cdx.json",
 )
 
 # Recent-scans sidebar shows the newest N; older scans stay on disk but are not
@@ -1245,6 +1249,12 @@ def security_summary(run_id):
     err = data.get("ScanError")
     if isinstance(err, dict) and err.get("Message"):
         sev["scanError"] = str(err["Message"])[:400]
+    # How many judgements are on file for this scan, whether or not their CVE
+    # is still among the findings (the sidecar outlives a re-scan): the UI
+    # offers the VEX export on this count, not on the rows in view.
+    vex_count = len(_load_vex_verdicts(run_id))
+    if vex_count:
+        sev["vexCount"] = vex_count
     return sev
 
 
@@ -4033,8 +4043,17 @@ class Handler(BaseHTTPRequestHandler):
                 # path (what the user recognizes).
                 "scanRoots": EXTRA_SCAN_ROOTS,
             }))
-        elif path == "/spdx-export":
-            self._spdx_export(urllib.parse.parse_qs(parsed.query))
+        elif path in ("/spdx-export", "/vex-export"):
+            # Both write a file into the output folder over GET, so they get
+            # the same Origin check /scan-stream does.
+            if not _origin_allowed(self.headers.get("Origin")):
+                self._send(403, json.dumps({"error": "bad origin"}))
+                return
+            qs = urllib.parse.parse_qs(parsed.query)
+            if path == "/spdx-export":
+                self._spdx_export(qs)
+            else:
+                self._vex_export(qs)
         elif path == "/file":
             self._serve_file(urllib.parse.parse_qs(parsed.query))
         elif path == "/scans":
@@ -4394,6 +4413,69 @@ class Handler(BaseHTTPRequestHandler):
 
         self._send(200, json.dumps({
             "name": os.path.basename(spdx),
+            "results": list_results(rid),
+        }))
+
+    def _vex_export(self, qs):
+        """Write the judgements recorded for a scan as a CycloneDX VEX document
+        (GET /vex-export?id=<scan id>) so they can be handed to another tool.
+
+        Unlike /spdx-export this rebuilds the file on every call: it reflects
+        the `_vex.json` sidecar, which keeps changing after the scan, and it
+        survives a re-scan while the file itself does not. The document lands
+        in the run folder under a name already in ARTIFACT_SUFFIXES, so it joins
+        the results listing and the download bundle. Responds with the new
+        artifact's name plus the refreshed results listing.
+        """
+        rid = (qs.get("id") or [""])[0]
+        if not scan_id_ok(rid):
+            self._send(400, json.dumps({"error": "invalid scan id"}))
+            return
+        bom = run_file(rid, "_bom.json")
+        if not bom or not os.path.isfile(bom):
+            self._send(404, json.dumps({"error": "no CycloneDX SBOM for this scan"}))
+            return
+        sidecar = run_file(rid, "_vex.json")
+        if not sidecar or not _load_vex_verdicts(rid):
+            self._send(404, json.dumps({"error": "no judgements recorded for this scan"}))
+            return
+        script = os.path.join(LIB_DIR, "export-vex.py")
+        if not os.path.isfile(script):
+            self._send(503, json.dumps({"error": "VEX export is not available here"}))
+            return
+        out = bom[: -len("_bom.json")] + "_vex.cdx.json"
+        # A name of its own per request: the server is threaded, so two exports
+        # of one scan must not write the same temporary file.
+        tmp = "%s.%s.tmp" % (out, secrets.token_hex(4))
+        try:
+            r = subprocess.run(
+                [sys.executable, script, bom, sidecar, tmp],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30,
+            )
+            if r.returncode != 0 or not os.path.isfile(tmp):
+                raise OSError(r.stderr.decode("utf-8", "replace")[-500:])
+            counts = json.loads(r.stdout.decode("utf-8", "replace").strip().splitlines()[-1])
+            exported, skipped = int(counts["exported"]), int(counts["skipped"])
+            if exported == 0:
+                os.remove(tmp)
+                self._send(422, json.dumps({
+                    "error": "none of the judgements match a component in the SBOM",
+                    "skipped": skipped,
+                }))
+                return
+            os.replace(tmp, out)
+        except (OSError, ValueError, KeyError, IndexError, subprocess.SubprocessError) as err:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            sys.stderr.write("[ui] VEX export failed for %s: %s\n" % (rid, err))
+            self._send(500, json.dumps({"error": "VEX export failed"}))
+            return
+        self._send(200, json.dumps({
+            "name": os.path.basename(out),
+            "exported": exported,
+            "skipped": skipped,
             "results": list_results(rid),
         }))
 

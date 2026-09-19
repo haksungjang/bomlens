@@ -87,7 +87,7 @@ When the same project and version were scanned before, a card compares this run 
 
 ![Components — Scope and Risk columns with filters](../images/web-ui-components.png)
 
-**Vulnerabilities** sorts by severity then CVSS, with a CVSS column and the fixed version, and each row expands in place to show the CVSS vector, description and references. Click a band in the severity bar to filter to that severity, or search by CVE or package. Every row's detail also has a judgement field, where you can record your own read of that CVE against your product (affected, not affected, fixed, or under investigation, with an optional note), separate from the vendor/advisory status a report already carries; it is saved to the scan's own result folder, not into the SBOM itself.
+**Vulnerabilities** sorts by severity then CVSS, with a CVSS column and the fixed version, and each row expands in place to show the CVSS vector, description and references. Click a band in the severity bar to filter to that severity, or search by CVE or package. Every row's detail also has a judgement field, where you can record your own read of that CVE against your product (affected, not affected, fixed, or under investigation, with an optional note), separate from the vendor/advisory status a report already carries; it is saved to the scan's own result folder, not into the SBOM itself. Once at least one judgement is on file for the scan, an **Export VEX** button above the table hands you the judgements as a CycloneDX VEX document (see the artifacts reference).
 
 ![Vulnerabilities — CVSS column and expandable rows](../images/web-ui-vulns.png)
 

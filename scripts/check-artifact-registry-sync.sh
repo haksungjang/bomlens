@@ -77,6 +77,7 @@ _vendored.cdx.json      :: yes :: yes :: _vendored\.cdx\.json
 _ai-profile.json        :: yes :: yes :: _ai-profile
 _ai-profile.md          :: yes :: yes :: _ai-profile
 _vex.json               :: yes :: yes :: _vex\.json
+_vex.cdx.json           :: yes :: yes :: _vex\.cdx\.json
 _modelica.cdx.json      :: no  :: yes :: skip
 _cocoapods.cdx.json     :: no  :: yes :: skip
 _conda.cdx.json         :: no  :: yes :: skip

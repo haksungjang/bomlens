@@ -4656,7 +4656,7 @@ echo "== supplier VEX verdicts (POST /vex-verdict) =="
 cat > "$OUT/vex_1.0_bom.json" <<'JSON'
 {"bomFormat":"CycloneDX","metadata":{"component":{"name":"vex","version":"1.0"}},
  "components":[{"name":"foo","version":"1.0","type":"library","purl":"pkg:npm/foo@1.0"},
-               {"name":"bar","version":"2.0","type":"library"}]}
+               {"name":"bar","version":"2.0","type":"library","bom-ref":"bar-ref"}]}
 JSON
 cat > "$OUT/vex_1.0_security.json" <<'JSON'
 {"Results":[{"Vulnerabilities":[
@@ -4740,6 +4740,11 @@ assert vulns['CVE-2024-10002']['vexState'] == 'under_investigation', vulns['CVE-
 assert 'status' not in vulns['CVE-2024-10001'], vulns['CVE-2024-10001']
 "; then
     pass "saved verdicts are joined onto the matching vulnerability rows (purl and pkg+installed both)"
+curl -fsS "$BASE/scan?id=vex_1.0" 2>/dev/null | python3 -c "
+import sys, json
+s = json.load(sys.stdin)['security']
+assert s['vexCount'] == 2, s
+" && pass "the scan summary carries how many judgements are on file (vexCount)" || fail "vexCount missing from the scan summary"
 else
     fail "verdicts did not join back onto /scan?id= as expected"
 fi
@@ -4795,9 +4800,102 @@ else
     fail "the purl-preferring write did not join back on read"
 fi
 
+# -- export the judgements as a CycloneDX VEX document (GET /vex-export) --
+bad_export_id=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/vex-export?id=../../etc/passwd")
+[ "$bad_export_id" = "400" ] && pass "/vex-export blocks a traversal scan id (400)" || fail "traversal id on /vex-export returned $bad_export_id (expected 400)"
+no_export_scan=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/vex-export?id=vex_nosuchscan_1.0")
+[ "$no_export_scan" = "404" ] && pass "/vex-export 404s for a scan with no _bom.json" || fail "nonexistent scan on /vex-export returned $no_export_scan (expected 404)"
+echo '{"bomFormat":"CycloneDX","components":[]}' > "$OUT/vexnone_1.0_bom.json"
+no_verdicts=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/vex-export?id=vexnone_1.0")
+[ "$no_verdicts" = "404" ] && pass "/vex-export 404s when no judgement was recorded" || fail "scan without judgements on /vex-export returned $no_verdicts (expected 404)"
+rm -f "$OUT/vexnone_1.0_bom.json"
+
+# A judgement recorded against a component the SBOM does not contain cannot be
+# pointed at anything, so the export must leave it out rather than guess.
+curl -fsS -X POST -H "Content-Type: application/json" \
+    -d '{"cve":"CVE-2024-10009","state":"affected","pkg":"ghost","installed":"1.0"}' \
+    "$BASE/vex-verdict?id=vex_1.0" >/dev/null
+export_resp=$(curl -fsS "$BASE/vex-export?id=vex_1.0")
+echo "$export_resp" | python3 -c "
+import sys, json
+r = json.load(sys.stdin)
+assert r['name'] == 'vex_1.0_vex.cdx.json', r
+# the ghost judgement saved above is reported as left out, not silently dropped
+assert r['skipped'] == 1 and r['exported'] >= 2, r
+assert any(x['name'] == r['name'] for x in r['results']), r['results']
+" && pass "/vex-export names the new artifact and lists it in the results" || fail "/vex-export response is wrong" "$export_resp"
+if python3 -c "
+import json
+d = json.load(open('$OUT/vex_1.0_vex.cdx.json'))
+assert d['bomFormat'] == 'CycloneDX' and d['specVersion'] == '1.6', d
+vulns = {v['id']: v for v in d['vulnerabilities']}
+# CVE-2024-10001 was last saved as fixed, CVE-2024-10002 as under_investigation:
+# the exported states are the CycloneDX words, not the UI's.
+assert vulns['CVE-2024-10001']['analysis']['state'] == 'resolved', vulns
+assert vulns['CVE-2024-10002']['analysis']['state'] == 'in_triage', vulns
+assert vulns['CVE-2024-10001']['affects'] == [{'ref': 'pkg:npm/foo@1.0'}], vulns
+# every ref resolves inside the document: the referenced components ride along
+embedded = {c['bom-ref']: c for c in d['components']}
+assert set(embedded) == {'pkg:npm/foo@1.0', 'bar-ref'}, embedded
+assert embedded['pkg:npm/foo@1.0']['purl'] == 'pkg:npm/foo@1.0', embedded
+assert 'justification' not in vulns['CVE-2024-10001']['analysis'], vulns
+assert d['metadata']['component']['name'] == 'vex', d['metadata']
+assert 'CVE-2024-10009' not in vulns, vulns  # its component is not in the SBOM
+assert vulns['CVE-2024-10002']['affects'] == [{'ref': 'bar-ref'}], vulns
+"; then
+    pass "the exported VEX maps states to CycloneDX values and points at the scanned components"
+else
+    fail "the exported VEX document is wrong" "$(cat "$OUT/vex_1.0_vex.cdx.json" 2>/dev/null)"
+fi
+curl -fsS -X POST -H "Content-Type: application/json" \
+    -d '{"cve":"CVE-2024-10001","state":"not_affected","purl":"pkg:npm/foo@1.0","detail":"changed after the first export"}' \
+    "$BASE/vex-verdict?id=vex_1.0" >/dev/null
+curl -fsS "$BASE/vex-export?id=vex_1.0" >/dev/null
+python3 -c "
+import json
+d = json.load(open('$OUT/vex_1.0_vex.cdx.json'))
+v = [x for x in d['vulnerabilities'] if x['id'] == 'CVE-2024-10001'][0]
+assert v['analysis']['state'] == 'not_affected' and v['analysis']['detail'] == 'changed after the first export', v
+" && pass "exporting again rebuilds the VEX from the current judgements" || fail "the second export did not pick up the changed judgement"
+
+# A judgement whose component is not in the SBOM is the only one on file: nothing
+# can be exported, and the caller is told so rather than handed an empty document.
+mkdir -p "$OUT/vexonly_1.0"
+echo '{"bomFormat":"CycloneDX","components":[{"name":"foo","version":"1.0","type":"library","bom-ref":"foo"}]}' > "$OUT/vexonly_1.0/vexonly_1.0_bom.json"
+echo '{"verdicts":[{"cve":"CVE-2024-10009","state":"affected","pkg":"ghost","installed":"1.0"}]}' > "$OUT/vexonly_1.0/vexonly_1.0_vex.json"
+none_matched=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/vex-export?id=vexonly_1.0")
+[ "$none_matched" = "422" ] && pass "/vex-export answers 422 when no judgement matches a component" || fail "unmatched-only export returned $none_matched (expected 422)"
+[ -f "$OUT/vexonly_1.0/vexonly_1.0_vex.cdx.json" ] && fail "a 422 export left a document behind" || pass "a 422 export writes no document"
+
+# The run-folder layout (what real scans produce), with a serialNumber and a
+# Maven-style group:artifact finding name that the SBOM carries as group + name.
+mkdir -p "$OUT/vexrun_1.0"
+cat > "$OUT/vexrun_1.0/vexrun_1.0_bom.json" <<'JSON'
+{"bomFormat":"CycloneDX","serialNumber":"urn:uuid:3e671687-395b-41f5-a30f-a58921a69b79","version":1,
+ "metadata":{"component":{"name":"vexrun","version":"1.0","type":"application","bom-ref":"root"}},
+ "components":[{"group":"org.apache.logging.log4j","name":"log4j-core","version":"2.14.1","type":"library","bom-ref":"m1"}]}
+JSON
+echo '{"verdicts":[{"cve":"CVE-2021-44228","state":"fixed","pkg":"org.apache.logging.log4j:log4j-core","installed":"2.14.1"}]}' > "$OUT/vexrun_1.0/vexrun_1.0_vex.json"
+run_resp=$(curl -fsS "$BASE/vex-export?id=vexrun_1.0")
+echo "$run_resp" | python3 -c "
+import sys, json
+r = json.load(sys.stdin)
+assert r['exported'] == 1 and r['skipped'] == 0, r
+assert any(x['name'] == 'vexrun_1.0_vex.cdx.json' for x in r['results']), r['results']
+d = json.load(open('$OUT/vexrun_1.0/vexrun_1.0_vex.cdx.json'))
+assert d['vulnerabilities'][0]['affects'] == [{'ref': 'm1'}], d
+assert d['components'][0]['group'] == 'org.apache.logging.log4j', d
+" && pass "run-folder export matches a Maven group:artifact finding and stays self-contained" || fail "run-folder export is wrong" "$run_resp"
+rm -rf "$OUT/vexonly_1.0" "$OUT/vexrun_1.0"
+
+cross_export=$(curl -s -o /dev/null -w '%{http_code}' -H "Origin: http://evil.example" "$BASE/vex-export?id=vex_1.0")
+[ "$cross_export" = "403" ] && pass "a cross-site Origin on /vex-export is rejected (403)" || fail "cross-site Origin on /vex-export returned $cross_export (expected 403)"
+
 curl -fsS -X POST "$BASE/scan-delete?id=vex_1.0" >/dev/null 2>&1
 [ -f "$OUT/vex_1.0_vex.json" ] && fail "/scan-delete left the VEX sidecar behind" \
     || pass "/scan-delete removes the VEX verdict sidecar along with the rest of the scan"
+[ -f "$OUT/vex_1.0_vex.cdx.json" ] && fail "/scan-delete left the exported VEX behind" \
+    || pass "/scan-delete removes the exported VEX document too"
 
 echo "== external vulnerability lookup (GET /advisory, GET /package-advisories) =="
 # Three dedicated server instances so these tests never touch the real

@@ -11,6 +11,7 @@ import {
   downloadAllUrl,
   fileUrl,
   exportSpdx,
+  exportVex,
   formSourceOf,
   getCapabilities,
   listScans,
@@ -282,6 +283,25 @@ describe("network functions", () => {
 
     fetchMock.mockRejectedValue(new Error("network"));
     expect(await getCapabilities()).toEqual({ firmware: false, scanoss: false, docker: true });
+  });
+
+  it("exportVex builds by id, and returns null on any failure", async () => {
+    const payload = {
+      name: "app_1.0_vex.cdx.json",
+      exported: 2,
+      skipped: 1,
+      results: [{ name: "app_1.0_vex.cdx.json", size: 10 }],
+    };
+    fetchMock.mockResolvedValue(ok(payload));
+    expect(await exportVex("app_1.0")).toEqual(payload);
+    expect(fetchMock.mock.calls[0][0]).toBe("/vex-export?id=app_1.0");
+
+    // 404 (no judgement recorded yet) and a network error both fall back to null
+    // so the caller can say "nothing to export" instead of throwing at the user.
+    fetchMock.mockResolvedValue(fail(404));
+    expect(await exportVex("app_1.0")).toBeNull();
+    fetchMock.mockRejectedValue(new Error("network"));
+    expect(await exportVex("app_1.0")).toBeNull();
   });
 
   it("exportSpdx converts by id, and returns null on any failure", async () => {

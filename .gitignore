@@ -35,6 +35,7 @@ bom.json
 *_ai-profile.json
 *_ai-profile.md
 *_vex.json
+*_vex.cdx.json
 *_security_cvebintool.json
 *_security_grype.json
 *.wfp

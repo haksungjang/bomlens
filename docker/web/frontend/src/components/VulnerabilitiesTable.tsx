@@ -19,8 +19,11 @@ import { Select } from "@/components/ui/select";
 import { EmptyState, ErrorState } from "@/components/ui/state";
 import {
   ApiError,
+  exportVex,
+  fileUrl,
   saveVexVerdict,
   VEX_STATES,
+  type ResultFile,
   type SecuritySummary,
   type Severity,
   type VexState,
@@ -103,6 +106,9 @@ interface Props {
    *  upgrading it actually reach this transitive package?" without hand-
    *  expanding a tree that can run to hundreds of branches. */
   onPickDependency?: (name: string, version?: string) => void;
+  /** The refreshed artifact listing after a VEX export, so the header counts
+   *  and the Artifacts screen agree with the new file. */
+  onResultsChange?: (files: ResultFile[]) => void;
 }
 
 type Sort = { key: VulnSortKey; dir: SortDir };
@@ -410,10 +416,13 @@ export function VulnerabilitiesTable({
   onQueryChange,
   onPickComponent,
   onPickDependency,
+  onResultsChange,
 }: Props) {
   const { t } = useTranslation();
+  const { toast } = useToast();
   const items = security.vulnerabilities ?? [];
   const [openKey, setOpenKey] = useState<string | null>(null);
+  const [exportingVex, setExportingVex] = useState(false);
   // Local overrides for a verdict just saved this session, so the badge and
   // panel reflect it immediately without waiting on a re-fetch of the whole
   // scan. Reset on scanId change so switching scans can't carry one over.
@@ -464,6 +473,34 @@ export function VulnerabilitiesTable({
     downloadCsv(
       csvFilename(scanId ?? "scan", "vulnerabilities", new Date().toISOString().slice(0, 10)),
       toCsv(vulnCsvRows(visible, headers)),
+    );
+  };
+
+  // The export button appears only once at least one judgement exists, either
+  // loaded with the scan or saved this session.
+  const hasVex =
+    !IS_STATIC_DEMO &&
+    ((security.vexCount ?? 0) > 0 ||
+      items.some((v) => Boolean(vexOverrides[vexKey(v)]?.state ?? v.vexState)));
+  const runVexExport = async () => {
+    if (!scanId || exportingVex) return;
+    setExportingVex(true);
+    const res = await exportVex(scanId);
+    setExportingVex(false);
+    if (!res) {
+      toast(t("result.vexExportFailed"));
+      return;
+    }
+    onResultsChange?.(res.results);
+    // Hand the file over straight away, as the SPDX export does.
+    const a = document.createElement("a");
+    a.href = fileUrl(scanId, res.name);
+    a.download = res.name;
+    a.click();
+    toast(
+      res.skipped > 0
+        ? t("result.vexExportPartial", { skipped: res.skipped })
+        : t("result.downloadStarted"),
     );
   };
 
@@ -590,17 +627,30 @@ export function VulnerabilitiesTable({
             {t("result.vulnShown", { shown: visible.length, total: items.length })}
           </span>
         )}
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="ml-auto shrink-0"
-          disabled={visible.length === 0}
-          onClick={exportCsv}
-        >
-          <Download className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-          {t("result.exportCsv")}
-        </Button>
+        <div className="ml-auto flex shrink-0 gap-2">
+          {scanId && hasVex && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={exportingVex}
+              onClick={runVexExport}
+            >
+              <Download className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              {exportingVex ? t("result.vexExporting") : t("result.vexExport")}
+            </Button>
+          )}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={visible.length === 0}
+            onClick={exportCsv}
+          >
+            <Download className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+            {t("result.exportCsv")}
+          </Button>
+        </div>
       </div>
       <div className="max-h-[44rem] resize-y overflow-auto rounded-md border">
         <table className="w-full text-left text-xs">

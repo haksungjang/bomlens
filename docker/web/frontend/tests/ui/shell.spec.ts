@@ -2217,7 +2217,22 @@ test("a supplier can record their own judgement, separate from the vendor status
       }),
     });
   });
+  let exportRequested = false;
+  await page.route("**/vex-export**", (r) => {
+    exportRequested = true;
+    r.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        name: "vex_1.0_vex.cdx.json",
+        results: [{ name: "vex_1.0_vex.cdx.json", size: 100 }],
+      }),
+    });
+  });
+  await page.route("**/file*", (r) => r.fulfill({ contentType: "application/json", body: "{}" }));
   await page.getByRole("link", { name: /^Vulnerabilities/ }).first().click();
+
+  // No judgement recorded yet, so there is nothing to export.
+  await expect(page.getByRole("button", { name: "Export VEX" })).toHaveCount(0);
 
   const row1 = page.locator("tr", { has: page.getByText("CVE-2024-1111") });
   await page.getByText("CVE-2024-1111").click();
@@ -2241,6 +2256,11 @@ test("a supplier can record their own judgement, separate from the vendor status
   // rather than replacing it -- the two are different axes.
   await expect(row1.getByText("Fixed", { exact: true })).toBeVisible();
   await expect(row1.getByText("Judgement: Affected")).toBeVisible();
+
+  // Once a judgement exists the table offers to export it as a VEX document.
+  await page.getByRole("button", { name: "Export VEX" }).click();
+  await expect(page.getByText("Download started")).toBeVisible();
+  expect(exportRequested).toBe(true);
 
   const results = await new AxeBuilder({ page }).include("main").analyze();
   expect(results.violations).toEqual([]);
