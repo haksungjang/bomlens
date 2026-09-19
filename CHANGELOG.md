@@ -9,12 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `--fail-on <condition>` makes a scan exit non-zero when a condition is met (exit 4) or cannot be judged from what the scan produced (exit 5). It can be repeated. The conditions are a closed list: `vulnerability=<critical|high|medium|low>`, `malicious-package` and `license-conflict`. A vulnerability scan that did not complete, or a license conflict with no `--license`, is reported as "cannot be judged" rather than passing. The CI/CD guide uses it in place of the `jq` step.
 - The web UI can export the CVE judgements you recorded as a CycloneDX 1.6 VEX document (**Export VEX** on the Vulnerabilities screen, `GET /vex-export`), so another tool can read them. The four states map to CycloneDX `analysis.state` values, and each entry points at a copy of its component held in the document, so the file stands alone. The judgements and the export also get their own card on the Artifacts screen.
 - The web UI can import a CycloneDX VEX document a supplier sent (**Import VEX** on the Vulnerabilities screen, `POST /vex-import`). Statements that apply to a component of the scanned SBOM show on their rows with a separate "Supplier VEX" label and never replace your own judgement. A document for a different product or version is refused.
 - `--vex <file>` reads a supplier's CycloneDX VEX document during a CLI scan and keeps the statements that apply to the scanned SBOM in `{Project}_{Version}_vex_imported.json`. The SBOM and the security report are unchanged (the security report is turned on too, since the statements are shown on its findings), and a document for a different product or version is reported and skipped.
 
 ### Fixed
 
+- A project or version name that starts or ends with a character outside `A-Za-z0-9.-` (for example `@acme/lib`) no longer fails the CLI with "SBOM not found on host". The script now names the files it looks for with the same rule the scanner container uses.
 - A source scan launched through the web UI or the desktop app, in any language, could fail outright ("argument list too long") once `build-prep.sh` grew past the kernel's single-argument limit (128KiB on Linux, which every Docker host uses under the hood). It now runs from a file on the same shared mount the scanned tree already uses, instead of being passed inline as a single `sh -c` argument. The CLI path was unaffected (it already bind-mounts the file).
 
 ### Changed

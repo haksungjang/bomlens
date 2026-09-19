@@ -52,6 +52,7 @@ Full options, analysis modes, CI/CD integration, and troubleshooting for BomLens
 | `--verify-weights` | false | With `--model`: download the repo's pickle-format weight files (`.bin`/`.pt`/`.pth`/`.ckpt` — the ones that execute code on load) and run the same local picklescan verification `--model-file` runs, instead of only trusting HuggingFace's own scan (`bomlens:hf:scan:*`). safetensors/GGUF/ONNX weights are never downloaded — they cannot execute code on load, so there is nothing for picklescan to check. Real network and disk cost (bounded by `AIBOM_VERIFY_MAX_FILES`/`AIBOM_VERIFY_MAX_BYTES`, default 5 files / 2 GiB each), unlike the metadata-only `ENRICH_HF_SECURITY` lookup, which is why this is opt-in. AI-model scans only |
 | `--byte-stable` | false | Deterministic (reproducible) SBOM output |
 | `--fail-on-conformance` | false | Exit 2 if this scan's own conformance report says "fail" (exit 3 if no conformance report was produced for this scan). Not offered with `--ui`. See [Exit codes](#exit-codes) |
+| `--fail-on <condition>` | — | Exit 4 when this scan meets the condition, or 5 when it cannot be judged from what the scan produced. Repeat the option for several conditions. The conditions are a closed list: `vulnerability=<critical\|high\|medium\|low>` (a finding at that severity or worse; turns the security report on), `malicious-package` (a component flagged as a known malicious package), `license-conflict` (a component incompatible with the license the product is distributed under; the SBOM's root component has to record it, which `--license` does for source and rootfs scans and a supplier SBOM carries itself, otherwise it cannot be judged). Findings are counted as the security report counts them: once per package and id, with the kernel's advisories left out. `--vex` statements are not applied, so a finding the supplier declared not affected still counts. `vulnerability=` is not available for AI model and dataset inputs, which have no dependencies to scan. Not offered with `--ui` or `--diff`. See [Exit codes](#exit-codes) |
 | `--sign` | false | cosign signature (`COSIGN_KEY` required) |
 | `--output-dir <dir>` | current directory | Base directory for outputs (alias `-o`). Each scan lands in a `{Project}_{Version}/` subfolder under it, keeping the bundle together and out of the source tree |
 | `--timestamp` | false | Append `_YYYYMMDD-HHMMSS` to the run subfolder so repeat scans of the same project and version are kept side by side instead of overwritten. Folder name only; SBOM bytes are unchanged |
@@ -139,8 +140,10 @@ To restore the previous flat layout, where every file is written directly in the
 | 1 | Scan failed (bad arguments, Docker unavailable, a required input missing, and similar) |
 | 2 | `--fail-on-conformance`: the scan succeeded, but its own conformance report says "fail" |
 | 3 | `--fail-on-conformance`: the scan succeeded, but produced no conformance report to judge |
+| 4 | `--fail-on`: the scan succeeded, but at least one condition is met |
+| 5 | `--fail-on`: the scan succeeded, but a condition could not be judged (for example the vulnerability database could not be downloaded, or `license-conflict` without `--license`), or the scan produced no result to judge |
 
-2 and 3 are used only when `--fail-on-conformance` is given; every scan that does not use it exits 0 or 1.
+2 to 5 are used only when the matching option is given; every scan that uses neither exits 0 or 1. Every `--fail-on` condition is printed with its verdict. When more than one code applies, the lowest wins: 2 and 3 (conformance) before 4, and 4 (a condition is met) before 5 (a condition could not be judged). "Could not be judged" is a failure on purpose: a scan that could not look is not a scan that found nothing, so an air-gapped run with no vulnerability database never passes a `vulnerability=` gate by accident.
 
 ## Pin the scanner image version
 

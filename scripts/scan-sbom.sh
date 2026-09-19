@@ -105,7 +105,7 @@ CONFORMANCE_PROFILE="${CONFORMANCE_PROFILE:-default}"
 # CI gate: exit non-zero when this scan's own conformance report says "fail".
 # Host-only logic (see the check near the end of this script); nothing is
 # passed to the container for it.
-FAIL_ON_CONFORMANCE="false"
+FAIL_ON_CONFORMANCE="false"; FAIL_ON=()
 FORCE_FIRMWARE="false"; ANALYZE_SBOM=""; MODEL=""; MODEL_FILE=""; VEX_FILE=""
 # Set when --target turned out to be a Yocto build directory: the folder the
 # user pointed at, while ANALYZE_SBOM holds the image SBOM found inside it.
@@ -181,6 +181,18 @@ while [[ "$#" -gt 0 ]]; do
         --sign) SIGN_SBOM="true" ;;
         --byte-stable) BYTE_STABLE="true" ;;
         --fail-on-conformance) FAIL_ON_CONFORMANCE="true" ;;
+        # Repeatable. The list of conditions is closed (checked below), so a typo
+        # fails here instead of quietly gating on nothing.
+        --fail-on)
+            case "${2:-}" in
+                vulnerability=critical|vulnerability=high|vulnerability=medium|vulnerability=low)
+                    GENERATE_SECURITY="true" ;;
+                malicious-package|license-conflict) ;;
+                *)
+                    echo "[ERROR] --fail-on: unknown condition '${2:-}'."
+                    echo "[ERROR] Use one of: vulnerability=critical|high|medium|low, malicious-package, license-conflict."; exit 1 ;;
+            esac
+            FAIL_ON+=("$2"); shift ;;
         --lang) REPORT_LANG="$2"; shift ;;
         --conformance-profile) CONFORMANCE_PROFILE="$2"; shift ;;
         --firmware) FORCE_FIRMWARE="true" ;;
@@ -325,6 +337,20 @@ Options:
                          "fail" (exit 3 if no conformance report was produced
                          for this scan). Not offered with --ui. See "Exit
                          codes" in the CLI reference.
+  --fail-on <condition>  Exit 4 when this scan meets the condition (exit 5 when it
+                         cannot be judged from what the scan produced). Repeat
+                         the option for several conditions. Conditions:
+                           vulnerability=<critical|high|medium|low>
+                                        a finding at that severity or worse
+                                        (turns the security report on)
+                           malicious-package
+                                        a component flagged as a known
+                                        malicious package
+                           license-conflict
+                                        a component incompatible with the
+                                        license given by --license
+                         Not offered with --ui or --diff. See "Exit codes" in
+                         the CLI reference.
   --lang <en|ko>         Language for the human-facing conformance and AI-profile
                          reports (.md/.html). Default en. The SBOM and the JSON
                          reports stay English regardless.
@@ -510,6 +536,7 @@ SBOM_PULL="${SBOM_PULL:-missing}"
 # ========================================================
 if [ "$UI_MODE" = "true" ]; then
     [ -z "$VEX_FILE" ] || { echo "[ERROR] --vex is not offered with --ui (import a VEX from the Vulnerabilities screen instead)."; exit 1; }
+    [ "${#FAIL_ON[@]}" -eq 0 ] || { echo "[ERROR] --fail-on is not offered with --ui (it exits on one scan's result; the UI runs many)."; exit 1; }
     [ "$FAIL_ON_CONFORMANCE" = "true" ] && { echo "[ERROR] --fail-on-conformance is not offered with --ui (it exits on one scan's result; the UI runs many)."; exit 1; }
     docker_check
     # The web UI owns per-run subfolders itself (server.py creates them under the
@@ -592,6 +619,7 @@ fi
 # check below (the same shape UI mode takes above).
 # ========================================================
 if [ -n "$DIFF_OLD" ]; then
+    [ "${#FAIL_ON[@]}" -eq 0 ] || { echo "[ERROR] --fail-on cannot be combined with --diff (a diff judges no scan)."; exit 1; }
     [ -z "$VEX_FILE" ] || { echo "[ERROR] --vex cannot be combined with --diff (a diff writes no SBOM to attach statements to)."; exit 1; }
     docker_check
     [ -f "$DIFF_OLD" ] || { echo "[ERROR] --diff: old SBOM not found: $DIFF_OLD"; exit 1; }
@@ -653,8 +681,13 @@ if [ -n "$_stale_cli_containers" ]; then
     echo "$_stale_cli_containers" | xargs "${DOCKER_ENV[@]}" docker rm >/dev/null 2>&1 || true
 fi
 
-SAFE_PROJECT=$(echo "$PROJECT_NAME" | sed 's/[^a-zA-Z0-9._-]/_/g')
-SAFE_VERSION=$(echo "$PROJECT_VERSION" | sed 's/[^a-zA-Z0-9._-]/_/g')
+# The scanner container names every output file with its own cleaning rule
+# (docker/entrypoint.sh: only [A-Za-z0-9.-] kept, runs of _ folded, edges trimmed).
+# Use the same rule here, or a name such as "@acme/lib" is looked for under a name
+# the container never wrote ("SBOM not found on host", and no result file found).
+container_safe() { printf '%s' "$1" | sed 's/[^a-zA-Z0-9.-]/_/g' | sed 's/__*/_/g' | sed 's/^_//; s/_$//'; }
+SAFE_PROJECT=$(container_safe "$PROJECT_NAME")
+SAFE_VERSION=$(container_safe "$PROJECT_VERSION")
 OUTPUT_FILE="${SAFE_PROJECT}_${SAFE_VERSION}_bom.json"
 SOURCE_DIR="$(pwd)"          # input anchor: the dir the user ran the tool in
 SCAN_INPUT_DIR="$SOURCE_DIR" # what cdxgen scans (overridden by git clone / zip extract)
@@ -682,6 +715,9 @@ UPLOAD_VAR="true"; [ "$GENERATE_ONLY" = "true" ] && UPLOAD_VAR="false"
 # produced it".
 CONFORMANCE_RESULT_FILE="${OUTPUT_HOST_DIR}/${SAFE_PROJECT}_${SAFE_VERSION}_conformance.result"
 [ "$FAIL_ON_CONFORMANCE" = "true" ] && rm -f "$CONFORMANCE_RESULT_FILE"
+# Same for --fail-on: only this run's own judgement may decide the exit code.
+GATE_RESULT_FILE="${OUTPUT_HOST_DIR}/${SAFE_PROJECT}_${SAFE_VERSION}_gate.result"
+[ "${#FAIL_ON[@]}" -gt 0 ] && rm -f "$GATE_RESULT_FILE"
 
 # A SOURCE scan writes $OUTPUT_FILE in two containers: stage 1 (cdxgen) here on
 # the host first, stage 2 (POSTPROCESS, entrypoint.sh) after. entrypoint.sh's
@@ -903,6 +939,15 @@ vex_run() {
     local d f
     d="$(cd "$(dirname "$VEX_FILE")" && pwd)"; f="$(basename "$VEX_FILE")"
     printf ' -v %q:/vex-in/vex.json:ro -e VEX_FILE=/vex-in/vex.json' "$(hostpath "$d/$f")"
+}
+
+# --fail-on: the conditions travel to the container as one comma-separated value.
+# Each is from a closed list (checked when the option is read), so none holds a
+# space or a shell-special character.
+gate_run() {
+    [ "${#FAIL_ON[@]}" -gt 0 ] || return 0
+    local joined; joined="$(IFS=,; printf '%s' "${FAIL_ON[*]}")"
+    printf ' -e FAIL_ON=%q' "$joined"
 }
 
 # ========================================================
@@ -1697,6 +1742,15 @@ fi
 # every mode; the risk report still renders from the notice, as it does in the
 # UI. Announce the skip only when the user actually asked (--security / --all),
 # so an ordinary --model run stays quiet instead of explaining a default.
+if [ "$MODE" = "AIBOM" ] || [ "$MODE" = "MODELFILE" ] || [ "$MODE" = "DATASET" ]; then
+    for fo in "${FAIL_ON[@]:-}"; do
+        case "$fo" in
+            vulnerability=*)
+                echo "[ERROR] --fail-on $fo is not available for AI model and dataset inputs: they have no package dependencies to scan, so no security report is produced."
+                echo "[ERROR] Use --fail-on malicious-package or --fail-on license-conflict for these."; exit 1 ;;
+        esac
+    done
+fi
 if { [ "$MODE" = "AIBOM" ] || [ "$MODE" = "MODELFILE" ] || [ "$MODE" = "DATASET" ]; } && [ "$GENERATE_SECURITY" = "true" ]; then
     [ "$SECURITY_REQUESTED" = "true" ] && \
         echo "[INFO] Skipping the security report: this input has no package dependencies to scan."
@@ -1995,7 +2049,7 @@ FALLBACK_SH
         -v "\"$(hostpath "$SCAN_INPUT_DIR")\"":/src -v "\"$(hostpath "$OUTPUT_HOST_DIR")\"":/host-output \
         -w /host-output \
         --add-host=host.docker.internal:host-gateway \
-        -e MODE=POSTPROCESS -e BOMLENS_RUN_INPUT="$OUTPUT_FILE" -e NESTED_ROOTFS_HINT="\"$NESTED_ROOTFS_HINT\"" $(pp_env)$(cosign_run)$(vex_run) \
+        -e MODE=POSTPROCESS -e BOMLENS_RUN_INPUT="$OUTPUT_FILE" -e NESTED_ROOTFS_HINT="\"$NESTED_ROOTFS_HINT\"" $(pp_env)$(cosign_run)$(vex_run)$(gate_run) \
         "\"$POSTPROCESS_IMAGE\""
 else
     # image / binary / rootfs / firmware / aibom / analyze / merge: scanner image
@@ -2076,7 +2130,7 @@ else
     # shellcheck disable=SC2046
     eval "$DOCKER_MSYS"docker run --rm $VOL \
         --add-host=host.docker.internal:host-gateway \
-        -e MODE="$MODE" -e BOMLENS_ARTIFACT_CLEANUP=1 $ENVV $(pp_env)$(cosign_run)$(vex_run) \
+        -e MODE="$MODE" -e BOMLENS_ARTIFACT_CLEANUP=1 $ENVV $(pp_env)$(cosign_run)$(vex_run)$(gate_run) \
         "\"$RUN_IMAGE\""
 fi
 
@@ -2163,6 +2217,39 @@ if [ "$GENERATE_ONLY" = "true" ]; then
 fi
 echo "=========================================="
 
+# --fail-on: docker/lib/evaluate-gate.sh wrote one line per condition into
+# <prefix>_gate.result (status, condition, detail; tab-separated), so the host
+# needs no jq. Every condition is printed, then the exit code is decided: 4 when
+# any condition is met, else 5 when any could not be judged from what this scan
+# produced (a scan that could not look is not a scan that found nothing). It is
+# applied after the conformance gate below, so 2 and 3 take precedence when
+# --fail-on-conformance is also given, and the report files are on disk by now.
+GATE_EXIT=0
+if [ "${#FAIL_ON[@]}" -gt 0 ]; then
+    if [ ! -f "$GATE_RESULT_FILE" ]; then
+        echo "[ERROR] --fail-on: this scan produced no result to judge. If the scanner image predates the option, refresh it: docker pull ${RUN_IMAGE:-$POSTPROCESS_IMAGE}"
+        GATE_EXIT=5
+    else
+        gate_lines=0
+        while IFS=$'\t' read -r gate_status gate_cond gate_detail; do
+            gate_lines=$((gate_lines + 1))
+            case "$gate_status" in
+                met)      echo "[ERROR] --fail-on ${gate_cond}: ${gate_detail}"; GATE_EXIT=4 ;;
+                ok)       echo "[GATE] ${gate_cond}: ${gate_detail}" ;;
+                *)        echo "[ERROR] --fail-on ${gate_cond} cannot be judged: ${gate_detail:-the result line is not understood}"
+                          [ "$GATE_EXIT" -eq 4 ] || GATE_EXIT=5 ;;
+            esac
+        done < "$GATE_RESULT_FILE"
+        # One line per condition asked for. Fewer means the judgement was cut off,
+        # and an incomplete result is not a pass.
+        if [ "$gate_lines" -ne "${#FAIL_ON[@]}" ]; then
+            echo "[ERROR] --fail-on: the result holds ${gate_lines} of ${#FAIL_ON[@]} conditions, so the judgement is incomplete."
+            [ "$GATE_EXIT" -eq 4 ] || GATE_EXIT=5
+        fi
+        [ "$GATE_EXIT" -ne 0 ] || echo "[GATE] every --fail-on condition was judged and none is met."
+    fi
+fi
+
 # --fail-on-conformance: judged last, after every artifact above is already on
 # disk, so a failing report can still be opened and acted on. Reads the bare
 # pass/fail sidecar validate-sbom.sh writes next to the JSON report (no jq
@@ -2179,3 +2266,4 @@ if [ "$FAIL_ON_CONFORMANCE" = "true" ]; then
         exit 2
     fi
 fi
+[ "$GATE_EXIT" -eq 0 ] || exit "$GATE_EXIT"

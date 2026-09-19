@@ -7786,6 +7786,99 @@ case "$out" in *"predates --vex"*) pass "a scanner image without import-vex.py s
 out=$(run_vex_step "$LIB" "$VEXDIR/no-such-file.json")
 case "$out" in *"not visible inside the container"*) pass "a document the container cannot see is reported" ;; *) fail "invisible document not reported" "$out" ;; esac
 
+echo "== evaluate-gate: --fail-on conditions are met, not met, or cannot be judged =="
+GATEDIR="$WORK/gate"; mkdir -p "$GATEDIR"
+cat > "$GATEDIR/bom.json" <<'JSON'
+{"bomFormat":"CycloneDX","metadata":{"component":{"name":"acme","version":"1","licenses":[{"license":{"id":"MIT"}}]}},
+ "components":[{"name":"evil","version":"1","properties":[{"name":"bomlens:malicious","value":"true"}]},
+               {"name":"gpl","version":"2","properties":[{"name":"bomlens:licenseConflict","value":"incompatible"}]},
+               {"name":"fine","version":"3","properties":[{"name":"bomlens:licenseConflict","value":"compatible"}]}]}
+JSON
+jq 'del(.components[0].properties) | del(.components[1].properties)' "$GATEDIR/bom.json" > "$GATEDIR/clean.json"
+jq 'del(.metadata.component.licenses)' "$GATEDIR/bom.json" > "$GATEDIR/nolic.json"
+echo '{"Results":[{"Vulnerabilities":[{"Severity":"HIGH"},{"Severity":"LOW"},{"Severity":"UNKNOWN"}]}]}' > "$GATEDIR/sec_security.json"
+echo '{"Results":[],"ScanError":{"Message":"database download failed"}}' > "$GATEDIR/err_security.json"
+gate_status() { # <prefix> <bom> <conditions> <condition to read> -> prints the status column
+    bash "$LIB/evaluate-gate.sh" "$GATEDIR/$2" "$GATEDIR/$1" "$3" >/dev/null 2>&1
+    awk -F'\t' -v c="$4" '$2 == c { print $1 }' "$GATEDIR/$1_gate.result"
+}
+[ "$(gate_status sec bom.json vulnerability=critical vulnerability=critical)" = "ok" ] \
+    && [ "$(gate_status sec bom.json vulnerability=high vulnerability=high)" = "met" ] \
+    && [ "$(gate_status sec bom.json vulnerability=medium vulnerability=medium)" = "met" ] \
+    && pass "a severity condition counts findings at that severity or worse and never counts UNKNOWN" \
+    || fail "vulnerability thresholds are wrong" "$(cat "$GATEDIR/sec_gate.result")"
+[ "$(gate_status err bom.json vulnerability=high vulnerability=high)" = "unjudged" ] \
+    && grep -q "database download failed" "$GATEDIR/err_gate.result" \
+    && pass "a security report whose scan failed is unjudged, not a pass, and carries the reason" \
+    || fail "a failed vulnerability scan was not left unjudged" "$(cat "$GATEDIR/err_gate.result")"
+[ "$(gate_status nosuch bom.json vulnerability=high vulnerability=high)" = "unjudged" ] \
+    && pass "a missing security report is unjudged" || fail "a missing security report was judged"
+[ "$(gate_status mal bom.json malicious-package malicious-package)" = "met" ] \
+    && pass "a flagged component meets malicious-package" || fail "malicious-package not met"
+MALICIOUS_DATA_FILE="$GATEDIR/bom.json" bash "$LIB/evaluate-gate.sh" "$GATEDIR/clean.json" "$GATEDIR/mal2" malicious-package >/dev/null 2>&1
+[ "$(awk -F'\t' '{print $1}' "$GATEDIR/mal2_gate.result")" = "ok" ] \
+    && pass "no flagged component, with the snapshot present, is ok" || fail "clean malicious-package was not ok"
+MALICIOUS_DATA_FILE="$GATEDIR/absent.json" bash "$LIB/evaluate-gate.sh" "$GATEDIR/clean.json" "$GATEDIR/mal3" malicious-package >/dev/null 2>&1
+ENRICH_MALICIOUS=false bash "$LIB/evaluate-gate.sh" "$GATEDIR/clean.json" "$GATEDIR/mal4" malicious-package >/dev/null 2>&1
+[ "$(awk -F'\t' '{print $1}' "$GATEDIR/mal3_gate.result")" = "unjudged" ] && [ "$(awk -F'\t' '{print $1}' "$GATEDIR/mal4_gate.result")" = "unjudged" ] \
+    && pass "no snapshot, or the check turned off, is unjudged: absent means not assessed" || fail "an unassessed malicious-package check was judged"
+[ "$(gate_status lic bom.json license-conflict license-conflict)" = "met" ] \
+    && [ "$(gate_status lic2 clean.json license-conflict license-conflict)" = "ok" ] \
+    && [ "$(gate_status lic3 nolic.json license-conflict license-conflict)" = "unjudged" ] \
+    && pass "license-conflict is met, ok, or unjudged when the product's own license is not declared" \
+    || fail "license-conflict verdicts are wrong"
+bash "$LIB/evaluate-gate.sh" "$GATEDIR/bom.json" "$GATEDIR/multi" "vulnerability=low,bogus" >/dev/null 2>&1
+[ "$(wc -l < "$GATEDIR/multi_gate.result" | tr -d ' ')" = "2" ] && [ "$(sed -n 2p "$GATEDIR/multi_gate.result" | cut -f1)" = "unjudged" ] \
+    && pass "several conditions get one line each, and an unknown one is unjudged rather than ignored" \
+    || fail "multiple conditions were not reported line by line" "$(cat "$GATEDIR/multi_gate.result")"
+
+# Counted the way the security report counts (kernel apart, one per purl-or-name and id),
+# and an unreadable or unassessed input is never an "ok".
+cat > "$GATEDIR/kern_security.json" <<'JSON'
+{"Results":[{"Vulnerabilities":[
+ {"Severity":"CRITICAL","PkgName":"linux_kernel","VulnerabilityID":"CVE-1"},
+ {"Severity":"HIGH","PkgName":"Linux-Kernel","VulnerabilityID":"CVE-2"}]}]}
+JSON
+[ "$(gate_status kern bom.json vulnerability=critical vulnerability=critical)" = "ok" ] \
+    && grep -q "1 kernel advisory" "$GATEDIR/kern_gate.result" \
+    && pass "kernel advisories are not counted, and the detail says how many were left out" \
+    || fail "kernel advisories were counted against the gate" "$(cat "$GATEDIR/kern_gate.result")"
+cat > "$GATEDIR/dup_security.json" <<'JSON'
+{"Results":[{"Vulnerabilities":[
+ {"Severity":"HIGH","PkgName":"openssl","VulnerabilityID":"CVE-9","PkgIdentifier":{"PURL":"pkg:deb/openssl@1"}}]},
+ {"Vulnerabilities":[{"Severity":"HIGH","PkgName":"openssl","VulnerabilityID":"CVE-9","PkgIdentifier":{"PURL":"pkg:deb/openssl@1"}}]}]}
+JSON
+bash "$LIB/evaluate-gate.sh" "$GATEDIR/bom.json" "$GATEDIR/dup" vulnerability=high >/dev/null 2>&1
+grep -q "^met.*1 finding(s)" "$GATEDIR/dup_gate.result" \
+    && pass "the same finding reported twice counts once" || fail "duplicate findings were counted twice" "$(cat "$GATEDIR/dup_gate.result")"
+cat > "$GATEDIR/both_security.json" <<'JSON'
+{"Results":[{"Vulnerabilities":[{"Severity":"CRITICAL","PkgName":"x","VulnerabilityID":"CVE-3"}]}],"ScanError":{"Message":"partial"}}
+JSON
+[ "$(gate_status both bom.json vulnerability=critical vulnerability=critical)" = "met" ] \
+    && pass "a listed finding meets the condition even when the run also recorded an error" \
+    || fail "findings next to a ScanError were reported as unjudged"
+printf '{"bomFormat":"CycloneDX","components":[{"name":"evil"' > "$GATEDIR/cut.json"
+[ "$(gate_status cut1 cut.json malicious-package malicious-package)" = "unjudged" ] \
+    && [ "$(gate_status cut2 cut.json license-conflict license-conflict)" = "unjudged" ] \
+    && pass "an SBOM that cannot be read leaves malicious-package and license-conflict unjudged" \
+    || fail "an unreadable SBOM was judged"
+jq '.components[0].properties = [{"name":"bomlens:malicious:rangeUnknown","value":"true"}]' "$GATEDIR/clean.json" > "$GATEDIR/range.json"
+[ "$(gate_status range range.json malicious-package malicious-package)" = "unjudged" ] \
+    && pass "a component that matched an advisory whose range could not be compared is unjudged, not ok" \
+    || fail "a range-unknown malicious match was passed"
+jq '.metadata.properties = [{"name":"bomlens:malicious-check-unavailable","value":"no snapshot"}]' "$GATEDIR/clean.json" > "$GATEDIR/unavail.json"
+[ "$(gate_status unavail unavail.json malicious-package malicious-package)" = "unjudged" ] \
+    && pass "a check the pipeline recorded as unavailable is unjudged" || fail "an unavailable malicious check was passed"
+jq '.components |= map(del(.properties))' "$GATEDIR/bom.json" > "$GATEDIR/noverdict.json"
+[ "$(gate_status nov noverdict.json license-conflict license-conflict)" = "unjudged" ] \
+    && pass "a root license with no verdict on any component is unjudged, not ok" || fail "license-conflict passed with no verdicts recorded"
+jq '.components[2].properties = [{"name":"bomlens:licenseConflict","value":"unknown"}]' "$GATEDIR/clean.json" > "$GATEDIR/unk.json"
+bash "$LIB/evaluate-gate.sh" "$GATEDIR/unk.json" "$GATEDIR/unk" license-conflict >/dev/null 2>&1
+grep -q "^ok.*1 component(s) could not be assessed" "$GATEDIR/unk_gate.result" \
+    && pass "components whose verdict is unknown are counted in the detail" || fail "unknown license verdicts were not reported" "$(cat "$GATEDIR/unk_gate.result")"
+ls "$GATEDIR"/*_gate.result.tmp.* >/dev/null 2>&1 \
+    && fail "a temporary gate file was left behind" || pass "the gate result is published whole, with no temporary file left"
+
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

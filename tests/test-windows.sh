@@ -118,13 +118,23 @@ case "${1:-}" in
     # Desktop file sharing / Colima's home-only mount) — nothing lands on disk.
     if [ -n "$pn" ] && [ -n "$pv" ] && [ "${DOCKER_STUB_NOWRITE:-0}" != "1" ]; then
       dest="${hostout:-.}"; mkdir -p "$dest" 2>/dev/null
+      # The container names every output with entrypoint.sh's cleaning rule (only
+      # [A-Za-z0-9.-], runs of _ folded, edges trimmed); do the same here.
+      spn="$(printf '%s' "$pn" | sed 's/[^a-zA-Z0-9.-]/_/g' | sed 's/__*/_/g' | sed 's/^_//; s/_$//')"
+      spv="$(printf '%s' "$pv" | sed 's/[^a-zA-Z0-9.-]/_/g' | sed 's/__*/_/g' | sed 's/^_//; s/_$//')"
       printf '{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"metadata":{"component":{"type":"application","name":"%s","version":"%s"}},"components":[]}\n' \
-        "$pn" "$pv" > "$dest/${pn}_${pv}_bom.json"
+        "$pn" "$pv" > "$dest/${spn}_${spv}_bom.json"
       # DOCKER_STUB_CONFORMANCE_RESULT models validate-sbom.sh's bare pass/fail
       # sidecar (--fail-on-conformance reads it). Unset means this run produced
       # no conformance report, same as a mode/step that never generates one.
       if [ -n "${DOCKER_STUB_CONFORMANCE_RESULT:-}" ]; then
-        printf '%s' "$DOCKER_STUB_CONFORMANCE_RESULT" > "$dest/${pn}_${pv}_conformance.result"
+        printf '%s' "$DOCKER_STUB_CONFORMANCE_RESULT" > "$dest/${spn}_${spv}_conformance.result"
+      fi
+      # DOCKER_STUB_GATE_RESULT models evaluate-gate.sh's sidecar (--fail-on reads
+      # it): its lines, tab-separated, written verbatim. Unset means the run
+      # produced none.
+      if [ -n "${DOCKER_STUB_GATE_RESULT:-}" ]; then
+        printf '%b' "$DOCKER_STUB_GATE_RESULT" > "$dest/${spn}_${spv}_gate.result"
       fi
     fi
     # MODE=DIFF carries no PROJECT_NAME/VERSION at all — it names its own
@@ -174,7 +184,7 @@ for flag in --project --version --target --git --branch --firmware --analyze \
             --byte-stable --sign --output-dir --timestamp --ui \
             --license --sbom-author --model --model-file --usage --merge --merge-root \
             --diff --trusca --upload-target --deep-cve --identify-vendored --verify-weights --spdx --lang \
-            --conformance-profile --fail-on-conformance --vex; do
+            --conformance-profile --fail-on-conformance --fail-on --vex; do
   if printf '%s' "$HELP" | grep -q -- "$flag"; then pass "help documents $flag"
   else fail "help documents $flag"; fi
 done
@@ -532,6 +542,11 @@ guard "--firmware without --target"    "--firmware requires" --project p --versi
 guard "unsafe git URL (shell metachar)" "unsafe or unsupported" --project p --version 1 --git "https://github.com/x/y;rm -rf /"
 guard "unsafe git URL (path traversal)" "unsafe or unsupported" --project p --version 1 --git "https://github.com/../../etc"
 guard "--merge + --target rejected"     "mutually exclusive" --project p --version 1 --merge a.json b.json --target z
+guard "--fail-on rejects an unknown condition" "unknown condition 'critical'" --project p --version 1 --target z --fail-on critical
+guard "--fail-on rejects an unknown severity"  "unknown condition 'vulnerability=urgent'" --project p --version 1 --target z --fail-on vulnerability=urgent
+guard "--fail-on needs a value"                "unknown condition ''" --project p --version 1 --target z --fail-on
+guard "--fail-on is refused with --ui"         "--fail-on is not offered with --ui" --ui --fail-on malicious-package
+guard "--fail-on is refused with --diff"       "--fail-on cannot be combined with --diff" --project p --version 1 --diff a.json b.json --fail-on malicious-package
 guard "--vex file must exist"           "--vex file not found" --project p --version 1 --target z --vex no-such-vex.json
 guard "--vex is refused with --diff"    "--vex cannot be combined with --diff" --project p --version 1 --diff a.json b.json --vex v.json
 guard "--vex is refused with --ui"      "--vex is not offered with --ui" --ui --vex v.json
@@ -870,6 +885,77 @@ rc_none=$RC
 { [ "$rc_none" -eq 3 ] && in_out "no conformance report to judge"; } \
   && pass "--fail-on-conformance: no report exits 3" \
   || { fail "--fail-on-conformance no-report case" "rc=$rc_none"; show; }
+
+section "--fail-on exit codes and how the conditions reach the container"
+# The judgement is made in the container (docker/lib/evaluate-gate.sh); here the
+# stub models its sidecar, and this checks how the host turns it into an exit code.
+TAB=$'\t'
+gate_case() { # <label> <expected rc> <expected output fragment> <sidecar text or -> <args...>
+  local label="$1" want_rc="$2" want_out="$3" sidecar="$4"; shift 4
+  local d; d="$(new_proj gate)"; printf 'ELFish\n' > "$d/app.out"
+  if [ "$sidecar" = "-" ]; then unset DOCKER_STUB_GATE_RESULT; else export DOCKER_STUB_GATE_RESULT="$sidecar"; fi
+  scan_in "$d" --project GT --version 1 --target app.out --generate-only "$@"
+  unset DOCKER_STUB_GATE_RESULT
+  if [ "$RC" -eq "$want_rc" ] && in_out "$want_out"; then pass "$label"
+  else fail "$label" "rc=$RC (want $want_rc); expected output containing '$want_out'"; show; fi
+}
+gate_case "--fail-on: every condition judged and none met exits 0" 0 "none is met" \
+  "ok${TAB}malicious-package${TAB}clean\n" --fail-on malicious-package
+gate_case "--fail-on: a met condition exits 4 and names it" 4 "--fail-on vulnerability=high: 2 finding(s)" \
+  "met${TAB}vulnerability=high${TAB}2 finding(s) at HIGH or worse\n" --fail-on vulnerability=high
+gate_case "--fail-on: a condition that cannot be judged exits 5 and says why" 5 "cannot be judged: no security report" \
+  "unjudged${TAB}vulnerability=high${TAB}no security report was produced for this scan\n" --fail-on vulnerability=high
+gate_case "--fail-on: a met condition wins over one that cannot be judged (4)" 4 "cannot be judged" \
+  "unjudged${TAB}license-conflict${TAB}no license\nmet${TAB}malicious-package${TAB}1 component(s)\n" --fail-on license-conflict --fail-on malicious-package
+gate_case "--fail-on: no result from the scan exits 5, never 0" 5 "produced no result to judge" \
+  "-" --fail-on malicious-package
+
+# A judgement that is cut off, or that the host does not understand, is not a pass.
+gate_case "--fail-on: a result with fewer lines than conditions exits 5 as incomplete" 5 "holds 1 of 2 conditions" \
+  "ok${TAB}malicious-package${TAB}clean\n" --fail-on malicious-package --fail-on license-conflict
+gate_case "--fail-on: a result line with an unknown status is not a pass (5)" 5 "cannot be judged" \
+  "fine${TAB}malicious-package${TAB}clean\n" --fail-on malicious-package
+
+# A project name the container cleans differently from this script still finds its result.
+d="$(new_proj gate_name)"; printf 'ELFish\n' > "$d/app.out"
+export DOCKER_STUB_GATE_RESULT="met${TAB}malicious-package${TAB}1 component(s)\n"
+scan_in "$d" --project '@acme' --version 1 --target app.out --generate-only --fail-on malicious-package
+unset DOCKER_STUB_GATE_RESULT
+{ [ "$RC" -eq 4 ] && in_out "--fail-on malicious-package: 1 component"; } \
+  && pass "--fail-on finds its result for a project name the container renames (\"@acme\")" \
+  || { fail "the gate result was looked for under the wrong name" "rc=$RC"; show; }
+
+# AI model and dataset inputs have no dependencies to scan, so no security report exists.
+guard "--fail-on vulnerability is refused for an AI model input" "not available for AI model and dataset inputs" --project M --version 1 --model owner/repo --fail-on vulnerability=high
+
+# Precedence with the conformance gate: 2 wins over a met condition.
+d="$(new_proj gate_conf)"; printf 'ELFish\n' > "$d/app.out"
+export DOCKER_STUB_CONFORMANCE_RESULT=fail DOCKER_STUB_GATE_RESULT="met${TAB}malicious-package${TAB}1 component(s)\n"
+scan_in "$d" --project GC --version 1 --target app.out --generate-only --fail-on-conformance --fail-on malicious-package
+unset DOCKER_STUB_CONFORMANCE_RESULT DOCKER_STUB_GATE_RESULT
+{ [ "$RC" -eq 2 ] && in_out "--fail-on malicious-package: 1 component"; } \
+  && pass "--fail-on with --fail-on-conformance: a failed conformance report (2) wins, and the met condition is still printed" \
+  || { fail "--fail-on / --fail-on-conformance precedence" "rc=$RC"; show; }
+
+# A result left by an earlier run at the same project/version must not decide this run.
+d="$(new_proj gate_stale)"; printf 'ELFish\n' > "$d/app.out"
+mkdir -p "$d/GS_1"; printf 'ok%smalicious-package%sstale\n' "$TAB" "$TAB" > "$d/GS_1/GS_1_gate.result"
+scan_in "$d" --project GS --version 1 --target app.out --generate-only --fail-on malicious-package
+{ [ "$RC" -eq 5 ] && in_out "produced no result to judge"; } \
+  && pass "--fail-on ignores a result left by an earlier run" \
+  || { fail "a stale gate result decided this run" "rc=$RC"; show; }
+
+# The conditions travel as one comma-separated value; a vulnerability condition turns the report on.
+d="$(new_proj gate_env)"; printf 'ELFish\n' > "$d/app.out"
+DOCKER_STUB_ARGV_DUMP=1 DOCKER_STUB_GATE_RESULT="ok${TAB}malicious-package${TAB}x\n" \
+  scan_in "$d" --project GE --version 1 --target app.out --generate-only \
+  --fail-on malicious-package --fail-on vulnerability=critical --fail-on license-conflict
+in_log "<FAIL_ON=malicious-package,vulnerability=critical,license-conflict>" \
+  && pass "--fail-on reaches the container as one comma-separated value, in the order given" \
+  || { fail "--fail-on value did not reach the container"; show; cat "$LOG"; }
+in_log "<GENERATE_SECURITY=true>" \
+  && pass "a vulnerability condition turns the security report on" \
+  || { fail "--fail-on vulnerability=... did not enable the security report"; show; cat "$LOG"; }
 
 # A stale .result from an earlier run at the same project/version (this run's
 # folder is reused, not recreated) must not be read as this run's verdict:
