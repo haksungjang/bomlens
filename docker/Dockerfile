@@ -113,8 +113,15 @@ ARG AIBOM_GENERATOR_REF=c5a3f2f647b801ab4ab7569aade4a6cdaf1f9591
 # cdxgen (Node) is installed alongside the AIBOM generator so enrich-aibom.sh can
 # harvest model pedigree / performance metrics that the OWASP tool omits. Opt-in
 # with the aibom image only; enrich-aibom.sh degrades gracefully when it is absent.
-# renovate: datasource=npm depName=@cyclonedx/cdxgen
-ARG CDXGEN_VERSION=12.8.4
+# renovate: datasource=npm depName=@cdxgen/cdxgen
+ARG CDXGEN_VERSION=13.1.0
+# cdxgen 13 requires Node.js >= 24; Debian's own nodejs package (bundled in the
+# python:3.12-slim base) is still on the 20.x line, so Node is installed from
+# the official upstream release tarball instead of apt. Pinned like syft/trivy/
+# cosign/docker above (this file's established pattern for external tools),
+# arch-mapped via uname -m.
+# renovate: datasource=github-releases depName=nodejs/node
+ARG NODE_VERSION=v24.21.0
 
 # NOTICE PDF rendering (opt-in: --build-arg SBOM_PDF=true). weasyprint renders the
 # generated _NOTICE.html to _NOTICE.pdf. It is Python-based (consistent with onot)
@@ -392,9 +399,16 @@ RUN if [ "$SBOM_AIBOM" = "true" ]; then \
       && git -C /opt/aibom-generator checkout --quiet "${AIBOM_GENERATOR_REF}" \
       && pip3 install --no-cache-dir -r /opt/aibom-generator/requirements.txt \
       && ( cd /opt/aibom-generator && python3 -m src.cli --help >/dev/null ) \
-      && apt-get update && apt-get install -y --no-install-recommends nodejs npm \
-      && npm install -g "@cyclonedx/cdxgen@${CDXGEN_VERSION}" \
-      && rm -rf /var/lib/apt/lists/* \
+      && case "$(uname -m)" in \
+           x86_64)  NODE_ARCH="x64" ;; \
+           aarch64) NODE_ARCH="arm64" ;; \
+           *)       NODE_ARCH="x64" ;; \
+         esac \
+      && curl -sSfL "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-${NODE_ARCH}.tar.gz" -o /tmp/node.tgz \
+      && tar -C /usr/local --strip-components=1 -xzf /tmp/node.tgz "node-${NODE_VERSION}-linux-${NODE_ARCH}" \
+      && rm /tmp/node.tgz \
+      && node --version && npm --version \
+      && npm install -g "@cdxgen/cdxgen@${CDXGEN_VERSION}" \
       && cdxgen --version >/dev/null; \
     else \
       echo "[build] aibom generator skipped (SBOM_AIBOM=false)"; \

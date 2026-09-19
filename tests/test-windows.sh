@@ -210,7 +210,7 @@ detect_case() {
   if [ "$ok" = 1 ]; then pass "$label → $lang ($img)"; else
     fail "$label → $lang ($img)" "rc=$RC; mode/lang/image mismatch"; show; fi
 }
-detect_case node   package.json     '{"name":"a","dependencies":{"express":"^4"}}' node   cdxgen-node20
+detect_case node   package.json     '{"name":"a","dependencies":{"express":"^4"}}' node   cdxgen-alpine-node24
 detect_case python requirements.txt 'flask==3.0.0'                                  python cdxgen-python312
 detect_case java   pom.xml          '<project><modelVersion>4.0.0</modelVersion></project>' java cdxgen-temurin-java21
 detect_case go     go.mod           'module x\n\ngo 1.21\n'                          go     cdxgen-debian-golang124
@@ -373,7 +373,7 @@ if command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1; th
     mkdir -p "$guard_dir/$key"
     printf 'stale-owner-container\n' > "$guard_dir/$key/owner"
     printf '/some/unrelated/other/path\n' > "$guard_dir/$key/path"
-    printf 'ghcr.io/sktelecom/bomlens:cdxgen-node20\n' > "$guard_dir/$key/image"
+    printf 'ghcr.io/sktelecom/bomlens:cdxgen-alpine-node24\n' > "$guard_dir/$key/image"
 
     scan_in "$d" --project Pguardmismatch --version 1.0.0 --generate-only
     ok=1
@@ -427,12 +427,12 @@ scan_in "$d" --project Pdotnetsub --version 1.0.0 --generate-only
 # Unknown (no manifest) and mixed (two manifests) both fall back to all-in-one.
 d="$(new_proj unknown)"; printf 'hello\n' > "$d/README"
 scan_in "$d" --project Punknown --version 1.0.0 --generate-only
-{ in_out "Language: unknown" && in_out "No package manifest" && in_log "cyclonedx/cdxgen:v12"; } \
+{ in_out "Language: unknown" && in_out "No package manifest" && in_log "cdxgen/cdxgen:v13"; } \
   && pass "no manifest → unknown → all-in-one image + warning" || { fail "no manifest → all-in-one"; show; }
 
 d="$(new_proj mixed)"; printf '{}' > "$d/package.json"; printf 'module x\ngo 1.21\n' > "$d/go.mod"
 scan_in "$d" --project Pmixed --version 1.0.0 --generate-only
-{ in_out "Language: mixed" && in_log "cyclonedx/cdxgen:v12"; } \
+{ in_out "Language: mixed" && in_log "cdxgen/cdxgen:v13"; } \
   && pass "two manifests → mixed → all-in-one image" || { fail "mixed → all-in-one"; show; }
 
 # A completed source scan must print success and leave the SBOM on the host,
