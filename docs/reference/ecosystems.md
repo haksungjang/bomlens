@@ -213,6 +213,30 @@ annotation(uses(Modelica(version="4.0.0"), Buildings(version="13.0.0")));
 
 ---
 
+## Conda
+
+```bash
+./scripts/scan-sbom.sh --project "CondaExample" --version "1.0.0" --target . --generate-only
+```
+
+Detected files: `environment.yml` or `environment.yaml` at the root of the scanned folder.
+
+cdxgen has no Conda cataloger, so BomLens reads the `dependencies:` list of the environment file itself. Each conda entry becomes a `pkg:conda/...` component, and each entry under a `pip:` item becomes a `pkg:pypi/...` component.
+
+```yaml
+dependencies:
+  - python=3.11
+  - numpy=1.26.4
+  - pip:
+    - requests==2.31.0
+```
+
+When the file is read successfully, BomLens turns off cdxgen's Python step for that scan. Otherwise a `setup.py` or `requirements.txt` elsewhere in the tree would replace the environment file as the source of truth.
+
+> Note: only the two-level layout shown above is recognized, with `dependencies:` at the left edge, entries indented by two spaces and `pip:` items by four. A file that uses another layout (a different indent width, a flow-style list, a tab) is not partly read. It is skipped as a whole and cdxgen's Python step runs as before. An entry with no version or only a range such as `>=1.0` does not name a version, so it is recorded without a version or PURL and carries the property `bomlens:versionUnpinned`. Editable and VCS installs under `pip:` are left out.
+
+---
+
 ## Docker image analysis
 
 Run Docker image analysis from the project root.
@@ -246,6 +270,7 @@ If source analysis finds no dependencies, check for the lock file below.
 | Node.js | `package.json` + `package-lock.json` or `yarn.lock` |
 | Python | `requirements.txt` or `pyproject.toml` + `poetry.lock` |
 | Go | `go.mod` + `go.sum` |
+| Conda | `environment.yml` or `environment.yaml` (root folder) |
 | Rust | `Cargo.lock` |
 | Ruby | `Gemfile.lock` |
 | PHP | `composer.lock` |
