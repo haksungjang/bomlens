@@ -1041,6 +1041,78 @@ fi
 # Restore the English report for any later assertion on these paths.
 ( cd "$WORK/risk" && bash "$LIB/generate-risk-report.sh" proj_1.0 proj >/dev/null 2>&1 )
 
+# Firmware analysis scope: a scan that could not open part of an image says so
+# in the report, in both languages, and a scan with no such properties (every
+# non-firmware mode) gets no section at all rather than a reassuring blank.
+mkdir -p "$WORK/riskfw"
+jq '.metadata.component.properties = [
+      {"name":"bomlens:firmware:input-bytes","value":"1000000"},
+      {"name":"bomlens:firmware:unknown-regions","value":"2"},
+      {"name":"bomlens:firmware:unknown-bytes","value":"250000"},
+      {"name":"bomlens:firmware:unknown-top-level-percent","value":"25"},
+      {"name":"bomlens:firmware:encrypted-regions","value":"1"},
+      {"name":"bomlens:firmware:extraction-failed","value":"1"},
+      {"name":"bomlens:firmware:extraction-failed-formats","value":"ubi"},
+      {"name":"bomlens:firmware:missing-extractors","value":"sasquatch"}]' \
+    "$WORK/lc.json" > "$WORK/riskfw/proj_1.0_bom.json"
+printf 'License: MIT\n' > "$WORK/riskfw/proj_1.0_NOTICE.txt"
+( cd "$WORK/riskfw" && bash "$LIB/generate-risk-report.sh" proj_1.0 proj FIRMWARE >/dev/null 2>&1 )
+FMD="$WORK/riskfw/proj_1.0_risk-report.md"; FHTML="$WORK/riskfw/proj_1.0_risk-report.html"
+if [ -f "$FMD" ] && grep -q '^### Firmware analysis scope$' "$FMD" \
+   && grep -q '25% of the image (250000 bytes) was not recognized' "$FMD" \
+   && grep -q 'Formats whose extraction did not complete: ubi\.' "$FMD" \
+   && grep -q 'Extraction tools the scanner image does not include: sasquatch\.' "$FMD"; then
+    pass "firmware scope section states the unopened share, the failed format and the missing tool"
+else
+    fail "firmware scope section missing from the md report" "$(grep -n -i 'scope' "$FMD" 2>/dev/null)"
+fi
+grep -q '25% of the image (250000 bytes) was not recognized' "$FHTML" 2>/dev/null \
+    && pass "html report carries the firmware scope note" || fail "html report lacks the firmware scope note"
+( cd "$WORK/riskfw" && REPORT_LANG=ko bash "$LIB/generate-risk-report.sh" proj_1.0 proj FIRMWARE >/dev/null 2>&1 )
+grep -q '^### 펌웨어 분석 범위$' "$FMD" && grep -q '이미지의 25%(250000바이트)를' "$FMD" \
+    && pass "ko report carries the firmware scope section" || fail "ko firmware scope section" "$(grep -n '범위' "$FMD" | head -3)"
+# A tool that is missing is the only thing wrong: the report says that, and does
+# not print "0% ... 0 steps ... 0 regions".
+mkdir -p "$WORK/riskfw2"
+jq '.metadata.component.properties = [
+      {"name":"bomlens:firmware:input-bytes","value":"1000"},
+      {"name":"bomlens:firmware:unknown-bytes","value":"0"},
+      {"name":"bomlens:firmware:extraction-failed","value":"0"},
+      {"name":"bomlens:firmware:encrypted-regions","value":"0"},
+      {"name":"bomlens:firmware:missing-extractors","value":"sasquatch"}]' \
+    "$WORK/lc.json" > "$WORK/riskfw2/proj_1.0_bom.json"
+printf 'License: MIT\n' > "$WORK/riskfw2/proj_1.0_NOTICE.txt"
+( cd "$WORK/riskfw2" && bash "$LIB/generate-risk-report.sh" proj_1.0 proj FIRMWARE >/dev/null 2>&1 )
+if grep -q 'sasquatch' "$WORK/riskfw2/proj_1.0_risk-report.md" \
+   && ! grep -q '0% of the image\|0 extraction step\|0 region' "$WORK/riskfw2/proj_1.0_risk-report.md"; then
+    pass "a missing tool alone is reported without zero-valued sentences"
+else
+    fail "missing-tool-only firmware scope" "$(grep -n -A4 'Firmware analysis scope' "$WORK/riskfw2/proj_1.0_risk-report.md")"
+fi
+# Property values are data from the SBOM. Markup in one must not reach the HTML
+# report, where an injected style tag could hide the vulnerability table.
+mkdir -p "$WORK/riskfw3"
+jq '.metadata.component.properties = [
+      {"name":"bomlens:firmware:input-bytes","value":"1000"},
+      {"name":"bomlens:firmware:unknown-bytes","value":"10"},
+      {"name":"bomlens:firmware:missing-extractors","value":"x<style>.table-wrap{display:none}</style>"}]' \
+    "$WORK/lc.json" > "$WORK/riskfw3/proj_1.0_bom.json"
+printf 'License: MIT\n' > "$WORK/riskfw3/proj_1.0_NOTICE.txt"
+( cd "$WORK/riskfw3" && bash "$LIB/generate-risk-report.sh" proj_1.0 proj FIRMWARE >/dev/null 2>&1 )
+grep -q 'display:none' "$WORK/riskfw3/proj_1.0_risk-report.html" \
+    && fail "markup in a firmware property reached the HTML report" \
+    || pass "markup in a firmware property is stripped before it reaches the report"
+# A supplier SBOM reviewed on the ANALYZE path is someone else's data: its
+# firmware properties are not this scan's statement about its own coverage.
+( cd "$WORK/riskfw" && bash "$LIB/generate-risk-report.sh" proj_1.0 proj ANALYZE >/dev/null 2>&1 )
+grep -qi 'Firmware analysis scope' "$FMD" \
+    && fail "an ANALYZE report gained a firmware scope section from the supplier's properties" \
+    || pass "the firmware scope section is written for a FIRMWARE scan only"
+( cd "$WORK/risk" && bash "$LIB/generate-risk-report.sh" proj_1.0 proj >/dev/null 2>&1 )
+grep -qi 'Firmware analysis scope' "$WORK/risk/proj_1.0_risk-report.md" \
+    && fail "a non-firmware report gained a firmware scope section" \
+    || pass "no firmware properties, no firmware scope section"
+
 # Without a BOM artifact the classification block is skipped, not an error.
 mkdir -p "$WORK/risk2"
 printf 'License: MIT\n' > "$WORK/risk2/proj_1.0_NOTICE.txt"
