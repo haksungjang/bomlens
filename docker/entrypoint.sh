@@ -96,7 +96,7 @@ KNOWN_ARTIFACT_SUFFIXES=(
     _conformance.json _conformance.md _conformance.html _conformance.result
     _risk-report.md _risk-report.html
     _scancode.json _files.json _source.json _input.json
-    _yocto_vex.json _security_epss.json _vendored.cdx.json
+    _yocto_vex.json _security_epss.json _vendored.cdx.json _gate.result
     _ai-profile.json _ai-profile.md _vex.cdx.json
     _modelica.cdx.json _cocoapods.cdx.json _conda.cdx.json
     _security_cvebintool.json _security_grype.json _security_yocto.json
@@ -1497,6 +1497,17 @@ if [ -n "${VEX_FILE:-}" ]; then
         esac
         rm -f "$vex_tmp"
     fi
+    sync_artifacts
+fi
+
+# --fail-on: judge the requested conditions now that the security report and the
+# SBOM enrichments (malicious-package, license conflict) are final. The verdict
+# goes to a small sidecar the CLI turns into an exit code; if this step cannot run
+# there is no sidecar, and the CLI reports that rather than passing.
+if [ -n "${FAIL_ON:-}" ]; then
+    bash "$LIBDIR/evaluate-gate.sh" "$OUTPUT_FILE" "$OUT_PREFIX" "$FAIL_ON" \
+        || echo "[WARN] --fail-on: the conditions could not be evaluated." >&2
+    [ -f "${OUT_PREFIX}_gate.result" ] && ARTIFACTS+=("${OUT_PREFIX}_gate.result")
     sync_artifacts
 fi
 

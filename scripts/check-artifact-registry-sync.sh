@@ -65,6 +65,7 @@ _conformance.json       :: yes :: yes :: _conformance
 _conformance.md         :: yes :: yes :: _conformance
 _conformance.html       :: yes :: yes :: _conformance
 _conformance.result     :: no  :: yes :: skip
+_gate.result            :: no  :: yes :: skip
 _risk-report.md         :: yes :: yes :: _risk-report
 _risk-report.html       :: yes :: yes :: _risk-report
 _scancode.json          :: yes :: yes :: _scancode\.json
