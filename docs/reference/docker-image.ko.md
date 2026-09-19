@@ -28,7 +28,7 @@ docker pull ghcr.io/sktelecom/bomlens:latest
 
 | 도구 | 버전 | 역할 |
 |------|------|------|
-| syft | v1.51.0 | 이미지, 바이너리, 디렉터리 스캔 |
+| syft | v1.52.0 | 이미지, 바이너리, 디렉터리 스캔 |
 | Trivy | v0.74.0 | 취약점 보고서 |
 | cosign | v3.1.3 | SBOM 서명 |
 | jq | — | SBOM 정규화와 고지문 생성 |
