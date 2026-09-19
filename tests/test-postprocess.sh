@@ -7718,6 +7718,74 @@ cn=$(jq -r '.checks[] | select(.id=="transitive") | .detail' "$WORK/compnone_con
     && pass "no compositions declared leaves the transitive detail exactly as before" \
     || fail "transitive detail changed with no compositions present" "$cn"
 
+echo "== import-vex: a supplier's CycloneDX VEX is read against the SBOM, and refused when it should be =="
+VEXDIR="$WORK/importvex"; mkdir -p "$VEXDIR"
+cat > "$VEXDIR/bom.json" <<'JSON'
+{"bomFormat":"CycloneDX","metadata":{"component":{"name":"acme","version":"2.0","bom-ref":"root"}},
+ "components":[{"name":"foo","version":"1.0","purl":"pkg:npm/foo@1.0","bom-ref":"foo"}]}
+JSON
+cat > "$VEXDIR/vex.json" <<'JSON'
+{"bomFormat":"CycloneDX","metadata":{"component":{"name":"ACME","version":"2.0"}},
+ "components":[{"bom-ref":"f","name":"foo","version":"1.0","purl":"pkg:npm/foo@1.0?x=1"},{"bom-ref":"g","name":"gone","version":"1","purl":"pkg:npm/gone@1"}],
+ "vulnerabilities":[{"id":"CVE-2024-1","analysis":{"state":"false_positive","justification":"code_not_present"},"affects":[{"ref":"f"},{"ref":"g"}]},
+                    {"id":"CVE-2024-2","analysis":{"state":"unknown-word"},"affects":[{"ref":"f"}]}]}
+JSON
+iv=$(python3 "$LIB/import-vex.py" "$VEXDIR/bom.json" "$VEXDIR/vex.json" "$VEXDIR/out.json"); irc=$?
+[ "$irc" = "0" ] && [ "$(echo "$iv" | jq -c '[.imported,.unmatched,.ignored]')" = "[1,1,1]" ] \
+    && pass "import-vex keeps the matching statement, counts the unmatched and the unknown state" \
+    || fail "import-vex summary is wrong (rc=$irc)" "$iv"
+[ "$(jq -r '.statements[0] | "\(.state) \(.receivedState) \(.purl) \(.pkg)@\(.installed)"' "$VEXDIR/out.json")" = "not_affected false_positive pkg:npm/foo@1.0 foo@1.0" ] \
+    && pass "false_positive maps to not_affected, keeps the sender's word, and stores purl plus name and version" \
+    || fail "stored statement is wrong" "$(cat "$VEXDIR/out.json")"
+
+jq '.metadata.component.name = "someone-else"' "$VEXDIR/vex.json" > "$VEXDIR/other.json"
+python3 "$LIB/import-vex.py" "$VEXDIR/bom.json" "$VEXDIR/other.json" "$VEXDIR/other-out.json" >/dev/null; irc=$?
+[ "$irc" = "3" ] && [ ! -f "$VEXDIR/other-out.json" ] \
+    && pass "import-vex refuses a VEX for another product (exit 3) and writes nothing" \
+    || fail "different-product VEX not refused (rc=$irc)"
+
+echo '{"x":1}' > "$VEXDIR/notvex.json"
+python3 "$LIB/import-vex.py" "$VEXDIR/bom.json" "$VEXDIR/notvex.json" "$VEXDIR/n-out.json" >/dev/null; irc=$?
+[ "$irc" = "2" ] && pass "import-vex refuses a file that is not a VEX document (exit 2)" || fail "non-VEX file returned $irc (expected 2)"
+
+# The entrypoint.sh block that runs import-vex.py for --vex, extracted between its
+# anchor comments (as the size-cap test above does) so this tracks the shipped
+# logic. Run in a subshell with the few names it reads.
+echo "== --vex step in entrypoint.sh: each outcome is reported, and only a usable document writes a file =="
+sed -n "/^# A supplier's CycloneDX VEX (--vex)/,/^# Risk report/p" "$ROOT_DIR/docker/entrypoint.sh" | sed '$d' > "$WORK/vex-step.sh"
+[ "$(wc -l < "$WORK/vex-step.sh")" -gt 20 ] && [ "$(wc -l < "$WORK/vex-step.sh")" -lt 80 ] \
+    || fail "could not extract the --vex step from entrypoint.sh (did its anchor comments move?)"
+run_vex_step() { # <libdir> <vex file> -> prints the step's output, then ARTIFACTS
+    # shellcheck disable=SC2034  # read by the sourced --vex step
+    ( LIBDIR="$1"; VEX_FILE="$2"; OUTPUT_FILE="$VEXDIR/bom.json"; OUT_PREFIX="$VEXDIR/step"
+      ARTIFACTS=(); sync_artifacts() { :; }
+      # shellcheck disable=SC1090
+      source "$WORK/vex-step.sh" 2>&1
+      echo "ARTIFACTS=${ARTIFACTS[*]:-}" )
+}
+rm -f "$VEXDIR"/step_vex_imported.json*
+out=$(run_vex_step "$LIB" "$VEXDIR/vex.json")
+case "$out" in *"[vex] 1 statement(s) apply"*"ARTIFACTS=$VEXDIR/step_vex_imported.json") pass "a usable VEX writes the file, registers it as an artifact and says how many statements apply" ;; *) fail "a usable VEX was not reported/registered" "$out" ;; esac
+[ "$(jq -r '.statements | length' "$VEXDIR/step_vex_imported.json")" = "1" ] && pass "the saved file holds the applying statements" || fail "saved file is wrong"
+ls "$VEXDIR"/step_vex_imported.json.tmp.* >/dev/null 2>&1 && fail "a temporary file was left behind" || pass "no temporary file is left behind"
+
+# Nothing applies: the earlier received file must survive untouched.
+echo '{"bomFormat":"CycloneDX","metadata":{"component":{"name":"acme","version":"2.0"}},"components":[{"bom-ref":"g","name":"gone","version":"1","purl":"pkg:npm/gone@1"}],"vulnerabilities":[{"id":"CVE-2024-1","analysis":{"state":"resolved"},"affects":[{"ref":"g"}]}]}' > "$VEXDIR/nomatch.json"
+before=$(cat "$VEXDIR/step_vex_imported.json")
+out=$(run_vex_step "$LIB" "$VEXDIR/nomatch.json")
+[ "$before" = "$(cat "$VEXDIR/step_vex_imported.json")" ] && case "$out" in *"nothing was saved"*"ARTIFACTS=") pass "a VEX with no applicable statement leaves the earlier received file as it was" ;; *) fail "no-match VEX not reported" "$out" ;; esac \
+    || fail "a no-match VEX replaced the earlier received file"
+
+out=$(run_vex_step "$LIB" "$VEXDIR/other.json")
+case "$out" in *"describes someone-else"*"but this scan is acme 2.0"*) pass "a VEX for another product is skipped with both product names" ;; *) fail "different-product VEX not reported" "$out" ;; esac
+out=$(run_vex_step "$LIB" "$VEXDIR/notvex.json")
+case "$out" in *"not a readable CycloneDX VEX document"*) pass "a file that is not a VEX is skipped with a plain reason" ;; *) fail "non-VEX file not reported" "$out" ;; esac
+mkdir -p "$VEXDIR/oldlib"
+out=$(run_vex_step "$VEXDIR/oldlib" "$VEXDIR/vex.json")
+case "$out" in *"predates --vex"*) pass "a scanner image without import-vex.py says so instead of blaming the file" ;; *) fail "stale image not reported as such" "$out" ;; esac
+out=$(run_vex_step "$LIB" "$VEXDIR/no-such-file.json")
+case "$out" in *"not visible inside the container"*) pass "a document the container cannot see is reported" ;; *) fail "invisible document not reported" "$out" ;; esac
+
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

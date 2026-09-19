@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The web UI can export the CVE judgements you recorded as a CycloneDX 1.6 VEX document (**Export VEX** on the Vulnerabilities screen, `GET /vex-export`), so another tool can read them. The four states map to CycloneDX `analysis.state` values, and each entry points at a copy of its component held in the document, so the file stands alone. The judgements and the export also get their own card on the Artifacts screen.
 - The web UI can import a CycloneDX VEX document a supplier sent (**Import VEX** on the Vulnerabilities screen, `POST /vex-import`). Statements that apply to a component of the scanned SBOM show on their rows with a separate "Supplier VEX" label and never replace your own judgement. A document for a different product or version is refused.
+- `--vex <file>` reads a supplier's CycloneDX VEX document during a CLI scan and keeps the statements that apply to the scanned SBOM in `{Project}_{Version}_vex_imported.json`. The SBOM and the security report are unchanged (the security report is turned on too, since the statements are shown on its findings), and a document for a different product or version is reported and skipped.
 
 ### Fixed
 

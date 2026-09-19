@@ -1458,6 +1458,48 @@ if [ "${GENERATE_SECURITY:-false}" = "true" ]; then
     sync_artifacts
 fi
 
+# A supplier's CycloneDX VEX (--vex): keep the statements that apply to this
+# SBOM in ${OUT_PREFIX}_vex_imported.json. The SBOM and the security report are
+# left as they are. An explicit request the document cannot satisfy is said
+# plainly and does not stop the scan: the SBOM is already complete. A document
+# with nothing that applies leaves an earlier received file as it was, as the
+# web UI's import does.
+if [ -n "${VEX_FILE:-}" ]; then
+    vex_out="${OUT_PREFIX}_vex_imported.json"
+    if [ ! -f "$VEX_FILE" ]; then
+        echo "[WARN] --vex skipped: the document is not visible inside the container ($VEX_FILE). If it is a symbolic link, pass the real file." >&2
+    elif [ ! -f "$LIBDIR/import-vex.py" ]; then
+        echo "[WARN] --vex skipped: this scanner image predates --vex. Refresh it (docker pull) and run again." >&2
+    else
+        vex_tmp="${vex_out}.tmp.$$"
+        vex_rc=0
+        vex_json="$(python3 "$LIBDIR/import-vex.py" "$OUTPUT_FILE" "$VEX_FILE" "$vex_tmp" 2>/dev/null)" || vex_rc=$?
+        case "$vex_rc" in
+            0)
+                if [ "$(printf '%s' "$vex_json" | jq -r '.imported')" = "0" ]; then
+                    echo "[WARN] --vex: no statement in the document applies to a component of this SBOM ($(printf '%s' "$vex_json" | jq -r '.unmatched') name components it does not contain, $(printf '%s' "$vex_json" | jq -r '.ignored') ignored); nothing was saved." >&2
+                elif mv "$vex_tmp" "$vex_out"; then
+                    ARTIFACTS+=("$vex_out")
+                    echo "[vex] $(printf '%s' "$vex_json" | jq -r '"\(.imported) statement(s) apply to this SBOM, \(.unmatched) name a component it does not contain, \(.ignored) ignored"') -> $(basename "$vex_out")"
+                else
+                    echo "[WARN] --vex: could not save $(basename "$vex_out") in the output folder." >&2
+                fi
+                ;;
+            3)
+                echo "[WARN] --vex skipped: the document describes $(printf '%s' "$vex_json" | jq -r '.vexProduct'), but this scan is $(printf '%s' "$vex_json" | jq -r '.scanProduct'). Use the VEX for this product and version." >&2
+                ;;
+            4)
+                echo "[WARN] --vex skipped: the document holds too many statements to import." >&2
+                ;;
+            *)
+                echo "[WARN] --vex skipped: the file is not a readable CycloneDX VEX document (JSON with bomFormat CycloneDX and a vulnerabilities list)." >&2
+                ;;
+        esac
+        rm -f "$vex_tmp"
+    fi
+    sync_artifacts
+fi
+
 # Risk report (오픈소스위험분석보고서): always for ANALYZE, and for every other
 # mode when GENERATE_REPORT=true (the CLI/UI default, opt-out via --no-report).
 # It re-aggregates the notice + security artifacts already produced above.
