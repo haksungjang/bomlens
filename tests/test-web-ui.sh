@@ -4891,9 +4891,133 @@ rm -rf "$OUT/vexonly_1.0" "$OUT/vexrun_1.0"
 cross_export=$(curl -s -o /dev/null -w '%{http_code}' -H "Origin: http://evil.example" "$BASE/vex-export?id=vex_1.0")
 [ "$cross_export" = "403" ] && pass "a cross-site Origin on /vex-export is rejected (403)" || fail "cross-site Origin on /vex-export returned $cross_export (expected 403)"
 
+# -- import a supplier's VEX document (POST /vex-import) --
+post_vex() { curl -s -o "${2:-/dev/null}" -w '%{http_code}' -X POST -H "Content-Type: application/json" --data-binary "$1" "$BASE/vex-import?id=${3:-vex_1.0}"; }
+[ "$(post_vex '{}' /dev/null '../../etc/passwd')" = "400" ] && pass "/vex-import blocks a traversal scan id (400)" || fail "traversal id on /vex-import"
+[ "$(post_vex '{}' /dev/null vex_nosuchscan_1.0)" = "404" ] && pass "/vex-import 404s for a scan with no _bom.json" || fail "nonexistent scan on /vex-import"
+[ "$(post_vex '{not json')" = "400" ] && pass "/vex-import rejects malformed JSON (400)" || fail "malformed JSON on /vex-import"
+[ "$(post_vex '{"bomFormat":"SPDX"}')" = "400" ] && pass "/vex-import rejects a document that is not CycloneDX VEX (400)" || fail "non-CycloneDX body on /vex-import"
+head -c 4300000 /dev/zero | tr '\0' 'x' > "$WORK/big-vex.txt"
+big=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Content-Type: application/json" --data-binary "@$WORK/big-vex.txt" "$BASE/vex-import?id=vex_1.0")
+[ "$big" = "413" ] && pass "/vex-import rejects a body over the size cap (413)" || fail "oversized body on /vex-import returned $big (expected 413)"
+cross_import=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Origin: http://evil.example" -H "Content-Type: application/json" -d '{}' "$BASE/vex-import?id=vex_1.0")
+[ "$cross_import" = "403" ] && pass "a cross-site Origin on /vex-import is rejected (403)" || fail "cross-site Origin on /vex-import returned $cross_import (expected 403)"
+
+# A VEX for another product: refused, nothing written.
+other='{"bomFormat":"CycloneDX","metadata":{"component":{"name":"someone-else","version":"1.0"}},"vulnerabilities":[{"id":"CVE-2024-10001","analysis":{"state":"not_affected"},"affects":[{"ref":"pkg:npm/foo@1.0"}]}]}'
+mismatch=$(post_vex "$other" "$WORK/mismatch.json")
+if [ "$mismatch" = "409" ] && python3 -c "
+import json; r = json.load(open('$WORK/mismatch.json'))
+assert r['vexProduct'].startswith('someone-else') and r['scanProduct'].startswith('vex'), r"; then
+    pass "/vex-import refuses a VEX for a different product (409) and names both"
+else
+    fail "different-product VEX returned $mismatch (expected 409)" "$(cat "$WORK/mismatch.json")"
+fi
+[ -f "$OUT/vex_1.0_vex_imported.json" ] && fail "a refused import wrote a file" || pass "a refused import writes nothing"
+
+# Nothing in the document applies to this SBOM: 422, nothing written.
+none='{"bomFormat":"CycloneDX","metadata":{"component":{"name":"vex","version":"1.0"}},"components":[{"bom-ref":"g","name":"ghost","version":"1","purl":"pkg:npm/ghost@1"}],"vulnerabilities":[{"id":"CVE-2024-10001","analysis":{"state":"not_affected"},"affects":[{"ref":"g"}]}]}'
+[ "$(post_vex "$none")" = "422" ] && pass "/vex-import answers 422 when no statement matches a component" || fail "no-match VEX on /vex-import"
+[ -f "$OUT/vex_1.0_vex_imported.json" ] && fail "a 422 import wrote a file" || pass "a 422 import writes nothing"
+
+# A real one: the supplier says CVE-2024-10001 does not affect foo, in CycloneDX words.
+good='{"bomFormat":"CycloneDX","specVersion":"1.6","serialNumber":"urn:uuid:11111111-1111-1111-1111-111111111111","version":1,"metadata":{"component":{"name":"VEX","version":"1.0"}},"components":[{"bom-ref":"a","name":"foo","version":"1.0","purl":"pkg:npm/foo@1.0?arch=x"},{"bom-ref":"g","name":"ghost","version":"1","purl":"pkg:npm/ghost@1"}],"vulnerabilities":[{"id":"CVE-2024-10001","analysis":{"state":"not_affected","justification":"code_not_reachable","detail":"never called"},"affects":[{"ref":"a"},{"ref":"g"}]},{"id":"CVE-2024-10002","analysis":{"state":"weird"},"affects":[{"ref":"a"}]}]}'
+imp=$(post_vex "$good" "$WORK/import.json")
+if [ "$imp" = "200" ] && python3 -c "
+import json; r = json.load(open('$WORK/import.json'))
+assert r['imported'] == 1 and r['unmatched'] == 1 and r['ignored'] == 1, r
+assert r['statements'][0]['state'] == 'not_affected' and r['statements'][0]['purl'] == 'pkg:npm/foo@1.0', r
+assert any(x['name'] == 'vex_1.0_vex_imported.json' for x in r['results']), r['results']"; then
+    pass "/vex-import keeps the statements that match, counts the rest, and lists the file"
+else
+    fail "valid VEX import is wrong ($imp)" "$(cat "$WORK/import.json")"
+fi
+if curl -fsS "$BASE/scan?id=vex_1.0" 2>/dev/null | python3 -c "
+import sys, json
+vulns = {v['id']: v for v in json.load(sys.stdin)['security']['vulnerabilities']}
+row = vulns['CVE-2024-10001']
+# the received statement is its own field: the user's own judgement is untouched
+assert row['vexReceived']['state'] == 'not_affected', row
+assert row['vexReceived']['justification'] == 'code_not_reachable', row
+assert row['vexReceived']['detail'] == 'never called', row
+assert row['vexState'] == 'not_affected', row  # the earlier own judgement (last saved above)
+assert 'vexReceived' not in vulns['CVE-2024-10002'], vulns['CVE-2024-10002']
+"; then
+    pass "a received statement shows on its row beside, not instead of, the user's own judgement"
+else
+    fail "received statement did not join onto /scan?id= as expected"
+fi
+python3 -c "
+import json
+d = json.load(open('$OUT/vex_1.0_vex.json'))
+assert all(v.get('source') == 'user' for v in d['verdicts']), d
+" && pass "importing left the user's own judgements file untouched" || fail "importing changed _vex.json"
+
+# Importing again replaces the received file rather than adding to it.
+again='{"bomFormat":"CycloneDX","metadata":{"component":{"name":"vex","version":"1.0"}},"components":[{"bom-ref":"b","name":"bar","version":"2.0"}],"vulnerabilities":[{"id":"CVE-2024-10002","analysis":{"state":"resolved"},"affects":[{"ref":"b"}]}]}'
+[ "$(post_vex "$again")" = "200" ] && curl -fsS "$BASE/scan?id=vex_1.0" 2>/dev/null | python3 -c "
+import sys, json
+vulns = {v['id']: v for v in json.load(sys.stdin)['security']['vulnerabilities']}
+assert vulns['CVE-2024-10002']['vexReceived']['state'] == 'fixed', vulns['CVE-2024-10002']
+assert 'vexReceived' not in vulns['CVE-2024-10001'], vulns['CVE-2024-10001']
+" && pass "a second import replaces the first, and a name-only component matches by name and version" || fail "second import did not replace the first"
+
+# -- hostile and awkward documents: none may reach a 500 --
+weird='{"bomFormat":"CycloneDX","metadata":{"component":{"name":"vex","version":"1.0"}},"components":[{"name":5,"version":{"a":1},"purl":{"p":1},"bom-ref":["x"]},{"name":"foo","version":"1.0","purl":"pkg:npm/foo@1.0","bom-ref":"a"}],"vulnerabilities":[{"id":"CVE-2024-10001","analysis":{"state":["not_affected"]},"affects":[{"ref":"a"}]},{"id":"CVE-2024-10002","analysis":{"state":"resolved"},"affects":[{"ref":"a"}]},{"id":"CVE-2024-10003","analysis":{"state":"resolved"}}]}'
+weird_code=$(post_vex "$weird" "$WORK/weird.json")
+if [ "$weird_code" = "200" ] && python3 -c "
+import json; r = json.load(open('$WORK/weird.json'))
+assert r['imported'] == 1 and r['ignored'] == 2, r  # wrong-typed state, and a statement with no affects"; then
+    pass "wrong-typed fields and a statement with no affects are counted as ignored, never a 500"
+else
+    fail "awkward VEX document returned $weird_code" "$(cat "$WORK/weird.json")"
+fi
+# Sent from a file: a single 200 KB argument is over Linux's per-argument limit.
+python3 -c "print('['*100000 + ']'*100000)" > "$WORK/deep.json"
+deep=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Content-Type: application/json" --data-binary "@$WORK/deep.json" "$BASE/vex-import?id=vex_1.0")
+[ "$deep" = "400" ] && pass "a deeply nested body is refused as invalid (400), not a 500" || fail "deeply nested body on /vex-import returned $deep (expected 400)"
+
+# Trivy-shaped row without a purl (a CPE match) against an SBOM component that has one:
+# the statement is stored with both keys, so the row still shows it.
+mkdir -p "$OUT/vexasym_1.0"
+echo '{"bomFormat":"CycloneDX","metadata":{"component":{"name":"vexasym","version":"1.0","type":"application","bom-ref":"root"}},"components":[{"name":"openssl","version":"3.0.0","type":"library","purl":"pkg:generic/openssl@3.0.0","bom-ref":"o"}]}' > "$OUT/vexasym_1.0/vexasym_1.0_bom.json"
+echo '{"Results":[{"Vulnerabilities":[{"VulnerabilityID":"CVE-2024-3333","Severity":"HIGH","PkgName":"openssl","InstalledVersion":"3.0.0","PkgIdentifier":{}},{"VulnerabilityID":"CVE-2024-4444","Severity":"LOW","PkgName":"zlib","InstalledVersion":"1.0","PkgIdentifier":{"PURL":"pkg:generic/zlib@1.0"}}]}]}' > "$OUT/vexasym_1.0/vexasym_1.0_security.json"
+asym='{"bomFormat":"CycloneDX","metadata":{"component":{"name":"vexasym","version":"1.0","bom-ref":"prod"}},"components":[{"bom-ref":"o","name":"openssl","version":"3.0.0","purl":"pkg:generic/openssl@3.0.0"}],"vulnerabilities":[{"id":"CVE-2024-3333","analysis":{"state":"not_affected"},"affects":[{"ref":"o"}]},{"id":"CVE-2024-4444","analysis":{"state":"not_affected","detail":"product does not ship it"},"affects":[{"ref":"prod"}]}]}'
+[ "$(post_vex "$asym" /dev/null vexasym_1.0)" = "200" ] && curl -fsS "$BASE/scan?id=vexasym_1.0" 2>/dev/null | python3 -c "
+import sys, json
+vulns = {v['id']: v for v in json.load(sys.stdin)['security']['vulnerabilities']}
+assert vulns['CVE-2024-3333']['vexReceived']['state'] == 'not_affected', vulns['CVE-2024-3333']
+# a product-level statement covers a finding that has no statement of its own
+assert vulns['CVE-2024-4444']['vexReceived']['detail'] == 'product does not ship it', vulns['CVE-2024-4444']
+" && pass "a purl-less finding matches its component by name and version, and a product-level statement covers the rest" || fail "purl-less finding or product-level statement did not show on its row"
+rm -rf "$OUT/vexasym_1.0"
+
+# The scanned SBOM is not held to the received document's size cap.
+python3 -c "
+import json
+comps = [{'name': 'p%d' % i, 'version': '1', 'type': 'library', 'purl': 'pkg:npm/p%d@1' % i, 'bom-ref': 'p%d' % i, 'description': 'x' * 200} for i in range(36000)]
+json.dump({'bomFormat': 'CycloneDX', 'metadata': {'component': {'name': 'bigsbom', 'version': '1'}}, 'components': comps}, open('$OUT/bigsbom_1_bom.json', 'w'))
+"
+bigsize=$(wc -c < "$OUT/bigsbom_1_bom.json")
+[ "$bigsize" -gt 8388608 ] || fail "fixture SBOM is not over 8 MiB ($bigsize)"
+[ "$(post_vex '{"bomFormat":"CycloneDX","metadata":{"component":{"name":"bigsbom","version":"1"}},"components":[{"bom-ref":"x","name":"p1","version":"1","purl":"pkg:npm/p1@1"}],"vulnerabilities":[{"id":"CVE-2024-1","analysis":{"state":"resolved"},"affects":[{"ref":"x"}]}]}' /dev/null bigsbom_1)" = "200" ] \
+    && pass "an SBOM over 8 MiB still accepts a VEX import" || fail "a large scanned SBOM broke /vex-import"
+rm -f "$OUT/bigsbom_1_bom.json" "$OUT/bigsbom_1_vex_imported.json"
+
+# A document that would add more statements than the cap is refused.
+python3 -c "
+import json
+vulns = [{'id': 'CVE-2024-%d' % i, 'analysis': {'state': 'resolved'}, 'affects': [{'ref': 'prod'}]} for i in range(20001)]
+json.dump({'bomFormat': 'CycloneDX', 'metadata': {'component': {'name': 'vex', 'version': '1.0', 'bom-ref': 'prod'}}, 'vulnerabilities': vulns}, open('$WORK/many.json', 'w'))
+"
+many=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Content-Type: application/json" --data-binary "@$WORK/many.json" "$BASE/vex-import?id=vex_1.0")
+[ "$many" = "413" ] && pass "a document with too many statements is refused (413)" || fail "over-cap statement count returned $many (expected 413)"
+
 curl -fsS -X POST "$BASE/scan-delete?id=vex_1.0" >/dev/null 2>&1
 [ -f "$OUT/vex_1.0_vex.json" ] && fail "/scan-delete left the VEX sidecar behind" \
     || pass "/scan-delete removes the VEX verdict sidecar along with the rest of the scan"
+[ -f "$OUT/vex_1.0_vex_imported.json" ] && fail "/scan-delete left the received VEX behind" \
+    || pass "/scan-delete removes the received VEX file too"
 [ -f "$OUT/vex_1.0_vex.cdx.json" ] && fail "/scan-delete left the exported VEX behind" \
     || pass "/scan-delete removes the exported VEX document too"
 

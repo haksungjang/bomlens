@@ -125,16 +125,20 @@ const GROUPS: GroupSpec[] = [
     match: (n) => n.includes("_scancode"),
   },
   {
-    // The judgements a supplier recorded (`_vex.json`, written by the web UI)
-    // and their CycloneDX VEX export (`_vex.cdx.json`). Neither matched a
-    // group, so the header counted them while no card offered them. The Yocto
-    // build's own `_yocto_vex.json` is a different file and stays out.
+    // The judgements a supplier recorded (`_vex.json`, written by the web UI),
+    // their CycloneDX VEX export (`_vex.cdx.json`) and the statements received
+    // from a supplier's VEX (`_vex_imported.json`). None matched a group, so
+    // the header counted them while no card offered them. The Yocto build's own
+    // `_yocto_vex.json` is a different file and stays out.
     key: "vex",
     Icon: ClipboardCheck,
     primary: false,
     rank: 8,
     match: (n) =>
-      (n.endsWith("_vex.json") || n.endsWith("_vex.cdx.json")) && !n.includes("_yocto_vex"),
+      (n.endsWith("_vex.json") ||
+        n.endsWith("_vex.cdx.json") ||
+        n.endsWith("_vex_imported.json")) &&
+      !n.includes("_yocto_vex"),
   },
 ];
 
