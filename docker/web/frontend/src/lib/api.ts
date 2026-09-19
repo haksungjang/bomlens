@@ -228,6 +228,10 @@ export interface VulnItem {
    *  `status` above (the vendor/advisory's own disposition). Absent until one
    *  is saved for this component + CVE. */
   vexState?: VexState;
+  /** What a supplier's VEX document said about this CVE and component
+   *  (POST /vex-import). Its own field, never merged into `vexState`: the user's
+   *  own judgement and a received statement are shown side by side. */
+  vexReceived?: VexReceived;
   /** Optional note recorded alongside vexState. */
   vexDetail?: string;
   /** ISO 8601 timestamp of when vexState was last saved. */
@@ -1056,6 +1060,80 @@ export async function exportSpdx(
     return (await res.json()) as { name: string; results: ResultFile[] };
   } catch {
     return null;
+  }
+}
+
+/** A statement received in a supplier's VEX document, already mapped to the
+ *  four states the screen uses. */
+export interface VexReceived {
+  state: VexState;
+  detail?: string;
+  /** The CycloneDX justification word the sender chose (e.g. "code_not_reachable"). */
+  justification?: string;
+  /** The product the document says it describes. */
+  source?: string;
+}
+
+/** One received statement as the import endpoint returns it, with the identity
+ *  it was matched to (purl, else pkg + installed). */
+export interface VexReceivedStatement {
+  cve: string;
+  state: VexState;
+  purl?: string;
+  pkg?: string;
+  installed?: string;
+  /** "product": the sender's statement is about the product itself, so it
+   *  covers every finding of this CVE that has no statement of its own. */
+  scope?: "product";
+  detail?: string;
+  justification?: string;
+}
+
+export type VexImportOutcome =
+  | {
+      ok: true;
+      imported: number;
+      unmatched: number;
+      ignored: number;
+      source: string | null;
+      statements: VexReceivedStatement[];
+      results: ResultFile[];
+    }
+  | {
+      ok: false;
+      status: number;
+      error: string;
+      /** Set on a 409: the product the document describes and the one scanned. */
+      vexProduct?: string;
+      scanProduct?: string;
+    };
+
+/**
+ * Send a CycloneDX VEX document (its text) to be read against a finished scan.
+ * Resolves to the outcome instead of throwing: the caller words a refusal
+ * (different product, no matching component, not a VEX) for the reader.
+ */
+export async function importVex(scanId: string, text: string): Promise<VexImportOutcome> {
+  if (IS_STATIC_DEMO) demoWriteRefused();
+  try {
+    const res = await fetch(`/vex-import?id=${encodeURIComponent(scanId)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: text,
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return {
+        ok: false,
+        status: res.status,
+        error: typeof j.error === "string" ? j.error : `could not import (${res.status})`,
+        vexProduct: j.vexProduct,
+        scanProduct: j.scanProduct,
+      };
+    }
+    return { ok: true, ...j } as VexImportOutcome;
+  } catch {
+    return { ok: false, status: 0, error: "network" };
   }
 }
 

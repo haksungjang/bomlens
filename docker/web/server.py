@@ -208,6 +208,9 @@ ARTIFACT_SUFFIXES = (
     # request by GET /vex-export (export-vex.py) and rebuilt every time, since
     # the judgements it reflects change after the scan.
     "_vex.cdx.json",
+    # CVE statements received from a supplier as a CycloneDX VEX document
+    # (POST /vex-import, import-vex.py), kept apart from the user's own `_vex.json`.
+    "_vex_imported.json",
 )
 
 # Recent-scans sidebar shows the newest N; older scans stay on disk but are not
@@ -1150,6 +1153,7 @@ def security_summary(run_id):
         return None
     priority = _epss_kev_map(run_id)
     vex_by_purl, vex_by_nv = _vex_verdict_index(run_id)
+    recv_by_purl, recv_by_nv, recv_by_cve, recv_source = _vex_received_index(run_id)
     sev = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "UNKNOWN": 0}
     vulns = []
     kernel = 0
@@ -1237,6 +1241,19 @@ def security_summary(run_id):
                         row["vexDetail"] = verdict["detail"]
                     if verdict.get("updatedAt"):
                         row["vexUpdatedAt"] = verdict["updatedAt"]
+                # A statement the supplier sent (POST /vex-import), joined the
+                # same way but reported on its own keys: it never replaces the
+                # user's own judgement above.
+                received = _received_for_row(
+                    row.get("purl"), v.get("PkgName"), v.get("InstalledVersion"), cid,
+                    recv_by_purl, recv_by_nv, recv_by_cve,
+                )
+                if received:
+                    row["vexReceived"] = {
+                        k: received[k] for k in ("state", "detail", "justification") if received.get(k)
+                    }
+                    if recv_source:
+                        row["vexReceived"]["source"] = recv_source
                 vulns.append(row)
     sev["TOTAL"] = sum(sev.values())
     sev["vulnerabilities"] = vulns
@@ -1311,10 +1328,72 @@ def _component_risk_index(run_id):
 # pedigree/false-positive states this UI has no use for.
 VEX_STATES = ("affected", "not_affected", "fixed", "under_investigation")
 MAX_VEX_DETAIL = 2000  # chars; a short justification, not a report
+MAX_VEX_IMPORT_BYTES = 4 * 1024 * 1024  # a received VEX document, not a bulk feed
 
 # Serializes read-modify-write on one run's *_vex.json. A single global lock
 # is fine: saves are rare, human-paced actions, never a hot path.
 _vex_write_lock = threading.Lock()
+
+
+def _load_vex_received(run_id):
+    """(statements, source) from a scan's `_vex_imported.json`: what a supplier's
+    VEX document said about this SBOM's components. ([], None) with no file or
+    one that fails to parse; never raises."""
+    p = run_file(run_id, "_vex_imported.json")
+    if not p or not os.path.isfile(p):
+        return [], None
+    try:
+        with open(p, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):  # ValueError covers a bad-JSON or bad-UTF-8 file
+        return [], None
+    if not isinstance(data, dict):
+        return [], None
+    stmts = data.get("statements")
+    src = data.get("source")
+    return (
+        [x for x in stmts if isinstance(x, dict)] if isinstance(stmts, list) else [],
+        src.get("product") if isinstance(src, dict) and isinstance(src.get("product"), str) else None,
+    )
+
+
+def _vex_received_index(run_id):
+    """Received statements keyed for the row join: by normalized purl, by
+    (name, installed) for a finding the scanner reported without a purl, and by
+    CVE alone for a product-level statement. Returns (by_purl, by_nv, by_cve,
+    source product name or None)."""
+    by_purl, by_nv, by_cve = {}, {}, {}
+    stmts, source = _load_vex_received(run_id)
+    for st in stmts:
+        cve = st.get("cve")
+        if not cve:
+            continue
+        if st.get("scope") == "product":
+            by_cve[cve] = st
+            continue
+        if st.get("purl"):
+            by_purl[(_norm_purl(st["purl"]), cve)] = st
+        name = (st.get("pkg") or "").lower()
+        if name:
+            by_nv[(name, st.get("installed") or "", cve)] = st
+    return by_purl, by_nv, by_cve, source
+
+
+def _received_for_row(row_purl, pkg_name, installed, cve, by_purl, by_nv, by_cve):
+    """The received statement for one finding. A finding with a purl matches on
+    the purl; only a statement recorded without one may fall back to name and
+    version, so a purl-bearing statement is never applied to another purl that
+    merely shares a name. A finding without a purl matches on name and version.
+    A product-level statement covers whatever no component statement did."""
+    hit = None
+    if row_purl:
+        hit = by_purl.get((_norm_purl(row_purl), cve))
+        if hit is None:
+            cand = by_nv.get(((pkg_name or "").lower(), installed or "", cve))
+            hit = cand if cand is not None and not cand.get("purl") else None
+    else:
+        hit = by_nv.get(((pkg_name or "").lower(), installed or "", cve))
+    return hit if hit is not None else by_cve.get(cve)
 
 
 def _load_vex_verdicts(run_id):
@@ -4101,6 +4180,8 @@ class Handler(BaseHTTPRequestHandler):
             self._scan_delete(urllib.parse.parse_qs(parsed.query))
         elif parsed.path == "/vex-verdict":
             self._vex_verdict_save(urllib.parse.parse_qs(parsed.query))
+        elif parsed.path == "/vex-import":
+            self._vex_import(urllib.parse.parse_qs(parsed.query))
         else:
             self._send(404, json.dumps({"error": "not found"}))
 
@@ -4258,6 +4339,101 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(500, json.dumps({"error": "could not save"}))
                 return
         self._send(200, json.dumps({"ok": True, "verdict": record}))
+
+    def _vex_import(self, qs):
+        """Read a CycloneDX VEX document the supplier sent (POST /vex-import?id=
+        <scan id>, the document as the request body) and keep the statements
+        that apply to this scan's SBOM, in `<prefix>_vex_imported.json`.
+
+        The user's own judgements (`_vex.json`) are never touched, and importing
+        again replaces the previous received file. A document that describes a
+        different product or version than the scanned SBOM is refused (409) and
+        nothing is written. Every check runs before the write it guards."""
+        rid = (qs.get("id") or [""])[0]
+        if not scan_id_ok(rid):
+            self._send(400, json.dumps({"error": "bad scan id"}))
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        if length <= 0 or length > MAX_VEX_IMPORT_BYTES:
+            self._send(413 if length > MAX_VEX_IMPORT_BYTES else 400,
+                       json.dumps({"error": "bad request size"}))
+            return
+        bom = run_file(rid, "_bom.json")
+        if not bom or not os.path.isfile(bom):
+            self._send(404, json.dumps({"error": "no CycloneDX SBOM for this scan"}))
+            return
+        script = os.path.join(LIB_DIR, "import-vex.py")
+        if not os.path.isfile(script):
+            self._send(503, json.dumps({"error": "VEX import is not available here"}))
+            return
+        try:
+            body = self.rfile.read(length)
+        except OSError:
+            self._send(400, json.dumps({"error": "could not read the request"}))
+            return
+        out = bom[: -len("_bom.json")] + "_vex_imported.json"
+        token = secrets.token_hex(4)
+        src, tmp = "%s.%s.in" % (out, token), "%s.%s.tmp" % (out, token)
+        try:
+            with open(src, "wb") as fh:
+                fh.write(body)
+            r = subprocess.run(
+                [sys.executable, script, bom, src, tmp],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30,
+            )
+            result = {}
+            try:
+                result = json.loads(r.stdout.decode("utf-8", "replace").strip().splitlines()[-1])
+            except (ValueError, IndexError):
+                pass
+            if r.returncode == 2 or result.get("error") == "invalid":
+                self._send(400, json.dumps({"error": "not a CycloneDX VEX document"}))
+                return
+            if r.returncode == 4:
+                self._send(413, json.dumps({"error": "this VEX holds too many statements"}))
+                return
+            if r.returncode == 3:
+                sys.stderr.write("[ui] VEX import refused for %s: document is for %s, scan is %s\n" % (
+                    rid, result.get("vexProduct"), result.get("scanProduct")))
+                self._send(409, json.dumps({
+                    "error": "this VEX describes a different product",
+                    "vexProduct": result.get("vexProduct"),
+                    "scanProduct": result.get("scanProduct"),
+                }))
+                return
+            if r.returncode != 0 or not os.path.isfile(tmp):
+                raise OSError(r.stderr.decode("utf-8", "replace")[-500:])
+            imported = int(result.get("imported", 0))
+            if imported == 0:
+                self._send(422, json.dumps({
+                    "error": "no statement in this VEX applies to a component of this SBOM",
+                    "unmatched": int(result.get("unmatched", 0)),
+                    "ignored": int(result.get("ignored", 0)),
+                }))
+                return
+            os.replace(tmp, out)
+        except (OSError, ValueError, subprocess.SubprocessError) as err:
+            sys.stderr.write("[ui] VEX import failed for %s: %s\n" % (rid, err))
+            self._send(500, json.dumps({"error": "VEX import failed"}))
+            return
+        finally:
+            for leftover in (src, tmp):
+                try:
+                    os.remove(leftover)
+                except OSError:
+                    pass
+        stmts, source = _load_vex_received(rid)
+        self._send(200, json.dumps({
+            "imported": imported,
+            "unmatched": int(result.get("unmatched", 0)),
+            "ignored": int(result.get("ignored", 0)),
+            "source": source,
+            "statements": stmts,
+            "results": list_results(rid),
+        }))
 
     def _git_cred(self):
         """Stash a private-repo token; return a single-use credId."""

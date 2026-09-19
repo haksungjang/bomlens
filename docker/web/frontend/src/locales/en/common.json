@@ -206,7 +206,7 @@
       },
       "vex": {
         "title": "CVE judgements",
-        "desc": "Your own affected / not affected / fixed / under investigation calls, and the CycloneDX VEX file exported from them."
+        "desc": "Your own affected / not affected / fixed / under investigation calls, the CycloneDX VEX file exported from them, and any supplier VEX you imported."
       },
       "security": {
         "title": "Security report",
@@ -307,6 +307,19 @@
     "vexExporting": "Building VEX…",
     "vexExportFailed": "Could not export the judgements as VEX. The components you judged may not be in the SBOM",
     "vexExportPartial": "{{skipped}} judgement(s) left out of the VEX: their component is not in the SBOM",
+    "vexImport": "Import VEX",
+    "vexImporting": "Reading VEX…",
+    "vexImported": "Imported {{imported}} statement(s); {{unmatched}} did not match a component in the SBOM",
+    "vexImportMismatch": "Not imported: this VEX describes {{vex}}, but the scan is {{scan}}",
+    "vexImportNoMatch": "Not imported: no statement in this VEX applies to a component of this SBOM",
+    "vexImportInvalid": "Not imported: the file is not a CycloneDX VEX document",
+    "vexImportFailed": "Could not import the VEX document",
+    "vexImportTooLarge": "Not imported: the file or its statement list is too large",
+    "vexReceivedBadge": "Supplier VEX: {{state}}",
+    "vexReceivedTitle": "Supplier VEX",
+    "vexReceivedHint": "A statement from a VEX document you imported, separate from your own judgement.",
+    "vexReceivedFrom": "From a VEX document for {{product}}, separate from your own judgement.",
+    "vexReceivedJustification": "Justification: {{value}}",
     "vexUpdatedAt": "Last updated {{date}}",
     "vulnRowToggle": "Show vulnerability details",
     "componentRowToggle": "Show component details",

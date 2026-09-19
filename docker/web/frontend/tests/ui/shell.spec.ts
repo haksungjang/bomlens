@@ -2266,6 +2266,68 @@ test("a supplier can record their own judgement, separate from the vendor status
   expect(results.violations).toEqual([]);
 });
 
+test("a supplier's VEX can be imported and shows apart from the user's own judgement", async ({ page }) => {
+  await stubVexAndRun(page);
+  let calls = 0;
+  await page.route("**/vex-import**", (r) => {
+    calls += 1;
+    if (calls === 1) {
+      r.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: "this VEX describes a different product",
+          vexProduct: "other 1.0",
+          scanProduct: "vex 1.0",
+        }),
+      });
+      return;
+    }
+    r.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        imported: 1,
+        unmatched: 2,
+        ignored: 0,
+        source: "vex 1.0",
+        statements: [
+          {
+            cve: "CVE-2024-1111",
+            state: "not_affected",
+            pkg: "openssl",
+            installed: "3.0.0",
+            detail: "the vulnerable code path is not built",
+            justification: "code_not_present",
+          },
+        ],
+        results: [],
+      }),
+    });
+  });
+  await page.getByRole("link", { name: /^Vulnerabilities/ }).first().click();
+  const row1 = page.locator("tr", { has: page.getByText("CVE-2024-1111") });
+  await expect(row1.getByText("Supplier VEX: Not affected")).toHaveCount(0);
+
+  const file = { name: "vex.json", mimeType: "application/json", buffer: Buffer.from("{}") };
+  // A document for another product is refused, and nothing appears on the rows.
+  await page.locator('input[type="file"]').setInputFiles(file);
+  await expect(page.getByText("this VEX describes other 1.0, but the scan is vex 1.0")).toBeVisible();
+  await expect(row1.getByText("Supplier VEX: Not affected")).toHaveCount(0);
+
+  await page.locator('input[type="file"]').setInputFiles(file);
+  await expect(page.getByText("Imported 1 statement(s); 2 did not match")).toBeVisible();
+  await expect(row1.getByText("Supplier VEX: Not affected")).toBeVisible();
+
+  await page.getByText("CVE-2024-1111").click();
+  await expect(page.getByText("Justification: code_not_present")).toBeVisible();
+  await expect(page.getByText("the vulnerable code path is not built")).toBeVisible();
+  // The user's own judgement input is still there, empty: the statement was not copied into it.
+  await expect(page.getByLabel("Judgement")).toHaveValue("");
+
+  const results = await new AxeBuilder({ page }).include("main").analyze();
+  expect(results.violations).toEqual([]);
+});
+
 // Two CVEs on the same installed package that share the same fixed version
 // look, in the table alone, like two unrelated rows: the reader has to notice
 // the coincidence by comparing the Fixed column by hand. The bundle summary

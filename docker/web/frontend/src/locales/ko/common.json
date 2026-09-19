@@ -206,7 +206,7 @@
       },
       "vex": {
         "title": "CVE 판단",
-        "desc": "영향 있음, 영향 없음, 이미 고침, 조사 중으로 직접 남긴 판단과, 이를 내보낸 CycloneDX VEX 파일입니다."
+        "desc": "영향 있음, 영향 없음, 이미 고침, 조사 중으로 직접 남긴 판단과, 이를 내보낸 CycloneDX VEX 파일, 가져온 공급사 VEX입니다."
       },
       "security": {
         "title": "보안 보고서",
@@ -307,6 +307,19 @@
     "vexExporting": "VEX 만드는 중…",
     "vexExportFailed": "판단을 VEX로 내보내지 못했습니다. 판단한 컴포넌트가 SBOM에 없을 수 있습니다",
     "vexExportPartial": "판단 {{skipped}}건은 SBOM에서 컴포넌트를 찾지 못해 VEX에서 뺐습니다",
+    "vexImport": "VEX 가져오기",
+    "vexImporting": "VEX 읽는 중…",
+    "vexImported": "진술 {{imported}}건을 가져왔고 {{unmatched}}건은 SBOM에서 컴포넌트를 찾지 못했습니다",
+    "vexImportMismatch": "가져오지 않았습니다. 이 VEX는 {{vex}}용인데 스캔은 {{scan}}입니다",
+    "vexImportNoMatch": "가져오지 않았습니다. 이 VEX의 어떤 진술도 이 SBOM의 컴포넌트에 해당하지 않습니다",
+    "vexImportInvalid": "가져오지 않았습니다. CycloneDX VEX 문서가 아닙니다",
+    "vexImportFailed": "VEX 문서를 가져오지 못했습니다",
+    "vexImportTooLarge": "가져오지 않았습니다. 파일이나 진술 목록이 너무 큽니다",
+    "vexReceivedBadge": "공급사 VEX: {{state}}",
+    "vexReceivedTitle": "공급사 VEX",
+    "vexReceivedHint": "가져온 VEX 문서의 진술이며, 직접 남긴 판단과 별개입니다.",
+    "vexReceivedFrom": "{{product}}용 VEX 문서의 진술이며, 직접 남긴 판단과 별개입니다.",
+    "vexReceivedJustification": "근거 분류: {{value}}",
     "vexUpdatedAt": "마지막 갱신 {{date}}",
     "vulnRowToggle": "취약점 상세 보기",
     "componentRowToggle": "컴포넌트 상세 보기",

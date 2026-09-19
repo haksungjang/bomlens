@@ -12,6 +12,7 @@ import {
   fileUrl,
   exportSpdx,
   exportVex,
+  importVex,
   formSourceOf,
   getCapabilities,
   listScans,
@@ -283,6 +284,38 @@ describe("network functions", () => {
 
     fetchMock.mockRejectedValue(new Error("network"));
     expect(await getCapabilities()).toEqual({ firmware: false, scanoss: false, docker: true });
+  });
+
+  it("importVex posts the document text and reports the outcome instead of throwing", async () => {
+    const good = {
+      imported: 1,
+      unmatched: 2,
+      ignored: 0,
+      source: "acme 2.0",
+      statements: [{ cve: "CVE-2024-1", state: "not_affected", purl: "pkg:npm/foo@1.0" }],
+      results: [],
+    };
+    fetchMock.mockResolvedValue(ok(good));
+    expect(await importVex("app_1.0", '{"bomFormat":"CycloneDX"}')).toEqual({ ok: true, ...good });
+    expect(fetchMock.mock.calls[0][0]).toBe("/vex-import?id=app_1.0");
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "POST", body: '{"bomFormat":"CycloneDX"}' });
+
+    // A refusal carries its reason; a 409 also names the two products.
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 409,
+      json: async () => ({ error: "different product", vexProduct: "b 1", scanProduct: "a 1" }),
+    });
+    expect(await importVex("app_1.0", "{}")).toEqual({
+      ok: false,
+      status: 409,
+      error: "different product",
+      vexProduct: "b 1",
+      scanProduct: "a 1",
+    });
+
+    fetchMock.mockRejectedValue(new Error("network"));
+    expect(await importVex("app_1.0", "{}")).toMatchObject({ ok: false, status: 0 });
   });
 
   it("exportVex builds by id, and returns null on any failure", async () => {
