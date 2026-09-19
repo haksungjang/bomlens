@@ -213,6 +213,30 @@ annotation(uses(Modelica(version="4.0.0"), Buildings(version="13.0.0")));
 
 ---
 
+## Conda
+
+```bash
+./scripts/scan-sbom.sh --project "CondaExample" --version "1.0.0" --target . --generate-only
+```
+
+감지 파일: 스캔 대상 폴더 최상위의 `environment.yml` 또는 `environment.yaml`
+
+cdxgen에는 Conda 카탈로거가 없어 BomLens가 환경 파일의 `dependencies:` 목록을 직접 읽습니다. conda 항목은 `pkg:conda/...` 컴포넌트가 되고, `pip:` 항목 아래에 적힌 패키지는 `pkg:pypi/...` 컴포넌트가 됩니다.
+
+```yaml
+dependencies:
+  - python=3.11
+  - numpy=1.26.4
+  - pip:
+    - requests==2.31.0
+```
+
+환경 파일을 정상적으로 읽으면 그 스캔에서는 cdxgen의 Python 단계를 끕니다. 끄지 않으면 트리 안 다른 위치의 `setup.py`나 `requirements.txt`가 환경 파일을 대신해 결과의 근거가 됩니다.
+
+> 주의: 위 예시처럼 두 단계 구조만 인식합니다. `dependencies:`는 왼쪽 끝에 두고, 항목은 공백 2칸, `pip:` 아래 항목은 공백 4칸으로 들여써야 합니다. 들여쓰기 폭이 다르거나 한 줄 목록 형식이거나 탭이 들어간 파일은 일부만 읽지 않고 파일 전체를 건너뛰며, 이 경우 cdxgen의 Python 단계가 이전처럼 실행됩니다. 버전이 없거나 `>=1.0` 같은 범위만 적힌 항목은 특정 버전을 가리키지 않으므로 버전과 PURL 없이 기록하고 `bomlens:versionUnpinned` 속성을 붙입니다. `pip:` 아래의 editable 설치와 VCS 설치는 제외합니다.
+
+---
+
 ## Docker 이미지 분석
 
 Docker 이미지 분석은 프로젝트 루트에서 실행합니다.
@@ -246,6 +270,7 @@ Docker 이미지 분석은 프로젝트 루트에서 실행합니다.
 | Node.js | `package.json` + `package-lock.json` 또는 `yarn.lock` |
 | Python | `requirements.txt` 또는 `pyproject.toml` + `poetry.lock` |
 | Go | `go.mod` + `go.sum` |
+| Conda | `environment.yml` 또는 `environment.yaml` (최상위 폴더) |
 | Rust | `Cargo.lock` |
 | Ruby | `Gemfile.lock` |
 | PHP | `composer.lock` |
