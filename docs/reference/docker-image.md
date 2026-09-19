@@ -34,7 +34,7 @@ It is a lightweight image (based on python 3.12 slim) without language toolchain
 | jq | — | SBOM normalization and notice generation |
 | ScanCode Toolkit | 32.5.0 | Precise license detection (included only in opt-in builds) |
 | docker CLI | 29.7.2 | Starts a sibling cdxgen container when the web UI runs a source scan |
-| cdxgen | 12.8.4 | Model pedigree enrichment (`bomlens-aibom` image only) |
+| cdxgen | 13.1.0 | Model pedigree enrichment (`bomlens-aibom` image only) |
 
 Tool versions are pinned with `ARG` in `docker/Dockerfile`.
 
