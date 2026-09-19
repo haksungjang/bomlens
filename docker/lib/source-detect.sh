@@ -13,10 +13,10 @@
 # Defaults use ${VAR:-default} so a caller that already exported these (the CLI)
 # keeps its values; a caller that did not (the UI) gets the defaults.
 
-# renovate: datasource=docker depName=ghcr.io/cyclonedx/cdxgen
-CDXGEN_TAG="${CDXGEN_TAG:-v12}"                                  # cdxgen language image tag
-# renovate: datasource=docker depName=ghcr.io/cyclonedx/cdxgen
-CDXGEN_ALLINONE="${CDXGEN_ALLINONE:-ghcr.io/cyclonedx/cdxgen:v12.5.0}"
+# renovate: datasource=docker depName=ghcr.io/cdxgen/cdxgen
+CDXGEN_TAG="${CDXGEN_TAG:-v13}"                                  # cdxgen language image tag
+# renovate: datasource=docker depName=ghcr.io/cdxgen/cdxgen
+CDXGEN_ALLINONE="${CDXGEN_ALLINONE:-ghcr.io/cdxgen/cdxgen:v13.1}"
 # A local name, not a registry one: the Android SDK is not open source and its
 # terms bar redistributing it, so this image is built on the machine that uses
 # it rather than published. scan-sbom.sh prints the build command when it is
@@ -326,15 +326,15 @@ detect_lang() {
 
 img_for_lang() {
     case "$1" in
-        rust)   echo "ghcr.io/cyclonedx/cdxgen-debian-rust:$CDXGEN_TAG" ;;
-        go)     echo "ghcr.io/cyclonedx/cdxgen-debian-golang124:$CDXGEN_TAG" ;;
-        ruby)   echo "ghcr.io/cyclonedx/cdxgen-debian-ruby34:$CDXGEN_TAG" ;;
-        java)   echo "ghcr.io/cyclonedx/cdxgen-temurin-java21:$CDXGEN_TAG" ;;
-        python) echo "ghcr.io/cyclonedx/cdxgen-python312:$CDXGEN_TAG" ;;
-        node)   echo "ghcr.io/cyclonedx/cdxgen-node20:$CDXGEN_TAG" ;;
-        php)    echo "ghcr.io/cyclonedx/cdxgen-debian-php84:$CDXGEN_TAG" ;;
-        dotnet) echo "ghcr.io/cyclonedx/cdxgen-debian-dotnet9:$CDXGEN_TAG" ;;
-        swift)  echo "ghcr.io/cyclonedx/cdxgen-debian-swift:$CDXGEN_TAG" ;;
+        rust)   echo "ghcr.io/cdxgen/cdxgen-debian-rust:$CDXGEN_TAG" ;;
+        go)     echo "ghcr.io/cdxgen/cdxgen-debian-golang124:$CDXGEN_TAG" ;;
+        ruby)   echo "ghcr.io/cdxgen/cdxgen-debian-ruby34:$CDXGEN_TAG" ;;
+        java)   echo "ghcr.io/cdxgen/cdxgen-temurin-java21:$CDXGEN_TAG" ;;
+        python) echo "ghcr.io/cdxgen/cdxgen-python312:$CDXGEN_TAG" ;;
+        node)   echo "ghcr.io/cdxgen/cdxgen-alpine-node24:$CDXGEN_TAG" ;;
+        php)    echo "ghcr.io/cdxgen/cdxgen-debian-php84:$CDXGEN_TAG" ;;
+        dotnet) echo "ghcr.io/cdxgen/cdxgen-debian-dotnet9:$CDXGEN_TAG" ;;
+        swift)  echo "ghcr.io/cdxgen/cdxgen-debian-swift:$CDXGEN_TAG" ;;
         *)      echo "$CDXGEN_ALLINONE" ;;   # mixed / unknown
     esac
 }

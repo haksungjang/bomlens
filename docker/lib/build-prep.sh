@@ -825,6 +825,7 @@ fix_lic_mapping() {
     command -v node >/dev/null 2>&1 || return 0
     _lic_dir=""
     for _c in /opt/cdxgen/data /opt/bin/data \
+              /usr/local/lib/node_modules/@cdxgen/cdxgen/data \
               /usr/local/lib/node_modules/@cyclonedx/cdxgen/data; do
         [ -f "$_c/lic-mapping.json" ] && { _lic_dir="$_c"; break; }
     done
