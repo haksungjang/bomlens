@@ -174,7 +174,7 @@ for flag in --project --version --target --git --branch --firmware --analyze \
             --byte-stable --sign --output-dir --timestamp --ui \
             --license --sbom-author --model --model-file --usage --merge --merge-root \
             --diff --trusca --upload-target --deep-cve --identify-vendored --verify-weights --spdx --lang \
-            --conformance-profile --fail-on-conformance; do
+            --conformance-profile --fail-on-conformance --vex; do
   if printf '%s' "$HELP" | grep -q -- "$flag"; then pass "help documents $flag"
   else fail "help documents $flag"; fi
 done
@@ -532,6 +532,9 @@ guard "--firmware without --target"    "--firmware requires" --project p --versi
 guard "unsafe git URL (shell metachar)" "unsafe or unsupported" --project p --version 1 --git "https://github.com/x/y;rm -rf /"
 guard "unsafe git URL (path traversal)" "unsafe or unsupported" --project p --version 1 --git "https://github.com/../../etc"
 guard "--merge + --target rejected"     "mutually exclusive" --project p --version 1 --merge a.json b.json --target z
+guard "--vex file must exist"           "--vex file not found" --project p --version 1 --target z --vex no-such-vex.json
+guard "--vex is refused with --diff"    "--vex cannot be combined with --diff" --project p --version 1 --diff a.json b.json --vex v.json
+guard "--vex is refused with --ui"      "--vex is not offered with --ui" --ui --vex v.json
 guard "--merge needs >=2 files"         "needs at least 2" --project p --version 1 --merge one.json
 guard "--merge-root without --merge"    "only applies with --merge" --project p --version 1 --merge-root x.json
 guard "--merge-root not in --merge list" "must be one of the --merge input files" \
@@ -763,6 +766,44 @@ DOCKER_STUB_ARGV_DUMP=1 \
 in_log "<SBOM_AUTHOR=(주)에스케이 & 파트너스>" \
   && pass "a Korean legal-entity name with parens/ampersand reaches the container as one unbroken argv element" \
   || { fail "(주)에스케이 & 파트너스 was split or mangled crossing the eval boundary"; show; cat "$LOG"; }
+
+# --vex: the received document is mounted read-only under /vex-in and named by
+# its container path, and it survives a directory name with a space.
+d="$(new_proj vex-mount)"; printf 'ELFish\n' > "$d/app.out"; mkdir -p "$d/dir with space"
+printf '{"bomFormat":"CycloneDX","vulnerabilities":[]}\n' > "$d/dir with space/supplier vex.json"
+DOCKER_STUB_ARGV_DUMP=1 \
+  scan_in "$d" --project VX1 --version 1 --target app.out --generate-only \
+  --vex "dir with space/supplier vex.json"
+in_log "<VEX_FILE=/vex-in/vex.json>" \
+  && pass "--vex reaches the container as one argv element naming the mounted path" \
+  || { fail "--vex path was split or mangled crossing the eval boundary"; show; cat "$LOG"; }
+in_log "/dir with space/supplier vex.json:/vex-in/vex.json:ro>" \
+  && pass "--vex mounts the file alone, read-only, not the folder it sits in" \
+  || { fail "--vex is not mounted as a single read-only file"; show; cat "$LOG"; }
+in_log "<GENERATE_SECURITY=true>" \
+  && pass "--vex turns the security report on" \
+  || { fail "--vex did not enable the security report"; show; cat "$LOG"; }
+
+# The SOURCE path runs a second (post-process) container: it must get the mount too.
+d="$(new_proj vex-source)"; printf '{"name":"x","version":"1.0.0"}\n' > "$d/package.json"
+printf '{"bomFormat":"CycloneDX","vulnerabilities":[]}\n' > "$d/v.json"
+DOCKER_STUB_ARGV_DUMP=1 \
+  scan_in "$d" --project VX3 --version 1 --generate-only --vex v.json
+in_log "<MODE=POSTPROCESS>" && in_log "<VEX_FILE=/vex-in/vex.json>" \
+  && pass "the source-scan post-process container receives --vex as well" \
+  || { fail "the source-scan post-process container did not receive --vex"; show; cat "$LOG"; }
+
+# A file name ending in a space must not swallow the image argument after it.
+d="$(new_proj vex-trailing-space)"; printf 'ELFish\n' > "$d/app.out"
+printf '{"bomFormat":"CycloneDX","vulnerabilities":[]}\n' > "$d/trail "
+DOCKER_STUB_ARGV_DUMP=1 \
+  scan_in "$d" --project VX4 --version 1 --target app.out --generate-only --vex "trail "
+in_log "<VEX_FILE=/vex-in/vex.json>" && in_log "/trail :/vex-in/vex.json:ro>" && in_log "<ghcr.io/sktelecom/bomlens:latest>" \
+  && pass "a --vex file name ending in a space reaches the container intact and keeps the image argument" \
+  || { fail "a trailing-space --vex file name broke the docker command line"; show; cat "$LOG"; }
+
+# A missing file is reported before anything is cloned.
+guard "--vex file is checked before a git clone" "--vex file not found" --project p --version 1 --git https://github.com/x/y --vex missing.json
 
 # Command substitution stays literal text -- eval re-parses the %q-escaped
 # value as one shell word, so $(...) and `...` inside it are data, not syntax.

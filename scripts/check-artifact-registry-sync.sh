@@ -89,9 +89,10 @@ _security_yocto.json    :: no  :: yes :: skip
 
 # _vex.json and _vex_imported.json are deliberately absent from entrypoint.sh's
 # KNOWN_ARTIFACT_SUFFIXES below, and that is not an oversight for the forward
-# check to catch: they are the two entries here the scan pipeline never writes
-# at all (POST /vex-verdict and POST /vex-import in server.py do, after a scan
-# is already done) and the two that must NOT be swept by a re-scan's
+# check to catch: they hold what a person supplied, not what a scan derived
+# (POST /vex-verdict and POST /vex-import in server.py write them after a scan
+# is done; --vex writes _vex_imported.json during one, only when a document is
+# given), so they are the two entries that must NOT be swept by a re-scan's
 # stale-artifact cleanup. A CVE judgement a supplier recorded, or a VEX
 # document they sent, against last week's scan of this project/version has to
 # survive scanning it again today; every other suffix here is regenerated

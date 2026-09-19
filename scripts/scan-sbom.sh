@@ -106,7 +106,7 @@ CONFORMANCE_PROFILE="${CONFORMANCE_PROFILE:-default}"
 # Host-only logic (see the check near the end of this script); nothing is
 # passed to the container for it.
 FAIL_ON_CONFORMANCE="false"
-FORCE_FIRMWARE="false"; ANALYZE_SBOM=""; MODEL=""; MODEL_FILE=""
+FORCE_FIRMWARE="false"; ANALYZE_SBOM=""; MODEL=""; MODEL_FILE=""; VEX_FILE=""
 # Set when --target turned out to be a Yocto build directory: the folder the
 # user pointed at, while ANALYZE_SBOM holds the image SBOM found inside it.
 YOCTO_BUILD_DIR=""
@@ -140,6 +140,9 @@ while [[ "$#" -gt 0 ]]; do
         --analyze|--sbom) ANALYZE_SBOM="$2"; shift ;;
         --model) MODEL="$2"; shift ;;
         --model-file) MODEL_FILE="$2"; shift ;;
+        # The statements attach to vulnerability rows, which come from the security
+        # report, so asking for a VEX asks for that report too (as --deep-cve does).
+        --vex) VEX_FILE="$2"; GENERATE_SECURITY="true"; shift ;;
         --usage) USAGE_CONTEXT="$2"; shift ;;
         --merge)
             # Variadic: absorb every following token until the next option (a
@@ -206,6 +209,14 @@ Options:
                          clash with it. Source scans cannot infer this, and
                          without it no conflict verdict is produced. An
                          existing root license in the SBOM is never replaced.
+  --vex <file>           A CycloneDX VEX document (JSON) a supplier sent for this
+                         product. The statements that apply to a component of the
+                         scanned SBOM are kept in <Project>_<Version>_vex_imported.json,
+                         apart from the SBOM and the security report, which stay
+                         unchanged. Turns the security report on, since the
+                         statements are shown on its findings. A document for a
+                         different product or version, or one that is not
+                         CycloneDX VEX, is reported and skipped.
   --sbom-author <name>   Entity that generated this SBOM — the organisation or
                          person running the scan, not the tool and not whoever
                          wrote the software. Use the full name, no acronyms.
@@ -498,6 +509,7 @@ SBOM_PULL="${SBOM_PULL:-missing}"
 # Web UI mode
 # ========================================================
 if [ "$UI_MODE" = "true" ]; then
+    [ -z "$VEX_FILE" ] || { echo "[ERROR] --vex is not offered with --ui (import a VEX from the Vulnerabilities screen instead)."; exit 1; }
     [ "$FAIL_ON_CONFORMANCE" = "true" ] && { echo "[ERROR] --fail-on-conformance is not offered with --ui (it exits on one scan's result; the UI runs many)."; exit 1; }
     docker_check
     # The web UI owns per-run subfolders itself (server.py creates them under the
@@ -580,6 +592,7 @@ fi
 # check below (the same shape UI mode takes above).
 # ========================================================
 if [ -n "$DIFF_OLD" ]; then
+    [ -z "$VEX_FILE" ] || { echo "[ERROR] --vex cannot be combined with --diff (a diff writes no SBOM to attach statements to)."; exit 1; }
     docker_check
     [ -f "$DIFF_OLD" ] || { echo "[ERROR] --diff: old SBOM not found: $DIFF_OLD"; exit 1; }
     [ -f "$DIFF_NEW" ] || { echo "[ERROR] --diff: new SBOM not found: $DIFF_NEW"; exit 1; }
@@ -875,6 +888,21 @@ cosign_run() {
     # COSIGN_KEY is a container path (safe as a value); COSIGN_PASSWORD is the
     # secret and is forwarded by name only (value via the exported env).
     printf ' -v %q:/cosign:ro -e COSIGN_KEY=%q -e COSIGN_PASSWORD' "$d" "/cosign/$f"
+}
+
+# --vex: the received document alone is mounted read-only (not the folder it
+# sits in, which may hold unrelated files) and named by its container path;
+# import-vex.py reads it after the SBOM exists.
+# It always appears at the fixed container path /vex-in/vex.json: this string is
+# expanded unquoted inside an eval'd command line, and an env value built from
+# the user's file name that ends in a space leaves a trailing backslash from %q
+# which joins the next token into the same word. The name stays only in the -v
+# source, where it is followed by the constant mount path.
+vex_run() {
+    [ -n "$VEX_FILE" ] || return 0
+    local d f
+    d="$(cd "$(dirname "$VEX_FILE")" && pwd)"; f="$(basename "$VEX_FILE")"
+    printf ' -v %q:/vex-in/vex.json:ro -e VEX_FILE=/vex-in/vex.json' "$(hostpath "$d/$f")"
 }
 
 # ========================================================
@@ -1350,6 +1378,12 @@ ingest_archive() {
 if [ -z "$GIT_URL" ] && [ -n "$TARGET" ] && is_git_url "$TARGET"; then
     GIT_URL="$TARGET"; TARGET=""
 fi
+# Host-only check, made before anything is cloned or downloaded.
+if [ -n "$VEX_FILE" ] && [ ! -f "$VEX_FILE" ]; then
+    echo "[ERROR] --vex file not found: $VEX_FILE"
+    echo "[ERROR] Pass the path of a CycloneDX VEX document (JSON), e.g. --vex supplier-vex.json."; exit 1
+fi
+
 if [ -n "$GIT_URL" ]; then
     [ -z "$TARGET" ]      || { echo "[ERROR] --git is mutually exclusive with --target."; exit 1; }
     [ -z "$ANALYZE_SBOM" ] || { echo "[ERROR] --git is mutually exclusive with --analyze."; exit 1; }
@@ -1961,7 +1995,7 @@ FALLBACK_SH
         -v "\"$(hostpath "$SCAN_INPUT_DIR")\"":/src -v "\"$(hostpath "$OUTPUT_HOST_DIR")\"":/host-output \
         -w /host-output \
         --add-host=host.docker.internal:host-gateway \
-        -e MODE=POSTPROCESS -e BOMLENS_RUN_INPUT="$OUTPUT_FILE" -e NESTED_ROOTFS_HINT="\"$NESTED_ROOTFS_HINT\"" $(pp_env)$(cosign_run) \
+        -e MODE=POSTPROCESS -e BOMLENS_RUN_INPUT="$OUTPUT_FILE" -e NESTED_ROOTFS_HINT="\"$NESTED_ROOTFS_HINT\"" $(pp_env)$(cosign_run)$(vex_run) \
         "\"$POSTPROCESS_IMAGE\""
 else
     # image / binary / rootfs / firmware / aibom / analyze / merge: scanner image
@@ -2042,7 +2076,7 @@ else
     # shellcheck disable=SC2046
     eval "$DOCKER_MSYS"docker run --rm $VOL \
         --add-host=host.docker.internal:host-gateway \
-        -e MODE="$MODE" -e BOMLENS_ARTIFACT_CLEANUP=1 $ENVV $(pp_env)$(cosign_run) \
+        -e MODE="$MODE" -e BOMLENS_ARTIFACT_CLEANUP=1 $ENVV $(pp_env)$(cosign_run)$(vex_run) \
         "\"$RUN_IMAGE\""
 fi
 
@@ -2089,6 +2123,9 @@ if [ "$GENERATE_ONLY" = "true" ]; then
     if [ "$GENERATE_SECURITY" = "true" ]; then
         summary_line "Security:" "${P}_security.json" "${P}_security.md" "${P}_security.html" \
             || note_missing "security report"
+    fi
+    if [ -n "$VEX_FILE" ]; then
+        summary_line "Supplier VEX:" "${P}_vex_imported.json" || note_missing "supplier VEX import"
     fi
     if [ "$GENERATE_SPDX" = "true" ]; then
         summary_line "SPDX:" "${P}_bom.spdx.json" || note_missing "SPDX export"
