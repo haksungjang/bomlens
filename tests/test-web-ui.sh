@@ -4972,8 +4972,10 @@ assert r['imported'] == 1 and r['ignored'] == 2, r  # wrong-typed state, and a s
 else
     fail "awkward VEX document returned $weird_code" "$(cat "$WORK/weird.json")"
 fi
-deep=$(python3 -c "print('['*100000 + ']'*100000)")
-[ "$(post_vex "$deep")" = "400" ] && pass "a deeply nested body is refused as invalid (400), not a 500" || fail "deeply nested body on /vex-import"
+# Sent from a file: a single 200 KB argument is over Linux's per-argument limit.
+python3 -c "print('['*100000 + ']'*100000)" > "$WORK/deep.json"
+deep=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Content-Type: application/json" --data-binary "@$WORK/deep.json" "$BASE/vex-import?id=vex_1.0")
+[ "$deep" = "400" ] && pass "a deeply nested body is refused as invalid (400), not a 500" || fail "deeply nested body on /vex-import returned $deep (expected 400)"
 
 # Trivy-shaped row without a purl (a CPE match) against an SBOM component that has one:
 # the statement is stored with both keys, so the row still shows it.
