@@ -3,42 +3,51 @@
 
 // helpmenu.mjs 단위 테스트(electron 비의존). 실제 메뉴 표시는 데스크톱 앱에서 확인한다.
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { addReportItem, ISSUE_FORM_URL } from "../lib/helpmenu.mjs";
+import { buildMenuTemplate, ISSUE_FORM_URL } from "../lib/helpmenu.mjs";
+import { mainMessages } from "../lib/i18n.mjs";
 
-class FakeItem {
-  constructor(opts) {
-    Object.assign(this, opts);
-  }
-}
-const opts = { label: "Report a problem...", helpLabel: "Help", onClick: () => {} };
+const here = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(here, "../..");
+const opts = { reportLabel: "Report a problem", helpLabel: "Help", onReport: () => {} };
 
-test("the report item is appended to an existing Help submenu", () => {
-  const appended = [];
-  const menu = {
-    items: [{ role: "fileMenu" }, { role: "help", submenu: { append: (i) => appended.push(i) } }],
-    append: () => assert.fail("must not create a second Help menu"),
-  };
-  assert.equal(addReportItem(menu, FakeItem, opts), true);
-  assert.equal(appended.length, 1);
-  assert.equal(appended[0].label, "Report a problem...");
-  assert.equal(appended[0].click, opts.onClick);
+test("the menu keeps the standard menus and adds the report item under Help", () => {
+  const tpl = buildMenuTemplate({ ...opts, platform: "win32" });
+  assert.deepEqual(tpl.map((m) => m.role), ["fileMenu", "editMenu", "viewMenu", "windowMenu", "help"]);
+  const help = tpl.at(-1);
+  assert.equal(help.label, "Help");
+  assert.equal(help.submenu.length, 1);
+  assert.equal(help.submenu[0].label, "Report a problem");
+  assert.equal(help.submenu[0].click, opts.onReport);
 });
 
-test("a Help menu is created when the default menu has none", () => {
-  const top = [];
-  const menu = { items: [{ role: "fileMenu" }], append: (i) => top.push(i) };
-  assert.equal(addReportItem(menu, FakeItem, opts), true);
-  assert.equal(top.length, 1);
-  assert.equal(top[0].label, "Help");
-  assert.equal(top[0].role, "help");
-  assert.equal(top[0].submenu[0].label, "Report a problem...");
+test("macOS gets the application menu first", () => {
+  const tpl = buildMenuTemplate({ ...opts, platform: "darwin" });
+  assert.equal(tpl[0].role, "appMenu");
+  assert.equal(tpl.at(-1).role, "help");
 });
 
-test("no menu, nothing to do", () => {
-  assert.equal(addReportItem(null, FakeItem, opts), false);
+test("the menu wording matches the web UI and has no ellipsis", () => {
+  const en = mainMessages("en");
+  const ko = mainMessages("ko");
+  assert.equal(en.reportProblem, "Report a problem");
+  assert.equal(ko.reportProblem, "문제 신고");
+  const web = JSON.parse(fs.readFileSync(path.join(root, "docker/web/frontend/src/locales/en/common.json"), "utf8"));
+  const webKo = JSON.parse(fs.readFileSync(path.join(root, "docker/web/frontend/src/locales/ko/common.json"), "utf8"));
+  assert.equal(en.reportProblem, web.nav.helpReport);
+  assert.equal(ko.reportProblem, webKo.nav.helpReport);
 });
 
-test("the issue form is the YAML bug-report template", () => {
-  assert.equal(ISSUE_FORM_URL, "https://github.com/sktelecom/bomlens/issues/new?template=bug_report.yml");
+// The issue form file is the source of truth. Every copy of its URL (this
+// module, the web UI, the start screen) must name a form that exists and agree.
+test("every copy of the issue form URL names an existing form and they agree", () => {
+  const template = ISSUE_FORM_URL.split("template=")[1];
+  assert.ok(fs.existsSync(path.join(root, ".github/ISSUE_TEMPLATE", template)), template);
+  const web = fs.readFileSync(path.join(root, "docker/web/frontend/src/lib/diagnostics.ts"), "utf8");
+  assert.ok(web.includes(ISSUE_FORM_URL), "the web UI's ISSUE_FORM_URL differs");
+  const status = fs.readFileSync(path.join(here, "../assets/status.html"), "utf8");
+  assert.ok(status.includes(ISSUE_FORM_URL), "the start screen's link differs");
 });
