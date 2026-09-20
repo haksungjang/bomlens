@@ -1,6 +1,7 @@
 // Copyright 2026 SK Telecom Co., Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
+import { Copy } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -10,10 +11,13 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import type { ScanProgress } from "@/lib/api";
+import { copyToClipboard } from "@/lib/diagnostics";
 import { stageProgress } from "@/lib/scanProgress";
 import { Disclosure } from "@/components/ui/disclosure";
+import { useToast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 export type RunStatus = "running" | "done" | "error";
@@ -42,6 +46,7 @@ export function ProgressLog({
   progress,
 }: Props) {
   const { t } = useTranslation();
+  const { toast } = useToast();
   const logBoxRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -66,6 +71,12 @@ export function ProgressLog({
     : status === "running"
       ? stageProgress(logs)
       : 100;
+
+  // Copies the lines exactly as they are shown in the box, so what lands on the
+  // clipboard is what the user just read.
+  const copyLog = async () => {
+    if (await copyToClipboard(logs.join("\n"))) toast(t("report.logCopied"));
+  };
 
   const body = (
     <>
@@ -104,6 +115,15 @@ export function ProgressLog({
           ))
         )}
       </div>
+      {logs.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3">
+          <Button type="button" variant="outline" size="sm" onClick={copyLog}>
+            <Copy className="h-4 w-4" aria-hidden />
+            {t("report.copyLog")}
+          </Button>
+          <p className="text-xs text-foreground/70">{t("report.logHint")}</p>
+        </div>
+      )}
     </>
   );
 

@@ -1289,6 +1289,27 @@ export async function loadScan(id: string): Promise<DoneEvent | null> {
   }
 }
 
+/**
+ * The plain-text diagnostics summary for the "Report a problem" panel (GET
+ * /diagnostics). `id` is the finished scan's run id; without it the server
+ * returns the environment section only (a scan that failed before it had a run
+ * folder). Null on any failure. The text is only ever shown to the user, who
+ * decides whether to copy it: nothing here is sent anywhere.
+ */
+export async function getDiagnostics(id?: string | null): Promise<string | null> {
+  if (IS_STATIC_DEMO) return null; // no server behind the demo
+  try {
+    const res = await fetch(
+      apiUrl(id ? `/diagnostics?id=${encodeURIComponent(id)}` : "/diagnostics"),
+    );
+    if (!res.ok) return null;
+    const j = (await res.json()) as { text?: unknown };
+    return typeof j.text === "string" ? j.text : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Absolute artifact URL (origin + path) — for the "copy link" action. */
 export function absoluteFileUrl(id: string | null | undefined, name: string): string {
   return new URL(fileUrl(id, name), window.location.origin).toString();
