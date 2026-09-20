@@ -3281,6 +3281,11 @@ case "$mode" in
         echo "[WARN] retry with Authorization: Bearer abcdef1234567890abcdef1234567890"
         echo "[WARN] fetched https://deploy:pa55w0rd@example.com/x?token=s3cr3ttoken1234"
         echo "[WARN] cannot open C:\\Users\\bob\\proj\\build.gradle"
+        # A value no other mask would catch, on a line that is not the last one.
+        echo "[WARN] Authorization: custom-scheme opaquevalue-onlyhere"
+        echo "[WARN] pushed with ghp_AbCdEfGhIjKlMnOpQrStUvWxYz012345 and password=hunter2"
+        # Not credentials: an image digest must survive.
+        echo "[WARN] base image ghcr.io/example/app@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef is old"
         echo "[ERROR] boom at /home/carol/work with Bearer zzzzzzzzzzzzzzzzzzzzzzzzzz"
         exit 1
         ;;
@@ -3507,8 +3512,8 @@ msg = dones[0]['data'].get('errorMessage')
 # -- must never carry the response body.
 assert msg == '[ERROR] TRUSCA ingest failed (HTTP 500)', msg
 assert 'do-not-leak-me' not in msg, msg
-assert any('do-not-leak-me' in str(e['data']) for e in evs if e['event'] == 'log'), \
-    'expected the raw Response: line to still be in the live log, unaffected'
+assert any(str(e['data']).startswith('Response:') for e in evs if e['event'] == 'log'), \
+    'expected the Response: line itself to still stream to the live log'
 "; then
     pass "a raw Response: body line never reaches errorMessage, only the [ERROR] line above it"
 else
@@ -3532,24 +3537,74 @@ import sys, json, os
 t = json.load(sys.stdin)['text']
 assert t.startswith('BomLens diagnostics'), t
 for want in ('app version:', 'scanner image:', 'container engine:', 'mode: ROOTFS',
-             'options:', 'outcome: failed', 'stages:', 'warnings: 4', 'error:'):
+             'options:', 'outcome: failed', 'stages:', 'warnings: 7', 'error:'):
     assert want in t, (want, t)
 for banned in ('alice', 'bob', 'carol', 'abcdef1234567890', 'pa55w0rd', 's3cr3ttoken',
-               'zzzzzzzz', 'diagproj', os.environ['PLAINROOT'], 'Bearer a'):
+               'zzzzzzzz', 'diagproj', os.environ['PLAINROOT'], 'Bearer a',
+               'opaquevalue', 'ghp_AbCd', 'hunter2', '/host/plainroot'):
     assert banned not in t, (banned, t)
 assert '/Users/***/secretproj/pom.xml' in t and '/home/***/work' in t, t
 assert 'Users' + chr(92) + '***' in t, t
+assert 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' in t, t
 "; then
     pass "/diagnostics on a failed scan lists the allowlisted fields and none of the leaked user names, tokens, credentials, scanned path or project name"
 else
     fail "/diagnostics leaked or omitted fields on a failed scan" "$diag_fail"
 fi
 
+# The live log (and so the copy-log button) is masked the same way, but keeps
+# digests: same stub run, log events.
+if echo "$events" | python3 -c "
+import sys, json
+logs = [str(e['data']) for e in json.load(sys.stdin) if e['event'] == 'log']
+joined = '\n'.join(logs)
+for banned in ('ghp_AbCd', 'hunter2', 'pa55w0rd', 's3cr3ttoken', 'opaquevalue', 'abcdef1234567890abcdef1234567890'):
+    assert banned not in joined, (banned, joined)
+assert 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' in joined, joined
+"; then
+    pass "streamed log lines are credential-masked and keep image digests"
+else
+    fail "streamed log lines leaked a credential or lost a digest" "$events"
+fi
+
+# A failure the server classifies itself (fail(): here an unknown input type)
+# must still land in the summary, with the reason and a bounded, allowlisted
+# input kind, not the request's raw value.
+events=$(sse_events "project=diagfail&version=1.0&source=bogus-kind-that-is-far-too-long-to-echo-back-in-a-summary-line")
+fail_id=$(echo "$events" | python3 -c "
+import sys, json
+d = [e for e in json.load(sys.stdin) if e['event'] == 'done'][0]['data']
+assert d['ok'] is False, d
+print(d['id'])")
+if curl -fsS "$BASE2/diagnostics?id=$fail_id" | python3 -c "
+import sys, json
+t = json.load(sys.stdin)['text']
+assert 'outcome: failed' in t and 'input: other' in t, t
+assert 'error:' in t and 'unknown input type: bogus-kind' in t, t
+assert 'far-too-long-to-echo-back-in-a-summary-line' not in t, t
+"; then
+    pass "a server-classified failure (unknown input type) is in the summary with its reason, and the request's source value is not echoed back"
+else
+    fail "/diagnostics for a fail() path lacks the reason or echoes the source value"
+fi
+
 echo ok > "$STUB_MODE_FILE"
 events=$(sse_events "project=diagok&version=1.0&source=rootfs-dir&target=$PLAINROOT")
 ok_id=$(echo "$events" | python3 -c "
 import sys, json
-print([e for e in json.load(sys.stdin) if e['event'] == 'done'][0]['data']['id'])")
+d = [e for e in json.load(sys.stdin) if e['event'] == 'done'][0]['data']
+# scanConfig in the done payload carries settings only, not the recorded outcome.
+assert not ({'mode', 'ok', 'errorMessage'} & set(d['scanConfig'])), d['scanConfig']
+print(d['id'])")
+if curl -fsS "$BASE2/scan?id=$ok_id" | python3 -c "
+import sys, json
+c = json.load(sys.stdin)['scanConfig']
+assert not ({'mode', 'ok', 'errorMessage'} & set(c)), c
+"; then
+    pass "scanConfig (done event and re-opened scan) holds the settings only, not the recorded outcome"
+else
+    fail "scanConfig carries outcome fields"
+fi
 if curl -fsS "$BASE2/diagnostics?id=$ok_id" | PLAINROOT="$PLAINROOT" python3 -c "
 import sys, json, os
 t = json.load(sys.stdin)['text']
@@ -3562,6 +3617,18 @@ else
     fail "/diagnostics on a successful scan is wrong"
 fi
 
+# No id, but the failure text the browser already shows: it is added, masked.
+if curl -fsS -G "$BASE2/diagnostics" --data-urlencode "error=Failed to launch scan: /Users/dave/x Bearer topsecretvalue1" | python3 -c "
+import sys, json
+t = json.load(sys.stdin)['text']
+assert 'error:' in t and 'Failed to launch scan' in t, t
+assert 'dave' not in t and 'topsecretvalue1' not in t, t
+"; then
+    pass "/diagnostics without an id adds the on-screen error, masked"
+else
+    fail "/diagnostics did not add or did not mask the on-screen error"
+fi
+
 # No id (a scan that failed before it had a run folder): environment only. A
 # malformed id is refused, like every other id-taking endpoint.
 if curl -fsS "$BASE2/diagnostics" | python3 -c "
@@ -3572,6 +3639,135 @@ assert 'app version:' in t and 'outcome' not in t, t
     pass "/diagnostics without an id returns the environment section only, and a traversal id is refused (400)"
 else
     fail "/diagnostics without an id or with a bad id misbehaved"
+fi
+
+echo "== credential masks: one check per pattern, digests preserved =="
+if SBOM_OUTPUT_DIR="$OUT" python3 - "$ROOT_DIR" <<'PY'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+
+mask = server._mask_credentials
+red = server._redact_diagnostic_text
+DIGEST = "sha256:" + "0123456789abcdef" * 4
+COMMIT = "0123456789abcdef0123456789abcdef01234567"
+
+# Authorization on a NON-last line, with a value no other mask catches.
+out = red("[WARN] Authorization: custom-scheme opaquevalue\n[WARN] second")
+assert "opaquevalue" not in out and out.endswith("[WARN] second"), out
+# Authorization must not swallow the next line when the value is empty.
+assert red("Authorization:\nnext line").endswith("next line")
+
+secrets = {
+    "github classic": "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+    "github oauth": "gho_AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+    "github user": "ghu_AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+    "github server": "ghs_AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+    "github refresh": "ghr_AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+    "github fine-grained": "github_pat_11ABCDEFG0abcdefghijklmnop_qrstuvwxyz0123456789",
+    "gitlab": "glpat-abcdefghij1234",
+    "huggingface": "hf_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789",
+    "slack": "xoxb-1234567890-abcdefghij",
+    "aws": "AKIA" + "ABCDEFGHIJKLMNOP",
+    "api key": "sk-abcdefghijklmnopqrstuvwxyz0123",
+    "npm": "npm_abcdefghijklmnopqrstuvwxyz0123456789",
+    "jwt": "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.abcdefghijklmnop",
+}
+for name, tok in secrets.items():
+    for form in (tok, "token_" + tok, "using " + tok + " now", "Basic " + tok):
+        got = mask("[WARN] " + form)
+        assert tok not in got, (name, form, got)
+
+for text, hidden in (
+    ("password=hunter2 more", "hunter2"),
+    ("db_password: hunter2", "hunter2"),
+    ('{"api_key": "hunter2"}', "hunter2"),
+    ("secret = hunter2;", "hunter2"),
+    ("access-key=hunter2", "hunter2"),
+    ("https://hunter2token@example.com/x", "hunter2token"),
+    ("https://user:hunter2@example.com/x", "hunter2"),
+    ("curl -H 'Authorization: Bearer hunter2'", "hunter2"),
+    ("fetch ?token=hunter2&x=1", "hunter2"),
+):
+    got = mask(text)
+    assert hidden not in got and "***" in got, (text, got)
+
+# Not credentials: kept.
+assert mask("ssh://git@github.com/o/r.git") == "ssh://git@github.com/o/r.git"
+assert DIGEST in mask("pull ghcr.io/o/app@" + DIGEST)
+assert DIGEST in server._scrub_error_text("pull ghcr.io/o/app@" + DIGEST)
+assert COMMIT in mask("at commit " + COMMIT)
+assert "sk-learn" in mask("install sk-learn")
+assert "a token was refused" == mask("a token was refused")
+
+# The stricter variant still masks bare hex runs (error cards), except digests.
+assert COMMIT not in server._scrub_error_text("hash " + COMMIT)
+
+# Home-directory user names.
+assert red("/Users/alice/p") == "/Users/***/p"
+assert red("/home/bob/p") == "/home/***/p"
+assert red("C:\\Users\\carol\\p") == "C:\\Users\\***\\p"
+print("ok")
+PY
+then
+    pass "each credential pattern is masked; digests, commit ids, ssh git@ and ordinary words are kept"
+else
+    fail "credential mask unit checks failed (see assertion above)"
+fi
+
+echo "== diagnostics: custom registry hidden, sources allowlisted, lines capped =="
+if SBOM_OUTPUT_DIR="$OUT" SBOM_SCANNER_IMAGE="registry.corp.internal:5000/team/bomlens:1.2.3@sha256:$(printf 'ab%.0s' $(seq 32))" \
+    python3 - "$ROOT_DIR" <<'PY'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+t = server.build_diagnostics(None)
+assert "corp.internal" not in t and "team/bomlens" not in t, t
+assert "scanner image: <custom image>:1.2.3@sha256:" in t, t
+assert "firmware image: ghcr.io/sktelecom/bomlens-firmware:latest" in t, t
+assert server._diag_image("ghcr.io/sktelecom/bomlens:latest", "ghcr.io/sktelecom/bomlens:latest") == "ghcr.io/sktelecom/bomlens:latest"
+assert server._diag_image("host:5000/x/y", "z") == "<custom image>"
+
+# A run whose recorded settings hold hostile values.
+run = "diaghostile_1"
+d = os.path.join(server.OUTPUT_DIR, run); os.makedirs(d, exist_ok=True)
+server.write_scanmeta(d, {"source": "x" * 500, "mode": "not a mode!", "conformanceProfile": "p" * 500,
+                          "ok": False, "errorMessage": "e" * 5000,
+                          "warnings": ["[WARN] " + "w" * 5000]})
+t = server.build_diagnostics(run)
+assert "input: other" in t and "mode: unknown" in t and "conformance profile" not in t, t
+assert max(len(l) for l in t.splitlines()) < 320, max(len(l) for l in t.splitlines())
+print("ok")
+PY
+then
+    pass "a custom registry host is hidden, hostile recorded values are not echoed, and long lines are capped"
+else
+    fail "diagnostics hardening checks failed (see assertion above)"
+fi
+
+echo "== diagnostics: engine probe parses tab-separated output and does not cache a failure =="
+ENGDIR="$WORK/enginebin"; mkdir -p "$ENGDIR"
+cat > "$ENGDIR/docker" <<'STUBDOCKER'
+#!/bin/bash
+if [ -f "$ENGINE_FAIL_FLAG" ]; then exit 1; fi
+printf '27.0.3\tDebian GNU/Linux 12 | (bookworm)\tlinux\taarch64\n'
+STUBDOCKER
+chmod +x "$ENGDIR/docker"; : > "$WORK/engine.sock"; : > "$WORK/engine-fail"
+if PATH="$ENGDIR:$PATH" SBOM_DOCKER_SOCK="$WORK/engine.sock" ENGINE_FAIL_FLAG="$WORK/engine-fail" \
+    SBOM_OUTPUT_DIR="$OUT" python3 - "$ROOT_DIR" "$WORK/engine-fail" <<'PY'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+assert server._diag_engine() == "engine did not answer", server._diag_engine()
+os.remove(sys.argv[2])           # the engine recovers: the failure was not cached
+got = server._diag_engine()
+assert got == "server 27.0.3, Debian GNU/Linux 12 | (bookworm) (linux/aarch64)", got
+print("ok")
+PY
+then
+    pass "the engine probe survives a | in the OS name and a transient failure is not cached"
+else
+    fail "engine probe parsing or caching is wrong (see assertion above)"
 fi
 
 echo "== _scrub_error_text: credential/token-shaped text is masked before display =="

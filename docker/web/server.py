@@ -473,25 +473,75 @@ def _classify_git_failure(text):
 # these patterns are a second, explicit layer in case such a line were ever
 # folded into a block some other way).
 _URL_USERINFO_RE = re.compile(r"://[^/\s@]+:[^/\s@]+@")
-_AUTH_HEADER_RE = re.compile(r"(?i)\bauthorization:\s*.+$")
+# A URL whose userinfo is a bare token (`https://<token>@host`). `git@` is the
+# ssh account name, not a credential, so it stays.
+_URL_TOKEN_USERINFO_RE = re.compile(r"://(?!git@)[^/\s@:]+@")
+# Whole rest of the line: a header value can hold spaces (`token ghp_...`).
+_AUTH_HEADER_RE = re.compile(r"(?im)\bauthorization:[ \t]*\S.*$")
 _BEARER_TOKEN_RE = re.compile(r"(?i)\bbearer\s+\S+")
 _TOKEN_PARAM_RE = re.compile(r"(?i)\btoken=[^&\s\"']+")
-_HEX_BLOB_RE = re.compile(r"\b[0-9a-fA-F]{20,}\b")
-_BASE64_BLOB_RE = re.compile(r"\b[A-Za-z0-9+/]{24,}={0,2}\b")
+# "token/secret/password/key" followed by a value, in `k=v`, `k: v` and JSON
+# `"k": "v"` forms; also with a prefix (`api_token`, `db-password`).
+_KEYWORD_VALUE_RE = re.compile(
+    r"(?i)\b((?:[a-z0-9]+[_-])*(?:token|secret|password|passwd|api[_-]?key|"
+    r"access[_-]?key|private[_-]?key))([\"']?[ \t]*[=:][ \t]*[\"']?)[^\s&\"',;]+"
+)
+# Tokens recognizable by their issuer's prefix. Preceded by anything but a
+# letter or digit: `\b` would not match after an underscore (`token_ghp_...`).
+_PREFIXED_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:"
+    r"gh[pousr]_[A-Za-z0-9]{20,}"            # GitHub
+    r"|github_pat_[A-Za-z0-9_]{20,}"         # GitHub fine-grained
+    r"|glpat-[A-Za-z0-9_-]{10,}"             # GitLab
+    r"|hf_[A-Za-z0-9]{20,}"                  # Hugging Face
+    r"|xox[abprs]-[A-Za-z0-9-]{10,}"         # Slack
+    r"|(?:AKIA|ASIA)[A-Z0-9]{16}"            # AWS access key id
+    r"|sk-[A-Za-z0-9_-]{20,}"                # API secret keys
+    r"|npm_[A-Za-z0-9]{30,}"                 # npm
+    r"|pypi-[A-Za-z0-9_-]{30,}"              # PyPI
+    r"|eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}"  # JWT
+    r")"
+)
+# Long hex/base64 runs. Not credentials by shape (an image digest or a commit id
+# looks the same), so they are masked only where a leaked secret is likelier than
+# a digest, and never right after a `sha256:`-style label.
+_NOT_AFTER_DIGEST_LABEL = r"(?<!sha1:)(?<!sha256:)(?<!sha384:)(?<!sha512:)"
+_HEX_BLOB_RE = re.compile(_NOT_AFTER_DIGEST_LABEL + r"\b[0-9a-fA-F]{20,}\b")
+_BASE64_BLOB_RE = re.compile(_NOT_AFTER_DIGEST_LABEL + r"\b[A-Za-z0-9+/]{24,}={0,2}\b")
+# The user-name segment of a home-directory path (`/Users/<name>`, `/home/<name>`,
+# `C:\Users\<name>`).
+_USER_PATH_RES = (
+    re.compile(r"(?i)(/(?:Users|home)/)[^/\s\"']+"),
+    re.compile(r"(?i)([A-Za-z]:[\\/]+Users[\\/]+)[^\\/\s\"']+"),
+)
+
+
+def _mask_credentials(text):
+    """Mask credential-shaped substrings: URL userinfo, an Authorization header,
+    a Bearer token, `token=`-style values, and tokens recognizable by their
+    issuer's prefix. Deliberately leaves long hex/base64 runs alone (see
+    _scrub_error_text for the stricter variant), so it is safe on log lines that
+    carry image digests and checksums.
+
+    Order matters: the structural patterns first, so their replacement text
+    ("***") does not get re-matched by a later pattern."""
+    text = _URL_USERINFO_RE.sub("://***@", text)
+    text = _URL_TOKEN_USERINFO_RE.sub("://***@", text)
+    text = _AUTH_HEADER_RE.sub("Authorization: ***", text)
+    text = _BEARER_TOKEN_RE.sub("Bearer ***", text)
+    text = _TOKEN_PARAM_RE.sub("token=***", text)
+    text = _KEYWORD_VALUE_RE.sub(lambda m: m.group(1) + m.group(2) + "***", text)
+    text = _PREFIXED_TOKEN_RE.sub("***", text)
+    return text
 
 
 def _scrub_error_text(text):
     """Mask credential/token-shaped substrings in one scanner log line before
     it can reach the browser as part of a failed-scan card's error message.
 
-    Order matters: the structural patterns (a URL's embedded userinfo, an
-    Authorization header, a Bearer token, a `token=` query param) are masked
-    first so their replacement text ("***") does not then get re-matched and
-    mangled by the broader hex/base64-blob patterns that run last."""
-    text = _URL_USERINFO_RE.sub("://***@", text)
-    text = _AUTH_HEADER_RE.sub("Authorization: ***", text)
-    text = _BEARER_TOKEN_RE.sub("Bearer ***", text)
-    text = _TOKEN_PARAM_RE.sub("token=***", text)
+    The credential masks of _mask_credentials, then the hex/base64 blob masks
+    last, so the "***" replacements above are not re-matched and mangled."""
+    text = _mask_credentials(text)
     text = _HEX_BLOB_RE.sub("***", text)
     text = _BASE64_BLOB_RE.sub("***", text)
     return text
@@ -2508,6 +2558,15 @@ def list_scans():
     return scans[:RECENT_SCANS_CAP]
 
 
+def _public_scan_config(meta):
+    """The sidecar as the browser's `scanConfig`: the settings only. The outcome
+    fields the diagnostics summary reads (mode, ok, errorMessage) stay
+    server-side."""
+    if not isinstance(meta, dict):
+        return meta
+    return {k: v for k, v in meta.items() if k not in ("mode", "ok", "errorMessage")}
+
+
 def scan_detail(run_id):
     """A past scan as a done-event payload (its own artifacts only)."""
     sbom = sbom_summary(run_id)
@@ -2530,7 +2589,7 @@ def scan_detail(run_id):
         # How the scan was launched (source + toggles), saved as a sidecar so the
         # UI can offer "re-scan with the same settings". None for pre-feature
         # scans that have no sidecar.
-        "scanConfig": scanmeta(run_id),
+        "scanConfig": _public_scan_config(scanmeta(run_id)),
         # Warnings the scan emitted, recovered from the same sidecar so a
         # re-opened result says what a live one said.
         "scanWarnings": (scanmeta(run_id) or {}).get("warnings") or [],
@@ -2545,104 +2604,193 @@ def scan_detail(run_id):
 # whatever a scan happened to record): tool/image versions, the container engine
 # kind, the scan mode and non-secret options, the outcome per stage, and the
 # collected [WARN]/[ERROR] text. It never carries source contents, the scanned
-# path or URL, the project name, tokens, or a raw log. Every free-text value is
-# additionally run through _redact_diagnostic_text.
+# path or URL, the project name, tokens, or a raw log. Free-text values are
+# additionally masked by _redact_diagnostic_text (home-directory user names and
+# credential-shaped text); that is a best-effort mask, so the panel tells the
+# user to read the text before pasting it.
 # --------------------------------------------------------------------------
 _DIAG_OPTION_KEYS = (
     "notice", "security", "deepLicense", "identifyVendored", "includeOsv",
     "byteStable", "deepCve",
 )
-_USER_PATH_RES = (
-    re.compile(r"(?i)(/(?:Users|home)/)[^/\s\"']+"),
-    re.compile(r"(?i)([A-Za-z]:[\\/]+Users[\\/]+)[^\\/\s\"']+"),
-)
+# Input kinds the server itself dispatches on. Anything else in a recorded scan
+# (the value comes from the request) is shown as "other".
+_DIAG_SOURCES = frozenset((
+    "current-dir", "rootfs-dir", "scan-target-src", "yocto-build-dir",
+    "docker-image", "git-url", "zip-upload", "package-upload", "sbom-upload",
+    "firmware-upload", "model-upload", "ai-model",
+))
+_DIAG_WORD_RE = re.compile(r"[A-Za-z0-9_.-]{1,40}")
+# One warning or error line in the summary is cut here, so a single runaway line
+# cannot make the summary (and the text box that shows it) huge.
+_DIAG_LINE_MAX_CHARS = 300
 _DIAG_ENGINE_TIMEOUT = 5
+_DIAG_ENGINE_CACHE_SECONDS = 60
 
 
-def _redact_diagnostic_text(text):
-    """Credential-shaped text (the same masks a failed-scan card gets) plus the
-    user-name segment of a home-directory path."""
-    # Home-directory names first, so the broader blob masks in _scrub_error_text
-    # do not swallow a whole path and leave a marker-less gap.
-    text = str(text)
-    for rx in _USER_PATH_RES:
-        text = rx.sub(lambda m: m.group(1) + "***", text)
-    return _scrub_error_text(text)
+def _diag_image(ref, default):
+    """An image reference for the summary. A reference that differs from the
+    built-in default was set through the environment and can name an internal
+    registry host, so only its tag and digest are kept."""
+    if ref == default:
+        return ref
+    digest = ref.partition("@")[2]
+    name = ref.partition("@")[0]
+    tag = name.rpartition(":")[2] if ":" in name.rpartition("/")[2] else ""
+    out = "<custom image>"
+    if tag:
+        out += ":" + tag
+    if digest:
+        out += "@" + digest
+    return out
+
+
+def _diag_clip(line):
+    line = str(line)
+    if len(line) > _DIAG_LINE_MAX_CHARS:
+        return line[:_DIAG_LINE_MAX_CHARS - 3] + "..."
+    return line
 
 
 _diag_engine_cache = [0.0, ""]
 
 
 def _diag_engine():
-    """Cached for a minute: the summary is fetched each time a result screen is
-    shown and `docker info` is a subprocess call."""
+    """Cached for a minute, but only a real answer: `docker info` is a
+    subprocess call and the summary is fetched each time a result screen is
+    shown, while a transient failure must not stick."""
     now = time.monotonic()
-    if _diag_engine_cache[1] and now - _diag_engine_cache[0] < 60:
+    if _diag_engine_cache[1] and now - _diag_engine_cache[0] < _DIAG_ENGINE_CACHE_SECONDS:
         return _diag_engine_cache[1]
-    value = _diag_engine_probe()
-    _diag_engine_cache[0], _diag_engine_cache[1] = now, value
+    value, answered = _diag_engine_probe()
+    if answered:
+        _diag_engine_cache[0], _diag_engine_cache[1] = now, value
     return value
 
 
 def _diag_engine_probe():
-    """Container engine kind via the mounted socket. Only the server version, OS
-    name, OS type and architecture are read: `docker info` also reports the
-    engine's host name, which can contain a person's name, so it is not asked."""
+    """(text, answered). The engine kind via the mounted socket. Only the server
+    version, OS name, OS type and architecture are read: `docker info` also
+    reports the engine's host name, which can contain a person's name, so it is
+    not asked."""
     if not docker_cli_present():
-        return "docker CLI not present in this image"
+        return "docker CLI not present in this image", False
     if not docker_capable():
-        return "engine socket not mounted"
+        return "engine socket not mounted", False
     try:
+        # Tab-separated: an OperatingSystem value can contain a "|".
         r = subprocess.run(
             ["docker", "info", "--format",
-             "{{.ServerVersion}}|{{.OperatingSystem}}|{{.OSType}}|{{.Architecture}}"],
+             "{{.ServerVersion}}\t{{.OperatingSystem}}\t{{.OSType}}\t{{.Architecture}}"],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             timeout=_DIAG_ENGINE_TIMEOUT,
         )
     except (OSError, subprocess.SubprocessError):
-        return "engine did not answer"
+        return "engine did not answer", False
     if r.returncode != 0:
-        return "engine did not answer"
-    parts = r.stdout.decode("utf-8", "replace").strip().split("|")
+        return "engine did not answer", False
+    parts = r.stdout.decode("utf-8", "replace").strip().split("\t")
     if len(parts) != 4:
-        return "engine did not answer"
-    return "server %s, %s (%s/%s)" % (parts[0], parts[1], parts[2], parts[3])
+        return "engine did not answer", False
+    return "server %s, %s (%s/%s)" % tuple(p.strip() for p in parts), True
 
 
-def build_diagnostics(run_id=None):
+_diag_sbom_cache = {}
+
+
+def _diag_sbom_facts(run_id):
+    """(component count, failed pipeline steps) for a run, or None without a
+    readable BOM. Reads only what the summary needs instead of building the
+    whole result summary, and remembers the answer per file version."""
+    p = run_file(run_id, "_bom.json")
+    if not p or not os.path.isfile(p):
+        return None
+    try:
+        st = os.stat(p)
+        key = (p, st.st_mtime_ns, st.st_size)
+        if key in _diag_sbom_cache:
+            return _diag_sbom_cache[key]
+        with open(p) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    count = len(_as_list(data.get("components")))
+    meta = _as_dict(data.get("metadata"))
+    if _as_dict(meta.get("component")).get("type") == "machine-learning-model":
+        count += 1
+    steps = []
+    for prop in _dicts(meta.get("properties")):
+        v = prop.get("value")
+        if prop.get("name") == "bomlens:pipeline-step-failed" and isinstance(v, str) \
+                and v and v[:MAX_PIPELINE_STEP_LEN] not in steps:
+            steps.append(v[:MAX_PIPELINE_STEP_LEN])
+    if len(_diag_sbom_cache) > 32:
+        _diag_sbom_cache.clear()
+    _diag_sbom_cache[key] = (count, steps)
+    return count, steps
+
+
+def _redact_diagnostic_text(text):
+    """Home-directory user names plus credential-shaped text. Long hex/base64
+    runs are left alone on purpose: image digests and commit ids are not
+    credentials and are what a maintainer needs to see."""
+    # Home-directory names first, so the credential masks do not swallow a
+    # whole path and leave a marker-less gap.
+    text = str(text)
+    for rx in _USER_PATH_RES:
+        text = rx.sub(lambda m: m.group(1) + "***", text)
+    return _mask_credentials(text)
+
+
+def build_diagnostics(run_id=None, error=None):
     """The diagnostics summary as text, or None for a malformed run id.
 
     `run_id` is optional: without it (a scan that failed before it had a run
-    folder) only the environment section is produced."""
+    folder) only the environment section is produced, plus `error` when given:
+    the failure text the browser already shows for such a scan. It is masked and
+    capped like every other line, and ignored when a run id is present (the run's
+    own recorded error is used then)."""
     if run_id is not None and not scan_id_ok(run_id):
         return None
     lines = [
         "BomLens diagnostics",
         "app version: %s" % (os.environ.get("BOMLENS_VERSION") or "unknown"),
-        "scanner image: %s" % SCANNER_IMAGE,
-        "firmware image: %s" % FIRMWARE_IMAGE,
-        "aibom image: %s" % AIBOM_IMAGE,
-        "deep-cve image: %s" % DEEP_CVE_IMAGE,
+        "scanner image: %s" % _diag_image(
+            SCANNER_IMAGE, "ghcr.io/sktelecom/bomlens:latest"),
+        "firmware image: %s" % _diag_image(
+            FIRMWARE_IMAGE, "ghcr.io/sktelecom/bomlens-firmware:latest"),
+        "aibom image: %s" % _diag_image(
+            AIBOM_IMAGE, "ghcr.io/sktelecom/bomlens-aibom:latest"),
+        "deep-cve image: %s" % _diag_image(
+            DEEP_CVE_IMAGE, "ghcr.io/sktelecom/bomlens-deep-cve:latest"),
         "container engine: %s" % _diag_engine(),
     ]
+    if not run_id and error:
+        lines.append("error:")
+        lines.extend("  " + _diag_clip(ln)
+                     for ln in str(error)[:_SCAN_ERROR_MAX_CHARS].splitlines())
     meta = scanmeta(run_id) if run_id else None
     if run_id and meta is None:
         lines.append("scan: no record found for this id")
     if meta:
-        lines.append("input: %s" % meta.get("source", "unknown"))
-        lines.append("mode: %s" % (meta.get("mode") or "unknown"))
+        src = meta.get("source")
+        lines.append("input: %s" % (src if src in _DIAG_SOURCES else "other"))
+        mode = meta.get("mode")
+        lines.append("mode: %s" % (
+            mode if isinstance(mode, str) and _DIAG_WORD_RE.fullmatch(mode) else "unknown"))
         opts = ["%s=%s" % (k, "on" if meta.get(k) else "off")
                 for k in _DIAG_OPTION_KEYS if k in meta]
         lines.append("options: %s" % (", ".join(opts) or "none recorded"))
-        if meta.get("conformanceProfile"):
-            lines.append("conformance profile: %s" % meta["conformanceProfile"])
+        prof = meta.get("conformanceProfile")
+        if isinstance(prof, str) and _DIAG_WORD_RE.fullmatch(prof):
+            lines.append("conformance profile: %s" % prof)
         if "ok" in meta:
             lines.append("outcome: %s" % ("succeeded" if meta["ok"] else "failed"))
         stages = []
-        sbom = sbom_summary(run_id)
-        if sbom is not None:
-            stages.append("sbom generated: %d components" % sbom.get("components", 0))
-            failed = [s for s in _as_list(sbom.get("pipelineStepsFailed")) if isinstance(s, str)]
+        facts = _diag_sbom_facts(run_id)
+        if facts is not None:
+            count, failed = facts
+            stages.append("sbom generated: %d components" % count)
             stages.append("pipeline steps failed: %s" % (", ".join(failed) or "none"))
         else:
             stages.append("sbom generated: no")
@@ -2658,10 +2806,11 @@ def build_diagnostics(run_id=None):
         lines.extend("  - " + s for s in stages)
         if meta.get("errorMessage"):
             lines.append("error:")
-            lines.extend("  " + ln for ln in str(meta["errorMessage"]).splitlines())
+            lines.extend("  " + _diag_clip(ln)
+                         for ln in str(meta["errorMessage"]).splitlines())
         warns = [w for w in _as_list(meta.get("warnings")) if isinstance(w, str)]
         lines.append("warnings: %s" % (len(warns) or "none"))
-        lines.extend("  " + w for w in warns[:MAX_SCAN_WARNINGS])
+        lines.extend("  " + _diag_clip(w) for w in warns[:MAX_SCAN_WARNINGS])
     return _redact_diagnostic_text("\n".join(lines)) + "\n"
 
 
@@ -4887,7 +5036,7 @@ class Handler(BaseHTTPRequestHandler):
         only, nothing is sent anywhere; the browser shows it and the user
         decides whether to copy it."""
         sid = (qs.get("id") or [""])[0] or None
-        text = build_diagnostics(sid)
+        text = build_diagnostics(sid, (qs.get("error") or [""])[0])
         if text is None:
             self._send(400, json.dumps({"error": "invalid scan id"}))
             return
@@ -5282,12 +5431,28 @@ class Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 disconnected[0] = True
 
+        def record_outcome(ok_, error_text=None, warnings=None):
+            """Save how this run ended into the run folder's sidecar, for the
+            diagnostics summary (GET /diagnostics). Written from a COPY of
+            scan_config: the settings echoed back to the browser (`scanConfig`)
+            stay exactly the settings, not the outcome. The error text is
+            masked and length-capped here, before it is ever stored."""
+            meta = dict(scan_config)
+            meta["mode"] = mode
+            meta["ok"] = ok_
+            if error_text:
+                meta["errorMessage"] = _scrub_error_text(str(error_text))[:_SCAN_ERROR_MAX_CHARS]
+            if warnings:
+                meta["warnings"] = warnings
+            write_scanmeta(run_out, meta)
+
         def fail(msg, key=None):
             # `key`, when set, names an i18n key the frontend can show as a
             # friendly headline (msg stays available as the collapsible raw
             # detail); every other caller passes only msg, so `key` is null
             # and the frontend falls back to showing msg exactly as before.
             sse("error", json.dumps({"detail": msg, "key": key}))
+            record_outcome(False, msg)
             sse("done", json.dumps({"ok": False, "id": run_id, "results": list_results(run_id),
                                     "sbom": None, "security": None, "conformance": None}))
 
@@ -5828,7 +5993,7 @@ class Handler(BaseHTTPRequestHandler):
                              "or relaunching the UI from the AIBOM image."); return
 
             else:
-                fail("unknown input type: %s" % source); return
+                fail("unknown input type: %s" % source[:40]); return
 
             # For a source scan, hand the entrypoint the HOST path of the scanned
             # tree so it can run a cdxgen language image as a sibling container
@@ -5899,14 +6064,17 @@ class Handler(BaseHTTPRequestHandler):
             # (error_sent stays False): see _ScanErrorTracker.
             error_tracker = _ScanErrorTracker()
             error_sent = False
+            error_detail = None
 
             def note_log(ln):
                 if isinstance(ln, str) and ln.lstrip().startswith("[WARN]"):
-                    text = ln.strip()
+                    text = _mask_credentials(ln.strip())
                     if text not in scan_warnings and len(scan_warnings) < MAX_SCAN_WARNINGS:
                         scan_warnings.append(text)
                 error_tracker.feed(ln)
-                sse("log", json.dumps(ln))
+                # Credential-shaped text is masked before it reaches the browser
+                # (and so the copy-log button); digests and checksums are kept.
+                sse("log", json.dumps(_mask_credentials(ln) if isinstance(ln, str) else ln))
             if sibling is not None:
                 # Firmware / AI on the permissive-only base image: run the
                 # dedicated image as a sibling container (host socket). It does
@@ -5931,10 +6099,8 @@ class Handler(BaseHTTPRequestHandler):
                 ok = rc == 0
                 if rc == -1:
                     error_sent = True
-                    sse("error", json.dumps({
-                        "detail": "Failed to launch the %s sibling container." % mode.lower(),
-                        "key": None,
-                    }))
+                    error_detail = "Failed to launch the %s sibling container." % mode.lower()
+                    sse("error", json.dumps({"detail": error_detail, "key": None}))
             else:
                 try:
                     proc = subprocess.Popen(
@@ -5968,7 +6134,8 @@ class Handler(BaseHTTPRequestHandler):
                     ok = proc.returncode == 0
                 except Exception as exc:  # noqa: BLE001
                     error_sent = True
-                    sse("error", json.dumps({"detail": "Failed to launch scan: %s" % exc, "key": None}))
+                    error_detail = "Failed to launch scan: %s" % exc
+                    sse("error", json.dumps({"detail": error_detail, "key": None}))
 
             # Artifacts landed in run_out (the run folder named run_id); the
             # summary helpers glob it by suffix. The done event carries id=run_id
@@ -5998,16 +6165,14 @@ class Handler(BaseHTTPRequestHandler):
                 # matched the [ERROR] convention.
                 "errorMessage": None if (ok or error_sent) else error_tracker.result(),
             }
-            # Outcome fields for the diagnostics summary (GET /diagnostics), which
-            # must work for a failed run too. errorMessage is the already-scrubbed
-            # tracker text, never a raw log line.
-            scan_config["mode"] = mode
-            scan_config["ok"] = ok
-            if done["errorMessage"]:
-                scan_config["errorMessage"] = done["errorMessage"]
+            # Outcome for the diagnostics summary (GET /diagnostics), which must
+            # work for a failed run too: the tracker's scrubbed [ERROR] text, or
+            # the launch failure the client was already told about.
+            outcome_error = None if ok else (done["errorMessage"] or error_detail)
             if scan_warnings:
+                # Also echoed to the browser, as it was before the summary existed.
                 scan_config["warnings"] = scan_warnings
-            write_scanmeta(run_out, scan_config)
+            record_outcome(ok, outcome_error, scan_warnings)
             sse("done", json.dumps(done))
         except Exception as exc:  # noqa: BLE001
             # The summary helpers are defended against malformed artifacts, so a
@@ -6019,6 +6184,10 @@ class Handler(BaseHTTPRequestHandler):
                 "detail": "Scan finished but the summary could not be built: %s" % exc,
                 "key": None,
             }))
+            try:
+                record_outcome(False, "Scan finished but the summary could not be built: %s" % exc)
+            except Exception:  # noqa: BLE001 - the stream must still get its done event
+                pass
             sse("done", json.dumps({"ok": False, "id": run_id,
                                     "results": list_results(run_id),
                                     "sbom": None, "security": None,
