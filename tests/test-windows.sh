@@ -545,6 +545,11 @@ guard "--merge + --target rejected"     "mutually exclusive" --project p --versi
 guard "--fail-on rejects an unknown condition" "unknown condition 'critical'" --project p --version 1 --target z --fail-on critical
 guard "--fail-on rejects an unknown severity"  "unknown condition 'vulnerability=urgent'" --project p --version 1 --target z --fail-on vulnerability=urgent
 guard "--fail-on needs a value"                "unknown condition ''" --project p --version 1 --target z --fail-on
+guard "--fail-on license-coverage needs a value"  "needs a whole percentage from 0 to 100" --project p --version 1 --target z --fail-on license-coverage=
+guard "--fail-on license-coverage rejects text"   "needs a whole percentage from 0 to 100" --project p --version 1 --target z --fail-on license-coverage=high
+guard "--fail-on license-coverage rejects >100"   "needs a whole percentage from 0 to 100" --project p --version 1 --target z --fail-on license-coverage=101
+guard "--fail-on license-coverage rejects a leading zero" "without leading zeros" --project p --version 1 --target z --fail-on license-coverage=08
+guard "--fail-on license-coverage has no bare form" "unknown condition 'license-coverage'" --project p --version 1 --target z --fail-on license-coverage
 guard "--fail-on is refused with --ui"         "--fail-on is not offered with --ui" --ui --fail-on malicious-package
 guard "--fail-on is refused with --diff"       "--fail-on cannot be combined with --diff" --project p --version 1 --diff a.json b.json --fail-on malicious-package
 guard "--vex file must exist"           "--vex file not found" --project p --version 1 --target z --vex no-such-vex.json
@@ -910,6 +915,18 @@ gate_case "--fail-on: a met condition wins over one that cannot be judged (4)" 4
 gate_case "--fail-on: no result from the scan exits 5, never 0" 5 "produced no result to judge" \
   "-" --fail-on malicious-package
 
+gate_case "--fail-on: empty-result met exits 4 and states the count" 4 "--fail-on empty-result: the scan found 0 components" \
+  "met${TAB}empty-result${TAB}the scan found 0 components\n" --fail-on empty-result
+gate_case "--fail-on: license-coverage met exits 4 and shows the measured value" 4 "0% (1/157)" \
+  "met${TAB}license-coverage=80${TAB}license coverage is 0% (1/157), below 80%\n" --fail-on license-coverage=80
+gate_case "--fail-on: license-coverage ok exits 0" 0 "none is met" \
+  "ok${TAB}license-coverage=80${TAB}license coverage is 100% (3/3), at or above 80%\n" --fail-on license-coverage=80
+gate_case "--fail-on: empty-result without a conformance report exits 5" 5 "no conformance report was produced" \
+  "unjudged${TAB}empty-result${TAB}no conformance report was produced for this scan\n" --fail-on empty-result
+guard "--fail-on empty-result is refused for an AI model input" "not available for AI model and dataset inputs" --project M --version 1 --model owner/repo --fail-on empty-result
+
+gate_case "--fail-on: a condition an older image does not know exits 5 and says to refresh the image" 5 "docker pull" \
+  "unjudged${TAB}empty-result${TAB}not a known condition\n" --fail-on empty-result
 # A judgement that is cut off, or that the host does not understand, is not a pass.
 gate_case "--fail-on: a result with fewer lines than conditions exits 5 as incomplete" 5 "holds 1 of 2 conditions" \
   "ok${TAB}malicious-package${TAB}clean\n" --fail-on malicious-package --fail-on license-conflict

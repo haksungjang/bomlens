@@ -665,6 +665,58 @@ spdx_tv_checks() {
 }
 
 # --------------------------------------------------------
+# Measurements for --fail-on (docker/lib/evaluate-gate.sh). Printed as one JSON
+# object:
+#   softwareComponentCount  components other than operating-system and file
+#                           entries: what the scan identified as software
+#   emptyResult             true when that count is 0
+#   licenseCoverage         {declared,total,pct}: of those components, how many
+#                           declare a license, and the percentage rounded down.
+#                           A license of NOASSERTION or NONE (any case) is not a
+#                           declaration, in every format. pct is null when
+#                           total is 0.
+# Separate from the checks on purpose: the license check keeps its own counting
+# (and its report text), and these numbers can differ from it.
+# --------------------------------------------------------
+cdx_signal() {
+    jq -c '
+      ([ .components[]? | select(.type != "operating-system" and .type != "file") ]) as $s
+      | ($s | length) as $n
+      | ([ $s[] | select([ (.licenses // [])[] | objects
+                            | (.license.id // .license.name // .expression // "")
+                            | select(type == "string" and . != "" and (ascii_upcase != "NOASSERTION") and (ascii_upcase != "NONE")) ]
+                          | length > 0) ] | length) as $d
+      | { softwareComponentCount: $n, emptyResult: ($n == 0),
+          licenseCoverage: { declared: $d, total: $n, pct: (if $n == 0 then null else (($d * 100 / $n) | floor) end) } }' "$SBOM" 2>/dev/null || echo '{}'
+}
+spdx_json_signal() {
+    jq -c '
+      def declared($v): ($v // "NOASSERTION") | (ascii_upcase != "NOASSERTION" and ascii_upcase != "NONE");
+      ([ .packages[]? ]) as $p
+      | ($p | length) as $n
+      | ([ $p[] | select(declared(.licenseConcluded) or declared(.licenseDeclared)) ] | length) as $d
+      | { softwareComponentCount: $n, emptyResult: ($n == 0),
+          licenseCoverage: { declared: $d, total: $n, pct: (if $n == 0 then null else (($d * 100 / $n) | floor) end) } }' "$SBOM" 2>/dev/null || echo '{}'
+}
+spdx_tv_signal() {
+    # One record per PackageName; a package declares a license when either license
+    # line names something other than NOASSERTION or NONE.
+    local counts n d
+    counts=$(awk '
+        function flush() { if (inpkg) { n++; if (ok) d++ } }
+        /^PackageName:/ { flush(); inpkg = 1; ok = 0; next }
+        /^PackageLicense(Concluded|Declared):/ {
+            v = $0; sub(/^[^:]*:[ \t]*/, "", v); sub(/[ \t\r]+$/, "", v); u = toupper(v)
+            if (inpkg && u != "" && u != "NOASSERTION" && u != "NONE") ok = 1
+        }
+        END { flush(); printf "%d %d", n + 0, d + 0 }' "$SBOM" 2>/dev/null) || counts="0 0"
+    n=${counts% *}; d=${counts#* }
+    jq -cn --argjson n "${n:-0}" --argjson d "${d:-0}" '
+      { softwareComponentCount: $n, emptyResult: ($n == 0),
+        licenseCoverage: { declared: $d, total: $n, pct: (if $n == 0 then null else (($d * 100 / $n) | floor) end) } }'
+}
+
+# --------------------------------------------------------
 # Compute checks for the detected format.
 # --------------------------------------------------------
 case "$FORMAT" in
@@ -702,6 +754,7 @@ case "$FORMAT" in
         else
             CHECKS=$(cdx_checks "$CYCLONEDX_SPEC_VERSIONS")
         fi
+        SIGNAL=$(cdx_signal)
         if registry_applies "${G7_REGISTRY:-$(dirname "$0")/g7-registry.json}"; then
             G7=$(g7_ai_checks)
             CHECKS=$(printf '%s\n%s' "$CHECKS" "$G7" | jq -cs 'add')
@@ -719,7 +772,7 @@ case "$FORMAT" in
             echo "[validate] added the 2026 SBOM minimum-element checks"
         fi
         ;;
-    SPDX-JSON)     CHECKS=$(spdx_json_checks) ;;
+    SPDX-JSON)     CHECKS=$(spdx_json_checks); SIGNAL=$(spdx_json_signal) ;;
     SPDX-3.0)
         # SPDX 3.0 is JSON-LD (@graph); the 2.x package/relationship shape the
         # spdx_json checks read does not exist. Measure conformance on the
@@ -739,6 +792,7 @@ case "$FORMAT" in
            && [ -s "$SPDX3_CDX" ]; then
             SBOM="$SPDX3_CDX"
             CHECKS=$(cdx_checks "$CYCLONEDX_SPEC_VERSIONS")
+            SIGNAL=$(cdx_signal)
             rm -f "$SPDX3_CDX"
             echo "[validate] SPDX 3.0 (Yocto) measured on the installed package set"
         elif command -v syft >/dev/null 2>&1 \
@@ -746,6 +800,7 @@ case "$FORMAT" in
            && [ -s "$SPDX3_CDX" ]; then
             SBOM="$SPDX3_CDX"
             CHECKS=$(cdx_checks "$CYCLONEDX_SPEC_VERSIONS")
+            SIGNAL=$(cdx_signal)
             rm -f "$SPDX3_CDX"
             echo "[validate] SPDX 3.0 measured via CycloneDX conversion"
         else
@@ -753,7 +808,7 @@ case "$FORMAT" in
             CHECKS='[{"id":"spec-version","label":"Spec version (SPDX-3.0)","required":true,"status":"pass","detail":"SPDX-3.0 (recognized; not measured without syft)","missing":[]}]'
         fi
         ;;
-    SPDX-TagValue) CHECKS=$(spdx_tv_checks) ;;
+    SPDX-TagValue) CHECKS=$(spdx_tv_checks); SIGNAL=$(spdx_tv_signal) ;;
     *)
         CHECKS='[{"id":"format","label":"Recognized SBOM format","required":true,"status":"fail","detail":"not CycloneDX or SPDX","missing":[]}]'
         ;;
@@ -996,14 +1051,21 @@ fi
 # --------------------------------------------------------
 # JSON report
 # --------------------------------------------------------
+# Two measurements stated on their own, so --fail-on empty-result and
+# --fail-on license-coverage read a value instead of inferring it from a check
+# that passes or warns on an empty denominator. Neither changes RESULT nor any
+# check. SIGNAL is set per format above (empty when the format was not measured).
+[ -n "${SIGNAL:-}" ] || SIGNAL='{}'
 jq -n \
    --arg project "$PROJECT" --arg format "$FORMAT" --arg result "$RESULT" \
    --arg ts "$GEN_AT" --argjson checks "$CHECKS" --argjson xwalk "$XW_SUMMARY" \
    --argjson untraceable "$N_UNTRACEABLE" --arg profile "$CONFORMANCE_PROFILE" \
-   --argjson pipelineStepsFailed "$PIPELINE_STEPS_FAILED" --argjson pipelineStepsFailedMore "$PIPELINE_STEPS_FAILED_MORE" '
+   --argjson pipelineStepsFailed "$PIPELINE_STEPS_FAILED" --argjson pipelineStepsFailedMore "$PIPELINE_STEPS_FAILED_MORE" \
+   --argjson signal "$SIGNAL" '
 { project: $project, format: $format, result: $result, generatedAt: $ts,
   profile: $profile, untraceableComponents: $untraceable, checks: $checks,
   pipelineStepsFailed: $pipelineStepsFailed, pipelineStepsFailedMore: $pipelineStepsFailedMore }
++ $signal
 + (if ($xwalk.frameworks | length) > 0 then { regulatoryCrosswalk: $xwalk } else {} end)
 ' > "$JSON"
 

@@ -1,12 +1,12 @@
 ---
-description: Integrate the scanner into CI so the SBOM refreshes on every build and a policy gate (vulnerability severity, malicious packages, license conflicts) can fail the pipeline.
+description: Integrate the scanner into CI so the SBOM refreshes on every build and a policy gate (vulnerability severity, malicious packages, license conflicts, empty results, license coverage) can fail the pipeline.
 ---
 
 # Use in CI/CD
 
 An SBOM is a point-in-time snapshot of dependencies, so it must be regenerated whenever dependencies change to stay in sync with the code. In CI it refreshes on every build and release, attaches to release artifacts, and becomes the basis for a vulnerability policy gate.
 
-> **Important**: a scan reports vulnerabilities and exits successfully unless you ask it to gate. `--fail-on` makes the scan itself exit non-zero when a condition you name is met (exit 4), or cannot be judged from what the scan produced (exit 5): a finding at a severity or worse, a known malicious package, or a license conflict. `--fail-on-conformance` does the same for the conformance report (exit 2). See [Exit codes](../reference/cli.md#exit-codes). No separate step that inspects the report files is needed.
+> **Important**: a scan reports vulnerabilities and exits successfully unless you ask it to gate. `--fail-on` makes the scan itself exit non-zero when a condition you name is met (exit 4), or cannot be judged from what the scan produced (exit 5): a finding at a severity or worse, a known malicious package, a license conflict, a scan that found no software (`empty-result`), or license coverage below a percentage you set (`license-coverage=<0-100>`). `--fail-on-conformance` does the same for the conformance report (exit 2). See [Exit codes](../reference/cli.md#exit-codes). No separate step that inspects the report files is needed.
 
 To reduce load, split depth by trigger: on PRs generate the SBOM quickly (`--generate-only --no-report`); on `main` and releases generate everything (`--all --generate-only`) and apply the gate.
 
