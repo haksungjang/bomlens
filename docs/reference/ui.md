@@ -139,7 +139,7 @@ This is the one feature that reaches outside the machine on its own initiative r
 
 ## Reporting a problem
 
-When a scan ends, whether it succeeded or failed, the Overview ends with a **Report a problem** panel. It shows a diagnostics summary in full: the app and scanner image versions, the container engine, the scan mode and options, the result of each stage, and the `[WARN]` lines the scan collected. It does not include source contents, the scanned path or project name, tokens or the user name in a home-directory path. **Copy summary** puts exactly that text on the clipboard, and **Open the issue form** opens the bug report form in your browser. Nothing is sent until you paste the text into the issue yourself. The run log has its own Copy log button, which copies the log as shown, so check it for names or paths you would rather not share. The Help menu (web UI and desktop app) also links to the issue form.
+When a scan ends, whether it succeeded or failed, the Overview ends with a Report a problem panel. It shows a diagnostics summary in full: the app and scanner image versions, the container engine, the scan mode and options, the result of each stage, and the `[WARN]` lines the scan collected. It does not include source contents, the scanned path or project name, tokens or the user name in a home-directory path. **Copy summary** puts exactly that text on the clipboard, and **Open the issue form** opens the bug report form in your browser. Nothing is sent until you paste the text into the issue yourself. The run log has its own Copy log button, which copies the log as shown, so check it for names or paths you would rather not share. The Help menu (web UI and desktop app) also links to the issue form.
 
 ## Notes
 
