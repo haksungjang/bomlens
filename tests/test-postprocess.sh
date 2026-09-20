@@ -5279,7 +5279,7 @@ echo "== source-tree guard: a scan leaves the scanned project unchanged =="
 # toolchain): a fake `go` that mutates go.mod + writes go.sum, and a fake `cdxgen`
 # that leaves build dirs and writes the bom where -o points.
 GUARD_ROOT="$WORK/guard"
-mkdir -p "$GUARD_ROOT/bin" "$GUARD_ROOT/src/keepdir" "$GUARD_ROOT/out"
+mkdir -p "$GUARD_ROOT/bin" "$GUARD_ROOT/src/keepdir" "$GUARD_ROOT/src/vendor" "$GUARD_ROOT/src/bin" "$GUARD_ROOT/src/obj" "$GUARD_ROOT/out"
 cat > "$GUARD_ROOT/bin/go" <<'STUB'
 #!/bin/sh
 printf 'require (\n\tgithub.com/indirect/dep v1.0.0 // indirect\n)\n' >> go.mod
@@ -5287,7 +5287,7 @@ echo 'github.com/indirect/dep v1.0.0 h1:deadbeef' > go.sum
 STUB
 cat > "$GUARD_ROOT/bin/cdxgen" <<'STUB'
 #!/bin/sh
-mkdir -p build/classes mod-new/build
+mkdir -p build/classes mod-new/build web/vendor/acme obj/Debug bin/Debug
 out=""; prev=""
 for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
 [ -n "$out" ] && echo '{"bomFormat":"CycloneDX","components":[]}' > "$out"
@@ -5297,6 +5297,9 @@ chmod +x "$GUARD_ROOT/bin/go" "$GUARD_ROOT/bin/cdxgen"
 printf 'module example.com/demo\n\ngo 1.24\n' > "$GUARD_ROOT/src/go.mod"
 printf 'package main\n' > "$GUARD_ROOT/src/main.go"
 printf 'keep me\n' > "$GUARD_ROOT/src/keepdir/file.txt"
+printf 'keep me\n' > "$GUARD_ROOT/src/vendor/own.txt"
+printf 'keep me\n' > "$GUARD_ROOT/src/bin/own.sh"
+printf 'keep me\n' > "$GUARD_ROOT/src/obj/own.txt"
 cp "$GUARD_ROOT/src/go.mod" "$GUARD_ROOT/go.mod.orig"
 PATH="$GUARD_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$GUARD_ROOT/src" "$GUARD_ROOT/out/bom.json" >/dev/null 2>&1
 cmp -s "$GUARD_ROOT/go.mod.orig" "$GUARD_ROOT/src/go.mod" \
@@ -5308,6 +5311,31 @@ cmp -s "$GUARD_ROOT/go.mod.orig" "$GUARD_ROOT/src/go.mod" \
 [ ! -e "$GUARD_ROOT/src/build" ] && [ ! -e "$GUARD_ROOT/src/mod-new" ] \
     && pass "build dirs created by the run are gone (including their new parent)" \
     || fail "build output left in the source tree" "$(cd "$GUARD_ROOT/src" && find . | sort | tr '\n' ' ')"
+[ ! -e "$GUARD_ROOT/src/web" ] \
+    && pass "a vendor/ directory the run created is gone (including its new parent)" \
+    || fail "composer output left in the source tree" "$(cd "$GUARD_ROOT/src" && find . | sort | tr '\n' ' ')"
+[ -f "$GUARD_ROOT/src/vendor/own.txt" ] && [ -f "$GUARD_ROOT/src/bin/own.sh" ] && [ -f "$GUARD_ROOT/src/obj/own.txt" ] \
+    && pass "vendor/, bin/ and obj/ directories the user already had are kept" \
+    || fail "the guard deleted a pre-existing vendor/, bin/ or obj/ directory"
+# Fresh tree: obj/ and bin/ that only the run created are removed.
+NEWD="$GUARD_ROOT/newdirs"; mkdir -p "$NEWD/src" "$NEWD/out"
+printf 'package main\n' > "$NEWD/src/main.go"
+printf 'module example.com/n\n\ngo 1.24\n' > "$NEWD/src/go.mod"
+PATH="$GUARD_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$NEWD/src" "$NEWD/out/bom.json" >/dev/null 2>&1
+[ ! -e "$NEWD/src/obj" ] && [ ! -e "$NEWD/src/bin" ] && [ ! -e "$NEWD/src/vendor" ] \
+    && pass "obj/, bin/ and vendor/ created by the run are gone" \
+    || fail "dotnet/composer output left in the source tree" "$(cd "$NEWD/src" && find . | sort | tr '\n' ' ')"
+# A snapshot from an older script (no dirs.names) must not treat the user's own
+# vendor/, bin/ and obj/ as new when a later run finishes it.
+LEG="$GUARD_ROOT/legacy"; mkdir -p "$LEG/src/vendor/acme" "$LEG/src/bin" "$LEG/src/obj" "$LEG/state/g1"
+printf 'x\n' > "$LEG/src/vendor/acme/lib.php"; printf 'x\n' > "$LEG/src/bin/tool.sh"; printf 'x\n' > "$LEG/src/obj/x.o"
+: > "$LEG/state/g1/files.before"; : > "$LEG/state/g1/dirs.before"
+sed -n '/^GUARD_DIR=""/,/^# Supervised execution/p' "$LIB/build-prep.sh" > "$LEG/guard-funcs.sh"
+( cd "$LEG/src" && SRC="$LEG/src" OUT="$LEG/none.json" \
+    sh -c 'log() { :; }; . "$1"; GUARD_DIR="$2"; guard_restore' _ "$LEG/guard-funcs.sh" "$LEG/state/g1" >/dev/null 2>&1 )
+[ -f "$LEG/src/vendor/acme/lib.php" ] && [ -f "$LEG/src/bin/tool.sh" ] && [ -f "$LEG/src/obj/x.o" ] \
+    && pass "finishing a snapshot from an older script keeps the user's vendor/, bin/ and obj/" \
+    || fail "an old-format snapshot led to deleting vendor/, bin/ or obj/"
 [ -f "$GUARD_ROOT/src/keepdir/file.txt" ] \
     && pass "a directory that existed before the scan is untouched" \
     || fail "the guard deleted a pre-existing directory"

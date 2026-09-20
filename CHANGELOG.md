@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A source scan no longer leaves `vendor/` (PHP), `obj/` and `bin/` (.NET) behind in the scanned project. Directories that did not exist before the scan are removed afterwards; ones you already had are kept.
 - A project or version name that starts or ends with a character outside `A-Za-z0-9.-` (for example `@acme/lib`) no longer fails the CLI with "SBOM not found on host". The script now names the files it looks for with the same rule the scanner container uses.
 - A source scan launched through the web UI or the desktop app, in any language, could fail outright ("argument list too long") once `build-prep.sh` grew past the kernel's single-argument limit (128KiB on Linux, which every Docker host uses under the hood). It now runs from a file on the same shared mount the scanned tree already uses, instead of being passed inline as a single `sh -c` argument. The CLI path was unaffected (it already bind-mounts the file).
 
