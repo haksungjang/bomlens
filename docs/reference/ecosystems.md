@@ -68,6 +68,8 @@ Detected file: `pom.xml`
 
 > Note: cdxgen reads a Maven component's license from its own `pom.xml` only, so one that declares no `<licenses>` and relies on Maven's own inheritance from a parent POM comes through with none. BomLens now walks that parent chain itself (the reactor's own modules, then the local repository for a parent outside it) and fills the license from the first ancestor that declares one, leaving the component untouched if none do or if it already carries a license. The filled component is recorded with a `bomlens:licenseSource` property set to `parent POM`.
 
+> Note: dependency and license resolution need the container to reach Maven Central, or your mirror. When it cannot, the result holds only the dependencies written in `pom.xml`, with no transitive dependencies and no licenses, and the scan finishes without a warning. If the component count is far below what you expect, check network access first.
+
 ---
 
 ## Java (Gradle)
@@ -77,6 +79,8 @@ Detected file: `pom.xml`
 ```
 
 Detected file: `build.gradle` or `build.gradle.kts`
+
+> Note: as with Maven, resolution needs the container to reach Maven Central, or your mirror. When it cannot, the result can hold only the direct dependencies, with no licenses. If the component count is far below what you expect, check network access first.
 
 ---
 
@@ -120,6 +124,8 @@ Detected file: `package.json` + `package-lock.json` (or `yarn.lock`, `pnpm-lock.
 
 Detected file: `requirements.txt`, or `pyproject.toml` + `poetry.lock`
 
+> Note: pin versions with `==` or commit a lock file such as `poetry.lock`. Without them the SBOM lists the versions available at scan time, not the ones you run. The bundled example pins its versions, and every component carries a license.
+
 ---
 
 ## Go
@@ -141,6 +147,8 @@ Detected file: `go.mod` + `go.sum`
 ```
 
 Detected file: `Gemfile.lock`
+
+> Note: with no `Gemfile.lock` committed, BomLens runs `bundle lock` before scanning. Commit the lock file so the SBOM matches what you deploy.
 
 ---
 
@@ -164,6 +172,8 @@ Detected file: `composer.lock`
 
 Detected file: `Cargo.lock`
 
+> Note: the SBOM records a license for almost no Cargo packages. The bundled example lists 157 components and 1 of them carries a license (under 1%), so the notice file built from the scan is nearly empty. Check the licenses of your Cargo dependencies another way, for example with `cargo metadata` or `cargo license`, or read them from each crate's own manifest. `--deep-license` does not help here: it scans your own source files, not the dependencies, and writes a separate report.
+
 > Note: a Cargo workspace member registered in `Cargo.lock` survives the file-level exclusion above even when its own directory sits under an excluded tree, because cdxgen reads `Cargo.lock` directly. Such a member's own component is left out too, along with a dependency only that member needs, unless a kept member reaches it as well (any way at all). `BOMLENS_INCLUDE_NON_SHIPPED=1` (the same switch as the file-level exclusion above) keeps everything this leaves out. The excluded members and the components dropped because of them are recorded on the SBOM as `bomlens:excluded-members` and `bomlens:excluded-components`.
 
 ---
@@ -174,7 +184,9 @@ Detected file: `Cargo.lock`
 ./scripts/scan-sbom.sh --project "DotNetExample" --version "1.0.0" --target examples/dotnet --generate-only
 ```
 
-Detected files: `*.csproj`, `*.fsproj`, `*.sln` or `*.slnx`, at the root or in folders up to three levels below it, plus `packages.lock.json`
+Detected files: `*.csproj`, `*.fsproj`, `*.sln` or `*.slnx`, at the root or in folders up to three levels below it. `packages.lock.json` is read when present
+
+> Note: detection needs a project or solution file. `packages.lock.json` is not required, but committing one (`dotnet restore --use-lock-file`) pins the resolved versions so the SBOM is reproducible.
 
 ---
 
@@ -193,6 +205,8 @@ Dependencies are read from the committed lockfiles, so include them in the scan:
 
 > Note: UIKit and other Xcode-driven platform dependencies require macOS and are not resolved in the Linux scanner.
 
+> Note: the bundled example lists 10 components, of which 7 carry a PURL (70%) and 2 a license (20%). Both are below the default thresholds of the conformance checks: the PURL check fails and the license check warns.
+
 ---
 
 ## Modelica
@@ -203,7 +217,7 @@ Dependencies are read from the committed lockfiles, so include them in the scan:
 
 Detected files: `*.mo`
 
-cdxgen has no Modelica cataloger, so the usual package-manager approach reads no dependencies. Instead, BomLens parses the `annotation(uses(...))` block a `.mo` package declares directly, picking up each library named there together with its version.
+cdxgen has no Modelica cataloger, so the usual package-manager approach reads no dependencies. Instead, BomLens parses the `annotation(uses(...))` block a `.mo` package declares directly, picking up each library named there together with its version. A `uses()` declaration carries only a name and a version, so the identified libraries have no license (0 of 2 in the bundled example).
 
 ```modelica
 annotation(uses(Modelica(version="4.0.0"), Buildings(version="13.0.0")));
@@ -257,6 +271,8 @@ Run Docker image analysis from the project root.
   --generate-only
 ```
 
+> Note: `--target` takes an image name or an image tar here. Pointing it at the `examples/docker` folder, which holds no dependency manifest, finds no components.
+
 ---
 
 ## Files required for detection
@@ -274,7 +290,29 @@ If source analysis finds no dependencies, check for the lock file below.
 | Rust | `Cargo.lock` |
 | Ruby | `Gemfile.lock` |
 | PHP | `composer.lock` |
-| .NET | `*.csproj`, `*.fsproj`, `*.sln` or `*.slnx` (root or up to three folders down) + `packages.lock.json` |
+| .NET | `*.csproj`, `*.fsproj`, `*.sln` or `*.slnx` (root or up to three folders down); `packages.lock.json` is optional |
+| Swift | `Package.swift` (+ `Package.resolved`) or `Podfile.lock` |
+| Modelica | a `.mo` file with an `annotation(uses(...))` block |
+| Android | a Gradle root (`settings.gradle[.kts]` or `build.gradle[.kts]`) plus a sign of the Android Gradle plugin, see [Android](#android) |
+| Docker image | no file: pass an image name or an image tar as `--target` |
+
+## Results on the bundled examples
+
+The bundled examples were scanned with BomLens 1.12.0 on 2026-09-20. The table counts software components only. The default conformance thresholds are 90% for PURL and 80% for license.
+
+| Example | Components | PURL | License |
+|---------|-----------:|-----:|--------:|
+| Node.js | 120 | 100% | 100% |
+| Python | 39 | 100% | 100% |
+| Go | 19 | 100% | 100% |
+| Ruby | 9 | 100% | 100% |
+| PHP | 16 | 100% | 100% |
+| .NET | 70 | 100% | 98% |
+| Rust | 157 | 100% | 0% |
+| Swift | 10 | 70% | 20% |
+| Modelica | 2 | 100% | 0% |
+
+Java (Maven), Java (Gradle) and Docker are not in the table. The Java scans could not be measured on the network used, where Maven Central did not serve artifacts (see the notes above). The Docker example is an image-scan example and finds nothing when scanned as a folder. These are results on small example projects, not a forecast for yours: a real project's coverage depends on its own dependencies.
 
 ## Comparing results
 
