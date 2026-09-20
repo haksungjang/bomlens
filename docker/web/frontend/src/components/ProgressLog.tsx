@@ -1,8 +1,8 @@
 // Copyright 2026 SK Telecom Co., Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Copy } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { Copy, TriangleAlert } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -48,6 +48,7 @@ export function ProgressLog({
   const { t } = useTranslation();
   const { toast } = useToast();
   const logBoxRef = useRef<HTMLDivElement>(null);
+  const [copyBlocked, setCopyBlocked] = useState(false);
 
   useEffect(() => {
     // Auto-scroll the log box itself — never scrollIntoView, which would also
@@ -75,7 +76,14 @@ export function ProgressLog({
   // Copies the lines exactly as they are shown in the box, so what lands on the
   // clipboard is what the user just read.
   const copyLog = async () => {
-    if (await copyToClipboard(logs.join("\n"))) toast(t("report.logCopied"));
+    if (await copyToClipboard(logs.join("\n"))) {
+      setCopyBlocked(false);
+      toast(t("report.logCopied"));
+    } else {
+      // A non-secure page (opened over a network address) has no clipboard API:
+      // say so instead of doing nothing.
+      setCopyBlocked(true);
+    }
   };
 
   const body = (
@@ -116,12 +124,20 @@ export function ProgressLog({
         )}
       </div>
       {logs.length > 0 && (
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="space-y-2">
           <Button type="button" variant="outline" size="sm" onClick={copyLog}>
             <Copy className="h-4 w-4" aria-hidden />
             {t("report.copyLog")}
           </Button>
-          <p className="text-xs text-foreground/70">{t("report.logHint")}</p>
+          <p className="flex items-start gap-2 text-sm text-foreground/80">
+            <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-risk-medium" aria-hidden />
+            {t("report.logHint")}
+          </p>
+          {copyBlocked && (
+            <p role="status" className="text-sm text-foreground/70">
+              {t("report.logCopyFailed")}
+            </p>
+          )}
         </div>
       )}
     </>

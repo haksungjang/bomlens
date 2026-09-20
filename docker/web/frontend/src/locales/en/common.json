@@ -1234,7 +1234,7 @@
   },
   "report": {
     "open": "Report a problem",
-    "intro": "This is everything that will be copied. Read it first: nothing is sent anywhere, and you paste it into the issue yourself.",
+    "intro": "This is everything that will be copied. Read it first: nothing is sent anywhere, and you paste it into the issue yourself. Home-directory user names and credential-shaped text are masked, but other paths and names may remain.",
     "loading": "Preparing the summary…",
     "loadFailed": "The summary could not be prepared. You can still open the issue form and describe what happened.",
     "label": "Diagnostics summary",
@@ -1244,6 +1244,8 @@
     "openIssue": "Open the issue form",
     "copyLog": "Copy log",
     "logCopied": "Log copied",
-    "logHint": "Copies the log exactly as shown above. Check it for paths or names you would rather not share before you paste it."
+    "logHint": "Copies the log exactly as shown above. Credential-shaped text is already masked, but read it before you paste it: paths and names are not.",
+    "ready": "The diagnostics summary is ready below.",
+    "logCopyFailed": "Copying was blocked here. Select the log above and copy it by hand."
   }
 }

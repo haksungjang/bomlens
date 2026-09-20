@@ -185,7 +185,7 @@ export function ScanRunning({
 
       {/* No run id here: the stream ended before a finished scan existed, so the
           summary is the environment section only. */}
-      {failed && <ReportProblem scanId={null} />}
+      {failed && <ReportProblem scanId={null} errorMessage={errorMessage} defaultOpen />}
     </div>
   );
 }

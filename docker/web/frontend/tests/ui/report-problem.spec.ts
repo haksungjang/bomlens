@@ -75,6 +75,12 @@ for (const ok of [true, false]) {
     page.on("request", (req) => requests.push(new URL(req.url()).pathname));
 
     await run(page);
+    // A healthy result stays folded, like the run log; a failed one opens it.
+    if (ok) {
+      await expect(page.getByTestId("report-text")).toHaveCount(0);
+      expect(requests).not.toContain("/diagnostics");
+      await page.getByText("Report a problem", { exact: true }).click();
+    }
 
     const shown = page.getByTestId("report-text");
     await expect(shown).toBeVisible();
@@ -92,7 +98,7 @@ for (const ok of [true, false]) {
 }
 
 test("the issue form opens away from the app", async ({ page }) => {
-  await stub(page, true);
+  await stub(page, false);
   await run(page);
   const link = page.getByRole("link", { name: "Open the issue form" });
   await expect(link).toHaveAttribute("href", /issues\/new\?template=bug_report\.yml$/);
@@ -139,6 +145,46 @@ test("the copy log button copies the visible log", async ({ page, context }) => 
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
     "first line\nsecond line",
   );
+});
+
+test("a blocked clipboard on the log copy says so", async ({ page }) => {
+  await stub(page, true);
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+  });
+  await page.route("**/scan-stream**", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body:
+        `event: log\ndata: "first line"\n\n` +
+        `event: done\ndata: ${JSON.stringify({ ...base, ok: true })}\n\n`,
+    }),
+  );
+  await run(page);
+  await page.getByText("Run log").first().click();
+  await expect(page.getByText(/read it before you paste it/i)).toBeVisible();
+  await page.getByRole("button", { name: "Copy log" }).click();
+  await expect(page.getByText(/Select the log above and copy it by hand/)).toBeVisible();
+});
+
+test("a scan that ends in a stream error sends its on-screen error to the summary", async ({
+  page,
+}) => {
+  await stub(page, false);
+  await page.route("**/scan-stream**", (r) =>
+    r.fulfill({
+      contentType: "text/event-stream",
+      body: `event: error\ndata: ${JSON.stringify({ detail: "Failed to launch scan: boom", key: null })}\n\n`,
+    }),
+  );
+  const seen: string[] = [];
+  await page.route("**/diagnostics**", (r) => {
+    seen.push(r.request().url());
+    return r.fulfill({ contentType: "application/json", body: JSON.stringify({ text: "x" }) });
+  });
+  await run(page);
+  await expect(page.getByTestId("report-text")).toBeVisible();
+  expect(new URL(seen[0]).searchParams.get("error")).toBe("Failed to launch scan: boom");
 });
 
 test("the report panel has no accessibility violations", async ({ page }) => {

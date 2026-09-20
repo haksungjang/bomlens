@@ -605,6 +605,19 @@ describe("getDiagnostics", () => {
     expect(fetchMock).toHaveBeenCalledWith("/diagnostics?id=run_1.0");
   });
 
+  it("sends the on-screen error only when there is no id", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ text: "t" }) });
+    vi.stubGlobal("fetch", fetchMock);
+    await getDiagnostics(null, "Failed to launch scan: boom");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/diagnostics?error=Failed+to+launch+scan%3A+boom",
+    );
+    await getDiagnostics("run_1", "ignored");
+    expect(fetchMock).toHaveBeenLastCalledWith("/diagnostics?id=run_1");
+    await getDiagnostics(null, "x".repeat(900));
+    expect(String(fetchMock.mock.calls.at(-1)?.[0]).length).toBeLessThan(560);
+  });
+
   it("asks for the environment section alone when there is no id", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

@@ -1,6 +1,8 @@
 // Copyright 2026 SK Telecom Co., Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { copyToClipboard, ISSUE_FORM_URL } from "./diagnostics";
@@ -24,9 +26,17 @@ describe("copyToClipboard", () => {
 });
 
 describe("ISSUE_FORM_URL", () => {
-  it("points at the YAML bug-report form on the public repository", () => {
-    expect(ISSUE_FORM_URL).toBe(
-      "https://github.com/sktelecom/bomlens/issues/new?template=bug_report.yml",
-    );
+  // The issue form file is the one source of truth: the URL must name a form
+  // that exists. (electron/test/helpmenu.test.mjs checks its own copy the same
+  // way, and that it equals this one.)
+  const template = ISSUE_FORM_URL.split("template=")[1];
+  const forms = resolve(__dirname, "../../../../../.github/ISSUE_TEMPLATE");
+
+  it("points at the bug-report form on the public repository", () => {
+    expect(ISSUE_FORM_URL.startsWith("https://github.com/sktelecom/bomlens/issues/new?template=")).toBe(true);
+  });
+
+  it("names a form file that exists", () => {
+    expect(existsSync(resolve(forms, template))).toBe(true);
   });
 });

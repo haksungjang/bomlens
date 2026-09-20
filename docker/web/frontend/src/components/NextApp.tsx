@@ -649,7 +649,12 @@ export function NextApp() {
           {/* A finished scan, succeeded or failed: the summary to attach to an
               issue, shown in full before anything is copied. */}
           {activeSection === "overview" && (
-            <ReportProblem scanId={result.id ?? loadedIdRef.current} />
+            <ReportProblem
+              key={result.id ?? loadedIdRef.current ?? "none"}
+              scanId={result.id ?? loadedIdRef.current}
+              errorMessage={scanError}
+              defaultOpen={!result.ok}
+            />
           )}
         </div>
       )}
