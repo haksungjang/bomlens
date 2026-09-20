@@ -48,9 +48,13 @@ opted_out() { case "$1" in 1|true) return 0 ;; esac; return 1; }
 #
 # So we snapshot the resolver-owned files before the run and put the tree back
 # afterwards: snapshotted files are restored byte for byte, and files or build
-# directories that were NOT there before are removed. Nothing outside these
-# names is considered, and nothing that already existed is deleted, so a
-# committed lockfile or a pre-existing build/ is never lost.
+# directories that were NOT there before are removed (composer's vendor/ and
+# dotnet's obj/ and bin/ included). Nothing outside these names is considered,
+# and nothing that already existed is deleted, so a committed lockfile or a
+# pre-existing build/ is never lost. The directory names in play are recorded
+# with the snapshot (dirs.names): a snapshot written by an older script never
+# listed vendor/obj/bin, so finishing it must not treat the user's own ones as
+# new.
 # BOMLENS_KEEP_BUILD_OUTPUT=1 opts out (leave the resolved tree in place, e.g.
 # to inspect what a resolution produced).
 # ---------------------------------------------------------------------------
@@ -59,6 +63,7 @@ GUARD_DIR=""
 # Resolver-owned paths, relative to $SRC. maxdepth 4 covers multi-module trees
 # (app/build, services/api/go.mod) without walking a whole monorepo; .git and
 # node_modules are pruned because nothing we run resolves inside them.
+GUARD_DIR_NAMES=2
 guard_paths() {
     if [ "$1" = "f" ]; then
         find . -maxdepth 4 \( -name .git -o -name node_modules \) -prune -o -type f \
@@ -68,9 +73,18 @@ guard_paths() {
     else
         find . -maxdepth 4 -name .git -prune -o -type d \
             \( -name .gradle -o -name .build -o -name build -o -name target \
-               -o -name node_modules -o -name __pycache__ -o -name .venv \) \
+               -o -name node_modules -o -name __pycache__ -o -name .venv \
+               -o -name vendor -o -name obj -o -name bin \) \
             -print -prune 2>/dev/null | LC_ALL=C sort
     fi
+}
+
+# Directories recorded before vendor/obj/bin were guarded (no dirs.names file).
+guard_paths_legacy_dirs() {
+    find . -maxdepth 4 -name .git -prune -o -type d \
+        \( -name .gradle -o -name .build -o -name build -o -name target \
+           -o -name node_modules -o -name __pycache__ -o -name .venv \) \
+        -print -prune 2>/dev/null | LC_ALL=C sort
 }
 
 guard_snapshot() {
@@ -88,6 +102,7 @@ guard_snapshot() {
     [ -n "$GUARD_DIR" ] || GUARD_DIR=$(mktemp -d 2>/dev/null) || { GUARD_DIR=""; return 0; }
     guard_paths f > "$GUARD_DIR/files.before" 2>/dev/null
     guard_paths d > "$GUARD_DIR/dirs.before" 2>/dev/null
+    echo "$GUARD_DIR_NAMES" > "$GUARD_DIR/dirs.names" 2>/dev/null
     while IFS= read -r _f; do
         [ -n "$_f" ] || continue
         mkdir -p "$GUARD_DIR/tree/$(dirname "$_f")" 2>/dev/null
@@ -121,7 +136,11 @@ guard_restore() {
         grep -qxF "$_f" "$_g/files.before" 2>/dev/null && continue
         rm -f "$_f" 2>/dev/null && _del=$((_del + 1))
     done < "$_g/files.after"
-    guard_paths d > "$_g/dirs.after" 2>/dev/null
+    if [ "$(cat "$_g/dirs.names" 2>/dev/null)" = "$GUARD_DIR_NAMES" ]; then
+        guard_paths d > "$_g/dirs.after" 2>/dev/null
+    else
+        guard_paths_legacy_dirs > "$_g/dirs.after" 2>/dev/null
+    fi
     while IFS= read -r _d; do
         [ -n "$_d" ] || continue
         [ -d "$_d" ] || continue
