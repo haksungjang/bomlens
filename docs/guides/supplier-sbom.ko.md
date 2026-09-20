@@ -9,7 +9,7 @@ description: 외부에서 받은 SBOM(CycloneDX/SPDX)이 요구사항을 충족�
 
 ## 언제 쓰나
 
-협력사나 다른 팀이 소스 대신 SBOM 파일을 전달했고, 그 SBOM이 품질 기준을 갖췄는지 확인한 뒤 라이선스와 취약점을 점검해야 할 때 씁니다. 입력은 CycloneDX와 SPDX(JSON, Tag-Value) 모두 가능하며, 내부에서 CycloneDX로 변환해 분석합니다.
+협력사나 다른 팀이 소스 대신 SBOM 파일을 전달했고, 그 SBOM이 품질 기준을 갖췄는지 확인한 뒤 라이선스와 취약점을 점검해야 할 때 씁니다. 입력은 CycloneDX(JSON, XML)와 SPDX(JSON, Tag-Value) 모두 가능하며, 내부에서 CycloneDX로 변환해 분석합니다. SPDX RDF/XML은 아직 지원하지 않습니다.
 
 검증 기준은 SBOM이 의존성 점검에 쓸 만한 품질을 갖췄는지를 보는 항목들입니다. 조직마다 요구사항이 다를 수 있으니, 참고 사례로 SK텔레콤 [공급망 보안 가이드](https://sktelecom.github.io/guide/supply-chain/for-suppliers/)의 [SBOM 요구사항](https://sktelecom.github.io/guide/supply-chain/for-suppliers/requirements/)을 둘 수 있습니다.
 
@@ -90,7 +90,7 @@ Java(Maven) 비중이 큰 SBOM이라면 스캔 옵션에서 **심층 CVE 매칭 
 
 ## SPDX 입력
 
-SPDX(JSON, Tag-Value)를 넣으면 내부에서 `syft convert`로 CycloneDX로 바꾼 뒤 동일한 파이프라인으로 분석합니다. 적합성 검증은 변환 전 SPDX 원본을 기준으로 합니다. 변환 과정에서 timestamp나 도구, 추이적 의존성 같은 메타데이터가 정규화되거나 사라질 수 있기 때문입니다. SPDX의 라이선스 표현 일부는 CycloneDX로 옮기면서 단순화될 수 있습니다.
+CycloneDX XML 문서는 검증 전에 CycloneDX JSON으로 다시 쓰며, 컴포넌트 해시와 루트 컴포넌트, 루트에서 이어지는 의존성 연결은 그대로 보존합니다. services, vulnerabilities, pedigree, evidence 절은 옮기지 않으며 건너뛴 절은 스캔 로그에 이름이 남습니다. DTD나 엔티티를 선언한 문서는 거부합니다. SPDX(JSON, Tag-Value)를 넣으면 내부에서 `syft convert`로 CycloneDX로 바꾼 뒤 동일한 파이프라인으로 분석합니다. 적합성 검증은 변환 전 SPDX 원본을 기준으로 합니다. 변환 과정에서 timestamp나 도구, 추이적 의존성 같은 메타데이터가 정규화되거나 사라질 수 있기 때문입니다. SPDX의 라이선스 표현 일부는 CycloneDX로 옮기면서 단순화될 수 있습니다.
 
 ## Yocto 이미지
 

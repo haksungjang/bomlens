@@ -2385,35 +2385,153 @@ bash "$LIB/validate-sbom.sh" "$FIX/good-spdx3-jsonld.json" "$WORK/spdx3-cf" "sup
 [ -f "$WORK/spdx3-cf_conformance.json" ] && jq -e '.checks|length>0' "$WORK/spdx3-cf_conformance.json" >/dev/null 2>&1 \
     && pass "SPDX 3.0 produces a conformance report" || fail "SPDX 3.0 conformance not produced"
 
-echo "== input-format: an XML SBOM is refused by name, not as 'unrecognized' =="
-# The pipeline reads JSON only. An XML CycloneDX used to fall into the generic
-# "unrecognized SBOM format" branch, which sends the user looking for a corrupt
-# file instead of for a format conversion. It is recognized in order to be
-# refused with what to do next; parsing XML is still out of scope.
-cat > "$WORK/supplier-bom.xml" <<'XML'
-<?xml version="1.0" encoding="UTF-8"?>
+echo "== input-format: CycloneDX XML is read, other XML is refused by name =="
+# CycloneDX XML is rewritten as JSON before format detection, keeping what
+# `syft convert` drops: component hashes, the root component, and the links from
+# the root in the dependency graph. Other XML (SPDX RDF/XML) and a CycloneDX file
+# that declares a DTD are refused by name rather than as "unrecognized format".
+FIXXML="$FIX/cyclonedx-1.6.xml"
+xml_out=$(bash "$LIB/convert-to-cdx.sh" "$FIXXML" "$WORK/xml-out.json" 2>&1); xml_rc=$?
+[ "$xml_rc" = "0" ] && pass "CycloneDX XML converts (exit 0)" || fail "CycloneDX XML did not convert (exit $xml_rc)" "$xml_out"
+jq -e '.bomFormat=="CycloneDX" and (.components|length)==2 and (.components[1].components|length)==1' "$WORK/xml-out.json" >/dev/null 2>&1 \
+    && pass "XML components, including a nested one, come through" || fail "XML component tree" "$(jq -c '.components|length' "$WORK/xml-out.json" 2>&1)"
+jq -e '.metadata.component.name=="acme-app" and (.metadata.component.hashes[0].alg=="SHA-256")' "$WORK/xml-out.json" >/dev/null 2>&1 \
+    && pass "the root component and its hash survive (syft convert drops both)" || fail "root component or hash lost"
+jq -e '[.components[]|select(.name=="lodash")|.hashes|length][0]==2' "$WORK/xml-out.json" >/dev/null 2>&1 \
+    && pass "component hashes survive" || fail "component hashes lost"
+jq -e '[.dependencies[]|select(.ref=="acme-app")|.dependsOn|length][0]==2' "$WORK/xml-out.json" >/dev/null 2>&1 \
+    && pass "the root still depends on its components" || fail "dependency graph from the root lost"
+jq -e '[.components[].licenses[]|(.license.id // .expression)]==["MIT","MIT OR Apache-2.0"]' "$WORK/xml-out.json" >/dev/null 2>&1 \
+    && pass "licenses (id and expression) survive" || fail "XML licenses" "$(jq -c '[.components[].licenses]' "$WORK/xml-out.json")"
+jq -e '.compositions[0].aggregate=="complete" and .compositions[0].assemblies==["acme-app"]' "$WORK/xml-out.json" >/dev/null 2>&1 \
+    && pass "the supplier's compositions survive" || fail "XML compositions"
+# The validator reads the same document through the same normalization. The
+# assertion names the spec version the validator saw, so it fails if the
+# conversion did not happen (an unreadable document gets a different check set).
+mkdir -p "$WORK/xmlval"
+bash "$LIB/validate-sbom.sh" "$FIXXML" "$WORK/xmlval/xv" "supplier" >/dev/null 2>&1
+jq -e '[.checks[]|select(.id=="spec-version")|.detail]|first|test("1\\.6")' "$WORK/xmlval/xv_conformance.json" >/dev/null 2>&1 \
+    && pass "conformance reads a CycloneDX XML document as CycloneDX 1.6" || fail "conformance did not see the converted XML" "$(jq -c '[.checks[]|select(.id=="spec-version")]' "$WORK/xmlval/xv_conformance.json" 2>&1 | cut -c1-200)"
+xmlconv() { python3 "$LIB/cdx-xml-to-json.py" "$1" "$2" 2>"$2.err"; }
+# pedigree, evidence: a valid document with them converts (their inner <component>
+# elements are not part of the component list), and the log names what was skipped.
+cat > "$WORK/xml-ped.xml" <<'XML'
+<?xml version="1.0"?>
 <bom xmlns="http://cyclonedx.org/schema/bom/1.6" version="1">
   <components>
-    <component type="library"><name>openssl</name><version>3.0.2</version></component>
+    <component type="library" bom-ref="a"><name>a</name><version>1</version>
+      <pedigree><ancestors><component type="library"><name>a-old</name></component></ancestors></pedigree>
+      <evidence><identity><field>purl</field></identity></evidence>
+    </component>
   </components>
 </bom>
 XML
-xml_out=$(bash "$LIB/convert-to-cdx.sh" "$WORK/supplier-bom.xml" "$WORK/xml-out.json" 2>&1); xml_rc=$?
-[ "$xml_rc" != "0" ] && pass "CycloneDX XML input fails (exit $xml_rc)" || fail "convert-to-cdx.sh accepted XML input (exit 0)"
-echo "$xml_out" | grep -q 'not supported yet' \
-    && pass "the XML error names the format instead of 'unrecognized SBOM format'" || fail "XML error text unexpected" "$xml_out"
-echo "$xml_out" | grep -qi 'json' \
-    && pass "the XML error tells the user to convert to JSON" || fail "XML error gives no next step" "$xml_out"
-echo "$xml_out" | grep -q 'unrecognized SBOM format' \
-    && fail "XML still falls through to the generic unknown-format branch" "$xml_out" || pass "XML does not reach the generic unknown-format branch"
+if xmlconv "$WORK/xml-ped.xml" "$WORK/xml-ped.json" && jq -e '(.components|length)==1' "$WORK/xml-ped.json" >/dev/null 2>&1; then
+    pass "a document with a pedigree converts; the ancestor is not counted as a component"
+else
+    fail "pedigree document was refused" "$(cat "$WORK/xml-ped.json.err")"
+fi
+grep -q 'evidence' "$WORK/xml-ped.json.err" && grep -q 'pedigree' "$WORK/xml-ped.json.err" \
+    && pass "skipped sections are named wherever they sit in the document" || fail "skipped sections not named" "$(cat "$WORK/xml-ped.json.err")"
+# The nested dependency form is one graph, the same as the flat form.
+cat > "$WORK/xml-dep.xml" <<'XML'
+<?xml version="1.0"?>
+<bom xmlns="http://cyclonedx.org/schema/bom/1.4" version="1">
+  <components>
+    <component type="library" bom-ref="a"><name>a</name></component>
+    <component type="library" bom-ref="b"><name>b</name></component>
+    <component type="library" bom-ref="c"><name>c</name></component>
+  </components>
+  <dependencies>
+    <dependency ref="root"><dependency ref="a"><dependency ref="b"><dependency ref="c"/></dependency></dependency></dependency>
+  </dependencies>
+</bom>
+XML
+xmlconv "$WORK/xml-dep.xml" "$WORK/xml-dep.json"
+jq -e '[.dependencies[]|select(.dependsOn|length>0)|"\(.ref)>\(.dependsOn|join(","))"]|sort==["a>b","b>c","root>a"]' "$WORK/xml-dep.json" >/dev/null 2>&1 \
+    && pass "a nested dependency tree keeps every edge, not only the first level" || fail "nested dependency edges" "$(jq -c '.dependencies' "$WORK/xml-dep.json")"
+# Fields a conformance check reads survive: manufacturer, authors, lifecycles.
+cat > "$WORK/xml-meta.xml" <<'XML'
+<?xml version="1.0"?>
+<bom xmlns="http://cyclonedx.org/schema/bom/1.6" version="1">
+  <metadata>
+    <lifecycles><lifecycle><phase>build</phase></lifecycle></lifecycles>
+    <manufacturer><name>Acme</name></manufacturer>
+    <component type="application"><name>app</name></component>
+  </metadata>
+  <components>
+    <component type="library"><name>lib</name>
+      <manufacturer><name>LibCo</name></manufacturer>
+      <authors><author><name>Ann</name></author></authors>
+    </component>
+  </components>
+</bom>
+XML
+xmlconv "$WORK/xml-meta.xml" "$WORK/xml-meta.json"
+jq -e '.metadata.manufacturer.name=="Acme" and .metadata.lifecycles[0].phase=="build" and .components[0].manufacturer.name=="LibCo" and .components[0].authors[0].name=="Ann"' "$WORK/xml-meta.json" >/dev/null 2>&1 \
+    && pass "manufacturer, authors and lifecycles survive the conversion" || fail "creator fields lost" "$(jq -c '.metadata,.components' "$WORK/xml-meta.json" | cut -c1-300)"
+# A comment or a license text that mentions an entity declaration is not a DTD.
+cat > "$WORK/xml-cmt.xml" <<'XML'
+<?xml version="1.0"?>
+<!-- generated by acme; no <!ENTITY declarations are used -->
+<bom xmlns="http://cyclonedx.org/schema/bom/1.4" version="1">
+  <components><component type="library"><name>a</name>
+    <licenses><license><name>Custom</name><text><![CDATA[ see <!ENTITY foo "bar"> in the notice ]]></text></license></licenses>
+  </component></components>
+</bom>
+XML
+xmlconv "$WORK/xml-cmt.xml" "$WORK/xml-cmt.json" && jq -e '(.components|length)==1' "$WORK/xml-cmt.json" >/dev/null 2>&1 \
+    && pass "a comment or license text that mentions an entity is not refused as a DTD" || fail "comment/CDATA mention refused" "$(cat "$WORK/xml-cmt.json.err")"
+# An odd version attribute does not cost the whole document; a pre-JSON spec
+# version is written as the first version that has a JSON form, and says so.
+cat > "$WORK/xml-old.xml" <<'XML'
+<?xml version="1.0"?>
+<bom xmlns="http://cyclonedx.org/schema/bom/1.1" version="1.0"><components><component type="library"><name>a</name></component></components></bom>
+XML
+xmlconv "$WORK/xml-old.xml" "$WORK/xml-old.json"
+jq -e '.specVersion=="1.2" and .version==1' "$WORK/xml-old.json" >/dev/null 2>&1 \
+    && grep -q 'written as 1.2' "$WORK/xml-old.json.err" \
+    && pass "a non-integer version is repaired and CycloneDX 1.1 is written as 1.2 with a note" || fail "old-version handling" "$(jq -c '[.specVersion,.version]' "$WORK/xml-old.json")"
+# UTF-16, as Windows tools write it: the declaration names UTF-16, the bytes are
+# UTF-16, and the converter, the CLI path and the DTD refusal all cope.
+sed 's/encoding="UTF-8"/encoding="UTF-16"/' "$FIXXML" | iconv -f UTF-8 -t UTF-16 > "$WORK/xml-u16.xml"
+u16_out=$(bash "$LIB/convert-to-cdx.sh" "$WORK/xml-u16.xml" "$WORK/xml-u16-out.json" 2>&1); u16_rc=$?
+[ "$u16_rc" = "0" ] && jq -e '(.components|length)==2 and .metadata.component.name=="acme-app"' "$WORK/xml-u16-out.json" >/dev/null 2>&1 \
+    && pass "UTF-16 CycloneDX XML converts" || fail "UTF-16 XML did not convert" "$u16_out"
+printf '<?xml version="1.0" encoding="UTF-16"?>\n<!DOCTYPE bom [<!ENTITY a "x">]>\n<bom xmlns="http://cyclonedx.org/schema/bom/1.6"><components><component type="library"><name>&a;</name></component></components></bom>\n' \
+    | iconv -f UTF-8 -t UTF-16 > "$WORK/evil-u16.xml"
+evil16=$(bash "$LIB/convert-to-cdx.sh" "$WORK/evil-u16.xml" "$WORK/evil16-out.json" 2>&1); evil16_rc=$?
+[ "$evil16_rc" != "0" ] && echo "$evil16" | grep -q 'declares a DTD' \
+    && pass "a DTD in a UTF-16 document is refused too" || fail "UTF-16 DTD not refused" "$evil16"
+# The input summary of an XML document matches what the JSON form would say.
+python3 "$LIB/describe-input-sbom.py" "$FIXXML" "$WORK/xml-desc.json" cyclonedx-1.6.xml >/dev/null 2>&1
+jq -e '.componentCount==2 and .rootComponent.name=="acme-app" and (.tools|length)==1' "$WORK/xml-desc.json" >/dev/null 2>&1 \
+    && pass "the input summary of an XML document lists the root, the tool and the components" || fail "XML input summary" "$(jq -c . "$WORK/xml-desc.json" 2>&1 | cut -c1-200)"
+# The JSON copy is keyed by content and converted once for the validator and the
+# converter together.
+ls "$WORK"/xmlval/.sbom-xml.*.json >/dev/null 2>&1 \
+    && pass "the converted copy is a scratch file the pipeline can reuse" || fail "no scratch copy written"
+# A DTD or entity declaration is refused before parsing (entity expansion,
+# external entities), and the refusal names the reason.
+cat > "$WORK/evil-bom.xml" <<'XML'
+<?xml version="1.0"?>
+<!DOCTYPE bom [<!ENTITY lol "lol"><!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;">]>
+<bom xmlns="http://cyclonedx.org/schema/bom/1.6"><components><component type="library"><name>&lol2;</name></component></components></bom>
+XML
+evil_out=$(bash "$LIB/convert-to-cdx.sh" "$WORK/evil-bom.xml" "$WORK/evil-out.json" 2>&1); evil_rc=$?
+[ "$evil_rc" != "0" ] && echo "$evil_out" | grep -q 'declares a DTD' \
+    && pass "a CycloneDX XML file with a DTD or entity is refused with the reason" || fail "DTD/entity XML was not refused" "$evil_out"
+python3 "$LIB/describe-input-sbom.py" "$WORK/evil-bom.xml" "$WORK/evil-desc.json" evil.xml >/dev/null 2>&1
+[ ! -s "$WORK/evil-desc.json" ] && pass "the input summary does not read a document that declares a DTD" || fail "describe-input read a DTD document"
+[ ! -s "$WORK/evil-out.json" ] && pass "nothing is written for a refused XML document" || fail "output written for refused XML"
 # SPDX RDF/XML lands in the same branch (no <bom> root, but it is still XML).
 cat > "$WORK/supplier-rdf.xml" <<'XML'
 <?xml version="1.0" encoding="UTF-8"?>
 <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><spdx:SpdxDocument/></rdf:RDF>
 XML
 rdf_out=$(bash "$LIB/convert-to-cdx.sh" "$WORK/supplier-rdf.xml" "$WORK/rdf-out.json" 2>&1 || true)
-echo "$rdf_out" | grep -q 'not supported yet' \
-    && pass "SPDX RDF/XML gets the same named error" || fail "SPDX RDF/XML error text unexpected" "$rdf_out"
+echo "$rdf_out" | grep -q 'could not be read' \
+    && pass "SPDX RDF/XML gets the named error" || fail "SPDX RDF/XML error text unexpected" "$rdf_out"
 # A genuinely unknown (non-XML, non-SBOM) input keeps the original message.
 printf 'this is not an SBOM at all\n' > "$WORK/notsbom.txt"
 txt_out=$(bash "$LIB/convert-to-cdx.sh" "$WORK/notsbom.txt" "$WORK/notsbom-out.json" 2>&1 || true)

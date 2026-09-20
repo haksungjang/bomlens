@@ -890,6 +890,8 @@ EOF
         ;;
 esac
 
+# The JSON copy of a CycloneDX XML input (sbom-detect.sh) is scratch, not a result.
+rm -f "$(dirname "$OUTPUT_FILE")"/.sbom-xml.*.json* "$(dirname "$OUT_PREFIX")"/.sbom-xml.*.json* 2>/dev/null || true
 if [ ! -s "$OUTPUT_FILE" ]; then echo "[ERROR] SBOM file is empty: $OUTPUT_FILE"; exit 1; fi
 echo "[INFO] SBOM ready: $OUTPUT_FILE"
 

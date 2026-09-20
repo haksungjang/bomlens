@@ -1280,15 +1280,24 @@ c_kind=$(curl -s -o /dev/null -w '%{http_code}' -F "file=@$WORK/sample.zip" "$BA
 [ "$c_kind" = "400" ] && pass "unknown upload kind rejected (400)" || fail "bogus kind returned $c_kind (expected 400)"
 c_ext=$(curl -s -o /dev/null -w '%{http_code}' -F "kind=zip" -F "file=@$WORK/payload.txt" "$BASE/upload?kind=zip")
 [ "$c_ext" = "415" ] && pass "wrong extension rejected (415)" || fail ".txt as zip returned $c_ext (expected 415)"
-# An XML SBOM is refused here rather than in the container: the pipeline reads
-# JSON only, so accepting the file just spends a scan to fail. The answer has to
-# name the format and the fix, not read as "unsupported file type".
+# CycloneDX XML is accepted: the pipeline converts it to JSON. Any other XML
+# (SPDX RDF/XML in practice) is refused here rather than in the container, since
+# accepting it would only spend a scan to fail, and the answer names the format
+# and the fix instead of reading as "unsupported file type".
 printf '<?xml version="1.0"?><bom xmlns="http://cyclonedx.org/schema/bom/1.6"/>\n' > "$WORK/supplier.xml"
-xml_body=$(curl -s -o "$WORK/xml-resp.json" -w '%{http_code}' -F "kind=sbom" -F "file=@$WORK/supplier.xml" "$BASE/upload?kind=sbom")
-[ "$xml_body" = "415" ] && pass "XML SBOM upload rejected (415)" || fail ".xml as sbom returned $xml_body (expected 415)"
+xml_ok=$(curl -s -o /dev/null -w '%{http_code}' -F "kind=sbom" -F "file=@$WORK/supplier.xml" "$BASE/upload?kind=sbom")
+[ "$xml_ok" = "200" ] && pass "CycloneDX XML SBOM upload accepted (200)" || fail "CycloneDX .xml as sbom returned $xml_ok (expected 200)"
+# UTF-16 (what some Windows tools write) puts a NUL between every character, so
+# a plain byte search for the namespace misses it; the converter reads it fine.
+printf '<?xml version="1.0"?><bom xmlns="http://cyclonedx.org/schema/bom/1.6"/>\n' | iconv -f UTF-8 -t UTF-16 > "$WORK/supplier-u16.xml"
+xml_u16=$(curl -s -o /dev/null -w '%{http_code}' -F "kind=sbom" -F "file=@$WORK/supplier-u16.xml" "$BASE/upload?kind=sbom")
+[ "$xml_u16" = "200" ] && pass "UTF-16 CycloneDX XML upload accepted (200)" || fail "UTF-16 .xml as sbom returned $xml_u16 (expected 200)"
+printf '<?xml version="1.0"?><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"/>\n' > "$WORK/supplier-rdf.xml"
+xml_body=$(curl -s -o "$WORK/xml-resp.json" -w '%{http_code}' -F "kind=sbom" -F "file=@$WORK/supplier-rdf.xml" "$BASE/upload?kind=sbom")
+[ "$xml_body" = "415" ] && pass "non-CycloneDX XML SBOM upload rejected (415)" || fail "RDF .xml as sbom returned $xml_body (expected 415)"
 xml_err=$(python3 -c "import json;print(json.load(open('$WORK/xml-resp.json')).get('error',''))" 2>/dev/null)
 case "$xml_err" in
-    *"not supported yet"*) pass "the 415 names XML and tells the user to convert to JSON" ;;
+    *"Only CycloneDX XML is read"*) pass "the 415 names the accepted XML format and the fix" ;;
     *) fail "XML upload error text unexpected" "got '$xml_err'" ;;
 esac
 # A JSON SBOM upload is unaffected by that guard.
