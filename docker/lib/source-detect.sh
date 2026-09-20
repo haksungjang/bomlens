@@ -34,7 +34,7 @@ FETCH_LICENSE="${FETCH_LICENSE:-true}"
 # container, so every path that starts it (scan-sbom.sh stage 1, the web UI
 # container, generate_sbom_cdxgen in entrypoint.sh) passes these on by name.
 # docker skips a name-only -e whose variable is unset.
-BUILD_PREP_ENV_NAMES="BOMLENS_KEEP_BUILD_OUTPUT BOMLENS_MAVEN_FULL_GRAPH BOMLENS_ANDROID_FULL_GRAPH BOMLENS_NODE_FULL_GRAPH BOMLENS_PHP_FULL_GRAPH BOMLENS_INCLUDE_NON_SHIPPED BOMLENS_NO_COPYRIGHT BOMLENS_PREP_TIMEOUT"
+BUILD_PREP_ENV_NAMES="BOMLENS_KEEP_BUILD_OUTPUT BOMLENS_MAVEN_FULL_GRAPH BOMLENS_ANDROID_FULL_GRAPH BOMLENS_NODE_FULL_GRAPH BOMLENS_PHP_FULL_GRAPH BOMLENS_INCLUDE_NON_SHIPPED BOMLENS_NO_COPYRIGHT BOMLENS_NO_CARGO_LICENSE BOMLENS_PREP_TIMEOUT"
 
 # Prints "-e NAME" for each name above. Names only, never values, so the output
 # is safe to splice into the eval'd docker command in scan-sbom.sh.

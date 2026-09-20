@@ -163,6 +163,7 @@ MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
 | `BOMLENS_CANCEL_GRACE` | — | `30` | Seconds a cancelled scan (CLI Ctrl+C, or the web UI's cancel button) gets to stop cleanly before it is force-stopped. Applies to the CLI and `--ui`; the desktop app always uses the default |
 | `BOMLENS_INCLUDE_NON_SHIPPED` | - | - | Source scans: set `1` to keep the manifests under test, example, benchmark and demo folders and the GitHub Actions workflows in `.github/workflows`, which are left out by default |
 | `BOMLENS_NO_COPYRIGHT` | - | - | Source scans: set `1` to skip filling npm and Python component `copyright` from the installed packages' license files |
+| `BOMLENS_NO_CARGO_LICENSE` | - | - | Source scans: set `1` to skip filling Rust component licenses from `cargo metadata` (`FETCH_LICENSE=false` on the command line skips it too) |
 | `CYCLONEDX_SPEC_VERSIONS` | — | `1.3 1.4 1.5 1.6` | Accepted CycloneDX spec versions for the conformance check (space-separated); overrides the default range |
 | `AI_CYCLONEDX_SPEC_VERSIONS` | — | `1.3 1.4 1.5 1.6 1.7` | Accepted CycloneDX versions for AI SBOMs (ML-BOM), which additionally allow 1.7 |
 | `SPDX_SPEC_VERSIONS` | — | `SPDX-2.2 SPDX-2.3` | Accepted SPDX spec versions for the conformance check |
