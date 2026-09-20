@@ -141,7 +141,12 @@ while IFS=$'\t' read -r -u 3 name eco url tag commit lock; do
 
     # The scan must not leave the checkout changed. Ignored files count: the
     # build output of these repositories is ignored by their own .gitignore.
-    if [ -z "$(cd "$src" && git status --porcelain --ignored 2>/dev/null)" ]; then clean=yes; else clean=no; fi
+    changed=$(cd "$src" && git status --porcelain --ignored 2>/dev/null)
+    if [ -z "$changed" ]; then clean=yes; else
+        clean=no
+        echo "  the scan changed the source tree:"
+        printf '%s\n' "$changed" | head -10 | sed 's/^/    /'
+    fi
 
     bom=$(find "$out" -name "*_bom.json" -type f 2>/dev/null | head -1)
     comps="-"; purl="-"; lic="-"; bom_ok=""
