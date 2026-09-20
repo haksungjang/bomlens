@@ -162,7 +162,7 @@ docker build --build-arg ANDROID_API=<API> -t bomlens-android-sdk<API> docker/an
 
 감지 파일: `composer.lock`
 
-> 주의: `composer.lock`이 커밋돼 있지 않으면 BomLens가 스캔 전에 직접 해석합니다(`composer update --no-dev`), Ruby의 `Gemfile.lock`을 처리하는 방식과 같습니다. cdxgen은 이미 각 composer 컴포넌트에 해석된 스코프를 붙여서 줍니다(`require`는 required, `require-dev`는 optional). BomLens는 Maven과 같은 방식으로 이 정보를 이용해 SBOM을 required 대상으로 걸러냅니다. require와 require-dev를 합친 전체 그래프를 그대로 두려면 `BOMLENS_PHP_FULL_GRAPH=1`을 설정하세요([Docker 이미지 환경 변수](docker-image.ko.md#환경-변수)).
+> 주의: `composer.lock`이 커밋돼 있지 않으면 BomLens가 스캔 전에 직접 해석합니다(`composer update --no-dev`, `require-dev`와 `config.lock`을 뺀 `composer.json` 사본으로, 플랫폼 요구사항은 무시합니다). Ruby의 `Gemfile.lock`을 처리하는 방식과 같습니다. 스캔이 끝나면 원래 `composer.json`을 되돌려 놓습니다. PHP 버전을 강제하지 않으므로, 프로젝트가 선언한 것보다 새로운 PHP를 요구하는 의존성 버전이 선택될 수 있습니다. cdxgen은 이미 각 composer 컴포넌트에 해석된 스코프를 붙여서 줍니다(`require`는 required, `require-dev`는 optional). BomLens는 Maven과 같은 방식으로 이 정보를 이용해 SBOM을 required 대상으로 걸러냅니다. require와 require-dev를 합친 전체 그래프를 그대로 두려면 `BOMLENS_PHP_FULL_GRAPH=1`을 설정하세요([Docker 이미지 환경 변수](docker-image.ko.md#환경-변수)).
 
 ---
 

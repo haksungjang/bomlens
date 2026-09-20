@@ -51,10 +51,10 @@ opted_out() { case "$1" in 1|true) return 0 ;; esac; return 1; }
 # directories that were NOT there before are removed (composer's vendor/ and
 # dotnet's obj/ and bin/ included). Nothing outside these names is considered,
 # and nothing that already existed is deleted, so a committed lockfile or a
-# pre-existing build/ is never lost. The directory names in play are recorded
-# with the snapshot (dirs.names): a snapshot written by an older script never
-# listed vendor/obj/bin, so finishing it must not treat the user's own ones as
-# new.
+# pre-existing build/ is never lost. The names in play are versioned and recorded
+# with the snapshot (names.version): a snapshot written by an older script never
+# listed vendor/obj/bin or composer.json, so finishing it must not treat the
+# user's own ones as new.
 # BOMLENS_KEEP_BUILD_OUTPUT=1 opts out (leave the resolved tree in place, e.g.
 # to inspect what a resolution produced).
 # ---------------------------------------------------------------------------
@@ -63,28 +63,37 @@ GUARD_DIR=""
 # Resolver-owned paths, relative to $SRC. maxdepth 4 covers multi-module trees
 # (app/build, services/api/go.mod) without walking a whole monorepo; .git and
 # node_modules are pruned because nothing we run resolves inside them.
-GUARD_DIR_NAMES=2
-guard_paths() {
+# The name set grows over time: 1 = original, 2 adds vendor/obj/bin directories,
+# 3 adds composer.json (rewritten during the PHP resolve). guard_paths takes the
+# version to list, so a snapshot is always compared with the names it was written
+# under.
+GUARD_NAMES_VERSION=3
+guard_paths() {  # guard_paths f|d [version]
+    _gv="${2:-$GUARD_NAMES_VERSION}"
     if [ "$1" = "f" ]; then
-        find . -maxdepth 4 \( -name .git -o -name node_modules \) -prune -o -type f \
-            \( -name go.mod -o -name go.sum -o -name Cargo.lock -o -name Gemfile.lock \
-               -o -name Package.resolved -o -name package-lock.json \
-               -o -name composer.lock \) -print 2>/dev/null | LC_ALL=C sort
-    else
+        if [ "$_gv" -ge 3 ]; then
+            find . -maxdepth 4 \( -name .git -o -name node_modules -o -name vendor \) -prune -o -type f \
+                \( -name go.mod -o -name go.sum -o -name Cargo.lock -o -name Gemfile.lock \
+                   -o -name Package.resolved -o -name package-lock.json \
+                   -o -name composer.lock -o -name composer.json \) -print 2>/dev/null | LC_ALL=C sort
+        else
+            find . -maxdepth 4 \( -name .git -o -name node_modules \) -prune -o -type f \
+                \( -name go.mod -o -name go.sum -o -name Cargo.lock -o -name Gemfile.lock \
+                   -o -name Package.resolved -o -name package-lock.json \
+                   -o -name composer.lock \) -print 2>/dev/null | LC_ALL=C sort
+        fi
+    elif [ "$_gv" -ge 2 ]; then
         find . -maxdepth 4 -name .git -prune -o -type d \
             \( -name .gradle -o -name .build -o -name build -o -name target \
                -o -name node_modules -o -name __pycache__ -o -name .venv \
                -o -name vendor -o -name obj -o -name bin \) \
             -print -prune 2>/dev/null | LC_ALL=C sort
+    else
+        find . -maxdepth 4 -name .git -prune -o -type d \
+            \( -name .gradle -o -name .build -o -name build -o -name target \
+               -o -name node_modules -o -name __pycache__ -o -name .venv \) \
+            -print -prune 2>/dev/null | LC_ALL=C sort
     fi
-}
-
-# Directories recorded before vendor/obj/bin were guarded (no dirs.names file).
-guard_paths_legacy_dirs() {
-    find . -maxdepth 4 -name .git -prune -o -type d \
-        \( -name .gradle -o -name .build -o -name build -o -name target \
-           -o -name node_modules -o -name __pycache__ -o -name .venv \) \
-        -print -prune 2>/dev/null | LC_ALL=C sort
 }
 
 guard_snapshot() {
@@ -102,7 +111,7 @@ guard_snapshot() {
     [ -n "$GUARD_DIR" ] || GUARD_DIR=$(mktemp -d 2>/dev/null) || { GUARD_DIR=""; return 0; }
     guard_paths f > "$GUARD_DIR/files.before" 2>/dev/null
     guard_paths d > "$GUARD_DIR/dirs.before" 2>/dev/null
-    echo "$GUARD_DIR_NAMES" > "$GUARD_DIR/dirs.names" 2>/dev/null
+    echo "$GUARD_NAMES_VERSION" > "$GUARD_DIR/names.version" 2>/dev/null
     while IFS= read -r _f; do
         [ -n "$_f" ] || continue
         mkdir -p "$GUARD_DIR/tree/$(dirname "$_f")" 2>/dev/null
@@ -127,7 +136,11 @@ guard_restore() {
         fi
         cp -p "$_g/tree/$_f" "$_f" 2>/dev/null && _rst=$((_rst + 1))
     done < "$_g/files.before"
-    guard_paths f > "$_g/files.after" 2>/dev/null
+    # A snapshot written by an older script has no version file (1) and is
+    # finished with the names it was written under.
+    _gnv=$(cat "$_g/names.version" 2>/dev/null)
+    case "$_gnv" in ''|*[!0-9]*) _gnv=1 ;; esac
+    guard_paths f "$_gnv" > "$_g/files.after" 2>/dev/null
     while IFS= read -r _f; do
         [ -n "$_f" ] || continue
         # Never the SBOM itself: the web-UI path asks cdxgen to write it inside
@@ -136,11 +149,7 @@ guard_restore() {
         grep -qxF "$_f" "$_g/files.before" 2>/dev/null && continue
         rm -f "$_f" 2>/dev/null && _del=$((_del + 1))
     done < "$_g/files.after"
-    if [ "$(cat "$_g/dirs.names" 2>/dev/null)" = "$GUARD_DIR_NAMES" ]; then
-        guard_paths d > "$_g/dirs.after" 2>/dev/null
-    else
-        guard_paths_legacy_dirs > "$_g/dirs.after" 2>/dev/null
-    fi
+    guard_paths d "$_gnv" > "$_g/dirs.after" 2>/dev/null
     while IFS= read -r _d; do
         [ -n "$_d" ] || continue
         [ -d "$_d" ] || continue
@@ -458,7 +467,39 @@ fi
 # (composer-lock-committed), unchanged by this step.
 if [ -f composer.json ] && [ ! -f composer.lock ] && command -v composer >/dev/null 2>&1; then
     log "composer update"
-    prep_step composer-install "$PREP_TIMEOUT_DEFAULT" composer update --no-dev --no-scripts --no-interaction
+    # `--no-dev` only skips installing require-dev; composer still resolves it,
+    # and a library whose dev tools require the library itself or PHP extensions
+    # the image lacks fails to resolve at all, leaving no lock and an empty SBOM.
+    # A library may also set config.lock=false, so composer writes no lock even
+    # when it resolves. The deployable scope needs none of that, so resolve a
+    # manifest without require-dev and config.lock, and ignore platform
+    # requirements (nothing runs here; a project pinned to an older PHP than the
+    # image still resolves, though a dependency version needing a newer PHP can
+    # then be picked). BOMLENS_PHP_FULL_GRAPH keeps the full manifest. The
+    # original is copied outside the tree, written back in place (so a symlinked
+    # composer.json stays a link) right after the resolve, and is also covered
+    # by the source-tree guard if the run is killed in between. php is always
+    # there where composer is; jq covers a stub or an unusual image.
+    _cj_orig=""; _cj_new=""
+    if ! opted_out "${BOMLENS_PHP_FULL_GRAPH:-}"; then
+        _cj_orig=$(mktemp 2>/dev/null) && _cj_new=$(mktemp 2>/dev/null) || { rm -f "$_cj_orig" "$_cj_new"; _cj_orig=""; }
+    fi
+    if [ -n "$_cj_orig" ] && cp -p composer.json "$_cj_orig" 2>/dev/null; then
+        _cj_ok=""
+        if command -v php >/dev/null 2>&1; then
+            php -r '$j = json_decode(file_get_contents("composer.json")); if (!is_object($j)) exit(1); unset($j->{"require-dev"}); if (isset($j->config) && is_object($j->config)) unset($j->config->lock); echo json_encode($j, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);' > "$_cj_new" 2>/dev/null && _cj_ok=1
+        elif command -v jq >/dev/null 2>&1; then
+            jq 'del(."require-dev") | del(.config.lock)' composer.json > "$_cj_new" 2>/dev/null && _cj_ok=1
+        fi
+        if [ -n "$_cj_ok" ] && [ -s "$_cj_new" ] && cat "$_cj_new" > composer.json 2>/dev/null; then
+            _cj_rewritten=1
+        else
+            _cj_rewritten=""
+        fi
+    fi
+    prep_step composer-install "$PREP_TIMEOUT_DEFAULT" composer update --no-dev --no-scripts --no-interaction --ignore-platform-reqs
+    [ -z "${_cj_rewritten:-}" ] || cat "$_cj_orig" > composer.json 2>/dev/null
+    rm -f "${_cj_orig:-}" "${_cj_new:-}"
 fi
 
 # Maven — no pre-resolve step. cdxgen invokes maven itself (dependency:tree /
