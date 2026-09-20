@@ -68,6 +68,8 @@ jq '.components | length' NodeExample_1.0.0/NodeExample_1.0.0_bom.json
 
 > 주의: cdxgen은 Maven 컴포넌트의 라이선스를 그 컴포넌트 자신의 `pom.xml`에서만 읽으므로, `<licenses>`를 선언하지 않고 부모 POM의 Maven 상속에 기대는 컴포넌트는 라이선스가 빈 채로 넘어옵니다. BomLens는 이제 그 부모 체인을 직접 따라가(리액터 자신의 모듈부터, 리액터 밖 부모는 로컬 저장소에서) 처음으로 라이선스를 선언한 조상의 값을 채우고, 어느 조상도 선언하지 않았거나 이미 라이선스가 있는 컴포넌트는 그대로 둡니다. 채운 컴포넌트에는 `bomlens:licenseSource` 속성이 `parent POM` 값으로 기록됩니다.
 
+> 주의: 의존성과 라이선스를 해석하려면 컨테이너가 Maven Central(또는 사내 미러)에 접속할 수 있어야 합니다. 접속하지 못하면 `pom.xml`에 적힌 의존성만 담기고 전이 의존성과 라이선스는 비며, 스캔은 경고 없이 끝납니다. 컴포넌트 수가 예상보다 훨씬 적으면 네트워크 접속부터 확인하세요.
+
 ---
 
 ## Java (Gradle)
@@ -77,6 +79,8 @@ jq '.components | length' NodeExample_1.0.0/NodeExample_1.0.0_bom.json
 ```
 
 감지 파일: `build.gradle` 또는 `build.gradle.kts`
+
+> 주의: Maven과 마찬가지로 해석하려면 컨테이너가 Maven Central(또는 사내 미러)에 접속할 수 있어야 합니다. 접속하지 못하면 직접 의존성만 담기고 라이선스가 빌 수 있습니다. 컴포넌트 수가 예상보다 훨씬 적으면 네트워크 접속부터 확인하세요.
 
 ---
 
@@ -120,6 +124,8 @@ docker build --build-arg ANDROID_API=<API> -t bomlens-android-sdk<API> docker/an
 
 감지 파일: `requirements.txt` 또는 `pyproject.toml` + `poetry.lock`
 
+> 주의: 버전을 `==`로 고정하거나 `poetry.lock` 같은 잠금 파일을 커밋하세요. 그렇지 않으면 SBOM에는 실제로 쓰는 버전이 아니라 스캔 시점에 받을 수 있는 버전이 담깁니다. 번들 예제는 버전을 고정해 두었고 모든 컴포넌트에 라이선스가 있습니다.
+
 ---
 
 ## Go
@@ -141,6 +147,8 @@ docker build --build-arg ANDROID_API=<API> -t bomlens-android-sdk<API> docker/an
 ```
 
 감지 파일: `Gemfile.lock`
+
+> 주의: `Gemfile.lock`이 커밋되어 있지 않으면 BomLens가 스캔 전에 `bundle lock`을 실행합니다. SBOM이 배포 구성과 일치하도록 잠금 파일을 커밋하세요.
 
 ---
 
@@ -164,6 +172,8 @@ docker build --build-arg ANDROID_API=<API> -t bomlens-android-sdk<API> docker/an
 
 감지 파일: `Cargo.lock`
 
+> 주의: SBOM에 라이선스가 기록되는 Cargo 패키지는 거의 없습니다. 번들 예제는 컴포넌트 157개 중 1개만 라이선스가 있어(1% 미만) 스캔으로 만든 고지문이 거의 비어 있습니다. Cargo 의존성의 라이선스는 `cargo metadata`나 `cargo license` 같은 다른 방법이나 각 크레이트의 자체 매니페스트로 확인하세요. `--deep-license`는 이 경우 도움이 되지 않습니다. 의존성이 아니라 자체 소스 파일을 검사하고 결과를 별도 보고서로 씁니다.
+
 > 주의: Cargo 워크스페이스 멤버가 `Cargo.lock`에 등록돼 있으면, 그 멤버의 디렉터리가 제외 대상 트리 아래에 있어도 위의 파일 단위 제외로는 빠지지 않습니다. cdxgen이 `Cargo.lock`을 직접 읽기 때문입니다. 이런 멤버 자신의 컴포넌트는 빠지고, 그 멤버만 필요로 하는 의존성도 함께 빠집니다. 다만 유지되는 멤버가 그 의존성을 어떤 식으로든 필요로 하면 남습니다. `BOMLENS_INCLUDE_NON_SHIPPED=1`(위 파일 단위 제외와 같은 스위치)로 이렇게 빠지는 것을 모두 그대로 둘 수 있습니다. 제외한 멤버와 그 때문에 빠진 컴포넌트는 SBOM에 각각 `bomlens:excluded-members`, `bomlens:excluded-components`로 기록됩니다.
 
 ---
@@ -174,7 +184,9 @@ docker build --build-arg ANDROID_API=<API> -t bomlens-android-sdk<API> docker/an
 ./scripts/scan-sbom.sh --project "DotNetExample" --version "1.0.0" --target examples/dotnet --generate-only
 ```
 
-감지 파일: 루트나 그 아래 세 단계 폴더까지의 `*.csproj`, `*.fsproj`, `*.sln`, `*.slnx`와 `packages.lock.json`
+감지 파일: 루트나 그 아래 세 단계 폴더까지의 `*.csproj`, `*.fsproj`, `*.sln`, `*.slnx`. `packages.lock.json`은 있으면 읽습니다
+
+> 주의: 감지에는 프로젝트 또는 솔루션 파일이 필요합니다. `packages.lock.json`은 필수는 아니지만, 커밋해 두면(`dotnet restore --use-lock-file`) 해석된 버전이 고정되어 SBOM을 재현할 수 있습니다.
 
 ---
 
@@ -193,6 +205,8 @@ docker build --build-arg ANDROID_API=<API> -t bomlens-android-sdk<API> docker/an
 
 > 주의: UIKit 등 Xcode가 관리하는 플랫폼 의존성은 macOS가 필요하며 Linux 스캐너에서는 해석되지 않습니다.
 
+> 주의: 번들 예제는 컴포넌트 10개 중 7개에 PURL(70%), 2개에 라이선스(20%)가 있습니다. 둘 다 적합성 검사의 기본 기준에 못 미칩니다. PURL 검사는 실패하고 라이선스 검사는 경고를 냅니다.
+
 ---
 
 ## Modelica
@@ -203,7 +217,7 @@ docker build --build-arg ANDROID_API=<API> -t bomlens-android-sdk<API> docker/an
 
 감지 파일: `*.mo`
 
-cdxgen에는 Modelica 카탈로거가 없어 일반적인 패키지 관리자 방식으로는 의존성을 읽지 못합니다. 대신 `.mo` 패키지 자신이 선언하는 `annotation(uses(...))` 블록을 직접 파싱해서, 그 안에 이름과 버전이 함께 적힌 라이브러리를 컴포넌트로 편입합니다.
+cdxgen에는 Modelica 카탈로거가 없어 일반적인 패키지 관리자 방식으로는 의존성을 읽지 못합니다. 대신 `.mo` 패키지 자신이 선언하는 `annotation(uses(...))` 블록을 직접 파싱해서, 그 안에 이름과 버전이 함께 적힌 라이브러리를 컴포넌트로 편입합니다. `uses()` 선언에는 이름과 버전만 있으므로 식별된 라이브러리에는 라이선스가 없습니다(번들 예제는 2개 중 0개).
 
 ```modelica
 annotation(uses(Modelica(version="4.0.0"), Buildings(version="13.0.0")));
@@ -257,6 +271,8 @@ Docker 이미지 분석은 프로젝트 루트에서 실행합니다.
   --generate-only
 ```
 
+> 주의: 이 경우 `--target`에는 이미지 이름이나 이미지 tar를 지정합니다. 의존성 목록 파일이 없는 `examples/docker` 폴더를 지정하면 컴포넌트를 찾지 못합니다.
+
 ---
 
 ## 감지에 필요한 파일
@@ -274,7 +290,29 @@ Docker 이미지 분석은 프로젝트 루트에서 실행합니다.
 | Rust | `Cargo.lock` |
 | Ruby | `Gemfile.lock` |
 | PHP | `composer.lock` |
-| .NET | `*.csproj`, `*.fsproj`, `*.sln`, `*.slnx`(루트 또는 세 단계 아래 폴더까지) + `packages.lock.json` |
+| .NET | `*.csproj`, `*.fsproj`, `*.sln`, `*.slnx`(루트 또는 세 단계 아래 폴더까지), `packages.lock.json`은 선택 |
+| Swift | `Package.swift` (+ `Package.resolved`) 또는 `Podfile.lock` |
+| Modelica | `annotation(uses(...))` 블록이 있는 `.mo` 파일 |
+| Android | Gradle 루트(`settings.gradle[.kts]` 또는 `build.gradle[.kts]`)와 Android Gradle 플러그인 사용 흔적, [Android](#android) 참고 |
+| Docker 이미지 | 파일 없음: 이미지 이름이나 이미지 tar를 `--target`으로 지정 |
+
+## 번들 예제 결과
+
+번들 예제를 2026-09-20에 BomLens 1.12.0으로 스캔했습니다. 표는 소프트웨어 컴포넌트만 셉니다. 적합성 검사의 기본 기준은 PURL 90%, 라이선스 80%입니다.
+
+| 예제 | 컴포넌트 | PURL | 라이선스 |
+|------|--------:|-----:|--------:|
+| Node.js | 120 | 100% | 100% |
+| Python | 39 | 100% | 100% |
+| Go | 19 | 100% | 100% |
+| Ruby | 9 | 100% | 100% |
+| PHP | 16 | 100% | 100% |
+| .NET | 70 | 100% | 98% |
+| Rust | 157 | 100% | 0% |
+| Swift | 10 | 70% | 20% |
+| Modelica | 2 | 100% | 0% |
+
+Java (Maven), Java (Gradle), Docker는 표에 없습니다. Java 스캔은 측정에 쓴 네트워크에서 Maven Central이 아티팩트를 내려주지 않아 측정하지 못했습니다(위 주의 참고). Docker 예제는 이미지를 스캔하는 예제라서 폴더로 스캔하면 아무것도 찾지 못합니다. 이 수치는 작은 예제 프로젝트의 결과이며 실제 프로젝트의 예측값이 아닙니다. 실제 프로젝트의 채움률은 그 프로젝트의 의존성에 따라 달라집니다.
 
 ## 결과 비교
 
