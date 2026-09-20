@@ -2538,6 +2538,134 @@ def scan_detail(run_id):
 
 
 # --------------------------------------------------------------------------
+# Diagnostics summary ("Report a problem")
+#
+# A short, plain-text summary a user reviews on screen and then pastes into an
+# issue. Built ONLY from the fields listed below (an allowlist, not a filter over
+# whatever a scan happened to record): tool/image versions, the container engine
+# kind, the scan mode and non-secret options, the outcome per stage, and the
+# collected [WARN]/[ERROR] text. It never carries source contents, the scanned
+# path or URL, the project name, tokens, or a raw log. Every free-text value is
+# additionally run through _redact_diagnostic_text.
+# --------------------------------------------------------------------------
+_DIAG_OPTION_KEYS = (
+    "notice", "security", "deepLicense", "identifyVendored", "includeOsv",
+    "byteStable", "deepCve",
+)
+_USER_PATH_RES = (
+    re.compile(r"(?i)(/(?:Users|home)/)[^/\s\"']+"),
+    re.compile(r"(?i)([A-Za-z]:[\\/]+Users[\\/]+)[^\\/\s\"']+"),
+)
+_DIAG_ENGINE_TIMEOUT = 5
+
+
+def _redact_diagnostic_text(text):
+    """Credential-shaped text (the same masks a failed-scan card gets) plus the
+    user-name segment of a home-directory path."""
+    # Home-directory names first, so the broader blob masks in _scrub_error_text
+    # do not swallow a whole path and leave a marker-less gap.
+    text = str(text)
+    for rx in _USER_PATH_RES:
+        text = rx.sub(lambda m: m.group(1) + "***", text)
+    return _scrub_error_text(text)
+
+
+_diag_engine_cache = [0.0, ""]
+
+
+def _diag_engine():
+    """Cached for a minute: the summary is fetched each time a result screen is
+    shown and `docker info` is a subprocess call."""
+    now = time.monotonic()
+    if _diag_engine_cache[1] and now - _diag_engine_cache[0] < 60:
+        return _diag_engine_cache[1]
+    value = _diag_engine_probe()
+    _diag_engine_cache[0], _diag_engine_cache[1] = now, value
+    return value
+
+
+def _diag_engine_probe():
+    """Container engine kind via the mounted socket. Only the server version, OS
+    name, OS type and architecture are read: `docker info` also reports the
+    engine's host name, which can contain a person's name, so it is not asked."""
+    if not docker_cli_present():
+        return "docker CLI not present in this image"
+    if not docker_capable():
+        return "engine socket not mounted"
+    try:
+        r = subprocess.run(
+            ["docker", "info", "--format",
+             "{{.ServerVersion}}|{{.OperatingSystem}}|{{.OSType}}|{{.Architecture}}"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=_DIAG_ENGINE_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "engine did not answer"
+    if r.returncode != 0:
+        return "engine did not answer"
+    parts = r.stdout.decode("utf-8", "replace").strip().split("|")
+    if len(parts) != 4:
+        return "engine did not answer"
+    return "server %s, %s (%s/%s)" % (parts[0], parts[1], parts[2], parts[3])
+
+
+def build_diagnostics(run_id=None):
+    """The diagnostics summary as text, or None for a malformed run id.
+
+    `run_id` is optional: without it (a scan that failed before it had a run
+    folder) only the environment section is produced."""
+    if run_id is not None and not scan_id_ok(run_id):
+        return None
+    lines = [
+        "BomLens diagnostics",
+        "app version: %s" % (os.environ.get("BOMLENS_VERSION") or "unknown"),
+        "scanner image: %s" % SCANNER_IMAGE,
+        "firmware image: %s" % FIRMWARE_IMAGE,
+        "aibom image: %s" % AIBOM_IMAGE,
+        "deep-cve image: %s" % DEEP_CVE_IMAGE,
+        "container engine: %s" % _diag_engine(),
+    ]
+    meta = scanmeta(run_id) if run_id else None
+    if run_id and meta is None:
+        lines.append("scan: no record found for this id")
+    if meta:
+        lines.append("input: %s" % meta.get("source", "unknown"))
+        lines.append("mode: %s" % (meta.get("mode") or "unknown"))
+        opts = ["%s=%s" % (k, "on" if meta.get(k) else "off")
+                for k in _DIAG_OPTION_KEYS if k in meta]
+        lines.append("options: %s" % (", ".join(opts) or "none recorded"))
+        if meta.get("conformanceProfile"):
+            lines.append("conformance profile: %s" % meta["conformanceProfile"])
+        if "ok" in meta:
+            lines.append("outcome: %s" % ("succeeded" if meta["ok"] else "failed"))
+        stages = []
+        sbom = sbom_summary(run_id)
+        if sbom is not None:
+            stages.append("sbom generated: %d components" % sbom.get("components", 0))
+            failed = [s for s in _as_list(sbom.get("pipelineStepsFailed")) if isinstance(s, str)]
+            stages.append("pipeline steps failed: %s" % (", ".join(failed) or "none"))
+        else:
+            stages.append("sbom generated: no")
+        kinds = []
+        for f in list_results(run_id):
+            name = f["name"]
+            for suf in ARTIFACT_SUFFIXES:
+                if name.endswith(suf):
+                    kinds.append(suf.lstrip("_"))
+                    break
+        stages.append("artifacts: %s" % (", ".join(kinds) or "none"))
+        lines.append("stages:")
+        lines.extend("  - " + s for s in stages)
+        if meta.get("errorMessage"):
+            lines.append("error:")
+            lines.extend("  " + ln for ln in str(meta["errorMessage"]).splitlines())
+        warns = [w for w in _as_list(meta.get("warnings")) if isinstance(w, str)]
+        lines.append("warnings: %s" % (len(warns) or "none"))
+        lines.extend("  " + w for w in warns[:MAX_SCAN_WARNINGS])
+    return _redact_diagnostic_text("\n".join(lines)) + "\n"
+
+
+# --------------------------------------------------------------------------
 # Upload handling
 # --------------------------------------------------------------------------
 def upload_token_dir(token):
@@ -4196,6 +4324,8 @@ class Handler(BaseHTTPRequestHandler):
             _sweep_stale_uploads()
         elif path == "/scan":
             self._serve_scan(urllib.parse.parse_qs(parsed.query))
+        elif path == "/diagnostics":
+            self._serve_diagnostics(urllib.parse.parse_qs(parsed.query))
         elif path == "/scan-stream":
             # A scan is a side-effecting action reachable only over GET (an
             # EventSource cannot issue POST), so it needs the CSRF check GET
@@ -4751,6 +4881,17 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, json.dumps({"error": "not found"}))
             return
         self._send(200, json.dumps(detail))
+
+    def _serve_diagnostics(self, qs):
+        """Plain-text diagnostics summary for the Report-a-problem panel. Read
+        only, nothing is sent anywhere; the browser shows it and the user
+        decides whether to copy it."""
+        sid = (qs.get("id") or [""])[0] or None
+        text = build_diagnostics(sid)
+        if text is None:
+            self._send(400, json.dumps({"error": "invalid scan id"}))
+            return
+        self._send(200, json.dumps({"text": text}))
 
     def _download_all(self, qs=None):
         """Bundle one scan's generated artifacts into one in-memory zip.
@@ -5857,9 +5998,16 @@ class Handler(BaseHTTPRequestHandler):
                 # matched the [ERROR] convention.
                 "errorMessage": None if (ok or error_sent) else error_tracker.result(),
             }
+            # Outcome fields for the diagnostics summary (GET /diagnostics), which
+            # must work for a failed run too. errorMessage is the already-scrubbed
+            # tracker text, never a raw log line.
+            scan_config["mode"] = mode
+            scan_config["ok"] = ok
+            if done["errorMessage"]:
+                scan_config["errorMessage"] = done["errorMessage"]
             if scan_warnings:
                 scan_config["warnings"] = scan_warnings
-                write_scanmeta(run_out, scan_config)
+            write_scanmeta(run_out, scan_config)
             sse("done", json.dumps(done))
         except Exception as exc:  # noqa: BLE001
             # The summary helpers are defended against malformed artifacts, so a

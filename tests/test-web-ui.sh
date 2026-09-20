@@ -3273,6 +3273,17 @@ case "$mode" in
         echo "Response: {\"secret\": \"do-not-leak-me\"}"
         exit 1
         ;;
+    # Warnings and an error that carry exactly what a diagnostics summary must
+    # not repeat: a home-directory user name, a Bearer token, a URL with
+    # credentials, an Authorization header.
+    diag-leak)
+        echo "[WARN] cannot read /Users/alice/secretproj/pom.xml"
+        echo "[WARN] retry with Authorization: Bearer abcdef1234567890abcdef1234567890"
+        echo "[WARN] fetched https://deploy:pa55w0rd@example.com/x?token=s3cr3ttoken1234"
+        echo "[WARN] cannot open C:\\Users\\bob\\proj\\build.gradle"
+        echo "[ERROR] boom at /home/carol/work with Bearer zzzzzzzzzzzzzzzzzzzzzzzzzz"
+        exit 1
+        ;;
     hang)
         i=0
         while [ "$i" -lt 100 ]; do
@@ -3502,6 +3513,65 @@ assert any('do-not-leak-me' in str(e['data']) for e in evs if e['event'] == 'log
     pass "a raw Response: body line never reaches errorMessage, only the [ERROR] line above it"
 else
     fail "a Response: line leaked into errorMessage" "$events"
+fi
+
+echo "== /diagnostics: the Report-a-problem summary carries an allowlist only =="
+# The summary is what a user pastes into a public issue. Whatever the scan
+# logged (paths with a user name, tokens, credentials in a URL, the scanned
+# path itself) must not be in it, on a failed scan and on a successful one.
+echo diag-leak > "$STUB_MODE_FILE"
+events=$(sse_events "project=diagproj&version=9.9&source=rootfs-dir&target=$PLAINROOT&token=")
+diag_id=$(echo "$events" | python3 -c "
+import sys, json
+d = [e for e in json.load(sys.stdin) if e['event'] == 'done'][0]['data']
+assert d['ok'] is False, d
+print(d['id'])")
+diag_fail=$(curl -fsS "$BASE2/diagnostics?id=$diag_id" 2>/dev/null)
+if echo "$diag_fail" | PLAINROOT="$PLAINROOT" python3 -c "
+import sys, json, os
+t = json.load(sys.stdin)['text']
+assert t.startswith('BomLens diagnostics'), t
+for want in ('app version:', 'scanner image:', 'container engine:', 'mode: ROOTFS',
+             'options:', 'outcome: failed', 'stages:', 'warnings: 4', 'error:'):
+    assert want in t, (want, t)
+for banned in ('alice', 'bob', 'carol', 'abcdef1234567890', 'pa55w0rd', 's3cr3ttoken',
+               'zzzzzzzz', 'diagproj', os.environ['PLAINROOT'], 'Bearer a'):
+    assert banned not in t, (banned, t)
+assert '/Users/***/secretproj/pom.xml' in t and '/home/***/work' in t, t
+assert 'Users' + chr(92) + '***' in t, t
+"; then
+    pass "/diagnostics on a failed scan lists the allowlisted fields and none of the leaked user names, tokens, credentials, scanned path or project name"
+else
+    fail "/diagnostics leaked or omitted fields on a failed scan" "$diag_fail"
+fi
+
+echo ok > "$STUB_MODE_FILE"
+events=$(sse_events "project=diagok&version=1.0&source=rootfs-dir&target=$PLAINROOT")
+ok_id=$(echo "$events" | python3 -c "
+import sys, json
+print([e for e in json.load(sys.stdin) if e['event'] == 'done'][0]['data']['id'])")
+if curl -fsS "$BASE2/diagnostics?id=$ok_id" | PLAINROOT="$PLAINROOT" python3 -c "
+import sys, json, os
+t = json.load(sys.stdin)['text']
+assert 'outcome: succeeded' in t and 'sbom generated: 2 components' in t, t
+assert 'pipeline steps failed: none' in t and 'artifacts: bom.json' in t, t
+assert 'diagok' not in t and os.environ['PLAINROOT'] not in t, t
+"; then
+    pass "/diagnostics on a successful scan reports the outcome, component count and artifact kinds without the project name or scanned path"
+else
+    fail "/diagnostics on a successful scan is wrong"
+fi
+
+# No id (a scan that failed before it had a run folder): environment only. A
+# malformed id is refused, like every other id-taking endpoint.
+if curl -fsS "$BASE2/diagnostics" | python3 -c "
+import sys, json
+t = json.load(sys.stdin)['text']
+assert 'app version:' in t and 'outcome' not in t, t
+" && [ "$(curl -s -o /dev/null -w '%{http_code}' "$BASE2/diagnostics?id=../etc")" = "400" ]; then
+    pass "/diagnostics without an id returns the environment section only, and a traversal id is refused (400)"
+else
+    fail "/diagnostics without an id or with a bad id misbehaved"
 fi
 
 echo "== _scrub_error_text: credential/token-shaped text is masked before display =="
