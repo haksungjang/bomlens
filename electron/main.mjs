@@ -6,7 +6,7 @@
 //
 // onot의 main.mjs를 본떴으나, 파이썬 사이드카 대신 Docker 컨테이너를 띄운다(lib/container.mjs).
 // 백엔드와 React SPA가 이미 스캐너 이미지 안에 있으므로 BrowserWindow는 localhost를 로드한다.
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen, session, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, MenuItem, nativeTheme, screen, session, shell } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,6 +26,7 @@ import { BOOT, canRetry, isBusy } from "./lib/boot.mjs";
 import { classifyPullFailure, createPullProgress } from "./lib/pullprogress.mjs";
 import { addScanMounts, parseScanMounts, removeScanMount } from "./lib/scanmounts.mjs";
 import { createHealthMonitor } from "./lib/health.mjs";
+import { addReportItem, ISSUE_FORM_URL } from "./lib/helpmenu.mjs";
 import { createStartupLogger } from "./lib/log.mjs";
 import { parseWindowState, sanitizeBounds } from "./lib/winstate.mjs";
 import { mainMessages, resolveLang } from "./lib/i18n.mjs";
@@ -510,6 +511,15 @@ function registerApp() {
     t = mainMessages(lang);
     // 시작 로그 파일: 실행마다 새로 쓴다. UI 전환 후 사라진 진행 내역을 문제 보고에 쓴다.
     startupLogger = createStartupLogger(startupLogPath());
+    // 도움말 메뉴에 "문제 신고"를 더한다. 시작 화면 단계(Docker 없음, 이미지 받기 실패)의
+    // 문제도 웹 UI가 뜨기 전이라 이 메뉴로만 신고 양식에 닿을 수 있다.
+    if (addReportItem(Menu.getApplicationMenu(), MenuItem, {
+      label: t.reportProblem,
+      helpLabel: t.helpMenu,
+      onClick: () => shell.openExternal(ISSUE_FORM_URL),
+    })) {
+      Menu.setApplicationMenu(Menu.getApplicationMenu());
+    }
     // macOS About 패널에 앱 이름과 버전을 표기한다(다른 OS에서는 효과가 없고 무해).
     app.setAboutPanelOptions({ applicationName: "BomLens", applicationVersion: app.getVersion() });
     app.on("web-contents-created", (_e, contents) => hardenWebContents(contents));
