@@ -194,8 +194,8 @@ Rancher Desktop이나 Docker Desktop을 쓴다면 앱의 설정(Preferences) 화
 
 ### 그 밖의 문제
 
-1. `VERBOSE=true ./tests/test-scan.sh` 로 상세 로그를 확인합니다.
+1. 같은 명령을 다시 실행하고 터미널 출력을 읽습니다. `[WARN]`과 `[ERROR]` 줄에 건너뛴 것과 실패한 것이 적혀 있습니다.
 2. Docker 이미지를 최신 버전으로 업데이트합니다: `docker pull ghcr.io/sktelecom/bomlens:latest`
-3. 해결되지 않으면 [GitHub Issues](https://github.com/sktelecom/bomlens/issues)에 환경 정보와 로그를 첨부해 제보해 주세요.
+3. 해결되지 않으면 [GitHub Issues](https://github.com/sktelecom/bomlens/issues/new?template=bug_report.yml)에 실행한 명령과 터미널 출력을 첨부해 제보해 주세요. 이슈 양식에 필요한 항목이 안내되어 있습니다.
 
 모드별 사용법은 [입력 시나리오 가이드](../guides/by-input.ko.md), 산출물 종류는 [산출물 레퍼런스](artifacts.ko.md), 언어 감지는 [지원 생태계](ecosystems.ko.md), 파이프라인에서 실행하는 방법은 [CI/CD 연동](../guides/ci-cd.ko.md)을 참고하세요.

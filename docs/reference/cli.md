@@ -197,8 +197,8 @@ Re-scanning the same `--project`/`--version` reuses its output folder, however t
 
 ### Anything else
 
-1. Check verbose logs with `VERBOSE=true ./tests/test-scan.sh`.
+1. Run the same command again and read the terminal output. The `[WARN]` and `[ERROR]` lines say what was skipped or what failed.
 2. Update the Docker image: `docker pull ghcr.io/sktelecom/bomlens:latest`.
-3. If it still fails, open a [GitHub Issue](https://github.com/sktelecom/bomlens/issues) with your environment info and logs.
+3. If it still fails, open a [GitHub Issue](https://github.com/sktelecom/bomlens/issues/new?template=bug_report.yml) with the command you ran and its terminal output. The issue form lists what it needs.
 
 For how to use each mode, see the [input scenarios guide](../guides/by-input.md); for the kinds of outputs, see the [artifacts reference](artifacts.md); for language detection, see [supported ecosystems](ecosystems.md); to run scans in a pipeline, see [CI/CD integration](../guides/ci-cd.md).

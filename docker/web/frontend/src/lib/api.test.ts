@@ -15,6 +15,7 @@ import {
   importVex,
   formSourceOf,
   getCapabilities,
+  getDiagnostics,
   listScans,
   loadScan,
   saveVexVerdict,
@@ -588,5 +589,54 @@ describe("formSourceOf", () => {
 
   it("keeps the deep scan-target variant, which the server handles", () => {
     expect(formSourceOf("scan-target-src")).toBe("scan-target-src");
+  });
+});
+
+describe("getDiagnostics", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("requests the scan's summary by id and returns its text", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ text: "BomLens diagnostics\n" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await getDiagnostics("run_1.0")).toBe("BomLens diagnostics\n");
+    expect(fetchMock).toHaveBeenCalledWith("/diagnostics?id=run_1.0");
+  });
+
+  it("sends the on-screen error only when there is no id", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ text: "t" }) });
+    vi.stubGlobal("fetch", fetchMock);
+    await getDiagnostics(null, "Failed to launch scan: boom");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/diagnostics?error=Failed+to+launch+scan%3A+boom",
+    );
+    await getDiagnostics("run_1", "ignored");
+    expect(fetchMock).toHaveBeenLastCalledWith("/diagnostics?id=run_1");
+    await getDiagnostics(null, "x".repeat(900));
+    expect(String(fetchMock.mock.calls.at(-1)?.[0]).length).toBeLessThan(560);
+  });
+
+  it("asks for the environment section alone when there is no id", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ text: "env" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await getDiagnostics(null);
+    expect(fetchMock).toHaveBeenCalledWith("/diagnostics");
+  });
+
+  it("is null on an HTTP error, a network failure or a malformed body", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false }));
+    expect(await getDiagnostics("x")).toBeNull();
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
+    expect(await getDiagnostics("x")).toBeNull();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ text: 5 }) }),
+    );
+    expect(await getDiagnostics("x")).toBeNull();
   });
 });

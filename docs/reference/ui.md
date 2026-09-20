@@ -137,6 +137,10 @@ Reachable from the top bar's icon at any time, or from a Cmd/Ctrl+K search whose
 
 This is the one feature that reaches outside the machine on its own initiative rather than as part of a scan — see [Local-first by design](../concepts/local-first.md) for what that means for a closed network. Set `EXTERNAL_LOOKUP=false` to remove it (the icon, the search row and the screen) entirely.
 
+## Reporting a problem
+
+When a scan ends, whether it succeeded or failed, the Overview ends with a Report a problem panel. It is folded after a successful scan and open after a failed one. It shows a diagnostics summary in full: the app and scanner image versions, the container engine, the scan mode and options, the result of each stage, and the `[WARN]` lines the scan collected. The summary is built from a fixed list of fields, so source contents, the scanned path and the project name are not part of it. Text taken from the scan itself (warnings and error messages) is filtered: user names in home-directory paths and text that looks like a credential are masked. The filter is best effort, and a folder name or other detail can remain, so read the summary before you paste it. **Copy summary** puts exactly the text you see on the clipboard, and **Open the issue form** opens the bug report form in your browser. Nothing is sent until you paste the text into the issue yourself. The run log has its own Copy log button, which copies the log as shown with credential-shaped text already masked; check it for paths and names too. The Help menu (web UI and desktop app) also links to the issue form, and so does the desktop app's start screen.
+
 ## Notes
 
 > The firmware upload tile appears automatically whenever the Docker engine is running. See the
