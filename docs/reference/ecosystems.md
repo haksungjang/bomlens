@@ -162,7 +162,7 @@ Detected file: `Gemfile.lock`
 
 Detected file: `composer.lock`
 
-> Note: with no `composer.lock` committed, BomLens resolves one itself (`composer update --no-dev`) before scanning, the same as it does for Ruby's `Gemfile.lock`. cdxgen already tags each composer component with its resolved scope (`require` becomes required, `require-dev` becomes optional), so BomLens filters the SBOM to the required set, the same way it does for Maven. To keep the full require-plus-require-dev graph instead, set `BOMLENS_PHP_FULL_GRAPH=1` ([Docker image environment variables](docker-image.md#environment-variables)).
+> Note: with no `composer.lock` committed, BomLens resolves one itself (`composer update --no-dev`, on a copy of `composer.json` without `require-dev` and `config.lock`, with platform requirements ignored) before scanning, the same as it does for Ruby's `Gemfile.lock`. Your `composer.json` is put back afterwards. A dependency version that needs a newer PHP than the project declares can be picked, because the PHP version is not enforced. cdxgen already tags each composer component with its resolved scope (`require` becomes required, `require-dev` becomes optional), so BomLens filters the SBOM to the required set, the same way it does for Maven. To keep the full require-plus-require-dev graph instead, set `BOMLENS_PHP_FULL_GRAPH=1` ([Docker image environment variables](docker-image.md#environment-variables)).
 
 ---
 

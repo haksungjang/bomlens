@@ -5325,7 +5325,7 @@ PATH="$GUARD_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$NEWD/src" "$NEWD/out/bom.
 [ ! -e "$NEWD/src/obj" ] && [ ! -e "$NEWD/src/bin" ] && [ ! -e "$NEWD/src/vendor" ] \
     && pass "obj/, bin/ and vendor/ created by the run are gone" \
     || fail "dotnet/composer output left in the source tree" "$(cd "$NEWD/src" && find . | sort | tr '\n' ' ')"
-# A snapshot from an older script (no dirs.names) must not treat the user's own
+# A snapshot from an older script (no names.version) must not treat the user's own
 # vendor/, bin/ and obj/ as new when a later run finishes it.
 LEG="$GUARD_ROOT/legacy"; mkdir -p "$LEG/src/vendor/acme" "$LEG/src/bin" "$LEG/src/obj" "$LEG/state/g1"
 printf 'x\n' > "$LEG/src/vendor/acme/lib.php"; printf 'x\n' > "$LEG/src/bin/tool.sh"; printf 'x\n' > "$LEG/src/obj/x.o"
@@ -5336,6 +5336,15 @@ sed -n '/^GUARD_DIR=""/,/^# Supervised execution/p' "$LIB/build-prep.sh" > "$LEG
 [ -f "$LEG/src/vendor/acme/lib.php" ] && [ -f "$LEG/src/bin/tool.sh" ] && [ -f "$LEG/src/obj/x.o" ] \
     && pass "finishing a snapshot from an older script keeps the user's vendor/, bin/ and obj/" \
     || fail "an old-format snapshot led to deleting vendor/, bin/ or obj/"
+# The same for a snapshot that predates composer.json being guarded.
+printf '{"require":{}}\n' > "$LEG/src/composer.json"
+mkdir -p "$LEG/state/g1"; : > "$LEG/state/g1/files.before"; : > "$LEG/state/g1/dirs.before"
+echo 2 > "$LEG/state/g1/names.version"
+( cd "$LEG/src" && SRC="$LEG/src" OUT="$LEG/none.json" \
+    sh -c 'log() { :; }; . "$1"; GUARD_DIR="$2"; guard_restore' _ "$LEG/guard-funcs.sh" "$LEG/state/g1" >/dev/null 2>&1 )
+[ -f "$LEG/src/composer.json" ] \
+    && pass "finishing a snapshot from an older script keeps the user's composer.json" \
+    || fail "an old-format snapshot led to deleting composer.json"
 [ -f "$GUARD_ROOT/src/keepdir/file.txt" ] \
     && pass "a directory that existed before the scan is untouched" \
     || fail "the guard deleted a pre-existing directory"
@@ -5695,11 +5704,13 @@ rm -f "$CA2_ROOT/bin/composer"
 cat > "$CA2_ROOT/bin/composer" <<STUB
 #!/bin/sh
 printf '%s\n' "\$*" > "$CA2_ROOT/composer-args.txt"
+cp composer.json "$CA2_ROOT/composer-seen.json"
 printf '{"packages":[]}\n' > composer.lock
 STUB
 chmod +x "$CA2_ROOT/bin/composer"
 mkdir -p "$CA2_ROOT/php-resolve/src" "$CA2_ROOT/php-resolve/out"
-printf '{"require":{"monolog/monolog":"^3.0"}}\n' > "$CA2_ROOT/php-resolve/src/composer.json"
+printf '{"require":{"monolog/monolog":"^3.0"},"require-dev":{"rollbar/rollbar":"^4.0"},"config":{"lock":false}}\n' > "$CA2_ROOT/php-resolve/src/composer.json"
+cp "$CA2_ROOT/php-resolve/src/composer.json" "$CA2_ROOT/php-resolve/composer.json.orig"
 PATH="$CA2_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$CA2_ROOT/php-resolve/src" "$CA2_ROOT/php-resolve/out/bom.json" >/dev/null 2>&1
 if [ -f "$CA2_ROOT/composer-args.txt" ] \
    && grep -q -- '--no-dev' "$CA2_ROOT/composer-args.txt" \
@@ -5716,6 +5727,69 @@ if jq -e '[.metadata.properties[]? | select(.name=="bomlens:prep-step-applied") 
 else
     fail "resolved composer.lock was not recorded as applied lock evidence" "$(jq -c '.metadata.properties' "$CA2_ROOT/php-resolve/out/bom.json" 2>&1)"
 fi
+# require-dev can make a library unresolvable (a dev tool that requires the
+# library itself, or PHP extensions the image lacks), so the resolve sees a
+# manifest without it, and the user's composer.json is put back afterwards.
+if [ -f "$CA2_ROOT/composer-seen.json" ] \
+   && jq -e 'has("require") and (has("require-dev") | not) and ((.config.lock? // null) == null)' "$CA2_ROOT/composer-seen.json" >/dev/null 2>&1 \
+   && grep -q -- '--ignore-platform-reqs' "$CA2_ROOT/composer-args.txt"; then
+    pass "the composer resolve runs on a manifest without require-dev or config.lock and ignores platform extensions"
+else
+    fail "composer resolved the full manifest" "$(cat "$CA2_ROOT/composer-seen.json" 2>/dev/null || echo '(never ran)')"
+fi
+cmp -s "$CA2_ROOT/php-resolve/composer.json.orig" "$CA2_ROOT/php-resolve/src/composer.json" \
+    && pass "composer.json is byte-identical after the scan" \
+    || fail "the scan left the resolve manifest in the source tree" "$(cat "$CA2_ROOT/php-resolve/src/composer.json")"
+# The same resolve in the situations that used to lose or alter the user's file.
+MANIFEST='{"require":{"monolog/monolog":"^3.0"},"require-dev":{"rollbar/rollbar":"^4.0"},"config":{"lock":false}}'
+php_case() {  # php_case <dir> [ENV=VALUE]  (src/composer.json is prepared by the caller)
+    _pc="$CA2_ROOT/$1"; shift
+    mkdir -p "$_pc/out"; rm -f "$CA2_ROOT/composer-seen.json"
+    env "$@" PATH="$CA2_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$_pc/src" "$_pc/out/bom.json" >/dev/null 2>&1
+}
+mkdir -p "$CA2_ROOT/php-link/src" "$CA2_ROOT/php-link/shared"
+printf '%s\n' "$MANIFEST" > "$CA2_ROOT/php-link/shared/composer.json"
+ln -s ../shared/composer.json "$CA2_ROOT/php-link/src/composer.json"
+php_case php-link X=1
+[ -L "$CA2_ROOT/php-link/src/composer.json" ] && cmp -s "$CA2_ROOT/php-link/shared/composer.json" - <<EOF2
+$MANIFEST
+EOF2
+[ $? -eq 0 ] \
+    && pass "a symlinked composer.json stays a link with its content unchanged" \
+    || fail "the resolve damaged a symlinked composer.json" "$(ls -la "$CA2_ROOT/php-link/src" 2>&1)"
+
+mkdir -p "$CA2_ROOT/php-keep/src"; printf '%s\n' "$MANIFEST" > "$CA2_ROOT/php-keep/src/composer.json"
+php_case php-keep BOMLENS_KEEP_BUILD_OUTPUT=1
+printf '%s\n' "$MANIFEST" | cmp -s - "$CA2_ROOT/php-keep/src/composer.json" \
+    && pass "composer.json is unchanged when the source-tree guard is off (BOMLENS_KEEP_BUILD_OUTPUT=1)" \
+    || fail "the guard-off path left composer.json rewritten" "$(cat "$CA2_ROOT/php-keep/src/composer.json")"
+
+mkdir -p "$CA2_ROOT/php-full/src"; printf '%s\n' "$MANIFEST" > "$CA2_ROOT/php-full/src/composer.json"
+php_case php-full BOMLENS_PHP_FULL_GRAPH=1
+jq -e 'has("require-dev")' "$CA2_ROOT/composer-seen.json" >/dev/null 2>&1 \
+    && pass "BOMLENS_PHP_FULL_GRAPH=1 resolves the full manifest, require-dev included" \
+    || fail "the full-graph opt-out still resolved a stripped manifest"
+
+mkdir -p "$CA2_ROOT/php-bad/src"; printf '{ not json\n' > "$CA2_ROOT/php-bad/src/composer.json"
+php_case php-bad X=1
+printf '{ not json\n' | cmp -s - "$CA2_ROOT/php-bad/src/composer.json" \
+    && [ -f "$CA2_ROOT/composer-args.txt" ] \
+    && pass "an unreadable composer.json is left untouched and composer still runs" \
+    || fail "invalid composer.json was altered or the resolve was skipped"
+
+mkdir -p "$CA2_ROOT/php-vendor/src/vendor/acme/old"
+printf '%s\n' "$MANIFEST" > "$CA2_ROOT/php-vendor/src/composer.json"
+printf '{}\n' > "$CA2_ROOT/php-vendor/src/vendor/acme/old/composer.json"
+cat > "$CA2_ROOT/bin/composer" <<STUB2
+#!/bin/sh
+mkdir -p vendor/acme/new; printf '{}\n' > vendor/acme/new/composer.json
+printf '{"packages":[]}\n' > composer.lock
+STUB2
+chmod +x "$CA2_ROOT/bin/composer"
+php_case php-vendor X=1
+[ -f "$CA2_ROOT/php-vendor/src/vendor/acme/new/composer.json" ] && [ -f "$CA2_ROOT/php-vendor/src/vendor/acme/old/composer.json" ] \
+    && pass "package manifests installed under a vendor/ the user already had are not deleted" \
+    || fail "the guard removed a manifest under an existing vendor/" "$(cd "$CA2_ROOT/php-vendor/src" && find . | sort | tr '\n' ' ')"
 rm -f "$CA2_ROOT/bin/composer"
 
 # PHP: composer.lock already committed -- the must-not-run stub aliased as
