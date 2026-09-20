@@ -109,7 +109,7 @@ UPLOAD_EXTS = {
     # .spdx.tar.zst is what a Yocto SPDX 2.2 build deploys, and the only SBOM
     # such a build produces — there is no .spdx.json beside it to send instead.
     # Named in full rather than as .tar.zst, which would admit any zstd tarball.
-    # .xml stays listed so an XML SBOM is answered by name (see the upload
+    # .xml is CycloneDX XML; any other XML is answered by name (see the upload
     # handler) rather than by the generic "unsupported file type".
     "sbom": (".json", ".xml", ".spdx", ".cdx.json", ".spdx.json", ".spdx.tar.zst"),
     "zip": (".zip", ".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".tar"),
@@ -4570,16 +4570,28 @@ class Handler(BaseHTTPRequestHandler):
             }))
             return
         if kind == "sbom" and lower.endswith(".xml"):
-            # The pipeline reads CycloneDX/SPDX JSON only. Refusing here rather
-            # than in the converter saves starting a container to fail, and says
-            # what to do instead of "unrecognized format".
-            shutil.rmtree(dest_dir, ignore_errors=True)
-            self._send(415, json.dumps({
-                "error": "XML SBOMs are not supported yet (got %s). "
-                         "Convert it to CycloneDX or SPDX JSON and upload that."
-                         % safe_fn
-            }))
-            return
+            # CycloneDX XML is read (docker/lib/cdx-xml-to-json.py). Any other XML,
+            # SPDX RDF/XML in practice, is refused here rather than in the
+            # container: accepting it would only spend a scan to fail, and the
+            # answer names the format and the fix instead of "unsupported file
+            # type". Only the namespace is checked here; the converter is what
+            # validates the document.
+            try:
+                with open(tmp_path, "rb") as fh:
+                    head = fh.read(4096)
+            except OSError:
+                head = b""
+            # UTF-16 (BOM or not) puts a NUL between every character of the
+            # namespace, so drop them before looking; the converter decodes
+            # such a document properly.
+            if b"cyclonedx.org/schema/bom" not in head.replace(b"\x00", b""):
+                shutil.rmtree(dest_dir, ignore_errors=True)
+                self._send(415, json.dumps({
+                    "error": "Only CycloneDX XML is read, and %s is not one. "
+                             "SPDX RDF/XML is not supported yet: export SPDX or "
+                             "CycloneDX JSON and upload that." % safe_fn
+                }))
+                return
         final_path = os.path.join(dest_dir, safe_fn)
         os.replace(tmp_path, final_path)
         self._send(200, json.dumps({"token": token, "filename": safe_fn, "kind": kind}))

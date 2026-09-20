@@ -9,7 +9,7 @@ How to validate that an SBOM (JSON) received from a supplier or another team mee
 
 ## When to use it
 
-Use it when a supplier or another team hands you an SBOM file instead of source, and you need to confirm the SBOM meets your quality criteria and then check its licenses and vulnerabilities. The input can be CycloneDX or SPDX (JSON, Tag-Value); it is converted to CycloneDX internally for analysis.
+Use it when a supplier or another team hands you an SBOM file instead of source, and you need to confirm the SBOM meets your quality criteria and then check its licenses and vulnerabilities. The input can be CycloneDX (JSON or XML) or SPDX (JSON, Tag-Value); it is converted to CycloneDX internally for analysis. SPDX RDF/XML is not supported yet.
 
 The criteria check whether an SBOM is good enough for dependency review. Requirements vary by organization; as one reference, see SK Telecom's [supply chain security guide](https://sktelecom.github.io/guide/supply-chain/for-suppliers/) and its [SBOM requirements](https://sktelecom.github.io/guide/supply-chain/for-suppliers/requirements/).
 
@@ -90,7 +90,7 @@ The risk report (`_risk-report`) is a document built by re-aggregating the outpu
 
 ## SPDX input
 
-If you supply SPDX (JSON, Tag-Value), it is converted to CycloneDX internally with `syft convert` and then analyzed through the same pipeline. Conformance validation is based on the original SPDX before conversion, because metadata such as timestamp, tools, or transitive dependencies can be normalized away during conversion. Some SPDX license expressions may be simplified when moved to CycloneDX.
+A CycloneDX XML document is rewritten as CycloneDX JSON before validation, keeping component hashes, the root component and the dependency links from it; services, vulnerabilities, pedigree and evidence sections are not carried over, and the scan log names any it skipped. A document that declares a DTD or an entity is refused. If you supply SPDX (JSON, Tag-Value), it is converted to CycloneDX internally with `syft convert` and then analyzed through the same pipeline. Conformance validation is based on the original SPDX before conversion, because metadata such as timestamp, tools, or transitive dependencies can be normalized away during conversion. Some SPDX license expressions may be simplified when moved to CycloneDX.
 
 ## Yocto images
 
