@@ -1230,6 +1230,13 @@
     "showingFiltered": "Showing {{count}} of {{total}} checks.",
     "noMatch": "No check matches this filter.",
     "report": "Report ({{ext}})",
+    "qualityPassWarn": "Pass, see the note below",
+    "qualityEmptyTitle": "No software components were found",
+    "qualityEmptyBody": "A pass here only means no required item could be measured. It does not mean the software was found. If you scanned a folder, check that it has a dependency manifest and that the scan path is right, then scan again.",
+    "qualityEmptyBodySupplied": "A pass here only means no required item could be measured. It does not mean the software is listed. Ask the supplier for an SBOM that lists the software components.",
+    "qualityLicenseTitle": "No component declares a license",
+    "qualityLicenseBody": "Software components with a declared license: {{declared}}/{{total}} ({{pct}}%). Attribution notices built from this SBOM will be nearly empty. Some ecosystems do not record licenses in their dependency files. A per-file license scan can fill part of the gap.",
+    "qualityLicenseFigure": "Declared licenses: {{pct}}% ({{declared}}/{{total}} software components; NOASSERTION and NONE are not counted)",
     "hiddenByFilter": "{{count}} more match this search under another filter."
   },
   "report": {

@@ -217,6 +217,7 @@ export function ResultSection({
           scanId={scanId}
           results={result.results}
           isSuppliedDocument={Boolean(inputSbomFileName(result))}
+          isAiDocument={isAiScan(result)}
         />
       ) : null;
 

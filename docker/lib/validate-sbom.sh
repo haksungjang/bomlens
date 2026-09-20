@@ -668,7 +668,10 @@ spdx_tv_checks() {
 # Measurements for --fail-on (docker/lib/evaluate-gate.sh). Printed as one JSON
 # object:
 #   softwareComponentCount  components other than operating-system and file
-#                           entries: what the scan identified as software
+#                           entries: what the scan identified as software (for
+#                           SPDX, packages the document DESCRIBES are the
+#                           subject itself, as CycloneDX's metadata.component
+#                           is, and are not counted)
 #   emptyResult             true when that count is 0
 #   licenseCoverage         {declared,total,pct}: of those components, how many
 #                           declare a license, and the percentage rounded down.
@@ -692,7 +695,8 @@ cdx_signal() {
 spdx_json_signal() {
     jq -c '
       def declared($v): ($v // "NOASSERTION") | (ascii_upcase != "NOASSERTION" and ascii_upcase != "NONE");
-      ([ .packages[]? ]) as $p
+      ([ (.documentDescribes // [])[]?, (.relationships[]? | select(.relationshipType == "DESCRIBES" and .spdxElementId == "SPDXRef-DOCUMENT") | .relatedSpdxElement) ]) as $roots
+      | ([ .packages[]? | select((.SPDXID // "") as $id | ($roots | index($id)) == null) ]) as $p
       | ($p | length) as $n
       | ([ $p[] | select(declared(.licenseConcluded) or declared(.licenseDeclared)) ] | length) as $d
       | { softwareComponentCount: $n, emptyResult: ($n == 0),
@@ -703,13 +707,15 @@ spdx_tv_signal() {
     # line names something other than NOASSERTION or NONE.
     local counts n d
     counts=$(awk '
-        function flush() { if (inpkg) { n++; if (ok) d++ } }
-        /^PackageName:/ { flush(); inpkg = 1; ok = 0; next }
+        function flush() { if (inpkg && !(id in root)) { n++; if (ok) d++ } }
+        NR == FNR { if ($1 == "Relationship:" && $2 == "SPDXRef-DOCUMENT" && $3 == "DESCRIBES") root[$4] = 1; next }
+        /^PackageName:/ { flush(); inpkg = 1; ok = 0; id = ""; next }
+        /^SPDXID:/ { if (inpkg) { id = $2 } next }
         /^PackageLicense(Concluded|Declared):/ {
             v = $0; sub(/^[^:]*:[ \t]*/, "", v); sub(/[ \t\r]+$/, "", v); u = toupper(v)
             if (inpkg && u != "" && u != "NOASSERTION" && u != "NONE") ok = 1
         }
-        END { flush(); printf "%d %d", n + 0, d + 0 }' "$SBOM" 2>/dev/null) || counts="0 0"
+        END { flush(); printf "%d %d", n + 0, d + 0 }' "$SBOM" "$SBOM" 2>/dev/null) || counts="0 0"
     n=${counts% *}; d=${counts#* }
     jq -cn --argjson n "${n:-0}" --argjson d "${d:-0}" '
       { softwareComponentCount: $n, emptyResult: ($n == 0),

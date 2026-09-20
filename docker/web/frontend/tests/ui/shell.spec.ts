@@ -1327,8 +1327,8 @@ const SUPPLIED_PIPELINE_DONE = {
   results: [...DONE.results, { name: "demo_1.0_input.json", size: 100 }],
 };
 
-async function stubAndRunWithDone(page: Page, done: unknown) {
-  await seedThemeLang(page, "light", "en");
+async function stubAndRunWithDone(page: Page, done: unknown, lang: "en" | "ko" = "en") {
+  await seedThemeLang(page, "light", lang);
   await page.route("**/capabilities", (r) =>
     r.fulfill({ contentType: "application/json", body: JSON.stringify({ firmware: false, scanoss: false, docker: true }) }),
   );
@@ -1381,6 +1381,114 @@ test("the conformance panel shows no pipeline-steps-failed note when the report 
   await page.getByRole("navigation").locator('a[href$="/conformance"]').first().click();
   await expect(page.getByText("CycloneDX", { exact: true })).toBeVisible();
   await expect(page.getByTestId("conformance-pipeline-steps-failed")).toHaveCount(0);
+  for (const id of ["conformance-empty-result", "conformance-no-licenses", "conformance-license-coverage"]) {
+    await expect(page.getByTestId(id)).toHaveCount(0);
+  }
+});
+
+// Result-quality signals: a "pass" verdict cannot say the scan found nothing or
+// that no component declares a license, so the panel warns and downgrades the
+// verdict badge. Reports without the fields (above) show neither.
+const QUALITY_CONFORMANCE = {
+  result: "pass",
+  format: "CycloneDX",
+  checks: [{ id: "timestamp", label: "Timestamp present", required: true, status: "pass", detail: "1 found" }],
+};
+
+test("the conformance panel warns on an empty result and does not show a plain pass", async ({ page }) => {
+  await stubAndRunWithDone(page, {
+    ...DONE,
+    conformance: {
+      ...QUALITY_CONFORMANCE,
+      softwareComponentCount: 0,
+      emptyResult: true,
+      licenseCoverage: { declared: 0, total: 0, pct: null },
+    },
+  });
+  await expect(page.locator("main h1")).toBeVisible();
+  await page.getByRole("navigation").locator('a[href$="/conformance"]').first().click();
+  await expect(page.getByTestId("conformance-empty-result")).toContainText("No software components were found");
+  await expect(page.getByText("Pass, see the note below")).toBeVisible();
+  await expect(page.getByTestId("conformance-license-coverage")).toHaveCount(0);
+});
+
+test("the conformance panel warns when no component declares a license and shows the figure", async ({ page }) => {
+  await stubAndRunWithDone(page, {
+    ...DONE,
+    conformance: {
+      ...QUALITY_CONFORMANCE,
+      softwareComponentCount: 157,
+      emptyResult: false,
+      licenseCoverage: { declared: 0, total: 157, pct: 0 },
+    },
+  });
+  await expect(page.locator("main h1")).toBeVisible();
+  await page.getByRole("navigation").locator('a[href$="/conformance"]').first().click();
+  const note = page.getByTestId("conformance-no-licenses");
+  await expect(note).toContainText("No component declares a license");
+  await expect(note).toContainText("0/157 (0%)");
+  await expect(page.getByText("Pass, see the note below")).toBeVisible();
+});
+
+test("the conformance panel does not say 'no license' when one component declares one", async ({ page }) => {
+  await stubAndRunWithDone(page, {
+    ...DONE,
+    conformance: {
+      ...QUALITY_CONFORMANCE,
+      softwareComponentCount: 157,
+      emptyResult: false,
+      licenseCoverage: { declared: 1, total: 157, pct: 0 },
+    },
+  });
+  await expect(page.locator("main h1")).toBeVisible();
+  await page.getByRole("navigation").locator('a[href$="/conformance"]').first().click();
+  await expect(page.getByTestId("conformance-license-coverage")).toContainText("0% (1/157 software components");
+  await expect(page.getByTestId("conformance-no-licenses")).toHaveCount(0);
+});
+
+test("the conformance panel points a supplied document's empty result at the supplier", async ({ page }) => {
+  await stubAndRunWithDone(page, {
+    ...DONE,
+    mode: "ANALYZE",
+    results: [...DONE.results, { name: "demo_1.0_input.json", size: 100 }],
+    conformance: { ...QUALITY_CONFORMANCE, softwareComponentCount: 0, emptyResult: true },
+  });
+  await expect(page.locator("main h1")).toBeVisible();
+  await page.getByRole("navigation").locator('a[href$="/conformance"]').first().click();
+  await expect(page.getByTestId("conformance-empty-result")).toContainText("Ask the supplier");
+});
+
+test("the conformance panel shows its warning in Korean", async ({ page }) => {
+  await stubAndRunWithDone(
+    page,
+    {
+      ...DONE,
+      conformance: { ...QUALITY_CONFORMANCE, softwareComponentCount: 0, emptyResult: true },
+    },
+    "ko",
+  );
+  await expect(page.locator("main h1")).toBeVisible();
+  await page.getByRole("navigation").locator('a[href$="/conformance"]').first().click();
+  await expect(page.getByTestId("conformance-empty-result")).toContainText("소프트웨어 컴포넌트를 찾지 못했습니다");
+  await expect(page.getByText("적합, 아래 안내 확인 필요")).toBeVisible();
+});
+
+test("the conformance panel keeps a plain pass and shows only the figure for healthy license coverage", async ({ page }) => {
+  await stubAndRunWithDone(page, {
+    ...DONE,
+    conformance: {
+      ...QUALITY_CONFORMANCE,
+      softwareComponentCount: 39,
+      emptyResult: false,
+      licenseCoverage: { declared: 39, total: 39, pct: 100 },
+    },
+  });
+  await expect(page.locator("main h1")).toBeVisible();
+  await page.getByRole("navigation").locator('a[href$="/conformance"]').first().click();
+  await expect(page.getByTestId("conformance-license-coverage")).toContainText("100% (39/39 software components");
+  await expect(page.getByTestId("conformance-no-licenses")).toHaveCount(0);
+  await expect(page.getByTestId("conformance-empty-result")).toHaveCount(0);
+  await expect(page.getByText("Pass", { exact: true })).toBeVisible();
 });
 
 for (const { theme, lang } of COMBOS) {

@@ -2236,6 +2236,12 @@ def conformance_summary(run_id):
         "pipelineStepsFailed": pipeline_steps_failed,
         "pipelineStepsFailedMore": pipeline_steps_failed_more,
     }
+    # Result-quality signals (validate-sbom.sh cdx_signal and siblings). A report
+    # from before they existed reads as absent keys, which stay absent so the UI
+    # shows no warning rather than a false "empty result".
+    signal = _conformance_quality_signal(data)
+    if signal:
+        out.update(signal)
     # Top-level regulatory crosswalk rollup (AI SBOMs only; validate-sbom.sh omits
     # the key entirely for non-AI SBOMs or when the crosswalk registry is absent).
     # Documentation-preparation view, not a compliance verdict. Surfaced as-is,
@@ -2243,6 +2249,37 @@ def conformance_summary(run_id):
     xwalk = _crosswalk_view(data.get("regulatoryCrosswalk"))
     if xwalk is not None:
         out["regulatoryCrosswalk"] = xwalk
+    return out
+
+
+def _conformance_quality_signal(data):
+    """Validated copy of the report's emptyResult / softwareComponentCount /
+    licenseCoverage fields; only the well-typed ones are returned."""
+    out = {}
+
+    def _count(v):
+        return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
+
+    n = _count(data.get("softwareComponentCount"))
+    if n is not None:
+        out["softwareComponentCount"] = n
+    empty = data.get("emptyResult")
+    # Two fields that contradict each other are both untrustworthy; keep neither.
+    if isinstance(empty, bool):
+        if n is None or empty == (n == 0):
+            out["emptyResult"] = empty
+        else:
+            out.pop("softwareComponentCount", None)
+    lc = data.get("licenseCoverage")
+    if isinstance(lc, dict):
+        declared, total = _count(lc.get("declared")), _count(lc.get("total"))
+        pct = lc.get("pct")
+        if declared is not None and total is not None and declared <= total:
+            if pct is not None and not (
+                isinstance(pct, int) and not isinstance(pct, bool) and 0 <= pct <= 100
+            ):
+                pct = None
+            out["licenseCoverage"] = {"declared": declared, "total": total, "pct": pct}
     return out
 
 
