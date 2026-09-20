@@ -450,7 +450,7 @@ jobs:
           }
 
           emit web      '^(docker/web/|docker/Dockerfile|docker/entrypoint\.sh|scripts/scan-sbom\.sh|tests/test-web-e2e\.sh|\.github/workflows/heavy-e2e\.yml)'
-          emit frontend '^docker/web/frontend/'
+          emit frontend '^(docker/web/frontend/|docker/entrypoint\.sh$|docker/lib/(build-prep|scan-firmware)\.sh$)'
           emit docs     '(\.md$|^docs/|^mkdocs\.yml$|^\.github/markdown-link-check-config\.json$)'
           emit examples '^examples/'
           emit desktop  '^(electron/|docker/web/server\.py$)'

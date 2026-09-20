@@ -42,6 +42,11 @@ const STEP_LABEL_KEY: Record<string, string> = {
   "swift-package-resolve": "pipelineSteps.swiftPackageResolve",
   "npm-production-set": "pipelineSteps.npmProductionSet",
   "pip-install": "pipelineSteps.pipInstall",
+  "cargo-workspace-metadata": "pipelineSteps.cargoWorkspaceMetadata",
+  "cargo-license-metadata": "pipelineSteps.cargoLicenseMetadata",
+  "composer-install": "pipelineSteps.composerInstall",
+  "pnpm-workspace-tree": "pipelineSteps.pnpmWorkspaceTree",
+  "enrich-distro-supplier": "pipelineSteps.enrichDistroSupplier",
 };
 
 /** The i18n key for a pipeline step id, or undefined for one with no label
