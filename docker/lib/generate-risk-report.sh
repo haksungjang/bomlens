@@ -97,8 +97,9 @@ if [ "$SCAN_MODE" = "FIRMWARE" ] && [ -f "${OUT_PREFIX}_bom.json" ] \
         '[.metadata.component.properties[]? | select(.name == $n) | .value][0] // ""' \
         "${OUT_PREFIX}_bom.json" 2>/dev/null; }
     # Values are interpolated into Markdown and HTML, so keep only the characters
-    # a number, a handler name or a tool name can contain.
-    fw_num() { fw_prop "$1" | tr -cd '0-9.' | cut -c1-12; }
+    # a number, a handler name or a tool name can contain: a number that is not
+    # plainly one is dropped, not repaired into a plausible one.
+    fw_num() { fw_prop "$1" | grep -E '^[0-9]+(\.[0-9]+)?$' | cut -c1-12; }
     fw_list() { fw_prop "$1" | tr -cd 'A-Za-z0-9_.,+-' | cut -c1-200; }
     if [ -n "$(fw_prop input-bytes)" ]; then
         FW_UNKNOWN_PCT=$(fw_num unknown-top-level-percent); FW_UNKNOWN_PCT="${FW_UNKNOWN_PCT:-0}"
@@ -358,7 +359,7 @@ else
     P_FW_UNKNOWN="${FW_UNKNOWN_PCT}% of the image (${FW_UNKNOWN_BYTES} bytes) was not recognized as a known format."
     P_FW_FAILED="${FW_FAILED} extraction step(s) did not complete."
     P_FW_ENCRYPTED="${FW_ENCRYPTED} region(s) are encrypted."
-    P_FW_TAIL="Components inside those regions are not listed in this SBOM, so the vulnerability counts above describe only what could be opened."
+    P_FW_TAIL="Components in any part of the image that was not opened are not listed in this SBOM, so the vulnerability counts above describe only what could be opened."
     P_FW_FORMATS="Formats whose extraction did not complete: ${FW_FAILED_FORMATS}."
     P_FW_MISSING="Extraction tools the scanner image does not include: ${FW_MISSING}."
     P_H2_LIC="License summary"

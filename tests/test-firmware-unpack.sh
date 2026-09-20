@@ -2275,6 +2275,15 @@ chk '.missing_extractors' '["sasquatch"]' "a missing extractor dependency is nam
 # The input size must not depend on where the root task sits in the array.
 rev=$(jq -c 'reverse' "$FIX/unblob-report-partial.json" | jq -c -f "$SUMJQ" | jq -c '[.input_bytes,.unknown_top_percent]')
 [ "$rev" = "[1000000,25]" ] && pass "a reordered report gives the same input size and share" || fail "reordered report" "$rev"
+# A sliver of unrecognized bytes rounds up, so it never reads as "0%" beside a
+# nonzero byte count.
+tiny=$(jq -c -f "$SUMJQ" <<'EOF2'
+[{"task":{"path":"/w/a","depth":0},"reports":[{"path":"/w/a","size":16777216,"__typename__":"StatReport"},
+  {"id":"1:1","handler_name":"tar","start_offset":0,"end_offset":16772216,"size":16772216,"is_encrypted":false,"extraction_reports":[],"__typename__":"ChunkReport"}]}]
+EOF2
+)
+[ "$(printf '%s' "$tiny" | jq -c '[.unknown_bytes,.unknown_top_percent]')" = "[5000,0.1]" ] \
+    && pass "a few unrecognized bytes show as 0.1%, not 0%" || fail "tiny unrecognized share" "$tiny"
 # An image no handler recognized has no unrecognized-region record to count, yet
 # all of it is unrecognized: the share comes from what was covered, not from a
 # count of unknown records.

@@ -1057,6 +1057,7 @@ MAX_ASSESS_URLS = 8  # license source links per assessed model
 # supplier-controlled list surfaced in this file.
 MAX_PIPELINE_STEP_LEN = 100  # chars per step id
 MAX_PIPELINE_STEPS = 20  # step ids listed; the rest are counted, not shown
+MAX_FIRMWARE_SCOPE_NAMES = 10  # handler or tool names listed in the firmware scope note
 
 # Severity ranking for picking a component's worst vulnerability.
 _SEV_RANK = {"CRITICAL": 5, "HIGH": 4, "MEDIUM": 3, "LOW": 2, "UNKNOWN": 1}
@@ -1477,6 +1478,58 @@ def _scope_index(data):
     return {ref: ("direct" if ref in direct else "transitive") for ref in refs}, True
 
 
+def _firmware_scope(meta):
+    """How much of a firmware image the unpacker could open, from the
+    bomlens:firmware:* properties scan-firmware.sh stamps on the root component.
+    Returns None when the document carries none, when nothing went unopened, or
+    when this document was not produced by a scan that unpacked the image itself.
+
+    That last condition is read from the document: only scan-firmware.sh lists
+    unblob among metadata.tools. A merged SBOM keeps the root component (and its
+    properties) from a earlier firmware scan, and a submitted SBOM is a
+    supplier's data, so neither may present those numbers as this scan's own.
+
+    The values come from the SBOM, so each is accepted only if it is plainly a
+    number or a plain name, and capped, the same rule docker/lib/
+    generate-risk-report.sh applies. A malformed number is dropped, not repaired."""
+    tools = meta.get("tools")
+    tool_list = tools.get("components") if isinstance(tools, dict) else tools
+    if not any(t.get("name") == "unblob" for t in _dicts(tool_list)):
+        return None
+    meta_comp = _as_dict(meta.get("component"))
+    props = {
+        p.get("name"): p.get("value")
+        for p in _dicts(meta_comp.get("properties"))
+        if isinstance(p.get("name"), str) and str(p.get("name")).startswith("bomlens:firmware:")
+    }
+    if props.get("bomlens:firmware:input-bytes") in (None, ""):
+        return None
+
+    def num(name):
+        raw = str(props.get("bomlens:firmware:" + name) or "")
+        return float(raw) if re.fullmatch(r"[0-9]{1,12}(\.[0-9]{1,6})?", raw) else 0.0
+
+    def names(name):
+        raw = re.sub(r"[^A-Za-z0-9_.,+-]", "", str(props.get("bomlens:firmware:" + name) or ""))[:200]
+        return [n for n in raw.split(",") if n]
+
+    formats, tools_missing = names("extraction-failed-formats"), names("missing-extractors")
+    scope = {
+        "unknownPercent": min(num("unknown-top-level-percent"), 100.0),
+        "unknownBytes": int(num("unknown-bytes")),
+        "failedSteps": int(num("extraction-failed")),
+        "encryptedRegions": int(num("encrypted-regions")),
+        "failedFormats": formats[:MAX_FIRMWARE_SCOPE_NAMES],
+        "missingExtractors": tools_missing[:MAX_FIRMWARE_SCOPE_NAMES],
+        "namesMore": max(0, len(formats) - MAX_FIRMWARE_SCOPE_NAMES)
+        + max(0, len(tools_missing) - MAX_FIRMWARE_SCOPE_NAMES),
+    }
+    if not (scope["unknownBytes"] or scope["failedSteps"] or scope["encryptedRegions"]
+            or scope["missingExtractors"]):
+        return None
+    return scope
+
+
 def sbom_summary(run_id):
     p = run_file(run_id, "_bom.json")
     if not p or not os.path.isfile(p):
@@ -1877,6 +1930,7 @@ def sbom_summary(run_id):
         "sbomToolDegraded": degraded,
         "pipelineStepsFailed": pipeline_steps_failed,
         "pipelineStepsFailedMore": pipeline_steps_failed_more,
+        "firmwareScope": _firmware_scope(_as_dict(data.get("metadata"))),
         "sbomOversizedBytes": oversized_bytes,
         # CycloneDX root component type — drives the honest scan-kind subtitle and
         # works on re-open too, where the scan MODE isn't stored.

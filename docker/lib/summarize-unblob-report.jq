@@ -27,7 +27,7 @@ def failed_types: ["ExtractCommandFailedReport", "ExtractorTimedOut", "Extractor
     recognized_chunks: ($chunks | length),
     unknown_chunks: ([$t[] | select(.__typename__ == "UnknownChunkReport")] | length),
     unknown_bytes: $unk_top_bytes,
-    unknown_top_percent: (if $input > 0 then ([($unk_top_bytes * 1000 / $input | floor) / 10, 100] | min) else 0 end),
+    unknown_top_percent: (if $input > 0 then ([($unk_top_bytes * 1000 / $input | ceil) / 10, 100] | min) else 0 end),
     nested_unknown_chunks: (([$r[] | select(.__typename__ == "UnknownChunkReport")] | length) - ([$t[] | select(.__typename__ == "UnknownChunkReport")] | length)),
     encrypted_chunks: ([$chunks[] | select(.is_encrypted == true)] | length),
     extract_failed: ([$r[] | select(.__typename__ as $n | failed_types | index($n))] | length),
