@@ -672,7 +672,12 @@
     "androidReleaseClasspath": "Android release classpath resolution",
     "swiftPackageResolve": "Swift package resolution",
     "npmProductionSet": "npm production dependency resolution",
-    "pipInstall": "Python dependency installation"
+    "pipInstall": "Python dependency installation",
+    "cargoWorkspaceMetadata": "Cargo workspace member detection",
+    "cargoLicenseMetadata": "Rust crate license lookup",
+    "composerInstall": "PHP Composer dependency installation",
+    "pnpmWorkspaceTree": "pnpm workspace dependency tree resolution",
+    "enrichDistroSupplier": "operating-system package supplier enrichment"
   },
   "pipelineNote": {
     "titleScan": "Some data may be incomplete",
