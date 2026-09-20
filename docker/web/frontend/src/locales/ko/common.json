@@ -675,9 +675,9 @@
     "pipInstall": "Python 의존성 설치",
     "cargoWorkspaceMetadata": "Cargo 워크스페이스 멤버 탐지",
     "cargoLicenseMetadata": "Rust 크레이트 라이선스 조회",
-    "composerInstall": "PHP Composer 의존성 설치",
+    "composerInstall": "PHP Composer 의존성 해석",
     "pnpmWorkspaceTree": "pnpm 워크스페이스 의존성 트리 해석",
-    "enrichDistroSupplier": "운영체제 패키지 공급자 정보 보강"
+    "enrichDistroSupplier": "OS 패키지 공급자 정보 보강"
   },
   "pipelineNote": {
     "titleScan": "일부 데이터가 없을 수 있습니다",

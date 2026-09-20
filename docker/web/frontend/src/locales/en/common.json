@@ -675,9 +675,9 @@
     "pipInstall": "Python dependency installation",
     "cargoWorkspaceMetadata": "Cargo workspace member detection",
     "cargoLicenseMetadata": "Rust crate license lookup",
-    "composerInstall": "PHP Composer dependency installation",
+    "composerInstall": "PHP Composer dependency resolution",
     "pnpmWorkspaceTree": "pnpm workspace dependency tree resolution",
-    "enrichDistroSupplier": "operating-system package supplier enrichment"
+    "enrichDistroSupplier": "OS package supplier enrichment"
   },
   "pipelineNote": {
     "titleScan": "Some data may be incomplete",
