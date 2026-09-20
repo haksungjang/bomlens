@@ -64,10 +64,11 @@ GUARD_DIR=""
 # (app/build, services/api/go.mod) without walking a whole monorepo; .git and
 # node_modules are pruned because nothing we run resolves inside them.
 # The name set grows over time: 1 = original, 2 adds vendor/obj/bin directories,
-# 3 adds composer.json (rewritten during the PHP resolve). guard_paths takes the
+# 3 adds composer.json (rewritten during the PHP resolve), 4 adds *.egg-info
+# directories (left by a Python source install). guard_paths takes the
 # version to list, so a snapshot is always compared with the names it was written
 # under.
-GUARD_NAMES_VERSION=3
+GUARD_NAMES_VERSION=4
 guard_paths() {  # guard_paths f|d [version]
     _gv="${2:-$GUARD_NAMES_VERSION}"
     if [ "$1" = "f" ]; then
@@ -82,16 +83,13 @@ guard_paths() {  # guard_paths f|d [version]
                    -o -name Package.resolved -o -name package-lock.json \
                    -o -name composer.lock \) -print 2>/dev/null | LC_ALL=C sort
         fi
-    elif [ "$_gv" -ge 2 ]; then
-        find . -maxdepth 4 -name .git -prune -o -type d \
-            \( -name .gradle -o -name .build -o -name build -o -name target \
-               -o -name node_modules -o -name __pycache__ -o -name .venv \
-               -o -name vendor -o -name obj -o -name bin \) \
-            -print -prune 2>/dev/null | LC_ALL=C sort
     else
-        find . -maxdepth 4 -name .git -prune -o -type d \
-            \( -name .gradle -o -name .build -o -name build -o -name target \
-               -o -name node_modules -o -name __pycache__ -o -name .venv \) \
+        # Directory names accumulate by version; "$@" carries them into one find.
+        set -- -name .gradle -o -name .build -o -name build -o -name target \
+               -o -name node_modules -o -name __pycache__ -o -name .venv
+        [ "$_gv" -lt 2 ] || set -- "$@" -o -name vendor -o -name obj -o -name bin
+        [ "$_gv" -lt 4 ] || set -- "$@" -o -name '*.egg-info'
+        find . -maxdepth 4 -name .git -prune -o -type d \( "$@" \) \
             -print -prune 2>/dev/null | LC_ALL=C sort
     fi
 }

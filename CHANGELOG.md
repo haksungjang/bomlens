@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A source scan of a Python project no longer leaves a `*.egg-info` directory behind in the scanned project. A directory that did not exist before the scan is removed afterwards; one you already had stays, though the install can still rewrite files inside it.
 - A PHP project with no `composer.lock` is now resolved without its `require-dev` section and without `config.lock=false`. A library whose dev tools could not be resolved (for example one that requires the library itself, or PHP extensions the image lacks) used to give an empty SBOM, and a resolvable one carried its dev tools as if they shipped. Your `composer.json` is put back right after the resolve, and `BOMLENS_PHP_FULL_GRAPH=1` still resolves the full manifest. The PHP version is not enforced during this resolve, so a dependency version that needs a newer PHP than the project declares can be picked.
 - A source scan no longer leaves `vendor/` (PHP), `obj/` and `bin/` (.NET) behind in the scanned project. Directories that did not exist before the scan are removed afterwards; ones you already had are kept.
 - A project or version name that starts or ends with a character outside `A-Za-z0-9.-` (for example `@acme/lib`) no longer fails the CLI with "SBOM not found on host". The script now names the files it looks for with the same rule the scanner container uses.

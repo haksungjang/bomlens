@@ -5288,7 +5288,7 @@ echo "== source-tree guard: a scan leaves the scanned project unchanged =="
 # toolchain): a fake `go` that mutates go.mod + writes go.sum, and a fake `cdxgen`
 # that leaves build dirs and writes the bom where -o points.
 GUARD_ROOT="$WORK/guard"
-mkdir -p "$GUARD_ROOT/bin" "$GUARD_ROOT/src/keepdir" "$GUARD_ROOT/src/vendor" "$GUARD_ROOT/src/bin" "$GUARD_ROOT/src/obj" "$GUARD_ROOT/out"
+mkdir -p "$GUARD_ROOT/bin" "$GUARD_ROOT/src/keepdir" "$GUARD_ROOT/src/vendor" "$GUARD_ROOT/src/bin" "$GUARD_ROOT/src/obj" "$GUARD_ROOT/src/keep.egg-info" "$GUARD_ROOT/out"
 cat > "$GUARD_ROOT/bin/go" <<'STUB'
 #!/bin/sh
 printf 'require (\n\tgithub.com/indirect/dep v1.0.0 // indirect\n)\n' >> go.mod
@@ -5296,7 +5296,7 @@ echo 'github.com/indirect/dep v1.0.0 h1:deadbeef' > go.sum
 STUB
 cat > "$GUARD_ROOT/bin/cdxgen" <<'STUB'
 #!/bin/sh
-mkdir -p build/classes mod-new/build web/vendor/acme obj/Debug bin/Debug
+mkdir -p build/classes mod-new/build web/vendor/acme obj/Debug bin/Debug pkg.egg-info
 out=""; prev=""
 for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
 [ -n "$out" ] && echo '{"bomFormat":"CycloneDX","components":[]}' > "$out"
@@ -5309,6 +5309,7 @@ printf 'keep me\n' > "$GUARD_ROOT/src/keepdir/file.txt"
 printf 'keep me\n' > "$GUARD_ROOT/src/vendor/own.txt"
 printf 'keep me\n' > "$GUARD_ROOT/src/bin/own.sh"
 printf 'keep me\n' > "$GUARD_ROOT/src/obj/own.txt"
+printf 'keep me\n' > "$GUARD_ROOT/src/keep.egg-info/PKG-INFO"
 cp "$GUARD_ROOT/src/go.mod" "$GUARD_ROOT/go.mod.orig"
 PATH="$GUARD_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$GUARD_ROOT/src" "$GUARD_ROOT/out/bom.json" >/dev/null 2>&1
 cmp -s "$GUARD_ROOT/go.mod.orig" "$GUARD_ROOT/src/go.mod" \
@@ -5324,8 +5325,12 @@ cmp -s "$GUARD_ROOT/go.mod.orig" "$GUARD_ROOT/src/go.mod" \
     && pass "a vendor/ directory the run created is gone (including its new parent)" \
     || fail "composer output left in the source tree" "$(cd "$GUARD_ROOT/src" && find . | sort | tr '\n' ' ')"
 [ -f "$GUARD_ROOT/src/vendor/own.txt" ] && [ -f "$GUARD_ROOT/src/bin/own.sh" ] && [ -f "$GUARD_ROOT/src/obj/own.txt" ] \
-    && pass "vendor/, bin/ and obj/ directories the user already had are kept" \
-    || fail "the guard deleted a pre-existing vendor/, bin/ or obj/ directory"
+    && [ -f "$GUARD_ROOT/src/keep.egg-info/PKG-INFO" ] \
+    && pass "vendor/, bin/, obj/ and .egg-info directories the user already had are kept" \
+    || fail "the guard deleted a pre-existing vendor/, bin/, obj/ or .egg-info directory"
+[ ! -e "$GUARD_ROOT/src/pkg.egg-info" ] \
+    && pass "an .egg-info directory the run created is gone" \
+    || fail "an .egg-info directory was left in the source tree"
 # Fresh tree: obj/ and bin/ that only the run created are removed.
 NEWD="$GUARD_ROOT/newdirs"; mkdir -p "$NEWD/src" "$NEWD/out"
 printf 'package main\n' > "$NEWD/src/main.go"
@@ -5345,6 +5350,14 @@ sed -n '/^GUARD_DIR=""/,/^# Supervised execution/p' "$LIB/build-prep.sh" > "$LEG
 [ -f "$LEG/src/vendor/acme/lib.php" ] && [ -f "$LEG/src/bin/tool.sh" ] && [ -f "$LEG/src/obj/x.o" ] \
     && pass "finishing a snapshot from an older script keeps the user's vendor/, bin/ and obj/" \
     || fail "an old-format snapshot led to deleting vendor/, bin/ or obj/"
+# ... and for one that predates .egg-info being guarded (version 3).
+LEG3="$GUARD_ROOT/legacy3"; mkdir -p "$LEG3/src/keep.egg-info" "$LEG3/state/g1"; : > "$LEG3/state/g1/files.before"; : > "$LEG3/state/g1/dirs.before"
+echo 3 > "$LEG3/state/g1/names.version"
+( cd "$LEG3/src" && SRC="$LEG3/src" OUT="$LEG3/none.json" \
+    sh -c 'log() { :; }; . "$1"; GUARD_DIR="$2"; guard_restore' _ "$LEG/guard-funcs.sh" "$LEG3/state/g1" >/dev/null 2>&1 )
+[ -d "$LEG3/src/keep.egg-info" ] \
+    && pass "finishing a snapshot from an older script keeps the user's .egg-info directory" \
+    || fail "an old-format snapshot led to deleting an .egg-info directory"
 # The same for a snapshot that predates composer.json being guarded.
 printf '{"require":{}}\n' > "$LEG/src/composer.json"
 mkdir -p "$LEG/state/g1"; : > "$LEG/state/g1/files.before"; : > "$LEG/state/g1/dirs.before"
