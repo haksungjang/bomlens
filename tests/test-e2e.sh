@@ -890,6 +890,10 @@ else
 
         [ -f "$w/testapp_1.0_NOTICE.txt" ] && [ -f "$w/testapp_1.0_NOTICE.html" ] \
             && pass "nodejs --all: notice files produced" || fail "nodejs --all: notice files produced"
+        # The installed packages' license files carry the attribution; it must reach the NOTICE.
+        grep -q "^ *Copyright: ." "$w/testapp_1.0_NOTICE.txt" 2>/dev/null \
+            && pass "nodejs --all: NOTICE prints copyright lines read from the installed packages" \
+            || fail "nodejs --all: NOTICE prints copyright lines read from the installed packages"
         [ -f "$w/testapp_1.0_security.json" ] && [ -f "$w/testapp_1.0_security.md" ] && [ -f "$w/testapp_1.0_security.html" ] \
             && pass "nodejs --all: security files produced" || fail "nodejs --all: security files produced"
 

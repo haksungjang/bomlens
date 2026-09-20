@@ -2917,6 +2917,354 @@ PY_LIC
     rm -f "$_pylic"
 fi
 
+# Copyright statements from the license files each installed package ships.
+# cdxgen leaves component.copyright empty, so the NOTICE has no attribution line
+# to print. The installed packages exist only until guard_restore below, and only
+# in this container, so the statements have to be read here.
+#
+# Only the package's own license files are read (LICENSE, LICENCE, COPYING,
+# NOTICE, COPYRIGHT), and only a line that opens with "Copyright", "(c)" or the
+# copyright sign and then gives a year, another (c), or "by". A component that
+# already has a copyright is left alone, a statement that cannot be tied to a
+# package is dropped, and every value set is stamped bomlens:copyrightSource.
+# BOMLENS_NO_COPYRIGHT=1 (or true) turns the pass off.
+if opted_out "${BOMLENS_NO_COPYRIGHT:-}"; then
+    log "copyright: pass off (BOMLENS_NO_COPYRIGHT)"
+elif [ "${rc:-1}" -eq 0 ] && [ -f "$OUT" ]; then
+    if command -v python3 >/dev/null 2>&1 && grep -q '"pkg:pypi/' "$OUT" 2>/dev/null; then
+        log "copyright: reading license files of installed python packages"
+        _pycpr=$(mktemp)
+        cat > "$_pycpr" <<'PY_CPR'
+import json, os, re, stat, sys
+from importlib.metadata import distributions
+
+bom_path = sys.argv[1]
+try:
+    with open(bom_path, encoding="utf-8") as fh:
+        bom = json.load(fh)
+except Exception:
+    sys.exit(0)
+components = bom.get("components")
+if not isinstance(components, list):
+    sys.exit(0)
+
+FILE_RE = re.compile(r"^(licen[sc]e|copying|notice|copyright)([-_.].*)?$", re.I)
+NEEDS_RE = re.compile(r"^[\s#*/;>|-]*(?:copyright\s*(?:\(c\)|\u00a9|&copy;|\d{4}|by\b)"
+                      r"|(?:\(c\)|\u00a9|&copy;)\s*\d{4})", re.I)
+# What is left of a statement once the marker, years and punctuation are removed must
+# still name someone.
+FILLER_RE = re.compile(r"copyright|\(c\)|\u00a9|&copy;|all rights reserved|\bby\b|[\d\s,.:;-]", re.I)
+# A template the package never filled in: <year>, [fullname], {{author}}, "year name of
+# author", "YEAR by AUTHOR EMAIL".
+WORDS = r"(?:year|yyyy|names?|owners?|holders?|authors?|fullname|full|email|organi[sz]ation|company|copyright|of|and|your|the)"
+PLACEHOLDER_RE = re.compile(r"[<\[{]{1,2}\s*" + WORDS + r"(?:[\s,]+" + WORDS + r")*\s*[>\]}]{1,2}"
+                            r"|\byear\s+name\s+of\s+author\b", re.I)
+UPPER_RE = re.compile(r"\b(?:YEAR|AUTHOR|OWNER|EMAIL)\b")
+# Text that belongs to a license, not to the package that ships it.
+BOILERPLATE_RE = re.compile(r"free software foundation|stichting mathematisch|"
+                            r"corporation for national research|internet (?:systems|software) consortium", re.I)
+PROSE_RE = re.compile(r"\b(?:notice|permission|shall|consisting|hereby|herein|conditions|provided|following)\b", re.I)
+HEAD_BYTES, MAX_FILES, MAX_LINES, MAX_STATEMENTS, MAX_LEN = 65536, 6, 400, 5, 200
+
+
+def canon(name):
+    return re.sub(r"[-_.]+", "-", (name or "").strip()).lower()
+
+
+def clean(line):
+    text = re.sub(r"^[\s#*/;>|-]+|[\s#*/;|-]+$", "", line)
+    return re.sub(r"\s+", " ", text).replace("&copy;", "(c)")
+
+
+def read_head(path, root):
+    """First HEAD_BYTES of a regular file that really lives under root."""
+    try:
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            return ""
+        real = os.path.realpath(path)
+        if not real.startswith(root + os.sep):
+            return ""
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read(HEAD_BYTES)
+    except Exception:
+        return ""
+
+
+def statements_in(path, root):
+    found = []
+    lines = [ln.rstrip("\r") for ln in read_head(path, root).split("\n")[:MAX_LINES]]
+    for n, line in enumerate(lines):
+        if len(line) > MAX_LEN * 2 or not NEEDS_RE.match(line):
+            continue
+        text = clean(line)
+        # A holder that runs onto the next line ("..., Stichting X," then "The Netherlands").
+        if text.endswith(",") and n + 1 < len(lines):
+            nxt = lines[n + 1]
+            if nxt.strip() and not NEEDS_RE.match(nxt):
+                text = clean(text + " " + nxt.strip())
+        text = text.rstrip(",")
+        if (not text or len(text) > MAX_LEN or PLACEHOLDER_RE.search(text) or UPPER_RE.search(text)
+                or BOILERPLATE_RE.search(text) or PROSE_RE.search(text)
+                or not re.search(r"[^\W\d_]", FILLER_RE.sub("", text))):
+            continue
+        found.append(text)
+    return found
+
+
+def key_of(text):
+    text = re.sub(r"<[^>]*>", "", text.lower()).replace("\u00a9", "(c)")
+    return re.sub(r"\s+", " ", text).strip().rstrip(".,;")
+
+
+def collapse(found):
+    """Drop repeats and any statement that only abbreviates a longer one."""
+    kept = []
+    for text in found:
+        key = key_of(text)
+        for i, (k, t) in enumerate(kept):
+            if k.startswith(key) or key.startswith(k):
+                if len(text) > len(t):
+                    kept[i] = (key, text)
+                break
+        else:
+            kept.append((key, text))
+    return [t for _, t in kept][:MAX_STATEMENTS]
+
+
+def dist_files(dist):
+    """(path, root) pairs: the license files an installed distribution ships, and the
+    directory each must stay under."""
+    found, seen = [], set()
+
+    def add(path, root):
+        if path not in seen and os.path.isfile(path):
+            seen.add(path)
+            found.append((path, root))
+
+    try:
+        base = str(getattr(dist, "_path", "") or "")
+        if base and os.path.isdir(base):
+            root = os.path.realpath(base)
+            for rel in (dist.metadata.get_all("License-File") or []):
+                for sub in (os.path.join(base, "licenses"), base):
+                    cand = os.path.join(sub, rel)
+                    if os.path.isfile(cand):
+                        add(cand, root)
+                        break
+            for cur, _dirs, names in os.walk(base):
+                for fn in sorted(names):
+                    if FILE_RE.match(fn):
+                        add(os.path.join(cur, fn), root)
+        # An egg-info install records no license file of its own; a wheel whose
+        # metadata directory we could not locate still lists its files.
+        if not found:
+            root = os.path.realpath(str(dist.locate_file("")))
+            for entry in (dist.files or []):
+                if FILE_RE.match(os.path.basename(str(entry))):
+                    add(str(dist.locate_file(entry)), root)
+    except Exception:
+        pass
+    return found[:MAX_FILES]
+
+index = {}
+for dist in distributions():
+    try:
+        name, version = dist.metadata.get("Name"), dist.metadata.get("Version")
+    except Exception:
+        continue
+    if name and version:
+        index.setdefault((canon(name), version), dist)
+
+if not index:
+    sys.stderr.write("[build-prep] copyright: no installed python distribution metadata found; "
+                     "python components left as they were\n")
+    sys.exit(0)
+
+changed = 0
+for comp in components:
+    if not str(comp.get("purl") or "").startswith("pkg:pypi/") or comp.get("copyright"):
+        continue
+    dist = index.get((canon(comp.get("name")), comp.get("version")))
+    if not dist:
+        continue
+    found = []
+    for path, root in dist_files(dist):
+        found.extend(statements_in(path, root))
+    found = collapse(found)
+    if not found:
+        continue
+    comp["copyright"] = "; ".join(found)
+    props = [p for p in comp.get("properties") or []
+             if p.get("name") != "bomlens:copyrightSource"]
+    props.append({"name": "bomlens:copyrightSource", "value": "installed license file"})
+    comp["properties"] = props
+    changed += 1
+
+if changed:
+    with open(bom_path, "w", encoding="utf-8") as fh:
+        json.dump(bom, fh, indent=2)
+    sys.stderr.write("[build-prep] copyright: filled %d python component(s) from installed license files\n" % changed)
+PY_CPR
+        python3 "$_pycpr" "$OUT" || log "copyright: python pass skipped (non-fatal)"
+        rm -f "$_pycpr"
+    fi
+    if command -v node >/dev/null 2>&1 && grep -q '"pkg:npm/' "$OUT" 2>/dev/null; then
+        # Same depth as guard_paths: a node_modules nested deeper than four levels in a
+        # monorepo is not searched, and its components keep no copyright.
+        _nmdirs=$(find . -maxdepth 4 -name .git -prune -o -type d -name node_modules -print -prune 2>/dev/null)
+        if [ -n "$_nmdirs" ]; then
+            log "copyright: reading license files under node_modules"
+            _jscpr=$(mktemp)
+            cat > "$_jscpr" <<'NODE_CPR'
+const fs = require('fs');
+const path = require('path');
+const bomPath = process.argv[2];
+const roots = (process.env.BOMLENS_NM_DIRS || '').split('\n').filter(Boolean);
+let bom;
+try { bom = JSON.parse(fs.readFileSync(bomPath, 'utf8')); } catch (e) { process.exit(0); }
+if (!Array.isArray(bom.components)) process.exit(0);
+
+const FILE_RE = /^(licen[sc]e|copying|notice|copyright)([-_.].*)?$/i;
+const NEEDS_RE = /^[\s#*/;>|-]*(?:copyright\s*(?:\(c\)|\u00a9|&copy;|\d{4}|by\b)|(?:\(c\)|\u00a9|&copy;)\s*\d{4})/i;
+// What is left of a statement once the marker, years and punctuation are removed must
+// still name someone.
+const FILLER_RE = /copyright|\(c\)|\u00a9|&copy;|all rights reserved|\bby\b|[\d\s,.:;-]/gi;
+// A template the package never filled in: <year>, [fullname], {{author}}, "year name of
+// author", "YEAR by AUTHOR EMAIL".
+const WORDS = '(?:year|yyyy|names?|owners?|holders?|authors?|fullname|full|email|organi[sz]ation|company|copyright|of|and|your|the)';
+const PLACEHOLDER_RE = new RegExp('[<\\[{]{1,2}\\s*' + WORDS + '(?:[\\s,]+' + WORDS + ')*\\s*[>\\]}]{1,2}'
+  + '|\\byear\\s+name\\s+of\\s+author\\b', 'i');
+const UPPER_RE = /\b(?:YEAR|AUTHOR|OWNER|EMAIL)\b/;
+// Text that belongs to a license, not to the package that ships it.
+const BOILERPLATE_RE = /free software foundation|stichting mathematisch|corporation for national research|internet (?:systems|software) consortium/i;
+const PROSE_RE = /\b(?:notice|permission|shall|consisting|hereby|herein|conditions|provided|following)\b/i;
+const HEAD_BYTES = 65536, MAX_FILES = 6, MAX_LINES = 400, MAX_STATEMENTS = 5, MAX_LEN = 200;
+
+function clean(line) {
+  return line.replace(/^[\s#*/;>|-]+|[\s#*/;|-]+$/g, '').replace(/\s+/g, ' ').replace(/&copy;/g, '(c)');
+}
+
+// First HEAD_BYTES of a regular file that really lives under root.
+function readHead(file, root) {
+  let fd;
+  try {
+    if (!fs.lstatSync(file).isFile()) return '';
+    if (!fs.realpathSync(file).startsWith(root + path.sep)) return '';
+    fd = fs.openSync(file, 'r');
+    const buf = Buffer.alloc(HEAD_BYTES);
+    const n = fs.readSync(fd, buf, 0, HEAD_BYTES, 0);
+    return buf.toString('utf8', 0, n);
+  } catch (e) {
+    return '';
+  } finally {
+    if (fd !== undefined) try { fs.closeSync(fd); } catch (e) { /* closed */ }
+  }
+}
+
+function statementsIn(file, root) {
+  const found = [];
+  const lines = readHead(file, root).split(/\r?\n/).slice(0, MAX_LINES);
+  lines.forEach((line, n) => {
+    if (line.length > MAX_LEN * 2 || !NEEDS_RE.test(line)) return;
+    let t = clean(line);
+    // A holder that runs onto the next line ("..., Stichting X," then "The Netherlands").
+    if (t.endsWith(',') && n + 1 < lines.length) {
+      const nxt = lines[n + 1];
+      if (nxt.trim() && !NEEDS_RE.test(nxt)) t = clean(t + ' ' + nxt.trim());
+    }
+    t = t.replace(/,+$/, '');
+    if (!t || t.length > MAX_LEN || PLACEHOLDER_RE.test(t) || UPPER_RE.test(t)
+        || BOILERPLATE_RE.test(t) || PROSE_RE.test(t)
+        || !/[\p{L}]/u.test(t.replace(FILLER_RE, ''))) return;
+    found.push(t);
+  });
+  return found;
+}
+
+function keyOf(t) {
+  return t.toLowerCase().replace(/<[^>]*>/g, '').replace(/\u00a9/g, '(c)')
+    .replace(/\s+/g, ' ').trim().replace(/[.,;]+$/, '');
+}
+
+// Drop repeats and any statement that only abbreviates a longer one.
+function collapse(found) {
+  const kept = [];
+  for (const t of found) {
+    const key = keyOf(t);
+    const i = kept.findIndex(k => k[0].startsWith(key) || key.startsWith(k[0]));
+    if (i === -1) kept.push([key, t]);
+    else if (t.length > kept[i][1].length) kept[i] = [key, t];
+  }
+  return kept.map(k => k[1]).slice(0, MAX_STATEMENTS);
+}
+
+// name@version -> the package directory that holds its license files
+const index = new Map();
+const seen = new Set();
+function walk(nm) {
+  let real;
+  try { real = fs.realpathSync(nm); } catch (e) { return; }
+  if (seen.has(real)) return;
+  seen.add(real);
+  let entries;
+  try { entries = fs.readdirSync(nm, { withFileTypes: true }); } catch (e) { return; }
+  for (const e of entries) {
+    if (e.name === '.bin' || (e.name.startsWith('.') && e.name !== '.pnpm')) continue;
+    const dir = path.join(nm, e.name);
+    if (e.name === '.pnpm') {
+      try { fs.readdirSync(dir).forEach(v => walk(path.join(dir, v, 'node_modules'))); } catch (x) { /* none */ }
+      continue;
+    }
+    if (e.name.startsWith('@')) {
+      try { fs.readdirSync(dir).forEach(s => pkg(path.join(dir, s))); } catch (x) { /* none */ }
+    } else {
+      pkg(dir);
+    }
+  }
+}
+function pkg(dir) {
+  let meta;
+  try { meta = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')); } catch (e) { return; }
+  // A package.json states its own name; only trust it where the folder agrees.
+  if (meta && meta.name && meta.version && path.basename(dir) === String(meta.name).split('/').pop()) {
+    const key = meta.name + '@' + meta.version;
+    if (!index.has(key)) index.set(key, dir);
+  }
+  walk(path.join(dir, 'node_modules'));
+}
+roots.forEach(walk);
+
+let changed = 0;
+for (const c of bom.components) {
+  if (!String(c.purl || '').startsWith('pkg:npm/') || c.copyright || !c.name || !c.version) continue;
+  const dir = index.get((c.group ? c.group + '/' : '') + c.name + '@' + c.version);
+  if (!dir) continue;
+  let root;
+  let files = [];
+  try {
+    root = fs.realpathSync(dir);
+    files = fs.readdirSync(dir).filter(f => FILE_RE.test(f)).sort().slice(0, MAX_FILES);
+  } catch (e) { continue; }
+  let found = [];
+  for (const f of files) found = found.concat(statementsIn(path.join(dir, f), root));
+  found = collapse(found);
+  if (!found.length) continue;
+  c.copyright = found.join('; ');
+  c.properties = (c.properties || []).filter(p => p.name !== 'bomlens:copyrightSource')
+    .concat([{ name: 'bomlens:copyrightSource', value: 'installed license file' }]);
+  changed++;
+}
+if (changed) {
+  fs.writeFileSync(bomPath, JSON.stringify(bom, null, 2));
+  process.stderr.write('[build-prep] copyright: filled ' + changed + ' npm component(s) from installed license files\n');
+}
+NODE_CPR
+            BOMLENS_NM_DIRS="$_nmdirs" node "$_jscpr" "$OUT" || log "copyright: npm pass skipped (non-fatal)"
+            rm -f "$_jscpr"
+        fi
+    fi
+fi
+
 # Record what the non-shipped exclusion left out: the patterns in
 # bomlens:excluded-paths and the manifest files, capped at 50, in
 # bomlens:excluded-manifests.

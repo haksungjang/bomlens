@@ -6106,6 +6106,326 @@ else
     echo "  SKIP: python3 venv not available"
 fi
 
+echo "== copyright: statements read from the license files an installed package ships =="
+# Files outside every package: a link or a License-File entry must never reach them.
+printf 'Copyright (c) 2024 Secret Host Data\n' > "$WORK/outside-secret.txt"
+mkdir -p "$WORK/outside-dir"
+printf 'Copyright (c) 2024 Secret Host Directory\n' > "$WORK/outside-dir/LICENSE"
+# cdxgen leaves component.copyright empty, so the NOTICE had no attribution to
+# print. build-prep.sh reads it from the package's own license files while the
+# install still exists. Only a line that opens with a copyright marker and gives a
+# year, (c) or "by" counts; a component that already has a value is never touched.
+if command -v python3 >/dev/null 2>&1 && python3 -m venv --without-pip "$WORK/cprvenv" >/dev/null 2>&1; then
+    CSP=$(echo "$WORK"/cprvenv/lib/python*/site-packages)
+    mkdir -p "$CSP"
+    sed -n "/cat > \"\$_pycpr\" <<'PY_CPR'/,/^PY_CPR\$/p" "$LIB/build-prep.sh" \
+        | sed '1d;$d' > "$WORK/cpr.py"
+    [ -s "$WORK/cpr.py" ] \
+        && pass "copyright script extracted from build-prep.sh" \
+        || fail "could not extract the python copyright pass from build-prep.sh"
+    mkpydist() {  # name version
+        mkdir -p "$CSP/$1-$2.dist-info"
+        printf 'Metadata-Version: 2.1\nName: %s\nVersion: %s\n\nbody\n' "$1" "$2" > "$CSP/$1-$2.dist-info/METADATA"
+    }
+    mkpydist alpha 1.0
+    cat > "$CSP/alpha-1.0.dist-info/LICENSE" <<'LICTXT'
+MIT License
+
+Copyright (c) 2020 Alpha Authors <alpha@example.org>
+Copyright (c) 2020 Alpha Authors
+Copyright (c) <year> <copyright holders>
+
+The above copyright notice and this permission notice shall be included by
+the recipient in all copies.
+LICTXT
+    mkpydist beta 2.0
+    printf 'Copyright OpenJS Foundation and other contributors\n' > "$CSP/beta-2.0.dist-info/LICENSE"
+    mkpydist gamma 3.0
+    printf 'Copyright (c) 2021 Gamma Inc.\n' > "$CSP/gamma-3.0.dist-info/LICENSE"
+    mkpydist delta 4.0
+    printf 'Copyright (c) 2022 Only In The Readme\n' > "$CSP/delta-4.0.dist-info/README.md"
+    mkdir -p "$CSP/epsilon-5.0.dist-info/licenses"
+    printf 'Metadata-Version: 2.4\nName: epsilon\nVersion: 5.0\n\nbody\n' > "$CSP/epsilon-5.0.dist-info/METADATA"
+    printf 'Copyright 2023 Epsilon Team\n' > "$CSP/epsilon-5.0.dist-info/licenses/LICENSE.txt"
+    mkpydist zeta 1.0
+    cat > "$CSP/zeta-1.0.dist-info/LICENSE" <<'LICTXT'
+Copyright (c) 2026 <copyright holders>
+Copyright (C) YEAR by AUTHOR EMAIL
+Copyright (C) year name of author
+Copyright (c) 2024 [fullname]
+Copyright 2024 {{author}}
+LICTXT
+    mkpydist eta 1.0
+    cat > "$CSP/eta-1.0.dist-info/COPYING" <<'LICTXT'
+Copyright (C) 1989, 1991 Free Software Foundation, Inc.
+Copyright (c) 1991 - 1995, Stichting Mathematisch Centrum Amsterdam,
+The Netherlands.
+Copyright (c) 2004-2010 by Internet Systems Consortium, Inc. ("ISC")
+Copyright (c) 2020 Eta Team
+LICTXT
+    mkpydist theta 1.0
+    printf 'Copyright (c) 2015 Acme Widgets,\nBerlin GmbH\n' > "$CSP/theta-1.0.dist-info/LICENSE"
+    mkpydist iota 1.0
+    printf 'Copyright (c) 2001 shall be consisting of the American\n' > "$CSP/iota-1.0.dist-info/LICENSE"
+    mkpydist kappa 1.0
+    ln -s "$WORK/outside-secret.txt" "$CSP/kappa-1.0.dist-info/LICENSE"
+    mkdir -p "$CSP/lambda-1.0.dist-info/licenses/LICENSES"
+    printf 'Metadata-Version: 2.4\nName: lambda\nVersion: 1.0\nLicense-File: LICENSES/MIT.txt\n\nbody\n' \
+        > "$CSP/lambda-1.0.dist-info/METADATA"
+    printf 'Copyright (c) 2024 Nested Owner\n' > "$CSP/lambda-1.0.dist-info/licenses/LICENSES/MIT.txt"
+    mkpydist mu 1.0
+    printf 'Copyright (C) 2007 Mu Team\nCopyright \xc2\xa9 2007 Mu Team\n' > "$CSP/mu-1.0.dist-info/LICENSE"
+    mkpydist nu 1.0
+    mkdir -p "$CSP/nu-1.0.dist-info/licenses/LICENSES"
+    printf 'Metadata-Version: 2.4\nName: nu\nVersion: 1.0\nLicense-File: LICENSES/A.txt\nLicense-File: LICENSES/B.txt\nLicense-File: LICENSES/C.txt\n\nbody\n' \
+        > "$CSP/nu-1.0.dist-info/METADATA"
+    for n in A B C; do printf 'Copyright (c) 2010 File %s Owner\n' "$n" > "$CSP/nu-1.0.dist-info/licenses/LICENSES/$n.txt"; done
+    printf 'Copyright (c) 2010 Root Owner\n' > "$CSP/nu-1.0.dist-info/LICENSE"
+    mkdir -p "$CSP/legacy-1.0-py3.12.egg-info"
+    printf 'Metadata-Version: 2.1\nName: legacy\nVersion: 1.0\n' > "$CSP/legacy-1.0-py3.12.egg-info/PKG-INFO"
+    printf 'LICENSE\n' > "$CSP/legacy-1.0-py3.12.egg-info/SOURCES.txt"
+    printf 'Copyright (c) 2012 Legacy Owner\n' > "$CSP/LICENSE"
+    mkdir -p "$CSP/chi-1.0.dist-info" "$CSP/psi-1.0.dist-info"
+    printf 'Metadata-Version: 2.4\nName: chi\nVersion: 1.0\nLicense-File: %s\n\nbody\n' "$WORK/outside-secret.txt" > "$CSP/chi-1.0.dist-info/METADATA"
+    printf 'Copyright (c) 2024 Secret Relative\n' > "$CSP/secret-rel.txt"
+    printf 'Metadata-Version: 2.4\nName: psi\nVersion: 1.0\nLicense-File: ../secret-rel.txt\n\nbody\n' > "$CSP/psi-1.0.dist-info/METADATA"
+    mkpydist xi 1.0
+    printf 'Metadata-Version: 2.4\nName: xi\nVersion: 1.0\nLicense-File: LICENSE\n\nbody\n' > "$CSP/xi-1.0.dist-info/METADATA"
+    ln -s "$WORK/outside-dir" "$CSP/xi-1.0.dist-info/licenses"
+    mkpydist omicron 1.0
+    printf 'MIT License\n\nCopyright (c) 2020 \nCopyright (c)\n\nPermission is hereby granted.\n' > "$CSP/omicron-1.0.dist-info/LICENSE"
+    mkpydist pi 1.0
+    printf 'Attribution 4.0 International\n\n     copyright--then that use is not regulated by the license. Our\n' > "$CSP/pi-1.0.dist-info/LICENSE"
+    cat > "$WORK/cprbom.json" <<'CPRBOM'
+{ "bomFormat": "CycloneDX", "specVersion": "1.6", "components": [
+  { "type": "library", "name": "alpha", "version": "1.0", "purl": "pkg:pypi/alpha@1.0" },
+  { "type": "library", "name": "beta", "version": "2.0", "purl": "pkg:pypi/beta@2.0" },
+  { "type": "library", "name": "gamma", "version": "3.0", "purl": "pkg:pypi/gamma@3.0",
+    "copyright": "Copyright (c) 1999 Declared Owner" },
+  { "type": "library", "name": "delta", "version": "4.0", "purl": "pkg:pypi/delta@4.0" },
+  { "type": "library", "name": "epsilon", "version": "5.0", "purl": "pkg:pypi/epsilon@5.0" },
+  { "type": "library", "name": "mystery", "version": "1.0", "purl": "pkg:pypi/mystery@1.0" },
+  { "type": "library", "name": "zeta", "version": "1.0", "purl": "pkg:pypi/zeta@1.0" },
+  { "type": "library", "name": "eta", "version": "1.0", "purl": "pkg:pypi/eta@1.0" },
+  { "type": "library", "name": "theta", "version": "1.0", "purl": "pkg:pypi/theta@1.0" },
+  { "type": "library", "name": "iota", "version": "1.0", "purl": "pkg:pypi/iota@1.0" },
+  { "type": "library", "name": "kappa", "version": "1.0", "purl": "pkg:pypi/kappa@1.0" },
+  { "type": "library", "name": "lambda", "version": "1.0", "purl": "pkg:pypi/lambda@1.0" },
+  { "type": "library", "name": "mu", "version": "1.0", "purl": "pkg:pypi/mu@1.0" },
+  { "type": "library", "name": "nu", "version": "1.0", "purl": "pkg:pypi/nu@1.0" },
+  { "type": "library", "name": "legacy", "version": "1.0", "purl": "pkg:pypi/legacy@1.0" },
+  { "type": "library", "name": "chi", "version": "1.0", "purl": "pkg:pypi/chi@1.0" },
+  { "type": "library", "name": "psi", "version": "1.0", "purl": "pkg:pypi/psi@1.0" },
+  { "type": "library", "name": "xi", "version": "1.0", "purl": "pkg:pypi/xi@1.0" },
+  { "type": "library", "name": "omicron", "version": "1.0", "purl": "pkg:pypi/omicron@1.0" },
+  { "type": "library", "name": "pi", "version": "1.0", "purl": "pkg:pypi/pi@1.0" }
+] }
+CPRBOM
+    "$WORK/cprvenv/bin/python3" "$WORK/cpr.py" "$WORK/cprbom.json" 2>"$WORK/cpr.err"
+    cpr() { jq -r --arg n "$1" '.components[] | select(.name==$n) | .copyright // "ABSENT"' "$WORK/cprbom.json"; }
+    csrc() { jq -r --arg n "$1" '.components[] | select(.name==$n)
+        | ((.properties // []) | map(select(.name=="bomlens:copyrightSource")) | .[0].value // "ABSENT")' "$WORK/cprbom.json"; }
+    [ "$(cpr alpha)" = "Copyright (c) 2020 Alpha Authors <alpha@example.org>" ] \
+        && pass "alpha keeps the longer of two statements that differ only by an address" \
+        || fail "alpha copyright='$(cpr alpha)'"
+    [ "$(csrc alpha)" = "installed license file" ] \
+        && pass "a filled copyright carries bomlens:copyrightSource" \
+        || fail "alpha copyrightSource='$(csrc alpha)'"
+    [ "$(cpr beta)" = "ABSENT" ] && [ "$(csrc beta)" = "ABSENT" ] \
+        && pass "a line with no year, (c) or by is not taken as a statement" \
+        || fail "beta copyright='$(cpr beta)'"
+    [ "$(cpr gamma)" = "Copyright (c) 1999 Declared Owner" ] && [ "$(csrc gamma)" = "ABSENT" ] \
+        && pass "an existing copyright is never overwritten" \
+        || fail "gamma copyright='$(cpr gamma)'"
+    [ "$(cpr delta)" = "ABSENT" ] \
+        && pass "a README is not read" \
+        || fail "delta copyright='$(cpr delta)'"
+    [ "$(cpr epsilon)" = "Copyright 2023 Epsilon Team" ] \
+        && pass "a license file under licenses/ is read" \
+        || fail "epsilon copyright='$(cpr epsilon)'"
+    [ "$(cpr mystery)" = "ABSENT" ] \
+        && pass "a component with no installed package is untouched" \
+        || fail "mystery copyright='$(cpr mystery)'"
+    [ "$(cpr zeta)" = "ABSENT" ] \
+        && pass "unfilled template lines (<copyright holders>, [fullname], YEAR by AUTHOR) are not taken" \
+        || fail "zeta copyright='$(cpr zeta)'"
+    [ "$(cpr eta)" = "Copyright (c) 2020 Eta Team" ] \
+        && pass "the Free Software Foundation and CWI lines of a license text are not attributed to the package" \
+        || fail "eta copyright='$(cpr eta)'"
+    [ "$(cpr theta)" = "Copyright (c) 2015 Acme Widgets, Berlin GmbH" ] \
+        && pass "a holder that runs onto the next line is joined" \
+        || fail "theta copyright='$(cpr theta)'"
+    [ "$(cpr iota)" = "ABSENT" ] \
+        && pass "a sentence of license prose is not taken as a statement" \
+        || fail "iota copyright='$(cpr iota)'"
+    [ "$(cpr kappa)" = "ABSENT" ] \
+        && pass "a license file that is a symlink out of the package is not read" \
+        || fail "kappa copyright='$(cpr kappa)'"
+    [ "$(cpr lambda)" = "Copyright (c) 2024 Nested Owner" ] \
+        && pass "a file named by License-File under licenses/ is read" \
+        || fail "lambda copyright='$(cpr lambda)'"
+    [ "$(cpr mu)" = "Copyright (C) 2007 Mu Team" ] \
+        && pass "statements that differ only by (c) versus the copyright sign are joined into one" \
+        || fail "mu copyright='$(cpr mu)'"
+    case "$(cpr nu)" in *"File A Owner"*"File B Owner"*"File C Owner"*"Root Owner"*) ok_nu=1 ;; *) ok_nu=0 ;; esac
+    [ "$ok_nu" = 1 ] \
+        && pass "License-File entries do not use up the file budget before the license files beside them" \
+        || fail "nu copyright='$(cpr nu)'"
+    [ "$(cpr legacy)" = "Copyright (c) 2012 Legacy Owner" ] \
+        && pass "an egg-info install falls back to the files it lists" \
+        || fail "legacy copyright='$(cpr legacy)'"
+    [ "$(cpr chi)" = "ABSENT" ] && [ "$(cpr psi)" = "ABSENT" ] \
+        && pass "a License-File entry that points outside the package (absolute or ../) is not read" \
+        || fail "chi='$(cpr chi)' psi='$(cpr psi)'"
+    [ "$(cpr xi)" = "ABSENT" ] \
+        && pass "a licenses/ folder that is a link out of the package is not read" \
+        || fail "xi copyright='$(cpr xi)'"
+    [ "$(cpr omicron)" = "ABSENT" ] \
+        && pass "a statement that names no holder (year only) is not taken" \
+        || fail "omicron copyright='$(cpr omicron)'"
+    [ "$(cpr pi)" = "ABSENT" ] \
+        && pass "license prose that merely starts with the word copyright is not taken" \
+        || fail "pi copyright='$(cpr pi)'"
+    grep -q "filled 8 python component" "$WORK/cpr.err" \
+        && pass "the pass reports how many components it filled" \
+        || fail "unexpected python copyright log" "$(cat "$WORK/cpr.err")"
+    cp "$WORK/cprbom.json" "$WORK/cprbom-1.json"
+    "$WORK/cprvenv/bin/python3" "$WORK/cpr.py" "$WORK/cprbom.json" 2>"$WORK/cpr2.err"
+    diff -q "$WORK/cprbom-1.json" "$WORK/cprbom.json" >/dev/null && [ ! -s "$WORK/cpr2.err" ] \
+        && pass "a second run changes nothing" \
+        || fail "second python copyright run was not a no-op"
+else
+    echo "  SKIP: python3 venv not available"
+fi
+
+echo "== copyright: npm packages read from node_modules =="
+if command -v node >/dev/null 2>&1; then
+    sed -n "/cat > \"\$_jscpr\" <<'NODE_CPR'/,/^NODE_CPR\$/p" "$LIB/build-prep.sh" \
+        | sed '1d;$d' > "$WORK/cpr.js"
+    [ -s "$WORK/cpr.js" ] \
+        && pass "npm copyright script extracted from build-prep.sh" \
+        || fail "could not extract the npm copyright pass from build-prep.sh"
+    NM="$WORK/npmtree/node_modules"
+    mknpm() {  # dir name version
+        mkdir -p "$1"
+        printf '{"name":"%s","version":"%s"}\n' "$2" "$3" > "$1/package.json"
+    }
+    mknpm "$NM/left-pad" left-pad 1.0.0
+    printf 'Copyright (c) 2014 Azer Koculu\n' > "$NM/left-pad/LICENSE"
+    mknpm "$NM/@scope/inner" @scope/inner 2.0.0
+    printf 'Copyright \xc2\xa9 2019 Scope Team\n' > "$NM/@scope/inner/COPYING"
+    mknpm "$NM/left-pad/node_modules/deep" deep 0.1.0
+    printf 'Copyright &copy; 2016-2021, Deep Author.\n' > "$NM/left-pad/node_modules/deep/LICENSE.md"
+    mknpm "$NM/nolicense" nolicense 1.0.0
+    printf 'Copyright (c) 2018 In The Readme Only\n' > "$NM/nolicense/README.md"
+    mknpm "$NM/placeholder" placeholder 1.0.0
+    printf 'Copyright (c) 2024 [fullname]\n' > "$NM/placeholder/LICENSE"
+    mknpm "$NM/.pnpm/pnp-pkg@1.0.0/node_modules/pnp-pkg" pnp-pkg 1.0.0
+    printf 'Copyright (c) 2021 Pnpm Owner\n' > "$NM/.pnpm/pnp-pkg@1.0.0/node_modules/pnp-pkg/LICENSE"
+    ln -s ".pnpm/pnp-pkg@1.0.0/node_modules/pnp-pkg" "$NM/pnp-pkg"
+    mknpm "$NM/loopy" loopy 1.0.0
+    printf 'Copyright (c) 2017 Loop Owner\n' > "$NM/loopy/LICENSE"
+    ln -s "$NM" "$NM/loopy/node_modules"
+    mknpm "$NM/victim" victim 1.0.0
+    ln -s "$WORK/outside-secret.txt" "$NM/victim/LICENSE"
+    mknpm "$NM/impostor" react 18.2.0
+    printf 'Copyright (c) 2020 Fake Owner\n' > "$NM/impostor/LICENSE"
+    mknpm "$NM/gnu" gnu 1.0.0
+    printf 'Copyright (C) 1989, 1991 Free Software Foundation, Inc.\nCopyright (c) 2019 Gnu Owner\n' > "$NM/gnu/COPYING"
+    cat > "$WORK/npmbom.json" <<'NPMBOM'
+{ "bomFormat": "CycloneDX", "specVersion": "1.6", "components": [
+  { "type": "library", "name": "left-pad", "version": "1.0.0", "purl": "pkg:npm/left-pad@1.0.0" },
+  { "type": "library", "group": "@scope", "name": "inner", "version": "2.0.0", "purl": "pkg:npm/%40scope/inner@2.0.0" },
+  { "type": "library", "name": "deep", "version": "0.1.0", "purl": "pkg:npm/deep@0.1.0" },
+  { "type": "library", "name": "left-pad", "version": "9.9.9", "purl": "pkg:npm/left-pad@9.9.9" },
+  { "type": "library", "name": "nolicense", "version": "1.0.0", "purl": "pkg:npm/nolicense@1.0.0" },
+  { "type": "library", "name": "placeholder", "version": "1.0.0", "purl": "pkg:npm/placeholder@1.0.0" },
+  { "type": "library", "name": "held", "version": "1.0.0", "purl": "pkg:npm/held@1.0.0", "copyright": "Copyright 1 Held" },
+  { "type": "library", "name": "pnp-pkg", "version": "1.0.0", "purl": "pkg:npm/pnp-pkg@1.0.0" },
+  { "type": "library", "name": "loopy", "version": "1.0.0", "purl": "pkg:npm/loopy@1.0.0" },
+  { "type": "library", "name": "victim", "version": "1.0.0", "purl": "pkg:npm/victim@1.0.0" },
+  { "type": "library", "name": "react", "version": "18.2.0", "purl": "pkg:npm/react@18.2.0" },
+  { "type": "library", "name": "gnu", "version": "1.0.0", "purl": "pkg:npm/gnu@1.0.0" }
+] }
+NPMBOM
+    BOMLENS_NM_DIRS="$NM" node "$WORK/cpr.js" "$WORK/npmbom.json" 2>"$WORK/cprn.err"
+    ncr() { jq -r --arg n "$1" --arg v "${2:-}" '[.components[] | select(.name==$n and (($v=="") or .version==$v))][0] | .copyright // "ABSENT"' "$WORK/npmbom.json"; }
+    [ "$(ncr left-pad 1.0.0)" = "Copyright (c) 2014 Azer Koculu" ] \
+        && pass "an npm package is matched by name and version" \
+        || fail "left-pad copyright='$(ncr left-pad 1.0.0)'"
+    [ "$(ncr inner)" = "Copyright © 2019 Scope Team" ] \
+        && pass "a scoped package is matched through its group" \
+        || fail "@scope/inner copyright='$(ncr inner)'"
+    [ "$(ncr deep)" = "Copyright (c) 2016-2021, Deep Author." ] \
+        && pass "a nested node_modules package is found and the HTML entity is decoded" \
+        || fail "deep copyright='$(ncr deep)'"
+    [ "$(ncr left-pad 9.9.9)" = "ABSENT" ] \
+        && pass "a different version of the same package is untouched" \
+        || fail "left-pad 9.9.9 copyright='$(ncr left-pad 9.9.9)'"
+    [ "$(ncr nolicense)" = "ABSENT" ] && [ "$(ncr placeholder)" = "ABSENT" ] \
+        && pass "a README and an unfilled template line are not taken as statements" \
+        || fail "nolicense='$(ncr nolicense)' placeholder='$(ncr placeholder)'"
+    [ "$(ncr held)" = "Copyright 1 Held" ] \
+        && pass "an existing npm copyright is never overwritten" \
+        || fail "held copyright='$(ncr held)'"
+    [ "$(ncr pnp-pkg)" = "Copyright (c) 2021 Pnpm Owner" ] \
+        && pass "a pnpm layout (symlink into .pnpm) is read" \
+        || fail "pnp-pkg copyright='$(ncr pnp-pkg)'"
+    [ "$(ncr loopy)" = "Copyright (c) 2017 Loop Owner" ] \
+        && pass "a node_modules that links back to itself does not loop" \
+        || fail "loopy copyright='$(ncr loopy)'"
+    [ "$(ncr victim)" = "ABSENT" ] \
+        && pass "a license file that is a symlink out of the package is not read" \
+        || fail "victim copyright='$(ncr victim)'"
+    [ "$(ncr react)" = "ABSENT" ] \
+        && pass "a folder whose package.json claims another package's name is not trusted" \
+        || fail "react copyright='$(ncr react)'"
+    [ "$(ncr gnu)" = "Copyright (c) 2019 Gnu Owner" ] \
+        && pass "the Free Software Foundation line of a COPYING file is not attributed to the package" \
+        || fail "gnu copyright='$(ncr gnu)'"
+    grep -q "filled 6 npm component" "$WORK/cprn.err" \
+        && pass "the npm pass reports how many components it filled" \
+        || fail "unexpected npm copyright log" "$(cat "$WORK/cprn.err")"
+    # The two implementations are twins; the same license text must give the same answer.
+    if [ -s "$WORK/cpr.py" ] && [ -x "$WORK/cprvenv/bin/python3" ]; then
+        PNM="$WORK/paritytree/node_modules"
+        i=0
+        : > "$WORK/parity-comps.txt"
+        while IFS= read -r line; do
+            i=$((i + 1))
+            mknpm "$PNM/par$i" "par$i" 1.0.0
+            printf '%b' "$line" > "$PNM/par$i/LICENSE"
+            mkdir -p "$CSP/par$i-1.0.dist-info"
+            printf 'Metadata-Version: 2.1\nName: par%s\nVersion: 1.0\n\nb\n' "$i" > "$CSP/par$i-1.0.dist-info/METADATA"
+            printf '%b' "$line" > "$CSP/par$i-1.0.dist-info/LICENSE"
+            printf '{"type":"library","name":"par%s","version":"%s","purl":"pkg:%s/par%s@%s"}\n' "$i" 1.0.0 npm "$i" 1.0.0 >> "$WORK/parity-comps.txt"
+        done <<'PARITY'
+Copyright (c) 2020 Alpha Corp\n
+     copyright--then that use is not regulated by the license. Our\n
+Copyright (c) 2020 \n
+Copyright (c) 2015 Acme,\nBerlin GmbH\n
+Preamble\fCopyright (c) 2001 Page Two Owner\n
+Copyright 2020 Google LLC\nCopyright (C) 2020 Google LLC\n
+Copyright (c) 2019 The Name Authors\n
+Copyright JS Foundation and other contributors\n
+PARITY
+        jq -s '{components: .}' "$WORK/parity-comps.txt" > "$WORK/par-npm.json"
+        jq '.components |= map(.version = "1.0.0")' "$WORK/par-npm.json" > "$WORK/par-npm2.json" && mv "$WORK/par-npm2.json" "$WORK/par-npm.json"
+        jq '.components |= map(.purl |= sub("pkg:npm/"; "pkg:pypi/") | .purl |= sub("@1.0.0"; "@1.0") | .version = "1.0")' "$WORK/par-npm.json" > "$WORK/par-py.json"
+        BOMLENS_NM_DIRS="$PNM" node "$WORK/cpr.js" "$WORK/par-npm.json" 2>/dev/null
+        "$WORK/cprvenv/bin/python3" "$WORK/cpr.py" "$WORK/par-py.json" 2>/dev/null
+        if [ "$(jq -c '[.components[].copyright // "ABSENT"]' "$WORK/par-npm.json")" = "$(jq -c '[.components[].copyright // "ABSENT"]' "$WORK/par-py.json")" ]; then
+            pass "the npm and Python implementations agree on the same license texts"
+        else
+            fail "npm and Python implementations disagree" "npm=$(jq -c '[.components[].copyright // "ABSENT"]' "$WORK/par-npm.json") py=$(jq -c '[.components[].copyright // "ABSENT"]' "$WORK/par-py.json")"
+        fi
+    else
+        echo "  SKIP: parity check needs the python section's venv"
+    fi
+else
+    echo "  SKIP: node not available"
+fi
+
 echo "== NOTICE: a license name that is not an SPDX id is marked unverified =="
 cat > "$WORK/unverified.json" <<'UNVBOM'
 { "bomFormat": "CycloneDX", "specVersion": "1.6",
