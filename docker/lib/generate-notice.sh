@@ -22,7 +22,9 @@
 #         scan actually installed. The pypi.org project-page URL is version-scoped
 #         rather than file-scoped, so it can't point at the wrong platform's file.
 #       * Copyright / attribution — component.copyright when present (cdxgen leaves
-#         it empty; scancode --deep-license or other sources fill it). When absent,
+#         it empty; build-prep.sh fills npm and Python components from the
+#         installed license files, and scancode --deep-license or other sources
+#         can fill others). When absent,
 #         the line is omitted rather than guessed.
 #   - The SPDX standard full text for each used license is appended from the
 #     bundled ./licenses/<spdx-id>.txt set (offline; no network at notice time).

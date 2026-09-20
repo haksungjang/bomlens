@@ -39,6 +39,8 @@ jq '.components | length' NodeExample_1.0.0/NodeExample_1.0.0_bom.json
 
 소스 스캔은 기본으로 테스트, 테스트 데이터, 예제, 벤치마크, 데모 폴더(`test`, `tests`, `spec`, `fixtures`, `testdata`, `__tests__`, `e2e`, `example`, `examples`, `benches`, `benchmarks`, `playground`, `samples`) 아래의 매니페스트와 `.github/workflows`의 GitHub Actions 워크플로를 제외합니다. 모두 제품과 함께 배포되지 않기 때문입니다. SBOM에는 적용한 패턴이 `bomlens:excluded-paths` 속성에, 제외한 매니페스트 파일이 `bomlens:excluded-manifests` 속성에 기록됩니다. 포함하려면 `BOMLENS_INCLUDE_NON_SHIPPED=1`을 설정하세요([Docker 이미지 환경 변수](docker-image.ko.md#환경-변수)).
 
+npm과 Python(pip) 패키지는 소스 스캔이 설치된 패키지에 들어 있는 라이선스 파일(`LICENSE`, `LICENCE`, `COPYING`, `NOTICE`, `COPYRIGHT`)에서 저작권 문구를 읽어 컴포넌트의 `copyright`를 채웁니다. 고지문에 저작권 표기 줄이 나오게 하려는 것입니다. `Copyright` 바로 뒤에 `(c)`, 저작권 기호, 연도, `by` 중 하나가 오거나 `(c)`나 저작권 기호 뒤에 연도가 오면서 권리자 이름이 있는 줄만 사용합니다. `Copyright Acme, Inc.`처럼 연도가 없는 표기는 가져오지 않습니다. 읽는 곳은 패키지 자신의 폴더(pip은 `.dist-info` 폴더)뿐이고, 파일은 최대 6개, 파일마다 앞 64KiB와 400줄까지, 컴포넌트당 문구는 최대 5개이며 `; `로 이어 붙입니다. 채우지 않은 서식(`<year>`, `[fullname]`)이나 라이선스 문서 자체의 문구(예: GNU 라이선스에 든 Free Software Foundation의 줄)는 제외하고, 패키지 밖을 가리키는 링크 파일도 읽지 않습니다. 이미 저작권 값이 있는 컴포넌트는 바꾸지 않고, 그런 줄이 없는 패키지는 비워 둡니다. 채운 값에는 `bomlens:copyrightSource` 속성이 붙습니다. `BOMLENS_NO_COPYRIGHT=1`로 끌 수 있습니다. 다른 생태계는 아직 지원하지 않습니다.
+
 아래 언어별 절에 그대로 붙여넣을 수 있는 명령을 정리했습니다.
 
 ---
