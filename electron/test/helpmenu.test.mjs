@@ -50,4 +50,6 @@ test("every copy of the issue form URL names an existing form and they agree", (
   assert.ok(web.includes(ISSUE_FORM_URL), "the web UI's ISSUE_FORM_URL differs");
   const status = fs.readFileSync(path.join(here, "../assets/status.html"), "utf8");
   assert.ok(status.includes(ISSUE_FORM_URL), "the start screen's link differs");
+  const missing = fs.readFileSync(path.join(here, "../assets/docker-missing.html"), "utf8");
+  assert.ok(missing.includes(ISSUE_FORM_URL), "the Docker guidance screen's link differs");
 });
