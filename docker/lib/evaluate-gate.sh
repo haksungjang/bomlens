@@ -45,6 +45,23 @@
 #         is unjudged, and so is a run whose compatibility step recorded nothing.
 #         Components whose verdict is "unknown" are counted in the detail.
 #
+#     empty-result
+#         the scan identified no software: no component is left once the
+#         operating-system and file entries are set aside (a rootfs or image scan
+#         that named no package is empty even though it lists files). Read from the
+#         conformance report's own `emptyResult` signal (validate-sbom.sh), not
+#         recounted here. Unjudged when the scan wrote no conformance report or the
+#         report carries no such signal (SPDX 3.0 that could not be converted). Not
+#         offered for AI model and dataset inputs (the CLI refuses it).
+#     license-coverage=<pct>
+#         fewer than <pct> percent of those same components declare a license
+#         (NOASSERTION and NONE are not declarations), the percentage rounded down.
+#         Read from the report's `licenseCoverage` signal, which is separate from
+#         its license check, so that check and the conformance verdict are
+#         untouched. Unjudged when there is no conformance report or no signal, and
+#         when there is nothing to measure (no such components); an empty result is
+#         what empty-result is for.
+#
 # The result file is written in one piece and holds exactly one line per
 # condition asked for, so a reader can tell a complete judgement from a cut-off
 # one.
@@ -55,6 +72,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RESULT="${OUT_PREFIX}_gate.result"
 PARTIAL="${RESULT}.tmp.$$"
 SECURITY="${OUT_PREFIX}_security.json"
+CONFORMANCE="${OUT_PREFIX}_conformance.json"
 
 if [ -z "$SBOM" ] || [ -z "$OUT_PREFIX" ] || [ ! -f "$SBOM" ]; then
     echo "[gate] usage: evaluate-gate.sh <sbom.json> <out_prefix> <conditions>" >&2
@@ -191,6 +209,61 @@ judge_license_conflict() { # <cond>
     fi
 }
 
+# The conformance report the pipeline already wrote is the only source for the
+# two conditions below. Prints nothing and returns 1 when it cannot be used.
+conformance_readable() { # <cond> -> emits unjudged and returns 1 when unusable
+    if [ ! -f "$CONFORMANCE" ]; then
+        emit unjudged "$1" "no conformance report was produced for this scan"; return 1
+    fi
+    if ! jq empty "$CONFORMANCE" >/dev/null 2>&1; then
+        emit unjudged "$1" "the conformance report could not be read"; return 1
+    fi
+    return 0
+}
+
+judge_empty_result() { # <cond>
+    local cond="$1" empty count
+    conformance_readable "$cond" || return
+    empty="$(jq -r 'if (.emptyResult | type) == "boolean" then (.emptyResult | tostring) else "" end' "$CONFORMANCE" 2>/dev/null)"
+    count="$(jq -r '.softwareComponentCount // empty' "$CONFORMANCE" 2>/dev/null)"
+    is_number "$count" || count="?"
+    case "$empty" in
+        true)  emit met "$cond" "the scan found ${count} software component(s); operating-system and file entries are not counted" ;;
+        false) emit ok "$cond" "the scan found ${count} software component(s)" ;;
+        *)     emit unjudged "$cond" "this report carries no component count (the format of this SBOM was not measured)" ;;
+    esac
+}
+
+judge_license_coverage() { # <cond> <pct>
+    local cond="$1" min="$2" line declared total pct detail
+    case "$min" in ''|*[!0-9]*) emit unjudged "$cond" "'$min' is not a whole percentage from 0 to 100"; return ;; esac
+    if [ "${#min}" -gt 3 ] || [ "$((10#$min))" -gt 100 ]; then
+        emit unjudged "$cond" "'$min' is not a whole percentage from 0 to 100"; return
+    fi
+    min=$((10#$min))
+    conformance_readable "$cond" || return
+    line="$(jq -r '.licenseCoverage
+        | if (type != "object") then "absent"
+          else "\(.declared // "")\t\(.total // "")\t\(.pct // "")" end' "$CONFORMANCE" 2>/dev/null)"
+    if [ -z "$line" ] || [ "$line" = "absent" ]; then
+        emit unjudged "$cond" "this report carries no license coverage (the format of this SBOM was not measured)"; return
+    fi
+    IFS=$'\t' read -r declared total pct <<< "$line"
+    if ! is_number "$declared" || ! is_number "$total"; then
+        emit unjudged "$cond" "the license coverage in this report could not be read"; return
+    fi
+    if [ "$total" -eq 0 ]; then
+        emit unjudged "$cond" "there is no software component to measure license coverage on (operating-system and file entries are not counted)"; return
+    fi
+    is_number "$pct" || pct=$((declared * 100 / total))
+    detail="${pct}% (${declared}/${total})"
+    if [ "$pct" -lt "$min" ]; then
+        emit met "$cond" "license coverage is ${detail:-unknown}, below ${min}%"
+    else
+        emit ok "$cond" "license coverage is ${detail:-unknown}, at or above ${min}%"
+    fi
+}
+
 IFS=',' read -r -a WANTED <<< "$CONDITIONS"
 for cond in "${WANTED[@]}"; do
     [ -n "$cond" ] || continue
@@ -198,6 +271,8 @@ for cond in "${WANTED[@]}"; do
         vulnerability=*)   judge_vulnerability "$cond" "${cond#vulnerability=}" ;;
         malicious-package) judge_malicious "$cond" ;;
         license-conflict)  judge_license_conflict "$cond" ;;
+        empty-result)      judge_empty_result "$cond" ;;
+        license-coverage=*) judge_license_coverage "$cond" "${cond#license-coverage=}" ;;
         *) emit unjudged "$cond" "not a known condition" ;;
     esac
 done

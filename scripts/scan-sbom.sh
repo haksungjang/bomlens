@@ -106,6 +106,10 @@ CONFORMANCE_PROFILE="${CONFORMANCE_PROFILE:-default}"
 # Host-only logic (see the check near the end of this script); nothing is
 # passed to the container for it.
 FAIL_ON_CONFORMANCE="false"; FAIL_ON=()
+fail_on_bad_coverage() {
+    echo "[ERROR] --fail-on: '$1' needs a whole percentage from 0 to 100 without leading zeros, for example license-coverage=80 (there is no default)."
+    exit 1
+}
 FORCE_FIRMWARE="false"; ANALYZE_SBOM=""; MODEL=""; MODEL_FILE=""; VEX_FILE=""
 # Set when --target turned out to be a Yocto build directory: the folder the
 # user pointed at, while ANALYZE_SBOM holds the image SBOM found inside it.
@@ -187,10 +191,16 @@ while [[ "$#" -gt 0 ]]; do
             case "${2:-}" in
                 vulnerability=critical|vulnerability=high|vulnerability=medium|vulnerability=low)
                     GENERATE_SECURITY="true" ;;
-                malicious-package|license-conflict) ;;
+                malicious-package|license-conflict|empty-result) ;;
+                license-coverage=*)
+                    # A whole percentage, 0 to 100, with no default: the threshold is the policy.
+                    case "${2#license-coverage=}" in
+                        ''|*[!0-9]*|????*|0?*) fail_on_bad_coverage "$2" ;;
+                        *) [ "${2#license-coverage=}" -le 100 ] || fail_on_bad_coverage "$2" ;;
+                    esac ;;
                 *)
                     echo "[ERROR] --fail-on: unknown condition '${2:-}'."
-                    echo "[ERROR] Use one of: vulnerability=critical|high|medium|low, malicious-package, license-conflict."; exit 1 ;;
+                    echo "[ERROR] Use one of: vulnerability=critical|high|medium|low, malicious-package, license-conflict, empty-result, license-coverage=<0-100>."; exit 1 ;;
             esac
             FAIL_ON+=("$2"); shift ;;
         --lang) REPORT_LANG="$2"; shift ;;
@@ -349,6 +359,11 @@ Options:
                            license-conflict
                                         a component incompatible with the
                                         license given by --license
+                           empty-result
+                                        the scan found no component
+                           license-coverage=<0-100>
+                                        fewer than that percent of components
+                                        declare a license (no default value)
                          Not offered with --ui or --diff. See "Exit codes" in
                          the CLI reference.
   --lang <en|ko>         Language for the human-facing conformance and AI-profile
@@ -1748,6 +1763,9 @@ if [ "$MODE" = "AIBOM" ] || [ "$MODE" = "MODELFILE" ] || [ "$MODE" = "DATASET" ]
             vulnerability=*)
                 echo "[ERROR] --fail-on $fo is not available for AI model and dataset inputs: they have no package dependencies to scan, so no security report is produced."
                 echo "[ERROR] Use --fail-on malicious-package or --fail-on license-conflict for these."; exit 1 ;;
+            empty-result)
+                echo "[ERROR] --fail-on empty-result is not available for AI model and dataset inputs: they are not judged by how many dependencies they list."
+                echo "[ERROR] Use --fail-on malicious-package, --fail-on license-conflict or --fail-on license-coverage=<pct> for these."; exit 1 ;;
         esac
     done
 fi
@@ -2237,6 +2255,8 @@ if [ "${#FAIL_ON[@]}" -gt 0 ]; then
                 met)      echo "[ERROR] --fail-on ${gate_cond}: ${gate_detail}"; GATE_EXIT=4 ;;
                 ok)       echo "[GATE] ${gate_cond}: ${gate_detail}" ;;
                 *)        echo "[ERROR] --fail-on ${gate_cond} cannot be judged: ${gate_detail:-the result line is not understood}"
+                          # An older image does not know a newer condition; say how to get one that does.
+                          [ "$gate_detail" != "not a known condition" ] || echo "[ERROR] --fail-on ${gate_cond}: the scanner image predates this condition, refresh it: docker pull ${RUN_IMAGE:-$POSTPROCESS_IMAGE}"
                           [ "$GATE_EXIT" -eq 4 ] || GATE_EXIT=5 ;;
             esac
         done < "$GATE_RESULT_FILE"

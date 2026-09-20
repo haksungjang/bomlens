@@ -8079,6 +8079,72 @@ jq '.components[2].properties = [{"name":"bomlens:licenseConflict","value":"unkn
 bash "$LIB/evaluate-gate.sh" "$GATEDIR/unk.json" "$GATEDIR/unk" license-conflict >/dev/null 2>&1
 grep -q "^ok.*1 component(s) could not be assessed" "$GATEDIR/unk_gate.result" \
     && pass "components whose verdict is unknown are counted in the detail" || fail "unknown license verdicts were not reported" "$(cat "$GATEDIR/unk_gate.result")"
+# empty-result and license-coverage read the measurements validate-sbom.sh wrote.
+# A well-formed document that lists nothing (metadata present, no components).
+cat > "$GATEDIR/qe.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,
+ "metadata":{"timestamp":"2026-01-01T00:00:00Z","tools":{"components":[{"type":"application","name":"t"}]},"component":{"type":"application","name":"app","version":"1"}},
+ "components":[]}
+JSON
+# Two software components (one declares MIT, one only NOASSERTION), plus a file and an OS entry that must not count.
+cat > "$GATEDIR/qc.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6",
+ "components":[{"type":"library","name":"a","version":"1","purl":"pkg:npm/a@1","licenses":[{"license":{"id":"NOASSERTION"}}]},
+               {"type":"library","name":"b","version":"1","purl":"pkg:npm/b@1","licenses":[{"license":{"id":"MIT"}}]},
+               {"type":"file","name":"f","licenses":[{"license":{"id":"MIT"}}]},
+               {"type":"operating-system","name":"os","version":"1"}]}
+JSON
+# Only files and an OS entry: nothing identified as software.
+echo '{"bomFormat":"CycloneDX","specVersion":"1.6","components":[{"type":"file","name":"f"},{"type":"operating-system","name":"os"}]}' > "$GATEDIR/qf.json"
+bash "$LIB/validate-sbom.sh" "$GATEDIR/qe.json" "$GATEDIR/qe" P >/dev/null 2>&1
+bash "$LIB/validate-sbom.sh" "$GATEDIR/qc.json" "$GATEDIR/qc" P >/dev/null 2>&1
+bash "$LIB/validate-sbom.sh" "$GATEDIR/qf.json" "$GATEDIR/qf" P >/dev/null 2>&1
+[ "$(gate_status qe qe.json empty-result empty-result)" = "met" ] \
+    && [ "$(gate_status qf qf.json empty-result empty-result)" = "met" ] \
+    && [ "$(gate_status qc qc.json empty-result empty-result)" = "ok" ] \
+    && grep -q "found 2 software component" "$GATEDIR/qc_gate.result" \
+    && pass "empty-result is met with 0 components or with only file and OS entries, ok with 2 software components" || fail "empty-result judged wrongly" "$(cat "$GATEDIR/qe_gate.result" "$GATEDIR/qf_gate.result" "$GATEDIR/qc_gate.result")"
+[ "$(gate_status qc qc.json license-coverage=50 license-coverage=50)" = "ok" ] \
+    && [ "$(gate_status qc qc.json license-coverage=51 license-coverage=51)" = "met" ] \
+    && grep -q "50% (1/2), below 51%" "$GATEDIR/qc_gate.result" \
+    && pass "license-coverage does not count NOASSERTION, files or OS entries, compares with the threshold and quotes it" || fail "license-coverage judged wrongly" "$(cat "$GATEDIR/qc_gate.result")"
+[ "$(gate_status qc qc.json license-coverage=0 license-coverage=0)" = "ok" ] \
+    && [ "$(gate_status qc qc.json license-coverage=100 license-coverage=100)" = "met" ] \
+    && [ "$(gate_status qc qc.json license-coverage=08 license-coverage=08)" = "ok" ] \
+    && grep -q "at or above 8%" "$GATEDIR/qc_gate.result" \
+    && pass "license-coverage=0 never fails, =100 needs everything, and a leading zero is normalized" || fail "license-coverage boundary values judged wrongly" "$(cat "$GATEDIR/qc_gate.result")"
+[ "$(gate_status qe qe.json license-coverage=80 license-coverage=80)" = "unjudged" ] \
+    && [ "$(gate_status qf qf.json license-coverage=80 license-coverage=80)" = "unjudged" ] \
+    && pass "license-coverage with no software component is unjudged, not 0%" || fail "an empty denominator was read as 0%"
+[ "$(gate_status none qc.json empty-result empty-result)" = "unjudged" ] \
+    && [ "$(gate_status none qc.json license-coverage=80 license-coverage=80)" = "unjudged" ] \
+    && [ "$(gate_status qc qc.json license-coverage=abc license-coverage=abc)" = "unjudged" ] \
+    && pass "no conformance report, or a threshold that is not a percentage, is unjudged" || fail "the coverage conditions passed without a report"
+# A report that is not JSON, or that lacks or garbles the signals, is never a pass.
+echo 'not json' > "$GATEDIR/bad_conformance.json"
+jq 'del(.emptyResult, .licenseCoverage)' "$GATEDIR/qc_conformance.json" > "$GATEDIR/nosig_conformance.json"
+jq '.emptyResult = "no" | .licenseCoverage = {declared:"x",total:"y"}' "$GATEDIR/qc_conformance.json" > "$GATEDIR/junk_conformance.json"
+[ "$(gate_status bad qc.json empty-result empty-result)" = "unjudged" ] \
+    && [ "$(gate_status bad qc.json license-coverage=80 license-coverage=80)" = "unjudged" ] \
+    && [ "$(gate_status nosig qc.json empty-result empty-result)" = "unjudged" ] \
+    && [ "$(gate_status nosig qc.json license-coverage=80 license-coverage=80)" = "unjudged" ] \
+    && [ "$(gate_status junk qc.json empty-result empty-result)" = "unjudged" ] \
+    && [ "$(gate_status junk qc.json license-coverage=80 license-coverage=80)" = "unjudged" ] \
+    && pass "an unreadable report, or one with a missing or non-boolean signal, is unjudged" || fail "a broken conformance report was judged"
+# The signals are their own fields: the empty document keeps whatever verdict the checks give it.
+[ "$(cat "$GATEDIR/qe_conformance.result")" = "pass" ] && [ "$(jq -r .result "$GATEDIR/qe_conformance.json")" = "pass" ] \
+    && jq -e '.emptyResult == true and .softwareComponentCount == 0 and .licenseCoverage.pct == null' "$GATEDIR/qe_conformance.json" >/dev/null \
+    && pass "an empty but well-formed document still conforms; emptyResult is a separate field" || fail "the empty document's conformance or signal is wrong" "$(cat "$GATEDIR/qe_conformance.result")"
+# SPDX-JSON and Tag-Value carry the same measurements.
+cat > "$GATEDIR/qs.json" <<'JSON'
+{"spdxVersion":"SPDX-2.3","packages":[{"name":"a","licenseConcluded":"none","licenseDeclared":"NOASSERTION"},{"name":"b","licenseDeclared":"Apache-2.0"}]}
+JSON
+printf 'SPDXVersion: SPDX-2.3\nPackageName: a\nPackageLicenseConcluded: NOASSERTION\nPackageName: b\nPackageLicenseDeclared: MIT\nPackageLicenseConcluded: NOASSERTION\nPackageName: c\n' > "$GATEDIR/qt.spdx"
+bash "$LIB/validate-sbom.sh" "$GATEDIR/qs.json" "$GATEDIR/qs" P >/dev/null 2>&1
+bash "$LIB/validate-sbom.sh" "$GATEDIR/qt.spdx" "$GATEDIR/qt" P >/dev/null 2>&1
+jq -e '.licenseCoverage == {declared:1,total:2,pct:50}' "$GATEDIR/qs_conformance.json" >/dev/null \
+    && jq -e '.licenseCoverage == {declared:1,total:3,pct:33} and .emptyResult == false' "$GATEDIR/qt_conformance.json" >/dev/null \
+    && pass "SPDX-JSON and Tag-Value report the same license coverage, NONE and NOASSERTION not counted" || fail "SPDX coverage measurements are wrong" "$(jq -c .licenseCoverage "$GATEDIR/qs_conformance.json" "$GATEDIR/qt_conformance.json")"
 ls "$GATEDIR"/*_gate.result.tmp.* >/dev/null 2>&1 \
     && fail "a temporary gate file was left behind" || pass "the gate result is published whole, with no temporary file left"
 
