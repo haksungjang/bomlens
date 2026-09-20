@@ -937,6 +937,119 @@ else
     exit 1
 fi
 
+# Rust licenses. cdxgen reads only Cargo.lock for a Rust project, and a lock file
+# carries no license, so nearly every crate came through without one. `cargo
+# metadata` downloads the crates and reports each one's declared license, so the
+# gap is filled from that: a component with no license takes the license its crate
+# declares in its own Cargo.toml (a workspace member or path crate included, whose
+# manifest is local). A license the SBOM already has is never replaced, a crate
+# that declares none stays empty, and every value set is stamped
+# bomlens:licenseSource. Cargo's older "MIT/Apache-2.0" spelling is written as an
+# SPDX expression, and a value that is not one (or names an id that is not on the
+# SPDX list) is kept as a plain license name. With no route to the registry `cargo
+# metadata` fails: the step is recorded as failed on the SBOM below, and the
+# licenses stay as cdxgen left them. It runs before that recording so a failure
+# reaches the SBOM. FETCH_LICENSE=false (the switch that turns off network license
+# lookups, also set by --byte-stable) skips it; so does BOMLENS_NO_CARGO_LICENSE=1
+# (or true).
+if opted_out "${BOMLENS_NO_CARGO_LICENSE:-}"; then
+    log "cargo: license pass off (BOMLENS_NO_CARGO_LICENSE)"
+elif [ "${FETCH_LICENSE:-true}" = "false" ]; then
+    log "cargo: license pass off (FETCH_LICENSE=false)"
+elif [ "${rc:-1}" -eq 0 ] && [ -f Cargo.toml ] && [ -f "$OUT" ] \
+     && command -v node >/dev/null 2>&1 && command -v cargo >/dev/null 2>&1 \
+     && grep -q '"pkg:cargo/' "$OUT" 2>/dev/null; then
+    log "cargo: reading the licenses crates declare (cargo metadata)"
+    _clmeta=$(mktemp)
+    if prep_step cargo-license-metadata "$PREP_TIMEOUT_DEFAULT" sh -c 'cargo metadata --format-version 1 > "$1"' _ "$_clmeta" \
+       && [ -s "$_clmeta" ]; then
+        _clspdx=""
+        for _c in /opt/cdxgen/data /opt/bin/data \
+                  /usr/local/lib/node_modules/@cdxgen/cdxgen/data \
+                  /usr/local/lib/node_modules/@cyclonedx/cdxgen/data; do
+            [ -f "$_c/spdx-licenses.json" ] && { _clspdx="$_c/spdx-licenses.json"; break; }
+        done
+        _cljs=$(mktemp)
+        cat > "$_cljs" <<'CARGO_LIC'
+const fs = require('fs');
+const [bomPath, metaPath] = process.argv.slice(2);
+let bom, meta;
+try { bom = JSON.parse(fs.readFileSync(bomPath, 'utf8')); } catch (e) { process.exit(0); }
+try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf8')); } catch (e) { process.exit(0); }
+if (!Array.isArray(bom.components) || !Array.isArray(meta.packages)) process.exit(0);
+
+// The SPDX ids (and exceptions) cdxgen ships. Without the list nothing can be
+// vouched for as an id, so every value is kept as a plain license name.
+let known = new Set();
+try {
+  const list = JSON.parse(fs.readFileSync(process.env.BOMLENS_SPDX_LIST || '', 'utf8'));
+  if (Array.isArray(list)) known = new Set(list);
+} catch (e) { /* no list */ }
+
+// name@version -> the license the crate declares (path and workspace crates too).
+const declared = new Map();
+for (const p of meta.packages) {
+  if (p.name && p.version && typeof p.license === 'string' && p.license.trim()) {
+    declared.set(p.name + '@' + p.version, p.license.trim());
+  }
+}
+
+// Cargo's older spelling separates alternatives with a slash: "MIT/Apache-2.0".
+// Free text that merely contains a slash (a URL) is left alone.
+const ID = '[A-Za-z0-9.+-]+';
+function spdx(text) {
+  const t = text.replace(/\s+/g, ' ');
+  return new RegExp('^' + ID + '( ?/ ?' + ID + ')+$').test(t) ? t.replace(/ ?\/ ?/g, ' OR ') : t;
+}
+// An SPDX expression alternates ids and OR/AND/WITH, every id on the SPDX list.
+function tokens(t) {
+  const tok = t.replace(/[()]/g, ' ').trim().split(/\s+/);
+  const ok = tok.length % 2 === 1 && tok.every((w, i) => i % 2 === 1
+    ? /^(OR|AND|WITH)$/.test(w) : known.has(w.replace(/\+$/, '')));
+  return ok ? tok : null;
+}
+// A flat OR (or AND) list is written in a fixed order, so the same pair of
+// licenses is one entry in the NOTICE whichever way a crate spells it.
+function ordered(t, tok) {
+  if (/[()]/.test(t)) return t;
+  const ops = new Set(tok.filter((w, i) => i % 2 === 1));
+  if (ops.size !== 1 || ops.has('WITH')) return t;
+  const words = tok.filter((w, i) => i % 2 === 0).sort();
+  return words.join(' ' + [...ops][0] + ' ');
+}
+function licenseEntry(text) {
+  const t = spdx(text);
+  const tok = tokens(t);
+  if (!tok) return { license: { name: t } };
+  if (tok.length === 1) return known.has(tok[0]) ? { license: { id: tok[0] } } : { expression: tok[0] };
+  return { expression: ordered(t, tok) };
+}
+const hasLicense = c => (c.licenses || []).some(e => e && (e.expression
+  || (e.license && (e.license.id || e.license.name))));
+
+let changed = 0;
+for (const c of bom.components) {
+  if (!String(c.purl || '').startsWith('pkg:cargo/') || hasLicense(c)) continue;
+  const text = declared.get(c.name + '@' + c.version);
+  if (!text) continue;
+  c.licenses = [licenseEntry(text)];
+  c.properties = (c.properties || []).filter(p => p.name !== 'bomlens:licenseSource')
+    .concat([{ name: 'bomlens:licenseSource', value: 'cargo metadata' }]);
+  changed++;
+}
+if (changed) {
+  fs.writeFileSync(bomPath, JSON.stringify(bom, null, 2));
+  process.stderr.write('[build-prep] cargo: filled ' + changed + ' component license(s) from the crates\' own manifests\n');
+}
+CARGO_LIC
+        BOMLENS_SPDX_LIST="$_clspdx" node "$_cljs" "$OUT" "$_clmeta" || log "cargo: license pass skipped (non-fatal)"
+        rm -f "$_cljs"
+    else
+        log "cargo: could not read crate licenses (cargo metadata failed, is the registry reachable?); licenses left as the generator resolved them"
+    fi
+    rm -f "$_clmeta"
+fi
+
 # Record each prep_step that failed or timed out (PREP_FAILED, space-separated
 # labels) on the SBOM, one bomlens:pipeline-step-failed property per label,
 # the same shape docker/lib/pipeline-step.sh's mark_pipeline_warning writes.

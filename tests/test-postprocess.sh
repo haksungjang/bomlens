@@ -6426,6 +6426,100 @@ else
     echo "  SKIP: node not available"
 fi
 
+echo "== cargo: licenses read from the crates' own manifests (cargo metadata) =="
+# cdxgen reads only Cargo.lock for Rust, which has no license, so nearly every crate
+# came through without one. build-prep.sh fills the gap from `cargo metadata`.
+if command -v node >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+    sed -n "/cat > \"\$_cljs\" <<'CARGO_LIC'/,/^CARGO_LIC\$/p" "$LIB/build-prep.sh" \
+        | sed '1d;$d' > "$WORK/cargo-lic.js"
+    [ -s "$WORK/cargo-lic.js" ] \
+        && pass "cargo license script extracted from build-prep.sh" \
+        || fail "could not extract the cargo license pass from build-prep.sh"
+    printf '["MIT","Apache-2.0","BSD-3-Clause","Unicode-3.0","GPL-3.0","LLVM-exception","0BSD"]\n' > "$WORK/cargo-spdx.json"
+    R='"source": "registry+https://github.com/rust-lang/crates.io-index"'
+    cat > "$WORK/cargo-meta.json" <<CMETA
+{ "packages": [
+  { "name": "serde", "version": "1.0.0", $R, "license": "MIT OR Apache-2.0" },
+  { "name": "libc", "version": "0.2.0", $R, "license": "MIT/Apache-2.0" },
+  { "name": "itoa", "version": "1.0.0", $R, "license": "MIT" },
+  { "name": "held", "version": "1.0.0", $R, "license": "MIT" },
+  { "name": "filed", "version": "1.0.0", $R, "license_file": "LICENSE" },
+  { "name": "blank", "version": "1.0.0", $R, "license": "" },
+  { "name": "odd", "version": "1.0.0", $R, "license": "GPL v3 or later" },
+  { "name": "prop", "version": "1.0.0", "source": "sparse+https://internal.example/index/", "license": "Proprietary" },
+  { "name": "paren", "version": "1.0.0", $R, "license": "(MIT OR Apache-2.0) AND Unicode-3.0" },
+  { "name": "withex", "version": "1.0.0", $R, "license": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT" },
+  { "name": "url", "version": "1.0.0", $R, "license": "See LICENSE file at http://x.org/l" },
+  { "name": "gplplus", "version": "1.0.0", $R, "license": "GPL-3.0+" },
+  { "name": "emptyentry", "version": "1.0.0", $R, "license": "MIT" },
+  { "name": "gitdep", "version": "0.1.0", "source": "git+https://example.org/gitdep#abc", "license": "Apache-2.0" },
+  { "name": "myapp", "version": "1.0.0", "source": null, "license": "MIT" },
+  { "name": "vers", "version": "2.0.0", $R, "license": "MIT" }
+] }
+CMETA
+    mkc() { printf '  { "type": "library", "name": "%s", "version": "%s", "purl": "pkg:cargo/%s@%s"%s }' "$1" "$2" "$1" "$2" "${3:-}"; }
+    {
+        echo '{ "bomFormat": "CycloneDX", "specVersion": "1.6", "components": ['
+        for n in serde libc; do mkc "$n" 1.0.0; echo ","; done
+        mkc itoa 1.0.0 ', "licenses": []'; echo ","
+        mkc held 1.0.0 ', "licenses": [ { "license": { "id": "BSD-3-Clause" } } ]'; echo ","
+        for n in filed blank odd prop paren withex url gplplus; do mkc "$n" 1.0.0; echo ","; done
+        mkc emptyentry 1.0.0 ', "licenses": [ { "license": { "name": "" } } ]'; echo ","
+        mkc gitdep 0.1.0; echo ","
+        mkc myapp 1.0.0; echo ","
+        mkc vers 1.0.0; echo ","
+        mkc unknown 1.0.0; echo ","
+        echo '  { "type": "library", "name": "left-pad", "version": "1.0.0", "purl": "pkg:npm/left-pad@1.0.0" }'
+        echo '] }'
+    } > "$WORK/cargo-bom.json"
+    # serde and libc are 1.0.0 / 0.2.0 in the metadata
+    jq '(.components[] | select(.name=="libc") | .version) = "0.2.0" | (.components[] | select(.name=="libc") | .purl) = "pkg:cargo/libc@0.2.0"' \
+        "$WORK/cargo-bom.json" > "$WORK/cargo-bom.tmp" && mv "$WORK/cargo-bom.tmp" "$WORK/cargo-bom.json"
+    cp "$WORK/cargo-bom.json" "$WORK/cargo-bom-nolist.json"
+    BOMLENS_SPDX_LIST="$WORK/cargo-spdx.json" node "$WORK/cargo-lic.js" "$WORK/cargo-bom.json" "$WORK/cargo-meta.json" 2>"$WORK/cargo-lic.err"
+    clic() { jq -c --arg n "$1" '.components[] | select(.name==$n) | .licenses // "ABSENT"' "$WORK/cargo-bom.json"; }
+    chk() {  # name expected description
+        [ "$(clic "$1")" = "$2" ] && pass "$3" || fail "$3" "$1 licenses=$(clic "$1")"
+    }
+    chk serde '[{"expression":"Apache-2.0 OR MIT"}]' "alternatives are written as one expression in a fixed order"
+    chk libc '[{"expression":"Apache-2.0 OR MIT"}]' "Cargo's older MIT/Apache-2.0 spelling becomes an expression"
+    chk itoa '[{"license":{"id":"MIT"}}]' "a single id on the SPDX list fills an empty license list"
+    chk held '[{"license":{"id":"BSD-3-Clause"}}]' "a license the SBOM already has is never replaced"
+    chk emptyentry '[{"license":{"id":"MIT"}}]' "an empty license entry counts as no license"
+    chk filed '"ABSENT"' "a crate that declares its license only as a file stays empty"
+    chk blank '"ABSENT"' "an empty declared license stays empty"
+    chk unknown '"ABSENT"' "a component that is not in the metadata stays empty"
+    chk odd '[{"license":{"name":"GPL v3 or later"}}]' "text that is not an SPDX expression is kept as a license name"
+    chk prop '[{"license":{"name":"Proprietary"}}]' "a token that is not on the SPDX list is a name, never an id"
+    chk paren '[{"expression":"(MIT OR Apache-2.0) AND Unicode-3.0"}]' "a parenthesised expression is kept as written"
+    chk withex '[{"expression":"Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT"}]' "an expression with WITH is kept as written"
+    chk url '[{"license":{"name":"See LICENSE file at http://x.org/l"}}]' "free text with a slash is not rewritten"
+    chk gplplus '[{"expression":"GPL-3.0+"}]' "an or-later id is an expression, not a license id"
+    chk gitdep '[{"license":{"id":"Apache-2.0"}}]' "a git dependency is filled too"
+    chk myapp '[{"license":{"id":"MIT"}}]' "the project's own crate takes the license its manifest declares"
+    chk vers '"ABSENT"' "another version of the crate is untouched"
+    [ "$(jq -c '.components[] | select(.name=="left-pad") | .licenses // "ABSENT"' "$WORK/cargo-bom.json")" = '"ABSENT"' ] \
+        && pass "a non-cargo component is untouched" || fail "left-pad was touched"
+    [ "$(jq -r '.components[] | select(.name=="serde") | [.properties[]? | select(.name=="bomlens:licenseSource") | .value][0]' "$WORK/cargo-bom.json")" = "cargo metadata" ] \
+        && pass "a filled license carries bomlens:licenseSource" \
+        || fail "serde licenseSource missing"
+    grep -q "filled 12 component license" "$WORK/cargo-lic.err" \
+        && pass "the pass reports how many licenses it filled" \
+        || fail "unexpected cargo license log" "$(cat "$WORK/cargo-lic.err")"
+    cp "$WORK/cargo-bom.json" "$WORK/cargo-bom-1.json"
+    BOMLENS_SPDX_LIST="$WORK/cargo-spdx.json" node "$WORK/cargo-lic.js" "$WORK/cargo-bom.json" "$WORK/cargo-meta.json" 2>"$WORK/cargo-lic2.err"
+    diff -q "$WORK/cargo-bom-1.json" "$WORK/cargo-bom.json" >/dev/null && [ ! -s "$WORK/cargo-lic2.err" ] \
+        && pass "a second run changes nothing" \
+        || fail "second cargo license run was not a no-op"
+    # Without the SPDX list nothing can be vouched for as an id.
+    BOMLENS_SPDX_LIST="$WORK/no-such-list.json" node "$WORK/cargo-lic.js" "$WORK/cargo-bom-nolist.json" "$WORK/cargo-meta.json" 2>/dev/null
+    [ "$(jq -c '.components[] | select(.name=="itoa") | .licenses' "$WORK/cargo-bom-nolist.json")" = '[{"license":{"name":"MIT"}}]' ] \
+        && pass "with no SPDX list every value is kept as a name" \
+        || fail "no-list itoa=$(jq -c '.components[] | select(.name=="itoa") | .licenses' "$WORK/cargo-bom-nolist.json")"
+else
+    echo "  SKIP: node or jq not available"
+fi
+
 echo "== NOTICE: a license name that is not an SPDX id is marked unverified =="
 cat > "$WORK/unverified.json" <<'UNVBOM'
 { "bomFormat": "CycloneDX", "specVersion": "1.6",
