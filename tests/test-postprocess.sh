@@ -538,6 +538,15 @@ date_expr=$(jq -r '.components[] | select(.name=="python-dateutil") | .licenses[
 [ "$date_expr" = "Dual License" ] && pass "unmappable free text (Dual License) left untouched" || fail "dateutil expression='$date_expr', expected Dual License"
 pkg_expr=$(jq -r '.components[] | select(.name=="packaging") | .licenses[0].expression // "ABSENT"' "$WORK/c.json")
 [ "$pkg_expr" = "Apache-2.0 OR BSD-2-Clause" ] && pass "compound expression left untouched" || fail "packaging expression='$pkg_expr'"
+# An exception clause is part of the license: WITH must not be cut down to the base id.
+cat > "$WORK/with-exc.json" <<'WITHEXC'
+{ "bomFormat": "CycloneDX", "specVersion": "1.6", "components": [
+  { "type": "library", "name": "target-lexicon", "version": "0.12.0", "purl": "pkg:cargo/target-lexicon@0.12.0",
+    "licenses": [ { "expression": "Apache-2.0 WITH LLVM-exception" } ] } ] }
+WITHEXC
+bash "$LIB/normalize-sbom.sh" "$WORK/with-exc.json" >/dev/null 2>&1
+with_expr=$(jq -r '.components[0].licenses[0].expression // "ABSENT"' "$WORK/with-exc.json")
+[ "$with_expr" = "Apache-2.0 WITH LLVM-exception" ] && pass "a WITH exception expression is not reduced to its base license" || fail "WITH expression='$with_expr'"
 
 echo "== license-text: CUSTOM entries with an embedded text are classified by clause wording =="
 # Regression for the benchmark-team report: cdxgen's Go resolver emits
@@ -6435,7 +6444,7 @@ if command -v node >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
     [ -s "$WORK/cargo-lic.js" ] \
         && pass "cargo license script extracted from build-prep.sh" \
         || fail "could not extract the cargo license pass from build-prep.sh"
-    printf '["MIT","Apache-2.0","BSD-3-Clause","Unicode-3.0","GPL-3.0","LLVM-exception","0BSD"]\n' > "$WORK/cargo-spdx.json"
+    printf '["MIT","Apache-2.0","BSD-3-Clause","Unicode-3.0","GPL-3.0","GPL-3.0+","LLVM-exception","0BSD"]\n' > "$WORK/cargo-spdx.json"
     R='"source": "registry+https://github.com/rust-lang/crates.io-index"'
     cat > "$WORK/cargo-meta.json" <<CMETA
 { "packages": [
@@ -6451,6 +6460,9 @@ if command -v node >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
   { "name": "withex", "version": "1.0.0", $R, "license": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT" },
   { "name": "url", "version": "1.0.0", $R, "license": "See LICENSE file at http://x.org/l" },
   { "name": "gplplus", "version": "1.0.0", $R, "license": "GPL-3.0+" },
+  { "name": "withalone", "version": "1.0.0", $R, "license": "Apache-2.0 WITH LLVM-exception" },
+  { "name": "texted", "version": "1.0.0", $R, "license": "MIT" },
+  { "name": "badfield", "version": "1.0.0", $R, "license": "MIT" },
   { "name": "emptyentry", "version": "1.0.0", $R, "license": "MIT" },
   { "name": "gitdep", "version": "0.1.0", "source": "git+https://example.org/gitdep#abc", "license": "Apache-2.0" },
   { "name": "myapp", "version": "1.0.0", "source": null, "license": "MIT" },
@@ -6463,7 +6475,9 @@ CMETA
         for n in serde libc; do mkc "$n" 1.0.0; echo ","; done
         mkc itoa 1.0.0 ', "licenses": []'; echo ","
         mkc held 1.0.0 ', "licenses": [ { "license": { "id": "BSD-3-Clause" } } ]'; echo ","
-        for n in filed blank odd prop paren withex url gplplus; do mkc "$n" 1.0.0; echo ","; done
+        for n in filed blank odd prop paren withex url gplplus withalone; do mkc "$n" 1.0.0; echo ","; done
+        mkc texted 1.0.0 ', "licenses": [ { "license": { "text": { "content": "MIT License full text" } } } ]'; echo ","
+        mkc badfield 1.0.0 ', "licenses": { "oops": true }'; echo ","
         mkc emptyentry 1.0.0 ', "licenses": [ { "license": { "name": "" } } ]'; echo ","
         mkc gitdep 0.1.0; echo ","
         mkc myapp 1.0.0; echo ","
@@ -6494,7 +6508,11 @@ CMETA
     chk paren '[{"expression":"(MIT OR Apache-2.0) AND Unicode-3.0"}]' "a parenthesised expression is kept as written"
     chk withex '[{"expression":"Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT"}]' "an expression with WITH is kept as written"
     chk url '[{"license":{"name":"See LICENSE file at http://x.org/l"}}]' "free text with a slash is not rewritten"
-    chk gplplus '[{"expression":"GPL-3.0+"}]' "an or-later id is an expression, not a license id"
+    chk gplplus '[{"license":{"id":"GPL-3.0+"}}]' "an or-later id that is on the SPDX list is a license id"
+    chk withalone '[{"expression":"Apache-2.0 WITH LLVM-exception"}]' "a single WITH expression is kept as an expression"
+    chk texted '[{"license":{"text":{"content":"MIT License full text"}}}]' "a license carried only as text is not replaced"
+    [ "$(jq -c '.components[] | select(.name=="badfield") | .licenses' "$WORK/cargo-bom.json")" = '{"oops":true}' ] \
+        && pass "a malformed licenses field is left alone and does not stop the pass" || fail "badfield was touched"
     chk gitdep '[{"license":{"id":"Apache-2.0"}}]' "a git dependency is filled too"
     chk myapp '[{"license":{"id":"MIT"}}]' "the project's own crate takes the license its manifest declares"
     chk vers '"ABSENT"' "another version of the crate is untouched"
@@ -6503,7 +6521,7 @@ CMETA
     [ "$(jq -r '.components[] | select(.name=="serde") | [.properties[]? | select(.name=="bomlens:licenseSource") | .value][0]' "$WORK/cargo-bom.json")" = "cargo metadata" ] \
         && pass "a filled license carries bomlens:licenseSource" \
         || fail "serde licenseSource missing"
-    grep -q "filled 12 component license" "$WORK/cargo-lic.err" \
+    grep -q "filled 13 component license" "$WORK/cargo-lic.err" \
         && pass "the pass reports how many licenses it filled" \
         || fail "unexpected cargo license log" "$(cat "$WORK/cargo-lic.err")"
     cp "$WORK/cargo-bom.json" "$WORK/cargo-bom-1.json"

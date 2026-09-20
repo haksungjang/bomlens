@@ -951,7 +951,9 @@ fi
 # licenses stay as cdxgen left them. It runs before that recording so a failure
 # reaches the SBOM. FETCH_LICENSE=false (the switch that turns off network license
 # lookups, also set by --byte-stable) skips it; so does BOMLENS_NO_CARGO_LICENSE=1
-# (or true).
+# (or true). Unlike the workspace-member filter further down, which uses
+# --no-deps --offline to avoid it, this needs the crates' sources, so it costs a
+# download (about 8 seconds for 150 crates).
 if opted_out "${BOMLENS_NO_CARGO_LICENSE:-}"; then
     log "cargo: license pass off (BOMLENS_NO_CARGO_LICENSE)"
 elif [ "${FETCH_LICENSE:-true}" = "false" ]; then
@@ -1024,8 +1026,11 @@ function licenseEntry(text) {
   if (tok.length === 1) return known.has(tok[0]) ? { license: { id: tok[0] } } : { expression: tok[0] };
   return { expression: ordered(t, tok) };
 }
-const hasLicense = c => (c.licenses || []).some(e => e && (e.expression
-  || (e.license && (e.license.id || e.license.name))));
+// Any evidence at all (an id, name, expression, url or text) means the component
+// already has a license and is left alone; a malformed field is left alone too.
+const hasLicense = c => c.licenses !== undefined && (!Array.isArray(c.licenses)
+  || c.licenses.some(e => e && (e.expression
+    || (e.license && (e.license.id || e.license.name || e.license.url || e.license.text)))));
 
 let changed = 0;
 for (const c of bom.components) {
