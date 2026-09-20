@@ -2139,6 +2139,76 @@ else
     echo "  SKIP: jq not available for conformance generation"
 fi
 
+echo "== conformance_summary passes through the result-quality signals =="
+# emptyResult / softwareComponentCount / licenseCoverage (validate-sbom.sh) drive
+# the panel's empty-result and zero-license warnings. They must pass through as
+# typed values, drop malformed ones, and stay absent for an older report.
+if command -v jq >/dev/null 2>&1; then
+    PROJECT=rqweb GEN_AT=2026-01-01 bash "$ROOT_DIR/docker/lib/validate-sbom.sh" \
+        "$ROOT_DIR/tests/fixtures/good-cyclonedx.json" "$OUT/rqweb_1.0" >/dev/null 2>&1
+    if SBOM_OUTPUT_DIR="$OUT" python3 - "$ROOT_DIR" "$OUT/rqweb_1.0_conformance.json" <<'PY'
+import sys, os, json
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+path = sys.argv[2]
+orig = json.load(open(path))
+c = server.conformance_summary("rqweb_1.0")
+assert c["emptyResult"] is False and c["softwareComponentCount"] > 0, c
+lc = c["licenseCoverage"]
+assert set(lc) == {"declared", "total", "pct"} and lc["total"] == c["softwareComponentCount"], lc
+
+def rewrite(mutate):
+    d = json.loads(json.dumps(orig)); mutate(d)
+    json.dump(d, open(path, "w"))
+    return server.conformance_summary("rqweb_1.0")
+
+def empty(d):
+    d["softwareComponentCount"] = 0; d["emptyResult"] = True
+    d["licenseCoverage"] = {"declared": 0, "total": 0, "pct": None}
+c = rewrite(empty)
+assert c["emptyResult"] is True and c["licenseCoverage"]["pct"] is None, c
+
+def bad(d):
+    d["emptyResult"] = "yes"; d["softwareComponentCount"] = -3
+    d["licenseCoverage"] = {"declared": "x", "total": 5, "pct": 7}
+c = rewrite(bad)
+for k in ("emptyResult", "softwareComponentCount", "licenseCoverage"):
+    assert k not in c, ("malformed value leaked", k, c.get(k))
+
+def pctbad(d):
+    d["licenseCoverage"] = {"declared": 1, "total": 2, "pct": 900}
+assert rewrite(pctbad)["licenseCoverage"] == {"declared": 1, "total": 2, "pct": None}
+def pctfloat(d):
+    d["licenseCoverage"] = {"declared": 1, "total": 2, "pct": 33.3}
+assert rewrite(pctfloat)["licenseCoverage"]["pct"] is None
+def pctbool(d):
+    d["licenseCoverage"] = {"declared": 1, "total": 2, "pct": True}
+assert rewrite(pctbool)["licenseCoverage"]["pct"] is None
+def over(d):
+    d["licenseCoverage"] = {"declared": 9, "total": 2, "pct": 50}
+assert "licenseCoverage" not in rewrite(over)
+def contradict(d):
+    d["emptyResult"] = True; d["softwareComponentCount"] = 157
+c = rewrite(contradict)
+assert "emptyResult" not in c or "softwareComponentCount" not in c, c
+
+def old(d):
+    for k in ("emptyResult", "softwareComponentCount", "licenseCoverage"):
+        d.pop(k, None)
+c = rewrite(old)
+for k in ("emptyResult", "softwareComponentCount", "licenseCoverage"):
+    assert k not in c, ("an old report must not gain", k)
+PY
+    then
+        pass "conformance_summary passes through, validates and defaults the result-quality signals"
+    else
+        fail "conformance_summary result-quality signals wrong"
+    fi
+    rm -f "$OUT"/rqweb_1.0_*
+else
+    echo "  SKIP: jq not available for conformance generation"
+fi
+
 echo "== ai profile summary (ai_profile_summary) =="
 # generate-ai-profile.sh re-aggregates the conformance + SBOM artifacts into a
 # governance card. ai_profile_summary must return the light rollup for an AI SBOM

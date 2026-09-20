@@ -8145,6 +8145,20 @@ bash "$LIB/validate-sbom.sh" "$GATEDIR/qt.spdx" "$GATEDIR/qt" P >/dev/null 2>&1
 jq -e '.licenseCoverage == {declared:1,total:2,pct:50}' "$GATEDIR/qs_conformance.json" >/dev/null \
     && jq -e '.licenseCoverage == {declared:1,total:3,pct:33} and .emptyResult == false' "$GATEDIR/qt_conformance.json" >/dev/null \
     && pass "SPDX-JSON and Tag-Value report the same license coverage, NONE and NOASSERTION not counted" || fail "SPDX coverage measurements are wrong" "$(jq -c .licenseCoverage "$GATEDIR/qs_conformance.json" "$GATEDIR/qt_conformance.json")"
+# The package the document DESCRIBES is the subject, not a dependency: a document
+# holding only that one reads as empty in both SPDX forms, as in CycloneDX.
+cat > "$GATEDIR/qr.json" <<'JSON'
+{"spdxVersion":"SPDX-2.3","SPDXID":"SPDXRef-DOCUMENT","packages":[{"SPDXID":"SPDXRef-root","name":"app"}],"relationships":[{"spdxElementId":"SPDXRef-DOCUMENT","relationshipType":"DESCRIBES","relatedSpdxElement":"SPDXRef-root"}]}
+JSON
+printf 'SPDXVersion: SPDX-2.3\nSPDXID: SPDXRef-DOCUMENT\nPackageName: app\nSPDXID: SPDXRef-root\nRelationship: SPDXRef-DOCUMENT DESCRIBES SPDXRef-root\n' > "$GATEDIR/qr.spdx"
+printf 'SPDXVersion: SPDX-2.3\nSPDXID: SPDXRef-DOCUMENT\nPackageName: app\nSPDXID: SPDXRef-root\nPackageName: dep\nSPDXID: SPDXRef-dep\nPackageLicenseDeclared: MIT\nRelationship: SPDXRef-DOCUMENT DESCRIBES SPDXRef-root\n' > "$GATEDIR/qd.spdx"
+bash "$LIB/validate-sbom.sh" "$GATEDIR/qr.json" "$GATEDIR/qr" P >/dev/null 2>&1
+bash "$LIB/validate-sbom.sh" "$GATEDIR/qr.spdx" "$GATEDIR/qrt" P >/dev/null 2>&1
+bash "$LIB/validate-sbom.sh" "$GATEDIR/qd.spdx" "$GATEDIR/qd" P >/dev/null 2>&1
+jq -e '.emptyResult == true and .softwareComponentCount == 0' "$GATEDIR/qr_conformance.json" >/dev/null \
+    && jq -e '.emptyResult == true and .softwareComponentCount == 0' "$GATEDIR/qrt_conformance.json" >/dev/null \
+    && jq -e '.licenseCoverage == {declared:1,total:1,pct:100}' "$GATEDIR/qd_conformance.json" >/dev/null \
+    && pass "an SPDX document holding only the package it describes reads as empty; the root is not counted" || fail "SPDX root package is counted as a component" "$(jq -c '[.emptyResult,.licenseCoverage]' "$GATEDIR/qr_conformance.json" "$GATEDIR/qrt_conformance.json" "$GATEDIR/qd_conformance.json")"
 ls "$GATEDIR"/*_gate.result.tmp.* >/dev/null 2>&1 \
     && fail "a temporary gate file was left behind" || pass "the gate result is published whole, with no temporary file left"
 

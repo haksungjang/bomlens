@@ -443,6 +443,14 @@ export interface ConformanceSummary {
   pipelineStepsFailed?: string[];
   /** How many more failed steps exist past the cap in pipelineStepsFailed. */
   pipelineStepsFailedMore?: number;
+  /** Components other than operating-system and file entries: what the scan
+   *  identified as software. Absent on a report from before this field existed. */
+  softwareComponentCount?: number;
+  /** True when softwareComponentCount is 0. Absent on an older report. */
+  emptyResult?: boolean;
+  /** Of the software components, how many declare a license. pct is rounded
+   *  down and null when there are no components. Absent on an older report. */
+  licenseCoverage?: { declared: number; total: number; pct: number | null };
 }
 
 /** One G7 cluster's coverage counts in the aiProfile card. */
