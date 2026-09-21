@@ -23,6 +23,11 @@
 #   CORPUS_FILE          alternative corpus definition
 #   SCAN_TIMEOUT         seconds allowed per repository (default 900)
 #   SBOM_SCANNER_IMAGE   scanner image, passed through to scan-sbom.sh
+#   BASELINE_FILE        results.tsv of an earlier run to compare with
+#   DROP_POINTS          an ecosystem whose mean license coverage fell this many points
+#                        against BASELINE_FILE fails the run (default 10)
+#                        (tests/lib/corpus-compare.sh; it also applies the floors in
+#                        tests/corpus/license-floor.tsv, with or without a baseline)
 #   FAIL_ON_ARGS         judgement options for each scan (default: --fail-on empty-result).
 #                        Set it to "" with a scanner image older than that option;
 #                        an empty result is then recognised from the SBOM instead.
@@ -38,9 +43,10 @@
 #   undetermined  no quality result: the repository could not be fetched (network), or
 #                 the scan could not judge (exit 5; usually a scanner image older than
 #                 --fail-on, see FAIL_ON_ARGS)
-# Exit code: 1 when any repository is empty, failed or timed out, changed its source tree
-# (build output that the repository ignores counts too), or when nothing at all could be
-# measured; otherwise 0. Without a running Docker engine the script skips (exit 0).
+# Exit code: 1 when any repository is empty, failed or timed out, or changed its source
+# tree (build output that the repository ignores counts too); when license coverage
+# regressed (against BASELINE_FILE or a floor); or when nothing at all could be
+# measured. Otherwise 0. Without a running Docker engine the script skips (exit 0).
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -192,6 +198,16 @@ if [ "$MEASURED" -eq 0 ]; then
     FAILED_ANY=1
 fi
 
+echo ""
+echo "License coverage judgement"
+COMPARISON=$(bash "$SCRIPT_DIR/lib/corpus-compare.sh" "$RESULTS" "${BASELINE_FILE:-}" "${DROP_POINTS:-10}" "$SCRIPT_DIR/corpus/license-floor.tsv" 2>&1); crc=$?
+printf '%s\n' "$COMPARISON"
+case "$crc" in
+    0) ;;
+    1) FAILED_ANY=1 ;;
+    *) echo "[ERROR] the license coverage judgement could not run (exit $crc)"; FAILED_ANY=1 ;;
+esac
+
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     {
         echo "### Real-repository corpus"
@@ -199,6 +215,14 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
         echo "| name | ecosystem | lock file | status | exit | components | purl % | license % | seconds | tree clean |"
         echo "|---|---|---|---|---|---|---|---|---|---|"
         tail -n +2 "$RESULTS" | awk -F'\t' '{ printf "|"; for (i = 1; i <= NF; i++) { f = $i; gsub(/\|/, "\\|", f); printf " %s |", f } printf "\n" }'
+        if [ -n "$COMPARISON" ]; then
+            echo ""
+            echo "#### License coverage judgement"
+            echo ""
+            echo '```'
+            printf '%s\n' "$COMPARISON"
+            echo '```'
+        fi
     } >> "$GITHUB_STEP_SUMMARY"
 fi
 
