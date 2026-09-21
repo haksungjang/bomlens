@@ -104,7 +104,7 @@ Docker가 설치되지 않았거나 꺼져 있으면, 앱이 스캔을 시작하
 ```
 
 준비가 잘 됐는지 확인하려면 압축을 푼 폴더에서 `scripts\check-setup.bat`을 더블클릭하세요.
-Docker 설치와 실행, 스캐너 이미지, 포트 상태를 Windows 표시 언어에 맞춰 점검해 줍니다.
+Docker 설치와 실행, 스캐너 이미지, Docker 엔진 메모리, 포트 상태를 Windows 표시 언어에 맞춰 점검해 줍니다.
 
 ![BomLens 웹 UI](../images/web-ui.png)
 

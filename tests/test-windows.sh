@@ -62,6 +62,8 @@ if [ "${DOCKER_STUB_ARGV_DUMP:-0}" = "1" ]; then
 fi
 case "${1:-}" in
   info)
+    # DOCKER_STUB_NO_ENGINE=1 models a Docker CLI whose engine is not running.
+    [ "${DOCKER_STUB_NO_ENGINE:-0}" != "1" ] || exit 1
     # `docker info --format '{{.MemTotal}}'`: the engine's memory in bytes.
     # DOCKER_STUB_MEMTOTAL models it; unset prints nothing, as an engine whose
     # value cannot be read would.
@@ -1299,6 +1301,35 @@ fi
 [ -f "$CHECK_SH" ]  && pass "scripts/check-setup.sh present"  || fail "scripts/check-setup.sh present"
 if [ -f "$CHECK_SH" ]; then
   grep -qi "docker image inspect" "$CHECK_SH" && pass "check-setup.sh inspects the scanner image" || fail "check-setup.sh inspects image"
+fi
+
+# check-setup.sh runs against the stub docker: language, memory hint and exit codes.
+if [ -f "$CHECK_SH" ]; then
+  cs_run() {  # cs_run <memtotal> [ENV=VALUE...]
+    local mem="$1"; shift
+    CS_OUT="$WORK/check-setup.out"
+    env -u SBOM_LANG -u LC_ALL -u LC_MESSAGES -u LANG "$@" DOCKER_STUB_MEMTOTAL="$mem" UI_PORT=$((49152 + RANDOM % 16000)) bash "$CHECK_SH" > "$CS_OUT" 2>&1
+    CS_RC=$?
+  }
+  cs_run 6198534144 SBOM_LANG=en
+  { [ "$CS_RC" -eq 0 ] && grep -q "BomLens setup check" "$CS_OUT" && grep -q "Docker engine memory is enough for Java builds: 6 GB" "$CS_OUT" \
+      && grep -q "everything is ready" "$CS_OUT"; } \
+    && pass "check-setup.sh: a ready environment exits 0 and reports the engine memory (English)" \
+    || { fail "check-setup.sh ready case" "rc=$CS_RC"; cat "$CS_OUT"; }
+  cs_run 2000000000 SBOM_LANG=en
+  { [ "$CS_RC" -eq 2 ] && grep -q "too little memory" "$CS_OUT" && grep -q "colima start --memory 4" "$CS_OUT" && grep -q "wsl --shutdown" "$CS_OUT" \
+      && grep -q "Items to review: 1" "$CS_OUT"; } \
+    && pass "check-setup.sh: low engine memory is a non-blocking problem (exit 2, counted, fix named)" \
+    || { fail "check-setup.sh low-memory case" "rc=$CS_RC"; cat "$CS_OUT"; }
+  cs_run 6198534144 SBOM_LANG=ko
+  { [ "$CS_RC" -eq 0 ] && grep -q "설치 점검" "$CS_OUT" && ! grep -q "setup check" "$CS_OUT"; } \
+    && pass "check-setup.sh: SBOM_LANG=ko prints Korean" || { fail "check-setup.sh Korean output" "rc=$CS_RC"; cat "$CS_OUT"; }
+  cs_run 6198534144 LANG=ko_KR.UTF-8
+  grep -q "설치 점검" "$CS_OUT" \
+    && pass "check-setup.sh: a Korean locale selects Korean" || { fail "check-setup.sh locale detection"; cat "$CS_OUT"; }
+  cs_run 6198534144 SBOM_LANG=en DOCKER_STUB_NO_ENGINE=1
+  { [ "$CS_RC" -eq 1 ] && grep -q "engine is not running" "$CS_OUT"; } \
+    && pass "check-setup.sh: a stopped engine is blocking (exit 1)" || { fail "check-setup.sh stopped-engine case" "rc=$CS_RC"; cat "$CS_OUT"; }
 fi
 
 # --------------------------------------------------------
