@@ -1009,6 +1009,13 @@ else
         else
             fail "go newer toolchain: transitive dependency resolved (spf13/pflag)" "$(tail -3 "$w/_scan.log" 2>/dev/null)"; show_log_if_verbose "$w"
         fi
+        # The module cache's license files carry the attribution; it must reach the SBOM.
+        if jq -e '[.components[]? | select((.purl // "") | startswith("pkg:golang/")) | select(.copyright)] | length > 0' \
+               "$w/testapp_1.0_bom.json" >/dev/null 2>&1; then
+            pass "go newer toolchain: copyright read from the module cache"
+        else
+            fail "go newer toolchain: copyright read from the module cache" "$(grep 'copyright:' "$w/_scan.log" 2>/dev/null | tail -3)"
+        fi
         rm -rf "$w"
     else
         skip "go-newer-toolchain fixture not found"

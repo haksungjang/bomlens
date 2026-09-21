@@ -6622,6 +6622,182 @@ else
     echo "  SKIP: node not available"
 fi
 
+echo "== copyright: Go modules and Cargo crates read from an index of installed directories =="
+# The shell side of build-prep.sh writes name@version -> directory (from `go list -m`
+# and `cargo metadata`); the same node script as the npm pass then reads the files.
+if command -v node >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 && [ -s "$WORK/cpr.js" ]; then
+    GM="$WORK/gomod"
+    mkdir -p "$GM/github.com/acme/widget@v1.2.0" "$GM/github.com/acme/v2@v2.0.0" "$GM/github.com/acme/nolic@v0.1.0" "$GM/github.com/acme/leak@v1.0.0"
+    printf 'MIT License\n\nCopyright (c) 2020 Acme Widgets Inc.\n' > "$GM/github.com/acme/widget@v1.2.0/LICENSE"
+    printf 'Copyright 2021 Acme V2 Authors\n' > "$GM/github.com/acme/v2@v2.0.0/LICENSE.txt"
+    printf 'Copyright (c) 2022 Only In Readme\n' > "$GM/github.com/acme/nolic@v0.1.0/README.md"
+    ln -s "$WORK/outside-secret.txt" "$GM/github.com/acme/leak@v1.0.0/LICENSE"
+    jq -n --arg d "$GM" '{"github.com/acme/widget@v1.2.0": ($d+"/github.com/acme/widget@v1.2.0"),
+        "github.com/acme/v2@v2.0.0": ($d+"/github.com/acme/v2@v2.0.0"),
+        "github.com/acme/nolic@v0.1.0": ($d+"/github.com/acme/nolic@v0.1.0"),
+        "github.com/acme/leak@v1.0.0": ($d+"/github.com/acme/leak@v1.0.0"),
+        "github.com/acme/gone@v1.0.0": ($d+"/does-not-exist")}' > "$WORK/goindex.json"
+    cat > "$WORK/gobom.json" <<'GOBOM'
+{ "bomFormat": "CycloneDX", "specVersion": "1.6", "components": [
+  { "type": "library", "name": "github.com/acme/widget", "version": "v1.2.0", "purl": "pkg:golang/github.com/acme/widget@v1.2.0" },
+  { "type": "library", "name": "github.com/acme/widget", "version": "v9.9.9", "purl": "pkg:golang/github.com/acme/widget@v9.9.9" },
+  { "type": "library", "name": "github.com/acme/v2", "version": "v2.0.0", "purl": "pkg:golang/github.com/acme/v2@v2.0.0" },
+  { "type": "library", "name": "github.com/acme/nolic", "version": "v0.1.0", "purl": "pkg:golang/github.com/acme/nolic@v0.1.0" },
+  { "type": "library", "name": "github.com/acme/leak", "version": "v1.0.0", "purl": "pkg:golang/github.com/acme/leak@v1.0.0" },
+  { "type": "library", "name": "github.com/acme/gone", "version": "v1.0.0", "purl": "pkg:golang/github.com/acme/gone@v1.0.0" },
+  { "type": "library", "name": "github.com/acme/held", "version": "v1.0.0", "purl": "pkg:golang/github.com/acme/held@v1.0.0", "copyright": "Copyright 1 Held" },
+  { "type": "library", "name": "widget", "version": "v1.2.0", "purl": "pkg:npm/widget@v1.2.0" }
+] }
+GOBOM
+    BOMLENS_CPR_INDEX="$WORK/goindex.json" BOMLENS_CPR_PURL_PREFIX="pkg:golang/" node "$WORK/cpr.js" "$WORK/gobom.json" 2>"$WORK/cprgo.err"
+    gcr() { jq -r --arg n "$1" --arg v "$2" '[.components[] | select(.name==$n and .version==$v)][0] | .copyright // "ABSENT"' "$WORK/gobom.json"; }
+    [ "$(gcr github.com/acme/widget v1.2.0)" = "Copyright (c) 2020 Acme Widgets Inc." ] \
+        && pass "a Go module is matched by module path and version" \
+        || fail "go widget copyright='$(gcr github.com/acme/widget v1.2.0)'"
+    [ "$(gcr github.com/acme/v2 v2.0.0)" = "Copyright 2021 Acme V2 Authors" ] \
+        && pass "a Go major-version path and a LICENSE.txt name are read" \
+        || fail "go v2 copyright='$(gcr github.com/acme/v2 v2.0.0)'"
+    [ "$(gcr github.com/acme/widget v9.9.9)" = "ABSENT" ] \
+        && pass "a Go module version missing from the index is untouched" \
+        || fail "go widget v9.9.9 was filled"
+    [ "$(gcr github.com/acme/nolic v0.1.0)" = "ABSENT" ] && [ "$(gcr github.com/acme/gone v1.0.0)" = "ABSENT" ] \
+        && pass "a Go module without a license file, or with a missing directory, stays empty" \
+        || fail "go nolic/gone were filled"
+    [ "$(gcr github.com/acme/leak v1.0.0)" = "ABSENT" ] \
+        && pass "a Go license file that links outside the module is not read" \
+        || fail "go leak followed a symlink out of the module"
+    [ "$(gcr github.com/acme/held v1.0.0)" = "Copyright 1 Held" ] \
+        && pass "a Go component that already has a copyright keeps it" \
+        || fail "go held copyright changed"
+    [ "$(jq -r '[.components[] | select(.purl|startswith("pkg:npm/"))][0].copyright // "ABSENT"' "$WORK/gobom.json")" = "ABSENT" ] \
+        && pass "the Go pass leaves other ecosystems alone" \
+        || fail "go pass touched an npm component"
+    [ "$(jq -r '[.components[] | select(.name=="github.com/acme/widget" and .version=="v1.2.0")][0] | .properties[]? | select(.name=="bomlens:copyrightSource") | .value' "$WORK/gobom.json")" = "installed license file" ] \
+        && pass "a Go copyright carries bomlens:copyrightSource" \
+        || fail "go widget has no copyrightSource"
+    grep -q "filled 2 golang component" "$WORK/cprgo.err" \
+        && pass "the Go pass reports how many components it filled" \
+        || fail "go pass summary line: $(cat "$WORK/cprgo.err")"
+
+    CR="$WORK/cratesrc"
+    mkdir -p "$CR/serde-1.0.0" "$CR/nolic-0.1.0"
+    printf 'Copyright (c) 2014 The Serde Developers\n' > "$CR/serde-1.0.0/LICENSE-MIT"
+    printf 'Copyright 2017-NOW Serde Team\n' > "$CR/serde-1.0.0/LICENSE-APACHE"
+    jq -n --arg d "$CR" '{"serde@1.0.0": ($d+"/serde-1.0.0"), "nolic@0.1.0": ($d+"/nolic-0.1.0")}' > "$WORK/crateindex.json"
+    cat > "$WORK/cratebom.json" <<'CRATEBOM'
+{ "bomFormat": "CycloneDX", "specVersion": "1.6", "components": [
+  { "type": "library", "name": "serde", "version": "1.0.0", "purl": "pkg:cargo/serde@1.0.0" },
+  { "type": "library", "name": "nolic", "version": "0.1.0", "purl": "pkg:cargo/nolic@0.1.0" },
+  { "type": "library", "name": "serde", "version": "1.0.0", "purl": "pkg:golang/serde@1.0.0" }
+] }
+CRATEBOM
+    BOMLENS_CPR_INDEX="$WORK/crateindex.json" BOMLENS_CPR_PURL_PREFIX="pkg:cargo/" node "$WORK/cpr.js" "$WORK/cratebom.json" 2>/dev/null
+    [ "$(jq -r '.components[0].copyright // "ABSENT"' "$WORK/cratebom.json")" = "Copyright 2017-NOW Serde Team; Copyright (c) 2014 The Serde Developers" ] \
+        && pass "a crate's LICENSE-MIT and LICENSE-APACHE are both read" \
+        || fail "crate serde copyright='$(jq -r '.components[0].copyright // "ABSENT"' "$WORK/cratebom.json")'"
+    [ "$(jq -r '.components[1].copyright // "ABSENT"' "$WORK/cratebom.json")" = "ABSENT" ] \
+        && [ "$(jq -r '.components[2].copyright // "ABSENT"' "$WORK/cratebom.json")" = "ABSENT" ] \
+        && pass "a crate without a license file, and a component of another ecosystem, stay empty" \
+        || fail "crate pass filled the wrong components"
+
+    printf 'not json' > "$WORK/badindex.json"
+    cp "$WORK/cratebom.json" "$WORK/cratebom2.json"
+    BOMLENS_CPR_INDEX="$WORK/badindex.json" BOMLENS_CPR_PURL_PREFIX="pkg:cargo/" node "$WORK/cpr.js" "$WORK/cratebom2.json" 2>/dev/null
+    diff -q "$WORK/cratebom.json" "$WORK/cratebom2.json" >/dev/null \
+        && pass "an unreadable index changes nothing" \
+        || fail "an unreadable index changed the SBOM"
+
+    # The index builders and the go list template are extracted from build-prep.sh.
+    sed -n "/cat > \"\$_cprjs\" <<'GO_CPR_INDEX'/,/^GO_CPR_INDEX\$/p" "$LIB/build-prep.sh" | sed '1d;$d' > "$WORK/go-index.js"
+    sed -n "/cat > \"\$_cprjs\" <<'CARGO_CPR_INDEX'/,/^CARGO_CPR_INDEX\$/p" "$LIB/build-prep.sh" | sed '1d;$d' > "$WORK/cargo-index.js"
+    GOTMPL=$(sed -n "s/^ *_cprgotmpl='\(.*\)'\$/\1/p" "$LIB/build-prep.sh" | head -1)
+    [ -s "$WORK/go-index.js" ] && [ -s "$WORK/cargo-index.js" ] && [ -n "$GOTMPL" ] \
+        && pass "the Go and Cargo index scripts and the go list template are extracted from build-prep.sh" \
+        || fail "could not extract the Go/Cargo index scripts from build-prep.sh"
+
+    # Go: list output plus vendor/modules.txt
+    GV="$WORK/govendor"
+    mkdir -p "$GV/vendor/github.com/acme/vend" "$GV/vendor/github.com/acme/listed" "$WORK/goelsewhere"
+    printf 'Copyright (c) 2023 Vendored Owner\n' > "$GV/vendor/github.com/acme/vend/LICENSE"
+    ln -s "$WORK/goelsewhere" "$GV/vendor/github.com/acme/escape"
+    printf '# github.com/acme/vend v1.0.0\n## explicit\ngithub.com/acme/vend\n# github.com/acme/listed v2.0.0\ngithub.com/acme/listed\n# github.com/acme/escape v3.0.0\n# ../../etc v1.0.0\n# github.com/acme/moved v1.0.0 => ./elsewhere\n' > "$GV/vendor/modules.txt"
+    printf 'github.com/acme/listed@v2.0.0\t/somewhere/listed\ngithub.com/acme/orig@v1.0.0\t/repl/orig\ngithub.com/acme/repl@v1.1.0\t/repl/orig\ngithub.com/acme/nodir@v1.0.0\t\n' \
+        | (cd "$GV" && node "$WORK/go-index.js") > "$WORK/goix.json"
+    [ "$(jq -r '."github.com/acme/vend@v1.0.0" | endswith("/vendor/github.com/acme/vend")' "$WORK/goix.json")" = "true" ] \
+        && pass "a module that exists only under vendor/ gets a folder from vendor/modules.txt" \
+        || fail "vendor module missing from the index: $(cat "$WORK/goix.json")"
+    [ "$(jq -r '."github.com/acme/listed@v2.0.0"' "$WORK/goix.json")" = "/somewhere/listed" ] \
+        && pass "a folder from go list wins over vendor/" \
+        || fail "go list folder was replaced by vendor/"
+    [ "$(jq -r 'has("github.com/acme/escape@v3.0.0") or has("../../etc@v1.0.0")' "$WORK/goix.json")" = "false" ] \
+        && pass "a vendor/modules.txt entry that points outside vendor/ is ignored" \
+        || fail "vendor traversal entry was indexed: $(cat "$WORK/goix.json")"
+    [ "$(jq -r 'has("github.com/acme/nodir@v1.0.0")' "$WORK/goix.json")" = "false" ] \
+        && [ "$(jq -r '."github.com/acme/repl@v1.1.0"' "$WORK/goix.json")" = "/repl/orig" ] \
+        && pass "a module with no folder is left out and a replacement version is a second key" \
+        || fail "go index: $(cat "$WORK/goix.json")"
+    printf '' | (cd "$WORK" && node "$WORK/go-index.js") > "$WORK/goix-empty.json"
+    [ "$(cat "$WORK/goix-empty.json")" = "{}" ] \
+        && pass "an empty go list gives an empty index" \
+        || fail "empty go list index: $(cat "$WORK/goix-empty.json")"
+
+    # Cargo: cargo metadata output
+    cat > "$WORK/cargo-ix-meta.json" <<'CIXMETA'
+{ "workspace_members": ["path+file:///app#app@0.1.0"],
+  "packages": [
+    { "id": "path+file:///app#app@0.1.0", "name": "app", "version": "0.1.0", "manifest_path": "/app/Cargo.toml", "source": null },
+    { "id": "registry+x#getrandom@0.1.16", "name": "getrandom", "version": "0.1.16", "manifest_path": "/reg/getrandom-0.1.16/Cargo.toml" },
+    { "id": "registry+x#getrandom@0.2.17", "name": "getrandom", "version": "0.2.17", "manifest_path": "/reg/getrandom-0.2.17/Cargo.toml" },
+    { "id": "path+file:///app/libx#libx@0.1.0", "name": "libx", "version": "0.1.0", "manifest_path": "/app/libx/Cargo.toml", "source": null } ] }
+CIXMETA
+    node "$WORK/cargo-index.js" "$WORK/cargo-ix-meta.json" > "$WORK/cargoix.json"
+    [ "$(jq -r 'has("app@0.1.0")' "$WORK/cargoix.json")" = "false" ] \
+        && pass "the scanned project's own workspace crate is not indexed" \
+        || fail "workspace member was indexed"
+    [ "$(jq -r '."getrandom@0.1.16"' "$WORK/cargoix.json")" = "/reg/getrandom-0.1.16" ] \
+        && [ "$(jq -r '."getrandom@0.2.17"' "$WORK/cargoix.json")" = "/reg/getrandom-0.2.17" ] \
+        && [ "$(jq -r '."libx@0.1.0"' "$WORK/cargoix.json")" = "/app/libx" ] \
+        && pass "two versions of a crate and a path dependency each get their own folder" \
+        || fail "cargo index: $(cat "$WORK/cargoix.json")"
+
+    # A (c) that only one of two license files writes does not duplicate the statement
+    mkdir -p "$WORK/cratesrc/dup-1.0.0"
+    printf 'Copyright 2017-NOW Dup Team\n' > "$WORK/cratesrc/dup-1.0.0/LICENSE-APACHE"
+    printf 'Copyright (c) 2017-NOW Dup Team\n' > "$WORK/cratesrc/dup-1.0.0/LICENSE-MIT"
+    jq -n --arg d "$WORK/cratesrc" '{"dup@1.0.0": ($d+"/dup-1.0.0")}' > "$WORK/dupindex.json"
+    printf '{"components":[{"type":"library","name":"dup","version":"1.0.0","purl":"pkg:cargo/dup@1.0.0"}]}' > "$WORK/dupbom.json"
+    BOMLENS_CPR_INDEX="$WORK/dupindex.json" BOMLENS_CPR_PURL_PREFIX="pkg:cargo/" node "$WORK/cpr.js" "$WORK/dupbom.json" 2>/dev/null
+    [ "$(jq -r '.components[0].copyright' "$WORK/dupbom.json")" = "Copyright (c) 2017-NOW Dup Team" ] \
+        && pass "the same statement with and without (c) is kept once" \
+        || fail "dup copyright='$(jq -r '.components[0].copyright' "$WORK/dupbom.json")'"
+
+    # The gap marker
+    printf '{"components":[]}' > "$WORK/unreadbom.json"
+    BOMLENS_CPR_UNREAD=golang node "$WORK/cpr.js" "$WORK/unreadbom.json"
+    BOMLENS_CPR_UNREAD=cargo node "$WORK/cpr.js" "$WORK/unreadbom.json"
+    BOMLENS_CPR_UNREAD=cargo node "$WORK/cpr.js" "$WORK/unreadbom.json"
+    [ "$(jq -r '.metadata.properties[] | select(.name=="bomlens:copyrightUnread") | .value' "$WORK/unreadbom.json")" = "golang,cargo" ] \
+        && pass "an ecosystem whose license files could not be listed is recorded once in metadata" \
+        || fail "copyrightUnread='$(jq -c '.metadata' "$WORK/unreadbom.json")'"
+
+    if command -v go >/dev/null 2>&1; then
+        # The go list template, against a module that needs nothing from the network: the
+        # main module is left out, and a replaced module reports the replacement's folder.
+        GT="$WORK/gotmpl"
+        mkdir -p "$GT/dep"
+        printf 'module example.com/dep\n\ngo 1.21\n' > "$GT/dep/go.mod"
+        printf 'module example.com/app\n\ngo 1.21\n\nrequire example.com/dep v1.0.0\n\nreplace example.com/dep => ./dep\n' > "$GT/go.mod"
+        goout=$(cd "$GT" && GOFLAGS="-mod=mod" go list -m -e -f "$GOTMPL" all 2>/dev/null)
+        [ "$goout" = "$(printf 'example.com/dep@v1.0.0\t%s' "$GT/dep")" ] \
+            && pass "the go list template yields path@version and the replacement folder, without the main module" \
+            || fail "go list template output: '$goout'"
+    else
+        echo "  SKIP: go not available"
+    fi
+else
+    echo "  SKIP: node, jq or the npm copyright script not available"
+fi
+
 echo "== cargo: licenses read from the crates' own manifests (cargo metadata) =="
 # cdxgen reads only Cargo.lock for Rust, which has no license, so nearly every crate
 # came through without one. build-prep.sh fills the gap from `cargo metadata`.

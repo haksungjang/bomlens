@@ -3085,6 +3085,12 @@ fi
 # already has a copyright is left alone, a statement that cannot be tied to a
 # package is dropped, and every value set is stamped bomlens:copyrightSource.
 # BOMLENS_NO_COPYRIGHT=1 (or true) turns the pass off.
+#
+# Go and Rust read the same way, through the shared node script below: Go from the
+# folders `go list -m` reports (the module cache, a replacement's folder) and from
+# vendor/, Rust from the folders `cargo metadata --offline` reports (the registry, git
+# checkouts, path dependencies). The scanned project's own module or crates are
+# skipped. Maven is not covered: it downloads jars, not source trees.
 if opted_out "${BOMLENS_NO_COPYRIGHT:-}"; then
     log "copyright: pass off (BOMLENS_NO_COPYRIGHT)"
 elif [ "${rc:-1}" -eq 0 ] && [ -f "$OUT" ]; then
@@ -3169,7 +3175,7 @@ def statements_in(path, root):
 
 
 def key_of(text):
-    text = re.sub(r"<[^>]*>", "", text.lower()).replace("\u00a9", "(c)")
+    text = re.sub(r"<[^>]*>", "", text.lower()).replace("\u00a9", "").replace("(c)", "")
     return re.sub(r"\s+", " ", text).strip().rstrip(".,;")
 
 
@@ -3265,20 +3271,40 @@ PY_CPR
         python3 "$_pycpr" "$OUT" || log "copyright: python pass skipped (non-fatal)"
         rm -f "$_pycpr"
     fi
+    # Same depth as guard_paths: a node_modules nested deeper than four levels in a
+    # monorepo is not searched, and its components keep no copyright.
+    _nmdirs=""
     if command -v node >/dev/null 2>&1 && grep -q '"pkg:npm/' "$OUT" 2>/dev/null; then
-        # Same depth as guard_paths: a node_modules nested deeper than four levels in a
-        # monorepo is not searched, and its components keep no copyright.
         _nmdirs=$(find . -maxdepth 4 -name .git -prune -o -type d -name node_modules -print -prune 2>/dev/null)
-        if [ -n "$_nmdirs" ]; then
-            log "copyright: reading license files under node_modules"
-            _jscpr=$(mktemp)
-            cat > "$_jscpr" <<'NODE_CPR'
+    fi
+    _cprgo=""
+    _cprcargo=""
+    if command -v node >/dev/null 2>&1; then
+        [ -f go.mod ] && command -v go >/dev/null 2>&1 && grep -q '"pkg:golang/' "$OUT" 2>/dev/null && _cprgo=1
+        [ -f Cargo.toml ] && command -v cargo >/dev/null 2>&1 && grep -q '"pkg:cargo/' "$OUT" 2>/dev/null && _cprcargo=1
+    fi
+    if [ -n "$_nmdirs" ] || [ -n "$_cprgo" ] || [ -n "$_cprcargo" ]; then
+        _jscpr=$(mktemp)
+        cat > "$_jscpr" <<'NODE_CPR'
 const fs = require('fs');
 const path = require('path');
 const bomPath = process.argv[2];
 const roots = (process.env.BOMLENS_NM_DIRS || '').split('\n').filter(Boolean);
+// Go and Rust hand over a name@version -> directory index instead of a node_modules tree.
+const indexFile = process.env.BOMLENS_CPR_INDEX || '';
+const purlPrefix = process.env.BOMLENS_CPR_PURL_PREFIX || 'pkg:npm/';
 let bom;
 try { bom = JSON.parse(fs.readFileSync(bomPath, 'utf8')); } catch (e) { process.exit(0); }
+// Only to say that an ecosystem's license files could not be listed at all.
+if (process.env.BOMLENS_CPR_UNREAD) {
+  bom.metadata = bom.metadata || {};
+  const props = bom.metadata.properties = bom.metadata.properties || [];
+  const held = props.find(p => p.name === 'bomlens:copyrightUnread');
+  if (held) held.value = held.value.split(',').concat(process.env.BOMLENS_CPR_UNREAD).filter((v, i, a) => a.indexOf(v) === i).join(',');
+  else props.push({ name: 'bomlens:copyrightUnread', value: process.env.BOMLENS_CPR_UNREAD });
+  fs.writeFileSync(bomPath, JSON.stringify(bom, null, 2));
+  process.exit(0);
+}
 if (!Array.isArray(bom.components)) process.exit(0);
 
 const FILE_RE = /^(licen[sc]e|copying|notice|copyright)([-_.].*)?$/i;
@@ -3339,7 +3365,7 @@ function statementsIn(file, root) {
 }
 
 function keyOf(t) {
-  return t.toLowerCase().replace(/<[^>]*>/g, '').replace(/\u00a9/g, '(c)')
+  return t.toLowerCase().replace(/<[^>]*>/g, '').replace(/\u00a9|\(c\)/g, '')
     .replace(/\s+/g, ' ').trim().replace(/[.,;]+$/, '');
 }
 
@@ -3389,11 +3415,18 @@ function pkg(dir) {
   }
   walk(path.join(dir, 'node_modules'));
 }
-roots.forEach(walk);
+if (indexFile) {
+  try {
+    const given = JSON.parse(fs.readFileSync(indexFile, 'utf8'));
+    for (const k of Object.keys(given)) index.set(k, given[k]);
+  } catch (e) { process.exit(0); }
+} else {
+  roots.forEach(walk);
+}
 
 let changed = 0;
 for (const c of bom.components) {
-  if (!String(c.purl || '').startsWith('pkg:npm/') || c.copyright || !c.name || !c.version) continue;
+  if (!String(c.purl || '').startsWith(purlPrefix) || c.copyright || !c.name || !c.version) continue;
   const dir = index.get((c.group ? c.group + '/' : '') + c.name + '@' + c.version);
   if (!dir) continue;
   let root;
@@ -3413,12 +3446,104 @@ for (const c of bom.components) {
 }
 if (changed) {
   fs.writeFileSync(bomPath, JSON.stringify(bom, null, 2));
-  process.stderr.write('[build-prep] copyright: filled ' + changed + ' npm component(s) from installed license files\n');
+  process.stderr.write('[build-prep] copyright: filled ' + changed + ' ' + purlPrefix.replace(/^pkg:|\/$/g, '') + ' component(s) from installed license files\n');
 }
 NODE_CPR
-            BOMLENS_NM_DIRS="$_nmdirs" node "$_jscpr" "$OUT" || log "copyright: npm pass skipped (non-fatal)"
-            rm -f "$_jscpr"
+        # Says on the SBOM that a whole ecosystem's license files could not be listed, so
+        # "no copyright" and "not read" can be told apart.
+        _cpr_unread() {
+            log "copyright: $2"
+            BOMLENS_CPR_UNREAD="$1" node "$_jscpr" "$OUT" || log "copyright: could not record the gap (non-fatal)"
+        }
+        if [ -n "$_nmdirs" ]; then
+            log "copyright: reading license files under node_modules"
+            BOMLENS_CPR_INDEX="" BOMLENS_CPR_PURL_PREFIX="pkg:npm/" BOMLENS_NM_DIRS="$_nmdirs" node "$_jscpr" "$OUT" \
+                || log "copyright: npm pass skipped (non-fatal)"
         fi
+        if [ -n "$_cprgo" ]; then
+            log "copyright: reading license files in the Go module cache and vendor/"
+            _cprix=$(mktemp)
+            _cprjs=$(mktemp)
+            cat > "$_cprjs" <<'GO_CPR_INDEX'
+const fs = require('fs');
+const path = require('path');
+const out = {};
+let text = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', d => { text += d; }).on('end', () => {
+  // path@version <TAB> folder, one per line, from `go list -m`. A module that is not on
+  // disk has no folder and is left out.
+  for (const line of text.split('\n')) {
+    const i = line.indexOf('\t');
+    if (i > 0 && line.slice(i + 1)) out[line.slice(0, i)] = line.slice(i + 1);
+  }
+  // A vendored project keeps the modules under vendor/ and may have no module cache.
+  try {
+    const root = fs.realpathSync('vendor');
+    for (const line of fs.readFileSync(path.join('vendor', 'modules.txt'), 'utf8').split('\n')) {
+      const m = /^# (\S+) (\S+)(?: => .*)?$/.exec(line);
+      if (!m || (m[1] + '@' + m[2]) in out) continue;
+      let dir;
+      try { dir = fs.realpathSync(path.join('vendor', m[1])); } catch (e) { continue; }
+      if (dir.startsWith(root + path.sep)) out[m[1] + '@' + m[2]] = dir;
+    }
+  } catch (e) { /* no vendor directory */ }
+  process.stdout.write(JSON.stringify(out));
+});
+GO_CPR_INDEX
+            # -e keeps a module that fails to resolve in the listing instead of stopping the
+            # whole command. A replaced module reads from its replacement's folder; when the
+            # replacement has a version, that version is a second key, because cdxgen names a
+            # component after the replacement when it falls back to reading go.mod.
+            _cprgotmpl='{{if not .Main}}{{.Path}}@{{.Version}}{{"\t"}}{{if .Replace}}{{.Replace.Dir}}{{else}}{{.Dir}}{{end}}{{if .Replace}}{{if .Replace.Version}}{{"\n"}}{{.Replace.Path}}@{{.Replace.Version}}{{"\t"}}{{.Replace.Dir}}{{end}}{{end}}{{end}}'
+            run_supervised_timeout "$PREP_TIMEOUT_DEFAULT" sh -c 'GOFLAGS="-mod=mod" go list -m -e -f "$1" all 2>/dev/null | node "$2" > "$3"' _ "$_cprgotmpl" "$_cprjs" "$_cprix"
+            _cprrc=$?
+            if [ "$_cprrc" -eq 0 ] && [ "$(wc -c < "$_cprix" | tr -d ' ')" -gt 2 ]; then
+                BOMLENS_CPR_INDEX="$_cprix" BOMLENS_CPR_PURL_PREFIX="pkg:golang/" node "$_jscpr" "$OUT" \
+                    || log "copyright: go pass skipped (non-fatal)"
+            elif [ "$_cprrc" -eq 124 ]; then
+                _cpr_unread golang "go module listing timed out after ${PREP_TIMEOUT_DEFAULT}s; go components left as they were"
+            else
+                _cpr_unread golang "no Go module folder found (modules not downloaded and no vendor/); go components left as they were"
+            fi
+            rm -f "$_cprix" "$_cprjs"
+        fi
+        if [ -n "$_cprcargo" ]; then
+            log "copyright: reading license files in the cargo registry"
+            _cprix=$(mktemp)
+            _cprmeta=$(mktemp)
+            _cprjs=$(mktemp)
+            cat > "$_cprjs" <<'CARGO_CPR_INDEX'
+const fs = require('fs');
+const path = require('path');
+const meta = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+// The scanned project's own crates are not third-party components.
+const own = new Set(meta.workspace_members || []);
+const out = {};
+for (const k of meta.packages || []) {
+  if (!k.name || !k.version || !k.manifest_path || own.has(k.id)) continue;
+  out[k.name + '@' + k.version] = path.dirname(k.manifest_path);
+}
+process.stdout.write(JSON.stringify(out));
+CARGO_CPR_INDEX
+            # Offline on purpose: the crates are on disk only when the license pass above
+            # (or an earlier build step) downloaded them. Reaching the network here would
+            # make the result depend on the registry, which FETCH_LICENSE=false and
+            # --byte-stable rule out.
+            run_supervised_timeout "$PREP_TIMEOUT_DEFAULT" sh -c 'cargo metadata --format-version 1 --offline > "$1" 2>/dev/null' _ "$_cprmeta"
+            _cprrc=$?
+            if [ "$_cprrc" -eq 0 ] && [ -s "$_cprmeta" ] \
+               && node "$_cprjs" "$_cprmeta" > "$_cprix" 2>/dev/null && [ -s "$_cprix" ]; then
+                BOMLENS_CPR_INDEX="$_cprix" BOMLENS_CPR_PURL_PREFIX="pkg:cargo/" node "$_jscpr" "$OUT" \
+                    || log "copyright: cargo pass skipped (non-fatal)"
+            elif [ "$_cprrc" -eq 124 ]; then
+                _cpr_unread cargo "cargo metadata timed out after ${PREP_TIMEOUT_DEFAULT}s; cargo components left as they were"
+            else
+                _cpr_unread cargo "crate sources are not on disk (cargo metadata --offline failed); cargo components left as they were"
+            fi
+            rm -f "$_cprix" "$_cprmeta" "$_cprjs"
+        fi
+        rm -f "$_jscpr"
     fi
 fi
 
