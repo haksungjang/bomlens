@@ -136,6 +136,11 @@ case "${1:-}" in
       if [ -n "${DOCKER_STUB_GATE_RESULT:-}" ]; then
         printf '%b' "$DOCKER_STUB_GATE_RESULT" > "$dest/${spn}_${spv}_gate.result"
       fi
+      # DOCKER_STUB_SUMMARY_RESULT models validate-sbom.sh's closing-summary
+      # sidecar (key<TAB>value lines), written verbatim. Unset means none.
+      if [ -n "${DOCKER_STUB_SUMMARY_RESULT:-}" ]; then
+        printf '%b' "$DOCKER_STUB_SUMMARY_RESULT" > "$dest/${spn}_${spv}_summary.result"
+      fi
     fi
     # MODE=DIFF carries no PROJECT_NAME/VERSION at all — it names its own
     # output file (DIFF_OUT_NAME) instead, so it needs its own stub write.
@@ -497,6 +502,59 @@ scan_in "$d" --project SumOk --version 4.1.0 --generate-only --no-report
     && ! in_out "requested but not produced"; } \
   && pass "summary lists the delivered SBOM without a spurious missing-artifact warning" \
   || { fail "summary warned about artifacts that were not requested" "rc=$RC"; show; }
+
+# The closing summary states what the result holds, from the scan's own
+# measurement. With the sidecar present it prints the counts; without one (an
+# older image, an AI SBOM) it prints nothing extra.
+d="$(new_proj sumfacts)"; printf '{"name":"a"}' > "$d/package.json"
+export DOCKER_STUB_SUMMARY_RESULT='components\t176\nlicensed\t169\nlicensePercent\t96\npurlPercent\t100\n'
+scan_in "$d" --project Facts --version 5.0.0 --generate-only
+unset DOCKER_STUB_SUMMARY_RESULT
+{ [ "$RC" -eq 0 ] && in_out "Components:" && in_out "176 identified (purl on 100%, license declared on 96% (169 of 176))" \
+    && ! in_out "[WARN] No software" && ! in_out "No component declares" && ! in_out "Reduced analysis"; } \
+  && pass "closing summary states the component count and the purl and license shares" \
+  || { fail "closing summary did not state the result" "rc=$RC"; show; }
+
+d="$(new_proj sumempty)"; printf '{"name":"a"}' > "$d/package.json"
+export DOCKER_STUB_SUMMARY_RESULT='components\t0\nlicensed\t0\nlicensePercent\t-\npurlPercent\t-\n'
+scan_in "$d" --project Empty0 --version 5.1.0 --generate-only
+unset DOCKER_STUB_SUMMARY_RESULT
+{ [ "$RC" -eq 0 ] && in_out "Analysis Complete" && in_out "0 identified" && in_out "[WARN] No software was identified"; } \
+  && pass "a scan with no components says so after 'Analysis Complete!'" \
+  || { fail "an empty result ended without a warning" "rc=$RC"; show; }
+
+d="$(new_proj sumnolic)"; printf '{"name":"a"}' > "$d/package.json"
+export DOCKER_STUB_SUMMARY_RESULT='components\t81\nlicensed\t0\nlicensePercent\t0\npurlPercent\t100\nreduced\tcdxgen-unavailable\nfailedSteps\tpip-install, composer-install\n'
+scan_in "$d" --project NoLic --version 5.2.0 --generate-only
+unset DOCKER_STUB_SUMMARY_RESULT
+{ [ "$RC" -eq 0 ] && in_out "81 identified (purl on 100%, license declared on 0% (0 of 81))" \
+    && in_out "[WARN] No component declares a license" \
+    && in_out "[WARN] Reduced analysis: the dependency analyzer could not run, so only direct dependencies were identified." \
+    && in_out "[WARN] Steps that failed: pip-install, composer-install"; } \
+  && pass "closing summary warns on 0% license coverage, a reduced analysis and failed steps" \
+  || { fail "closing summary missed a warning" "rc=$RC"; show; }
+
+d="$(new_proj sumtiny)"; printf '{"name":"a"}' > "$d/package.json"
+export DOCKER_STUB_SUMMARY_RESULT='components\t200\nlicensed\t1\nlicensePercent\t0\npurlPercent\t100\n'
+scan_in "$d" --project Tiny --version 5.15.0 --generate-only
+unset DOCKER_STUB_SUMMARY_RESULT
+{ [ "$RC" -eq 0 ] && in_out "(1 of 200)" && ! in_out "No component declares a license"; } \
+  && pass "one licensed component out of many is not reported as none" \
+  || { fail "the no-license warning followed the rounded percent" "rc=$RC"; show; }
+
+d="$(new_proj sumnone)"; printf '{"name":"a"}' > "$d/package.json"
+scan_in "$d" --project NoFacts --version 5.3.0 --generate-only
+{ [ "$RC" -eq 0 ] && in_out "Analysis Complete" && ! in_out "Components:" && ! in_out "identified"; } \
+  && pass "no summary sidecar, no invented counts" \
+  || { fail "counts were printed without a sidecar" "rc=$RC"; show; }
+
+# A sidecar left by an earlier scan of the same project and version is not this run's.
+d="$(new_proj sumstale)"; printf '{"name":"a"}' > "$d/package.json"
+mkdir -p "$d/Stale_5.4.0"; printf 'components\t999\n' > "$d/Stale_5.4.0/Stale_5.4.0_summary.result"
+scan_in "$d" --project Stale --version 5.4.0 --generate-only
+{ [ "$RC" -eq 0 ] && ! in_out "999"; } \
+  && pass "a summary sidecar from an earlier scan is not reported" \
+  || { fail "a stale summary sidecar was reported" "rc=$RC"; show; }
 
 # --------------------------------------------------------
 section "Target-mode routing"

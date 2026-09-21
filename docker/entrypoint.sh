@@ -93,7 +93,7 @@ KNOWN_ARTIFACT_SUFFIXES=(
     _bom.json _bom.json.sig _bom.spdx.json _bom.spdx.json.sig
     _NOTICE.txt _NOTICE.html _NOTICE.pdf
     _security.json _security.md _security.html
-    _conformance.json _conformance.md _conformance.html _conformance.result
+    _conformance.json _conformance.md _conformance.html _conformance.result _summary.result
     _risk-report.md _risk-report.html
     _scancode.json _files.json _source.json _input.json
     _yocto_vex.json _security_epss.json _vendored.cdx.json _gate.result
@@ -1319,6 +1319,11 @@ if [ "$AI_MODEL_SCAN" = "true" ]; then
 elif [ "$CONFORMANCE_GEN_MODE" = "true" ]; then
     run_optional_step conformance bash "$LIBDIR/validate-sbom.sh" "$OUTPUT_FILE" "$OUT_PREFIX" "$PROJECT_NAME"
 fi
+# --no-report skips the block that collects the conformance sidecars below, but the
+# CLI's closing summary still needs its facts on the host.
+if [ "${GENERATE_REPORT:-false}" != "true" ] && [ -f "${OUT_PREFIX}_summary.result" ]; then
+    ARTIFACTS+=("${OUT_PREFIX}_summary.result")
+fi
 
 # Deep license detection (scancode, opt-in). Only meaningful for source trees.
 if [ "${DEEP_LICENSE:-false}" = "true" ] && [ -d /src ]; then
@@ -1531,6 +1536,9 @@ if [ "$SCAN_MODE" = "ANALYZE" ] || [ "${GENERATE_REPORT:-false}" = "true" ]; the
     for ext in json md html result; do
         [ -f "${OUT_PREFIX}_conformance.${ext}" ] && ARTIFACTS+=("${OUT_PREFIX}_conformance.${ext}")
     done
+    # Facts for the CLI's closing summary (written by validate-sbom.sh; not
+    # human-facing, so it is not in server.py's ARTIFACT_SUFFIXES either).
+    [ -f "${OUT_PREFIX}_summary.result" ] && ARTIFACTS+=("${OUT_PREFIX}_summary.result")
     run_optional_step generate-risk-report bash "$LIBDIR/generate-risk-report.sh" "$OUT_PREFIX" "$PROJECT_NAME" "$SCAN_MODE"
     [ -f "${OUT_PREFIX}_risk-report.md" ] && ARTIFACTS+=("${OUT_PREFIX}_risk-report.md")
     [ -f "${OUT_PREFIX}_risk-report.html" ] && ARTIFACTS+=("${OUT_PREFIX}_risk-report.html")
