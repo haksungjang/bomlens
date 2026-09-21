@@ -3674,6 +3674,106 @@ pr_specs=$(jq '[.components[] | select((.purl|startswith("pkg:pypi/")) and ((.pr
 pr_dangling=$(jq '[.dependencies[]? | (.ref, (.dependsOn[]?)) | select(test("pkg:pypi/(flask@2.0|requests@2.25)$"))] | length' "$WORK/pr.json")
 [ "$pr_dangling" = "0" ] && pass "dependency graph has no dangling refs to dropped components" || fail "$pr_dangling dangling dependency ref(s) remain"
 
+echo "== swift-dup: versionless copies of a resolved Swift package are dropped =="
+# Shape measured on examples/swift: Package.resolved gives the namespaced pkg:swift
+# component (with its license); cdxgen also emits a pkg:generic entry from the
+# import statement and a purl-less "unspecified" entry from the checkout's own
+# Package.swift. Platform modules and the root must survive.
+cat > "$WORK/sw.json" <<'SWEOF'
+{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,
+ "components":[
+  {"bom-ref":"SwiftExample","type":"application","name":"SwiftExample","version":"unspecified"},
+  {"bom-ref":"pkg:generic/Foundation","type":"library","name":"Foundation","purl":"pkg:generic/Foundation"},
+  {"bom-ref":"pkg:generic/swift-log","type":"library","name":"swift-log","purl":"pkg:generic/swift-log"},
+  {"bom-ref":"pkg:swift/github.com/apple/swift-log@1.15.1","type":"library","name":"swift-log","version":"1.15.1","purl":"pkg:swift/github.com/apple/swift-log@1.15.1","licenses":[{"license":{"id":"Apache-2.0"}}]},
+  {"bom-ref":"swift-log","type":"application","name":"swift-log","version":"unspecified"},
+  {"bom-ref":"other-lib","type":"library","name":"other-lib","version":"unspecified"}],
+ "dependencies":[
+  {"ref":"pkg:swift/github.com/apple/swift-log@1.15.1","dependsOn":[]},
+  {"ref":"swift-log","dependsOn":[]},
+  {"ref":"application:app:latest","dependsOn":["SwiftExample","swift-log","other-lib"]}]}
+SWEOF
+bash "$LIB/normalize-sbom.sh" "$WORK/sw.json" >/dev/null 2>&1
+[ "$(jq -r '[.components[].name] | sort | join(",")' "$WORK/sw.json")" = "Foundation,SwiftExample,other-lib,swift-log" ] \
+    && pass "versionless swift-log copies dropped; platform module, root and unrelated entry kept" \
+    || fail "swift-dup components" "$(jq -c '[.components[]|[.name,.purl]]' "$WORK/sw.json")"
+[ "$(jq -r '.components[] | select(.name=="swift-log") | .licenses[0].license.id' "$WORK/sw.json")" = "Apache-2.0" ] \
+    && pass "the resolved swift-log component keeps its license" \
+    || fail "resolved swift-log lost its license"
+[ "$(jq -c '[.dependencies[] | select(.ref=="application:app:latest") | .dependsOn[]] | sort' "$WORK/sw.json")" = '["SwiftExample","other-lib","pkg:swift/github.com/apple/swift-log@1.15.1"]' ] \
+    && [ "$(jq '[.dependencies[] | select(.ref=="swift-log")] | length' "$WORK/sw.json")" = "0" ] \
+    && pass "edges to a dropped copy are pointed at the kept package, no dangling ref" \
+    || fail "swift-dup dependencies" "$(jq -c '.dependencies' "$WORK/sw.json")"
+
+# Edge cases: nothing may crash, and nothing unrelated may be dropped.
+cat > "$WORK/sw2.json" <<'SWEOF'
+{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,
+ "components":[
+  {"bom-ref":"pkg:swift/github.com/apple/swift-nio@2.0.0","type":"library","name":"swift-nio","version":"2.0.0","purl":"pkg:swift/github.com/apple/swift-nio@2.0.0"},
+  {"bom-ref":"nio-copy","type":"library","name":"swift-nio","version":"unspecified","properties":[{"name":"internal:SrcFile","value":"Package.swift"}]},
+  {"type":"library","version":"unspecified"},
+  {"type":"library","name":"FirstParty","version":"2.0.0"},
+  {"type":"library","name":"AnotherReal","version":"3.1.4"},
+  {"bom-ref":"pkg:swift/github.com/apple/swift-log@1.0.0","type":"library","name":"swift-log","version":"1.0.0","purl":"pkg:swift/github.com/apple/swift-log@1.0.0"},
+  {"bom-ref":"pkg:swift/github.com/other/swift-log@9.9.9","type":"library","name":"swift-log","version":"9.9.9","purl":"pkg:swift/github.com/other/swift-log@9.9.9"},
+  {"bom-ref":"log-copy","type":"library","name":"swift-log","version":"unspecified"},
+  {"bom-ref":"nio-target","type":"application","name":"swift-nio","version":"unspecified","properties":[{"name":"syft:location:0:path","value":"/src/Sources"}]}],
+ "dependencies":[
+  {"ref":"nio-copy","dependsOn":["pkg:swift/github.com/apple/swift-log@1.0.0"]},
+  {"ref":"pkg:swift/github.com/apple/swift-nio@2.0.0"},
+  {"ref":"root","dependsOn":["nio-copy","log-copy"]}]}
+SWEOF
+for mode in "" "--stable"; do
+    cp "$WORK/sw2.json" "$WORK/sw2o.json"
+    bash "$LIB/normalize-sbom.sh" "$WORK/sw2o.json" $mode >/dev/null 2>&1; sw2_rc=$?
+    [ "$sw2_rc" = "0" ] && pass "normalize ${mode:-default}: a nameless component and an absent dependsOn do not abort the step" || fail "normalize ${mode:-default} exited $sw2_rc"
+    [ "$(jq '[.components[] | select(.name=="FirstParty" or .name=="AnotherReal")] | length' "$WORK/sw2o.json")" = "2" ] \
+        && pass "components without bom-ref or purl are not removed as duplicates (${mode:-default})" \
+        || fail "unrelated components lost (${mode:-default})"
+    [ "$(jq '[.components[] | select(.["bom-ref"]=="nio-copy")] | length' "$WORK/sw2o.json")" = "0" ] \
+        && [ "$(jq '[.components[] | select(.["bom-ref"]=="nio-target")] | length' "$WORK/sw2o.json")" = "1" ] \
+        && pass "a bookkeeping-only copy is dropped but a first-party target with other properties stays (${mode:-default})" \
+        || fail "swift-nio copy/target handling (${mode:-default})"
+    [ "$(jq '[.components[] | select(.["bom-ref"]=="log-copy")] | length' "$WORK/sw2o.json")" = "1" ] \
+        && pass "a name shared by two namespaced packages is ambiguous, so its copy is kept (${mode:-default})" \
+        || fail "ambiguous swift-log copy was dropped (${mode:-default})"
+    [ "$(jq -c '[.dependencies[] | select(.ref=="pkg:swift/github.com/apple/swift-nio@2.0.0") | .dependsOn[]]' "$WORK/sw2o.json")" = '["pkg:swift/github.com/apple/swift-log@1.0.0"]' ] \
+        && pass "a dropped copy's own edges move to the kept package (${mode:-default})" \
+        || fail "child edges lost (${mode:-default})" "$(jq -c '.dependencies' "$WORK/sw2o.json")"
+    [ "$(jq '[.dependencies[] | select(.dependsOn == null)] | length' "$WORK/sw2o.json")" = "0" ] \
+        && pass "no dependency entry gets a null dependsOn (${mode:-default})" \
+        || fail "null dependsOn written (${mode:-default})"
+done
+cat > "$WORK/sw3.json" <<'SWEOF'
+{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"components":[{"bom-ref":"a","type":"library","name":"left-pad","version":"1.0.0","purl":"pkg:npm/left-pad@1.0.0"}],"dependencies":[{"ref":"a","dependsOn":["a","a"]}]}
+SWEOF
+cp "$WORK/sw3.json" "$WORK/sw3o.json"
+bash "$LIB/normalize-sbom.sh" "$WORK/sw3o.json" >/dev/null 2>&1
+[ "$(jq -cS '.dependencies' "$WORK/sw3o.json")" = "$(jq -cS '.dependencies' "$WORK/sw3.json")" ] \
+    && pass "an SBOM with no swift components keeps its dependency list unchanged" \
+    || fail "non-swift SBOM dependencies were rewritten"
+
+echo "== modelica: a license in the map needs a valid floor version =="
+mo_bad="$(python3 - "$LIB" 2>/dev/null <<'PYEOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("im", sys.argv[1] + "/identify-modelica.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+print(m.curated_license({"repo": "x", "license": "MIT"}, "1.0.0"),
+      m.curated_license({"repo": "x", "license": "MIT", "licenseFromVersion": 13.0}, "14.0.0"),
+      m.curated_license({"repo": "x", "license": "MIT", "licenseFromVersion": "1.0"}, "1.0.0"))
+PYEOF
+)"
+[ "$mo_bad" = "None None MIT" ] \
+    && pass "a map entry with no or non-string floor yields no license; a valid one does" \
+    || fail "curated_license edge cases: $mo_bad"
+cat > "$WORK/lbnl.json" <<'LBEOF'
+{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"components":[{"bom-ref":"b","type":"library","name":"Buildings","version":"13.0.0","licenses":[{"license":{"id":"BSD-3-Clause-LBNL"}}]}]}
+LBEOF
+bash "$LIB/normalize-sbom.sh" "$WORK/lbnl.json" >/dev/null 2>&1
+[ "$(jq -r '.components[0].properties[]? | select(.name=="bomlens:licenseClass") | .value' "$WORK/lbnl.json")" = "permissive" ] \
+    && pass "BSD-3-Clause-LBNL is classified permissive" \
+    || fail "BSD-3-Clause-LBNL class" "$(jq -c '.components[0].properties' "$WORK/lbnl.json")"
+
 echo "== os-src: deb/apk/rpm components get aquasecurity:trivy:Src* for Trivy CVE matching =="
 # Regression for the SCA-benchmark os-vuln-zero report: Trivy matches distro
 # advisories by SOURCE package name, which it only reads from its own
@@ -6671,9 +6771,24 @@ generic_purl="$(jq -r '.components[] | select(.name=="Custom") | .purl' "$MODIR/
 [ "$generic_purl" = "pkg:generic/Custom@0.1.0" ] \
     && pass "an unmapped library name falls back to pkg:generic (no guessed repo)" \
     || fail "generic purl=$generic_purl"
-[ "$(jq '[.components[].licenses] | flatten | length' "$MODIR/decl/out.json")" = "0" ] \
-    && pass "licenses are left empty rather than guessed" \
-    || fail "a license was invented for a declaration with none"
+mapped_lic="$(jq -r '.components[] | select(.name=="Modelica") | .licenses[0].license.id // "NONE"' "$MODIR/decl/out.json")"
+[ "$mapped_lic" = "BSD-3-Clause" ] \
+    && pass "a mapped library at a confirmed version gets its recorded license" \
+    || fail "mapped license=$mapped_lic"
+[ "$(jq '[.components[] | select(.name=="Custom") | .licenses[]] | length' "$MODIR/decl/out.json")" = "0" ] \
+    && pass "an unmapped library is left without a license rather than guessed" \
+    || fail "a license was invented for an unmapped library"
+mkdir -p "$MODIR/oldver"
+cat > "$MODIR/oldver/Old.mo" <<'MOEOF'
+within ;
+package Old
+  annotation(uses(Modelica(version="3.2.2"), Buildings(version="not-a-version")));
+end Old;
+MOEOF
+python3 "$LIB/identify-modelica.py" "$MODIR/oldver" "$MODIR/oldver/out.json" "1.0.0" >/dev/null 2>&1
+[ "$(jq '[.components[].licenses[]] | length' "$MODIR/oldver/out.json")" = "0" ] \
+    && pass "a version below the recorded floor, or an unparseable one, gets no license" \
+    || fail "license assigned outside the confirmed versions" "$(jq -c '.components' "$MODIR/oldver/out.json")"
 
 cat > "$MODIR/plain/NoUses.mo" <<'MOEOF'
 within ;
