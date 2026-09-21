@@ -321,6 +321,7 @@ generate_sbom_cdxgen() {
         return 1
     fi
     lang=$(detect_lang "$src")
+    warn_low_engine_memory_for "$lang" "$src"
     if [ "$lang" = "android" ]; then
         api=$(android_api "$src")
         img="${ANDROID_IMAGE_PREFIX}${api}:latest"

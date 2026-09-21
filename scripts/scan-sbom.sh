@@ -1874,6 +1874,7 @@ if [ "$MODE" = "SOURCE" ]; then
     # separate from the scanned tree, even for --git/zip ingestion.
     [ -n "$(ls -A "$SCAN_INPUT_DIR" 2>/dev/null)" ] || { echo "[ERROR] source directory is empty: $SCAN_INPUT_DIR"; exit 1; }
     LANG_DET=$(detect_lang "$SCAN_INPUT_DIR")
+    warn_low_engine_memory_for "$LANG_DET" "$SCAN_INPUT_DIR"
     if [ "$LANG_DET" = "android" ]; then
         API=$(android_api "$SCAN_INPUT_DIR")
         CDX_IMG="${ANDROID_IMAGE_PREFIX}${API}:latest"
