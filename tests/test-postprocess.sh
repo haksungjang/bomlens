@@ -8709,6 +8709,50 @@ jq -e '.emptyResult == true and .softwareComponentCount == 0' "$GATEDIR/qr_confo
 ls "$GATEDIR"/*_gate.result.tmp.* >/dev/null 2>&1 \
     && fail "a temporary gate file was left behind" || pass "the gate result is published whole, with no temporary file left"
 
+echo "== real-repository corpus: license coverage judgement =="
+CC="$ROOT_DIR/tests/lib/corpus-compare.sh"
+CCDIR="$WORK/corpus-compare"; mkdir -p "$CCDIR"
+CC_HEAD='name\tecosystem\tlockfile\tstatus\texit\tcomponents\tpurl_pct\tlicense_pct\tseconds\ttree_clean'
+cc_row() { printf '%s\t%s\tno\t%s\t0\t%s\t100\t%s\t5\tyes\n' "$1" "$2" "$3" "$4" "$5"; }
+{ printf "$CC_HEAD\n"; cc_row a go ok 10 100; cc_row b go ok 8 80; cc_row c rust ok 9 100; cc_row e php ok 9 100; } > "$CCDIR/base.tsv"
+{ printf "$CC_HEAD\n"; cc_row a go ok 12 100; cc_row b go ok 8 70; cc_row c rust ok 9 50; cc_row d php ok 1 100; } > "$CCDIR/cur.tsv"
+cc_out=$(bash "$CC" "$CCDIR/cur.tsv" "$CCDIR/base.tsv" 2>&1); cc_rc=$?
+[ "$cc_rc" -eq 0 ] && printf '%s' "$cc_out" | grep -q "rust .*one repository, not judged" \
+    && pass "one repository is reported but not judged when its ecosystem fell 10 points or more" \
+    || fail "a single-repository drop was judged (exit $cc_rc)" "$cc_out"
+printf '%s' "$cc_out" | grep -q "components 10 -> 12" \
+    && printf '%s' "$cc_out" | grep -q "Not in the earlier results (left out): d" \
+    && printf '%s' "$cc_out" | grep -q "not in this run: e (php)" \
+    && pass "changed component counts and repositories missing on either side are reported" \
+    || fail "the comparison did not report changes and missing repositories" "$cc_out"
+{ printf "$CC_HEAD\n"; cc_row a go ok 10 100; cc_row b go ok 8 100; } > "$CCDIR/base2.tsv"
+{ printf "$CC_HEAD\n"; cc_row a go ok 10 100; cc_row b go ok 8 80; } > "$CCDIR/cur2.tsv"
+bash "$CC" "$CCDIR/cur2.tsv" "$CCDIR/base2.tsv" >/dev/null 2>&1; [ $? -eq 1 ] \
+    && pass "a mean that fell by exactly the threshold fails (two repositories compared)" \
+    || fail "a 10 point drop over two repositories was not a regression"
+bash "$CC" "$CCDIR/cur2.tsv" "$CCDIR/base2.tsv" 11 >/dev/null 2>&1 \
+    && pass "the drop threshold is adjustable" || fail "a 10 point drop failed with an 11 point threshold"
+{ printf "$CC_HEAD\n"; cc_row a go ok 10 100; cc_row b go failed 8 30; } > "$CCDIR/cur3.tsv"
+bash "$CC" "$CCDIR/cur3.tsv" "$CCDIR/base2.tsv" >/dev/null 2>&1 \
+    && pass "a repository that is not ok in this run does not count as a coverage drop" \
+    || fail "a failed scan with numeric coverage was read as a drop"
+sed 's/$/\r/' "$CCDIR/base2.tsv" > "$CCDIR/base2-crlf.tsv"
+bash "$CC" "$CCDIR/cur2.tsv" "$CCDIR/base2-crlf.tsv" >/dev/null 2>&1; [ $? -eq 1 ] \
+    && pass "a baseline with CRLF line endings is read the same" || fail "a CRLF baseline was misread"
+bash "$CC" "$CCDIR/cur2.tsv" "$CCDIR/missing.tsv" 2>&1 | grep -q "No baseline" \
+    && pass "a missing baseline skips the comparison, not the run" || fail "a missing baseline was not reported"
+printf 'name\tecosystem\tstatus\n' > "$CCDIR/other-cols.tsv"
+bash "$CC" "$CCDIR/cur2.tsv" "$CCDIR/other-cols.tsv" 2>&1 | grep -q "different columns" \
+    && pass "a baseline written with other columns is skipped" || fail "a baseline with other columns was compared"
+printf '# ecosystem\tminimum\ngo\t95\nrust\t60\n' > "$CCDIR/floor.tsv"
+bash "$CC" "$CCDIR/cur2.tsv" "" 10 "$CCDIR/floor.tsv" 2>&1 | grep -q "go .*REGRESSION"; [ $? -eq 0 ] \
+    && pass "a mean below its floor fails, even with no baseline" || fail "the floor did not apply"
+bash "$CC" "$CCDIR/cur.tsv" "" 10 "$CCDIR/floor.tsv" 2>&1 | grep -q "rust .*REGRESSION" \
+    && pass "a single-repository ecosystem is still judged against its floor" \
+    || fail "the floor was skipped for an ecosystem with one repository"
+bash "$CC" "$CCDIR/missing-current.tsv" >/dev/null 2>&1; [ $? -eq 2 ] \
+    && pass "unusable input exits 2, apart from a regression" || fail "a missing results file did not exit 2"
+
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
