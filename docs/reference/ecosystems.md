@@ -207,7 +207,7 @@ Dependencies are read from the committed lockfiles, so include them in the scan:
 
 > Note: UIKit and other Xcode-driven platform dependencies require macOS and are not resolved in the Linux scanner.
 
-> Note: the bundled example lists 10 components, of which 7 carry a PURL (70%) and 2 a license (20%). Both are below the default thresholds of the conformance checks: the PURL check fails and the license check warns.
+> Note: the bundled example lists 6 components, of which 5 carry a PURL (83%) and 2 a license (33%). Both are below the default thresholds of the conformance checks: the PURL check fails and the license check warns. The two resolved packages (`swift-argument-parser`, `swift-log`) have a PURL and a license. The rest are the package itself and the platform modules it imports (`Foundation`, `XCTest`, `dispatch`), which have no license to declare. BomLens drops the versionless duplicates of a resolved package that the import scan adds, so a package is counted once.
 
 ---
 
@@ -219,7 +219,7 @@ Dependencies are read from the committed lockfiles, so include them in the scan:
 
 Detected files: `*.mo`
 
-cdxgen has no Modelica cataloger, so the usual package-manager approach reads no dependencies. Instead, BomLens parses the `annotation(uses(...))` block a `.mo` package declares directly, picking up each library named there together with its version. A `uses()` declaration carries only a name and a version, so the identified libraries have no license (0 of 2 in the bundled example).
+cdxgen has no Modelica cataloger, so the usual package-manager approach reads no dependencies. Instead, BomLens parses the `annotation(uses(...))` block a `.mo` package declares directly, picking up each library named there together with its version. A `uses()` declaration carries only a name and a version, so a license comes from BomLens's own table of known libraries (`docker/lib/modelica-library-map.json`), not from your project. The table records the license read from each library's upstream license file (Modelica Standard Library 3.2.3 and later: `BSD-3-Clause`; Buildings 13.0.0 and later: `BSD-3-Clause-LBNL`). Both libraries in the bundled example get a license this way (2 of 2), recorded with the property `bomlens:licenseSource` = `modelica-library-map`. A library outside the table, or a version older than the recorded one, has no license.
 
 ```modelica
 annotation(uses(Modelica(version="4.0.0"), Buildings(version="13.0.0")));
@@ -311,8 +311,8 @@ The bundled examples were scanned with BomLens 1.12.0 on 2026-09-20. The table c
 | PHP | 16 | 100% | 100% |
 | .NET | 70 | 100% | 98% |
 | Rust | 157 | 100% | 0% |
-| Swift | 10 | 70% | 20% |
-| Modelica | 2 | 100% | 0% |
+| Swift | 6 | 83% | 33% |
+| Modelica | 2 | 100% | 100% |
 
 Java (Maven), Java (Gradle) and Docker are not in the table. The Java scans could not be measured on the network used, where Maven Central did not serve artifacts (see the notes above). The Docker example is an image-scan example and finds nothing when scanned as a folder. These are results on small example projects, not a forecast for yours: a real project's coverage depends on its own dependencies.
 

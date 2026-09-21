@@ -207,7 +207,7 @@ docker build --build-arg ANDROID_API=<API> -t bomlens-android-sdk<API> docker/an
 
 > 주의: UIKit 등 Xcode가 관리하는 플랫폼 의존성은 macOS가 필요하며 Linux 스캐너에서는 해석되지 않습니다.
 
-> 주의: 번들 예제는 컴포넌트 10개 중 7개에 PURL(70%), 2개에 라이선스(20%)가 있습니다. 둘 다 적합성 검사의 기본 기준에 못 미칩니다. PURL 검사는 실패하고 라이선스 검사는 경고를 냅니다.
+> 주의: 번들 예제는 컴포넌트 6개 중 5개에 PURL(83%), 2개에 라이선스(33%)가 있습니다. 둘 다 적합성 검사의 기본 기준에 못 미칩니다. PURL 검사는 실패하고 라이선스 검사는 경고를 냅니다. 해석된 패키지 두 개(`swift-argument-parser`, `swift-log`)에는 PURL과 라이선스가 있습니다. 나머지는 패키지 자신과, 코드가 가져다 쓰는 플랫폼 모듈(`Foundation`, `XCTest`, `dispatch`)이며 이 모듈에는 선언할 라이선스가 없습니다. import 검사가 추가하는, 버전 없는 중복 항목은 BomLens가 제거해 패키지가 한 번만 집계됩니다.
 
 ---
 
@@ -219,7 +219,7 @@ docker build --build-arg ANDROID_API=<API> -t bomlens-android-sdk<API> docker/an
 
 감지 파일: `*.mo`
 
-cdxgen에는 Modelica 카탈로거가 없어 일반적인 패키지 관리자 방식으로는 의존성을 읽지 못합니다. 대신 `.mo` 패키지 자신이 선언하는 `annotation(uses(...))` 블록을 직접 파싱해서, 그 안에 이름과 버전이 함께 적힌 라이브러리를 컴포넌트로 편입합니다. `uses()` 선언에는 이름과 버전만 있으므로 식별된 라이브러리에는 라이선스가 없습니다(번들 예제는 2개 중 0개).
+cdxgen에는 Modelica 카탈로거가 없어 일반적인 패키지 관리자 방식으로는 의존성을 읽지 못합니다. 대신 `.mo` 패키지 자신이 선언하는 `annotation(uses(...))` 블록을 직접 파싱해서, 그 안에 이름과 버전이 함께 적힌 라이브러리를 컴포넌트로 편입합니다. `uses()` 선언에는 이름과 버전만 있으므로 라이선스는 프로젝트가 아니라 BomLens가 가진 알려진 라이브러리 표(`docker/lib/modelica-library-map.json`)에서 가져옵니다. 표에는 각 라이브러리의 업스트림 저장소 라이선스 파일에서 확인한 값을 적어 둡니다(Modelica Standard Library 3.2.3 이상은 `BSD-3-Clause`, Buildings 13.0.0 이상은 `BSD-3-Clause-LBNL`). 번들 예제의 두 라이브러리는 이 방식으로 모두 라이선스를 얻으며(2개 중 2개), 출처는 속성 `bomlens:licenseSource` 값 `modelica-library-map`으로 남습니다. 표에 없는 라이브러리나 기록된 것보다 낮은 버전에는 라이선스가 없습니다.
 
 ```modelica
 annotation(uses(Modelica(version="4.0.0"), Buildings(version="13.0.0")));
@@ -311,8 +311,8 @@ Docker 이미지 분석은 프로젝트 루트에서 실행합니다.
 | PHP | 16 | 100% | 100% |
 | .NET | 70 | 100% | 98% |
 | Rust | 157 | 100% | 0% |
-| Swift | 10 | 70% | 20% |
-| Modelica | 2 | 100% | 0% |
+| Swift | 6 | 83% | 33% |
+| Modelica | 2 | 100% | 100% |
 
 Java (Maven), Java (Gradle), Docker는 표에 없습니다. Java 스캔은 측정에 쓴 네트워크에서 Maven Central이 아티팩트를 내려주지 않아 측정하지 못했습니다(위 주의 참고). Docker 예제는 이미지를 스캔하는 예제라서 폴더로 스캔하면 아무것도 찾지 못합니다. 이 수치는 작은 예제 프로젝트의 결과이며 실제 프로젝트의 예측값이 아닙니다. 실제 프로젝트의 채움률은 그 프로젝트의 의존성에 따라 달라집니다.
 
