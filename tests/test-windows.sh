@@ -61,7 +61,13 @@ if [ "${DOCKER_STUB_ARGV_DUMP:-0}" = "1" ]; then
   done
 fi
 case "${1:-}" in
-  version|info|pull|image|stop|rm) exit 0 ;;
+  info)
+    # `docker info --format '{{.MemTotal}}'`: the engine's memory in bytes.
+    # DOCKER_STUB_MEMTOTAL models it; unset prints nothing, as an engine whose
+    # value cannot be read would.
+    [ -z "${DOCKER_STUB_MEMTOTAL:-}" ] || echo "$DOCKER_STUB_MEMTOTAL"
+    exit 0 ;;
+  version|pull|image|stop|rm) exit 0 ;;
   ps)
     # `docker ps -aq --filter label=bomlens.scan=cli --filter status=exited`:
     # the startup sweep for a scan container an earlier, killed run left
@@ -232,6 +238,52 @@ detect_case go     go.mod           'module x\n\ngo 1.21\n'                     
 detect_case rust   Cargo.toml       '[package]\nname="x"\nversion="0.1.0"'          rust   cdxgen-debian-rust
 detect_case ruby   Gemfile          "source 'https://rubygems.org'\ngem 'rack'"     ruby   cdxgen-debian-ruby34
 detect_case php    composer.json    '{"require":{"monolog/monolog":"^3"}}'          php    cdxgen-debian-php84
+
+# A Java build in an engine with too little memory is announced before it starts;
+# a roomy engine, an unreadable value and other languages print nothing.
+for mem_case in "2000000000:low" "6198534144:roomy" "3900000000:roomy" "bogus:unreadable"; do
+  mem_bytes="${mem_case%%:*}"; mem_kind="${mem_case#*:}"
+  d="$(new_proj "mem_$mem_kind")"; printf '<project><modelVersion>4.0.0</modelVersion></project>' > "$d/pom.xml"
+  DOCKER_STUB_MEMTOTAL="$mem_bytes" scan_in "$d" --project "Pmem$mem_kind" --version 1.0.0 --generate-only
+  if [ "$mem_kind" = low ]; then
+    { [ "$RC" -eq 0 ] && in_out "The Docker engine has about 2 GB" && in_out "colima stop && colima start --memory 4" && in_out "Docker Desktop:  Settings" \
+        && in_out ".wslconfig" && in_out "Rancher Desktop:"; } \
+      && pass "a Java scan on a 2 GB engine warns and names the Colima and Docker Desktop settings" \
+      || { fail "no memory warning on a 2 GB engine" "rc=$RC"; show; }
+  else
+    { [ "$RC" -eq 0 ] && ! in_out "The Docker engine has about"; } \
+      && pass "a Java scan does not warn about memory ($mem_bytes: $mem_kind engine)" \
+      || { fail "a spurious memory warning ($mem_bytes)" "rc=$RC"; show; }
+  fi
+done
+# Every line of the warning starts with [WARN], the marker the web UI keeps.
+d="$(new_proj mem_marker)"; printf '<project><modelVersion>4.0.0</modelVersion></project>' > "$d/pom.xml"
+DOCKER_STUB_MEMTOTAL=2000000000 scan_in "$d" --project Pmemmarker --version 1.0.0 --generate-only
+mem_lines=$(grep -c "Colima:\|Docker Desktop:\|Rancher Desktop:" "$OUT")
+mem_marked=$(grep "Colima:\|Docker Desktop:\|Rancher Desktop:" "$OUT" | grep -c "^\[WARN\]")
+{ [ "$mem_lines" -eq 3 ] && [ "$mem_marked" -eq 3 ]; } \
+  && pass "every line of the memory warning starts with [WARN]" \
+  || { fail "a memory warning line lacks the [WARN] marker" "$mem_lines lines, $mem_marked marked"; show; }
+# A value with a carriage return (a Windows docker.exe) is still read.
+d="$(new_proj mem_cr)"; printf '<project><modelVersion>4.0.0</modelVersion></project>' > "$d/pom.xml"
+DOCKER_STUB_MEMTOTAL="$(printf '2000000000\r')" scan_in "$d" --project Pmemcr --version 1.0.0 --generate-only
+in_out "The Docker engine has about 2 GB" \
+  && pass "an engine memory value ending in a carriage return is still read" \
+  || { fail "a CR-terminated value was ignored"; show; }
+# A pom.xml next to a package.json (a mixed tree), or below the root, still runs Maven.
+d="$(new_proj mem_mixed)"; printf '<project><modelVersion>4.0.0</modelVersion></project>' > "$d/pom.xml"; printf '{"name":"a"}' > "$d/package.json"
+DOCKER_STUB_MEMTOTAL=2000000000 scan_in "$d" --project Pmemmixed --version 1.0.0 --generate-only
+in_out "Language: mixed" && in_out "A Maven build needs about 4 GB" \
+  && pass "a mixed tree with a pom.xml warns about a Maven build" || { fail "a mixed Java tree was not warned" "rc=$RC"; show; }
+d="$(new_proj mem_nested)"; mkdir -p "$d/backend"; printf '<project><modelVersion>4.0.0</modelVersion></project>' > "$d/backend/pom.xml"
+DOCKER_STUB_MEMTOTAL=2000000000 scan_in "$d" --project Pmemnested --version 1.0.0 --generate-only
+in_out "A Maven build needs about 4 GB" \
+  && pass "a pom.xml below the root of an unrecognised tree warns too" || { fail "a nested pom.xml was not warned" "rc=$RC"; show; }
+
+d="$(new_proj mem_node)"; printf '{"name":"a"}' > "$d/package.json"
+DOCKER_STUB_MEMTOTAL=2000000000 scan_in "$d" --project Pmemnode --version 1.0.0 --generate-only
+{ [ "$RC" -eq 0 ] && ! in_out "The Docker engine has about"; } \
+  && pass "a Node.js scan does not warn about engine memory" || { fail "a non-Java scan warned about memory" "rc=$RC"; show; }
 
 # Go toolchain settings reach the cdxgen container. The Go image pins
 # GOTOOLCHAIN=local, so the host value travels as HOST_GOTOOLCHAIN.
