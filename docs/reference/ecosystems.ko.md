@@ -39,7 +39,7 @@ jq '.components | length' NodeExample_1.0.0/NodeExample_1.0.0_bom.json
 
 소스 스캔은 기본으로 테스트, 테스트 데이터, 예제, 벤치마크, 데모 폴더(`test`, `tests`, `spec`, `fixtures`, `testdata`, `__tests__`, `e2e`, `example`, `examples`, `benches`, `benchmarks`, `playground`, `samples`) 아래의 매니페스트와 `.github/workflows`의 GitHub Actions 워크플로를 제외합니다. 모두 제품과 함께 배포되지 않기 때문입니다. SBOM에는 적용한 패턴이 `bomlens:excluded-paths` 속성에, 제외한 매니페스트 파일이 `bomlens:excluded-manifests` 속성에 기록됩니다. 포함하려면 `BOMLENS_INCLUDE_NON_SHIPPED=1`을 설정하세요([Docker 이미지 환경 변수](docker-image.ko.md#환경-변수)).
 
-npm과 Python(pip) 패키지는 소스 스캔이 설치된 패키지에 들어 있는 라이선스 파일(`LICENSE`, `LICENCE`, `COPYING`, `NOTICE`, `COPYRIGHT`)에서 저작권 문구를 읽어 컴포넌트의 `copyright`를 채웁니다. 고지문에 저작권 표기 줄이 나오게 하려는 것입니다. `Copyright` 바로 뒤에 `(c)`, 저작권 기호, 연도, `by` 중 하나가 오거나 `(c)`나 저작권 기호 뒤에 연도가 오면서 권리자 이름이 있는 줄만 사용합니다. `Copyright Acme, Inc.`처럼 연도가 없는 표기는 가져오지 않습니다. 읽는 곳은 패키지 자신의 폴더(pip은 `.dist-info` 폴더)뿐이고, 파일은 최대 6개, 파일마다 앞 64KiB와 400줄까지, 컴포넌트당 문구는 최대 5개이며 `; `로 이어 붙입니다. 채우지 않은 서식(`<year>`, `[fullname]`)이나 라이선스 문서 자체의 문구(예: GNU 라이선스에 든 Free Software Foundation의 줄)는 제외하고, 패키지 밖을 가리키는 링크 파일도 읽지 않습니다. 이미 저작권 값이 있는 컴포넌트는 바꾸지 않고, 그런 줄이 없는 패키지는 비워 둡니다. 채운 값에는 `bomlens:copyrightSource` 속성이 붙습니다. `BOMLENS_NO_COPYRIGHT=1`로 끌 수 있습니다. 다른 생태계는 아직 지원하지 않습니다.
+npm, Python(pip), Go, Rust(Cargo) 패키지는 소스 스캔이 설치된 패키지에 들어 있는 라이선스 파일(`LICENSE`, `LICENCE`, `COPYING`, `NOTICE`, `COPYRIGHT`)에서 저작권 문구를 읽어 컴포넌트의 `copyright`를 채웁니다. 고지문에 저작권 표기 줄이 나오게 하려는 것입니다. `Copyright` 바로 뒤에 `(c)`, 저작권 기호, 연도, `by` 중 하나가 오거나 `(c)`나 저작권 기호 뒤에 연도가 오면서 권리자 이름이 있는 줄만 사용합니다. `Copyright Acme, Inc.`처럼 연도가 없는 표기는 가져오지 않습니다. 읽는 곳은 패키지 자신의 폴더뿐이고(pip은 `.dist-info` 폴더, Go는 `go list`가 알려 주는 폴더로 모듈 캐시, `replace`한 모듈은 대체본 폴더, 또는 `vendor/`이며, Rust는 `cargo metadata`가 알려 주는 폴더로 cargo registry, git 체크아웃, 경로 의존성입니다), 파일은 최대 6개, 파일마다 앞 64KiB와 400줄까지, 컴포넌트당 문구는 최대 5개이며 `; `로 이어 붙입니다. 채우지 않은 서식(`<year>`, `[fullname]`)이나 라이선스 문서 자체의 문구(예: GNU 라이선스에 든 Free Software Foundation의 줄)는 제외하고, 패키지 밖을 가리키는 링크 파일도 읽지 않습니다. 이미 저작권 값이 있는 컴포넌트는 바꾸지 않고, 그런 줄이 없는 패키지는 비워 둡니다. 채운 값에는 `bomlens:copyrightSource` 속성이 붙습니다. `BOMLENS_NO_COPYRIGHT=1`로 끌 수 있습니다. Java(Maven)는 지원하지 않습니다. Maven은 소스 폴더가 아니라 jar 파일을 내려받으므로 의존성의 라이선스 파일이 디스크에 없습니다. `replace`한 Go 모듈에는 실제로 빌드되는 코드의 문구가 들어가므로 컴포넌트가 가리키는 버전과 다를 수 있습니다. 스캔 대상 자신의 Go 모듈과 Rust 워크스페이스 크레이트는 채우지 않습니다. Rust 단계는 이미 디스크에 있는 크레이트 소스만 읽고 네트워크로 내려받지 않으므로, `FETCH_LICENSE=false`나 `--byte-stable`에서는 내려받지 않은 크레이트가 비어 있습니다. 폴더가 디스크에 없는 Go와 Rust 컴포넌트(예: 내려받기 실패)도 비어 있습니다. 한 생태계의 폴더를 하나도 조회하지 못하면 SBOM의 `bomlens:copyrightUnread` 메타데이터 속성(`golang`, `cargo`)에 기록하므로, 저작권이 없는 것과 단계가 실행되지 않은 것을 구분할 수 있습니다.
 
 아래 언어별 절에 그대로 붙여넣을 수 있는 명령을 정리했습니다.
 
@@ -300,19 +300,19 @@ Docker 이미지 분석은 프로젝트 루트에서 실행합니다.
 
 ## 번들 예제 결과
 
-번들 예제를 2026-09-20에 BomLens 1.12.0으로 스캔했습니다. 표는 소프트웨어 컴포넌트만 셉니다. 적합성 검사의 기본 기준은 PURL 90%, 라이선스 80%입니다.
+번들 예제를 2026-09-21에 BomLens 1.12.0과 그 이후의 소스 스캔 변경으로 스캔했습니다. 표는 소프트웨어 컴포넌트만 셉니다. 저작권 열은 `copyright`가 채워진 컴포넌트의 비율입니다(위 설명 참고). Ruby, PHP, .NET, Swift, Modelica는 지원하지 않습니다. 적합성 검사의 기본 기준은 PURL 90%, 라이선스 80%입니다.
 
-| 예제 | 컴포넌트 | PURL | 라이선스 |
-|------|--------:|-----:|--------:|
-| Node.js | 120 | 100% | 100% |
-| Python | 39 | 100% | 100% |
-| Go | 19 | 100% | 100% |
-| Ruby | 9 | 100% | 100% |
-| PHP | 16 | 100% | 100% |
-| .NET | 70 | 100% | 98% |
-| Rust | 157 | 100% | 0% |
-| Swift | 6 | 83% | 33% |
-| Modelica | 2 | 100% | 100% |
+| 예제 | 컴포넌트 | PURL | 라이선스 | 저작권 |
+|------|--------:|-----:|--------:|----------:|
+| Node.js | 120 | 100% | 100% | 95% |
+| Python | 39 | 100% | 100% | 82% |
+| Go | 19 | 100% | 100% | 94% |
+| Ruby | 9 | 100% | 100% | 0% |
+| PHP | 16 | 100% | 100% | 0% |
+| .NET | 70 | 100% | 98% | 0% |
+| Rust | 157 | 100% | 99% | 83% |
+| Swift | 6 | 83% | 33% | 0% |
+| Modelica | 2 | 100% | 100% | 0% |
 
 Java (Maven), Java (Gradle), Docker는 표에 없습니다. Java 스캔은 측정에 쓴 네트워크에서 Maven Central이 아티팩트를 내려주지 않아 측정하지 못했습니다(위 주의 참고). Docker 예제는 이미지를 스캔하는 예제라서 폴더로 스캔하면 아무것도 찾지 못합니다. 이 수치는 작은 예제 프로젝트의 결과이며 실제 프로젝트의 예측값이 아닙니다. 실제 프로젝트의 채움률은 그 프로젝트의 의존성에 따라 달라집니다.
 
