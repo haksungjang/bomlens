@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `scripts/check-setup.sh` now speaks English and Korean (`SBOM_LANG`, else the locale), checks the Docker engine's memory for Maven and Gradle builds as `check-setup.bat` now does, and tells apart a blocking problem (exit 1) from problems that do not block (exit 2, with their number in the result line). It used to exit 0 in both cases. `scripts/check-ux-heuristics.sh` keeps the message sets of the two scripts equal.
 - A PHP (Composer) source scan whose root `composer.json` has no committed `composer.lock` now resolves one itself (`composer update --no-dev --no-scripts --no-interaction`), the same as Ruby's `bundle lock` step already does for a missing `Gemfile.lock`. Previously nothing resolved it, and cdxgen came back with zero components and no indication anything was wrong. A resolve failure is now recorded on the SBOM instead of failing silently.
 
 ## [v1.12.0] - 2026-09-15

@@ -84,7 +84,7 @@ If you prefer a script over the desktop app, this path works too.
 ===========================================
 ```
 
-To check that everything is ready, double-click `scripts\check-setup.bat` in the unzipped folder. It checks Docker installation and status, the scanner image, and port status, in your Windows display language.
+To check that everything is ready, double-click `scripts\check-setup.bat` in the unzipped folder. It checks Docker installation and status, the scanner image, the Docker engine's memory and port status, in your Windows display language.
 
 ![The BomLens web UI](../images/web-ui-en.png)
 
