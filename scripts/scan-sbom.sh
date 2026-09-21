@@ -733,6 +733,9 @@ CONFORMANCE_RESULT_FILE="${OUTPUT_HOST_DIR}/${SAFE_PROJECT}_${SAFE_VERSION}_conf
 # Same for --fail-on: only this run's own judgement may decide the exit code.
 GATE_RESULT_FILE="${OUTPUT_HOST_DIR}/${SAFE_PROJECT}_${SAFE_VERSION}_gate.result"
 [ "${#FAIL_ON[@]}" -gt 0 ] && rm -f "$GATE_RESULT_FILE"
+# The closing summary's facts (docker/lib/validate-sbom.sh) belong to this run only.
+SUMMARY_RESULT_FILE="${OUTPUT_HOST_DIR}/${SAFE_PROJECT}_${SAFE_VERSION}_summary.result"
+rm -f "$SUMMARY_RESULT_FILE"
 
 # A SOURCE scan writes $OUTPUT_FILE in two containers: stage 1 (cdxgen) here on
 # the host first, stage 2 (POSTPROCESS, entrypoint.sh) after. entrypoint.sh's
@@ -2232,6 +2235,55 @@ if [ "$GENERATE_ONLY" = "true" ]; then
         echo "    docker pull ${RUN_IMAGE}"
         echo "  Otherwise the step degraded — check the log above for its warning."
     fi
+fi
+# What the result holds, in every mode: the numbers come from the scan's own
+# measurement (validate-sbom.sh), not from a count made here. Absent (an older
+# image, an AI SBOM) it prints nothing.
+if [ -f "$SUMMARY_RESULT_FILE" ]; then
+    sum_components=""; sum_licensed=""; sum_license_pct=""; sum_purl_pct=""; sum_reduced=""; sum_failed=""
+    while IFS=$'\t' read -r sum_key sum_val; do
+        case "$sum_key" in
+            components)     sum_components="$sum_val" ;;
+            licensed)       sum_licensed="$sum_val" ;;
+            licensePercent) sum_license_pct="$sum_val" ;;
+            purlPercent)    sum_purl_pct="$sum_val" ;;
+            reduced)        sum_reduced="$sum_val" ;;
+            failedSteps)    sum_failed="$sum_val" ;;
+        esac
+    done < "$SUMMARY_RESULT_FILE"
+    case "$sum_components" in
+        ''|*[!0-9]*) ;;
+        *)
+            if [ "$sum_components" -eq 0 ]; then
+                printf '  %-12s %s\n' "Components:" "0 identified"
+                echo "[WARN] No software was identified. Check that the scanned folder holds a manifest or lock file for a supported ecosystem, and read the log above."
+            else
+                sum_detail=""
+                case "$sum_purl_pct" in ''|-|*[!0-9]*) ;; *) sum_detail="purl on ${sum_purl_pct}%" ;; esac
+                case "$sum_license_pct" in
+                    ''|-|*[!0-9]*) ;;
+                    *) sum_detail="${sum_detail:+$sum_detail, }license declared on ${sum_license_pct}% (${sum_licensed:-0} of ${sum_components})" ;;
+                esac
+                printf '  %-12s %s\n' "Components:" "${sum_components} identified${sum_detail:+ ($sum_detail)}"
+                [ "${sum_licensed:-0}" != "0" ] || echo "[WARN] No component declares a license, so license checks have nothing to work with. Read the log above."
+            fi
+            # Under --analyze these describe the submitted document's history, not
+            # this run, so they are not reported.
+            if [ "$MODE" != "ANALYZE" ]; then
+                if [ -n "$sum_reduced" ]; then
+                    case "$sum_reduced" in
+                        disk-space)  sum_why="the scan ran out of disk space" ;;
+                        oom)         sum_why="the build ran out of memory" ;;
+                        network)     sum_why="a dependency download failed" ;;
+                        cdxgen-crash) sum_why="the dependency analyzer failed" ;;
+                        *)           sum_why="the dependency analyzer could not run" ;;
+                    esac
+                    echo "[WARN] Reduced analysis: ${sum_why}, so only direct dependencies were identified."
+                fi
+                [ -z "$sum_failed" ] || echo "[WARN] Steps that failed: ${sum_failed} (details in the log above)"
+            fi
+            ;;
+    esac
 fi
 echo "=========================================="
 

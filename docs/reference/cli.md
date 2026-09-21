@@ -132,6 +132,23 @@ To restore the previous flat layout, where every file is written directly in the
 
 `--diff` has no project or version of its own, so it writes its report directly into the base directory (current directory, or `--output-dir`) rather than a per-run subfolder.
 
+## What the scan prints at the end
+
+With `--generate-only`, the CLI lists the files it produced after `Analysis Complete!`. For every scan that measured software (not an AI model or dataset scan) it then states what the result holds:
+
+```
+  Components:  176 identified (purl on 100%, license declared on 96% (169 of 176))
+```
+
+The numbers come from the scan's own conformance measurement, so they match the `licenseCoverage` and `softwareComponentCount` fields of the conformance report, and the purl share counts the same packages as its purl check. The purl share is shown for CycloneDX results only. A warning line follows when something is off:
+
+- `No software was identified`: the result has no components. Check that the scanned folder holds a manifest or lock file for a supported ecosystem.
+- `No component declares a license`: no component declares one, so license checks have nothing to work with.
+- `Reduced analysis`: a shallow fallback ran instead of the full analysis and only direct dependencies were identified. The line names the cause: out of disk space, out of memory, a failed download, or the dependency analyzer failing or not running.
+- `Steps that failed`: post-processing steps that did not complete, by name. Details are in the log above.
+
+The last two are not shown for `--analyze`, because they would describe the submitted document rather than this run. The summary does not change the exit code. To fail a run on these conditions, use `--fail-on empty-result` or `--fail-on license-coverage=<0-100>`. A scanner image that predates the summary prints only the file list.
+
 ## Exit codes
 
 | Code | Meaning |

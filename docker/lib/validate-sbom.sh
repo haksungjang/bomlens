@@ -10,6 +10,7 @@
 #   produces <out_prefix>_conformance.json   (machine-readable result)
 #            <out_prefix>_conformance.md      (human summary)
 #            <out_prefix>_conformance.html    (visual summary)
+#            <out_prefix>_summary.result      (key<TAB>value facts for the CLI closing summary)
 #            <out_prefix>_conformance.result  (bare "pass"/"fail", for --fail-on-conformance
 #                                              to read without a host jq dependency)
 #
@@ -1078,6 +1079,38 @@ jq -n \
 # Bare pass/fail sidecar for --fail-on-conformance (scripts/scan-sbom.sh): a
 # single word, so the CLI can gate on it without requiring jq on the host.
 printf '%s' "$RESULT" > "${OUT_PREFIX}_conformance.result"
+
+# Closing-summary sidecar for the CLI (scripts/scan-sbom.sh), one "key<TAB>value"
+# line per fact, so the host needs no jq. The counts are the SIGNAL measured
+# above, the same numbers as the conformance report's top-level fields; only the
+# purl share is counted here (CycloneDX only, "-" otherwise). Not written for an
+# AI SBOM (no software to count) or when nothing was measured.
+rm -f "${OUT_PREFIX}_summary.result"
+if [ "${IS_AI:-false}" != true ] && printf '%s' "$SIGNAL" | jq -e 'has("softwareComponentCount")' >/dev/null 2>&1; then
+    _sum_purl="-"
+    if [ "$FORMAT" = "CycloneDX" ]; then
+        # The same package set and rule as the conformance report's purl check:
+        # every component except data, file and operating-system ones.
+        _sum_purl=$(jq -r '[ .components[]? | select(.type != "operating-system" and .type != "file" and .type != "data") ] as $p
+            | if ($p | length) == 0 then "-"
+              else (([ $p[] | select(.purl != null) ] | length) * 100 / ($p | length) | floor | tostring) end' "$SBOM" 2>/dev/null) || _sum_purl="-"
+    fi
+    {
+        printf '%s' "$SIGNAL" | jq -r '"components\t\(.softwareComponentCount)",
+            "licensed\t\(.licenseCoverage.declared // 0)",
+            "licensePercent\t\(.licenseCoverage.pct // "-")"'
+        printf 'purlPercent\t%s\n' "${_sum_purl:--}"
+        # A shallow fallback analysis and any failed post-processing step are the
+        # two reasons a result is smaller than the scan was asked to give. Values
+        # come from the SBOM (a supplier's document under --analyze), so every
+        # control character is replaced and the length is capped before they can
+        # reach a terminal.
+        jq -r '((.metadata.properties // [])[]? | select(.name == "bomlens:sbom-tool-degraded") | .value)
+               | select(type == "string") | gsub("\\p{Cc}"; " ") | .[0:100] | "reduced\t\(.)"' "$SBOM" 2>/dev/null | head -n 1
+        printf '%s' "$PIPELINE_STEPS_FAILED" | jq -r --argjson more "${PIPELINE_STEPS_FAILED_MORE:-0}" '
+            if length > 0 then "failedSteps\t\(map(gsub("\\p{Cc}"; " ") | .[0:100]) | join(", "))\(if $more > 0 then " (and \($more) more)" else "" end)" else empty end' 2>/dev/null
+    } > "${OUT_PREFIX}_summary.result" 2>/dev/null
+fi
 
 # --------------------------------------------------------
 # Localization (REPORT_LANG=ko). The JSON above is NEVER localized — it is an

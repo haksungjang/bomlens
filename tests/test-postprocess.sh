@@ -8868,6 +8868,76 @@ bash "$CC" "$CCDIR/cur.tsv" "" 10 "$CCDIR/floor.tsv" 2>&1 | grep -q "rust .*REGR
 bash "$CC" "$CCDIR/missing-current.tsv" >/dev/null 2>&1; [ $? -eq 2 ] \
     && pass "unusable input exits 2, apart from a regression" || fail "a missing results file did not exit 2"
 
+echo "== closing-summary sidecar: the CLI's facts come from the scan's own measurement =="
+SUMDIR="$WORK/summary-sidecar"; mkdir -p "$SUMDIR"
+cat > "$SUMDIR/a.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,
+ "metadata":{"component":{"type":"application","name":"app","version":"1"},
+   "properties":[{"name":"bomlens:sbom-tool-degraded","value":"syft fallback"},
+                 {"name":"bomlens:pipeline-step-failed","value":"pip-install"},
+                 {"name":"bomlens:pipeline-step-failed","value":"composer-install"}]},
+ "components":[
+  {"type":"library","name":"a","version":"1","purl":"pkg:npm/a@1","licenses":[{"license":{"id":"MIT"}}]},
+  {"type":"library","name":"b","version":"1","purl":"pkg:npm/b@1"},
+  {"type":"library","name":"c","version":"1","licenses":[{"license":{"id":"NOASSERTION"}}]},
+  {"type":"operating-system","name":"debian","version":"12"}]}
+JSON
+bash "$LIB/validate-sbom.sh" "$SUMDIR/a.json" "$SUMDIR/a" P >/dev/null 2>&1
+sum_want=$(printf 'components\t3\nlicensed\t1\nlicensePercent\t33\npurlPercent\t66\nreduced\tsyft fallback\nfailedSteps\tpip-install, composer-install\n')
+[ "$(cat "$SUMDIR/a_summary.result" 2>/dev/null)" = "$sum_want" ] \
+    && jq -e '.softwareComponentCount == 3 and .licenseCoverage.declared == 1 and .licenseCoverage.pct == 33' "$SUMDIR/a_conformance.json" >/dev/null \
+    && pass "the sidecar carries the same counts as the conformance report, plus the purl share, the reduced analysis and the failed steps" \
+    || fail "the summary sidecar differs from the conformance report" "$(cat "$SUMDIR/a_summary.result" 2>&1)"
+cat > "$SUMDIR/e.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"metadata":{"component":{"type":"application","name":"app","version":"1"}},"components":[]}
+JSON
+bash "$LIB/validate-sbom.sh" "$SUMDIR/e.json" "$SUMDIR/e" P >/dev/null 2>&1
+[ "$(cat "$SUMDIR/e_summary.result" 2>/dev/null)" = "$(printf 'components\t0\nlicensed\t0\nlicensePercent\t-\npurlPercent\t-')" ] \
+    && pass "an empty result is written as zero components with no percentages" \
+    || fail "the empty-result sidecar is wrong" "$(cat "$SUMDIR/e_summary.result" 2>&1)"
+
+# The purl share counts the same package set as the conformance report's purl check:
+# a data component is not a package and is left out of the denominator.
+cat > "$SUMDIR/d.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,
+ "metadata":{"component":{"type":"application","name":"app","version":"1"}},
+ "components":[
+  {"type":"library","name":"a","version":"1","purl":"pkg:npm/a@1"},
+  {"type":"library","name":"b","version":"1"},
+  {"type":"data","name":"corpus","version":"1"}]}
+JSON
+bash "$LIB/validate-sbom.sh" "$SUMDIR/d.json" "$SUMDIR/d" P >/dev/null 2>&1
+grep -qx "$(printf 'purlPercent\t50')" "$SUMDIR/d_summary.result" \
+    && jq -e '.checks[] | select(.id == "purl" or (.name // "" | test("PURL"; "i"))) | select((.detail // "") | test("1/2"))' "$SUMDIR/d_conformance.json" >/dev/null 2>&1 \
+    && pass "the purl share leaves data components out, as the conformance purl check does" \
+    || fail "the purl share and the conformance purl check disagree" "$(cat "$SUMDIR/d_summary.result" 2>&1) / $(jq -c '[.checks[] | select((.name // "") | test("PURL"; "i"))]' "$SUMDIR/d_conformance.json" 2>&1)"
+# Values that came from a document are cut and stripped before a terminal can see them.
+ESC_LONG=$(printf 'x%.0s' $(seq 1 300))
+jq --arg v "$(printf 'bad\033[31mred%s' "$ESC_LONG")" '.metadata.properties = [{"name":"bomlens:sbom-tool-degraded","value":$v}]
+    + [range(0;22) | {"name":"bomlens:pipeline-step-failed","value":"step\(.)"}]' "$SUMDIR/d.json" > "$SUMDIR/x.json" 2>/dev/null \
+  || jq --arg v "$(printf 'bad\033[31mred%s' "$ESC_LONG")" '.metadata.properties = ([{"name":"bomlens:sbom-tool-degraded","value":$v}] + [range(0;22) | {"name":"bomlens:pipeline-step-failed","value":("step" + tostring)}])' "$SUMDIR/d.json" > "$SUMDIR/x.json"
+bash "$LIB/validate-sbom.sh" "$SUMDIR/x.json" "$SUMDIR/x" P >/dev/null 2>&1
+if ! LC_ALL=C grep -q "$(printf '\033')" "$SUMDIR/x_summary.result" \
+   && [ "$(grep '^reduced' "$SUMDIR/x_summary.result" | wc -c)" -le 120 ] \
+   && grep -q "(and 2 more)" "$SUMDIR/x_summary.result"; then
+    pass "an escape sequence in a document value is removed, the value is capped, and the hidden step count is kept"
+else
+    fail "the summary sidecar passed a control character or lost the step count" "$(head -c 400 "$SUMDIR/x_summary.result" | od -c | head -5)"
+fi
+# SPDX carries no purl share; an AI SBOM has no software to count and writes no sidecar.
+printf 'SPDXVersion: SPDX-2.3\nSPDXID: SPDXRef-DOCUMENT\nPackageName: app\nSPDXID: SPDXRef-root\nPackageName: dep\nSPDXID: SPDXRef-dep\nPackageLicenseDeclared: MIT\nRelationship: SPDXRef-DOCUMENT DESCRIBES SPDXRef-root\n' > "$SUMDIR/t.spdx"
+bash "$LIB/validate-sbom.sh" "$SUMDIR/t.spdx" "$SUMDIR/t" P >/dev/null 2>&1
+grep -qx "$(printf 'purlPercent\t-')" "$SUMDIR/t_summary.result" 2>/dev/null \
+    && pass "an SPDX document gets no purl share" || fail "the SPDX sidecar has a purl share" "$(cat "$SUMDIR/t_summary.result" 2>&1)"
+cat > "$SUMDIR/ai.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,
+ "metadata":{"component":{"type":"application","name":"app","version":"1"}},
+ "components":[{"type":"machine-learning-model","name":"m","version":"1","licenses":[{"license":{"id":"MIT"}}]}]}
+JSON
+bash "$LIB/validate-sbom.sh" "$SUMDIR/ai.json" "$SUMDIR/ai" P >/dev/null 2>&1
+[ ! -f "$SUMDIR/ai_summary.result" ] && [ -f "$SUMDIR/ai_conformance.json" ] \
+    && pass "an AI SBOM writes no closing-summary sidecar" || fail "an AI SBOM wrote a summary sidecar"
+
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
