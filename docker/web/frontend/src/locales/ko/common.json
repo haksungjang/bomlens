@@ -645,6 +645,7 @@
     "verifyWeights": "모델 가중치 검증",
     "modelSecurity": "모델 보안 검사",
     "conformance": "적합성 검증",
+    "resolvePurl": "제출된 식별자의 패키지 저장소 조회",
     "describeInput": "입력 SBOM 설명 생성",
     "suggestVendored": "번들 소스 탐지",
     "docmeta": "문서 메타데이터 캡처",
