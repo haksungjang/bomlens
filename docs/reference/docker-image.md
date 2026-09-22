@@ -164,13 +164,15 @@ MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
 | `BOMLENS_INCLUDE_NON_SHIPPED` | - | - | Source scans: set `1` to keep the manifests under test, example, benchmark and demo folders and the GitHub Actions workflows in `.github/workflows`, which are left out by default |
 | `BOMLENS_NO_COPYRIGHT` | - | - | Source scans: set `1` to skip filling npm, Python, Go and Rust component `copyright` from the installed packages' license files |
 | `BOMLENS_NO_CARGO_LICENSE` | - | - | Source scans: set `1` to skip filling Rust component licenses from `cargo metadata` (`FETCH_LICENSE=false` on the command line skips it too) |
-| `CYCLONEDX_SPEC_VERSIONS` | — | `1.3 1.4 1.5 1.6` | Accepted CycloneDX spec versions for the conformance check (space-separated); overrides the default range |
-| `AI_CYCLONEDX_SPEC_VERSIONS` | — | `1.3 1.4 1.5 1.6 1.7` | Accepted CycloneDX versions for AI SBOMs (ML-BOM), which additionally allow 1.7 |
+| `CYCLONEDX_SPEC_VERSIONS` | — | `1.3 1.4 1.5 1.6 1.7` | Accepted CycloneDX spec versions for the conformance check (space-separated); overrides the default range |
+| `AI_CYCLONEDX_SPEC_VERSIONS` | — | `1.3 1.4 1.5 1.6 1.7` | Accepted CycloneDX versions for AI SBOMs (ML-BOM); always includes 1.7, the version the AIBOM toolchain emits |
 | `SPDX_SPEC_VERSIONS` | — | `SPDX-2.2 SPDX-2.3` | Accepted SPDX spec versions for the conformance check |
 | `PURL_MIN_PCT` | — | `90` | Conformance check: minimum percentage of components with a PURL (mandatory check). Applies to a `--deep-cve` scan too, CLI or web UI |
 | `LICENSE_MIN_PCT` | — | `80` | Conformance check: minimum percentage of components with a license (recommended, warn only). Applies to a `--deep-cve` scan too, CLI or web UI |
 | `HASH_MIN_PCT` | — | `50` | Conformance check: minimum percentage of components with a hash (recommended, warn only). Applies to a `--deep-cve` scan too, CLI or web UI |
 | `FIELD_MIN_PCT` | — | `80` | Conformance check: minimum percentage coverage for advisory per-component regulatory fields. Applies to a `--deep-cve` scan too, CLI or web UI |
+| `PURL_TYPES_FILE` | — | `docker/lib/purl-types.json` | Conformance check: the purl-spec type data that says which types exist and which of them require a namespace |
+| `NS_ADVISORY_TYPES` | — | `golang huggingface` | Conformance check: types whose missing namespace is reported on the advisory row instead of failing the SBOM (space-separated) |
 
 > TRUSCA's (formerly TrustedOSS Portal) native ingest endpoint (`POST /v1/projects/{id}/sbom-ingest`, Bearer auth) is not Dependency-Track compatible. To push to a regular Dependency-Track server, keep `UPLOAD_TARGET=dependency-track` (the default).
 
