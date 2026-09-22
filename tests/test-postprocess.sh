@@ -3077,7 +3077,7 @@ jq -e '.checks[] | select(.id=="purl-syntax") | .missing | index("commons-lang3:
 pb_cov=$(jq -r '.checks[] | select(.id=="purl") | .status' "$WORK/pbad_conformance.json")
 [ "$pb_cov" = "pass" ] && pass "PURL coverage stays green (syntax is a separate check)" || fail "purl coverage='$pb_cov', expected pass"
 
-echo "== conformance: os-purl-namespace fails an OS purl whose distro is only a qualifier =="
+echo "== conformance: purl-namespace fails an OS purl whose distro is only a qualifier =="
 # The guide's submission checklist rejects an rpm/deb/apk purl whose
 # distribution appears only as a `?distro=` qualifier and not as the purl
 # namespace (pkg:rpm/<distro>/name) — the same as a namespace missing outright.
@@ -3087,10 +3087,10 @@ jq '.components += [
   {"type":"library","name":"openssl","version":"3.0.7","purl":"pkg:rpm/openssl@3.0.7?distro=rhel-9"}
 ]' "$FIX/good-cyclonedx.json" > "$WORK/distro-qual-cdx.json"
 bash "$LIB/validate-sbom.sh" "$WORK/distro-qual-cdx.json" "$WORK/dqc" "supplier" >/dev/null 2>&1
-dqc_stat=$(jq -r '.checks[] | select(.id=="os-purl-namespace") | .status' "$WORK/dqc_conformance.json")
-[ "$dqc_stat" = "fail" ] && pass "CycloneDX JSON: distro-only-qualifier purl fails os-purl-namespace" \
-    || fail "CycloneDX JSON: os-purl-namespace status='$dqc_stat', expected fail"
-jq -e '.checks[] | select(.id=="os-purl-namespace") | .missing | index("pkg:rpm/openssl@3.0.7?distro=rhel-9")' \
+dqc_stat=$(jq -r '.checks[] | select(.id=="purl-namespace") | .status' "$WORK/dqc_conformance.json")
+[ "$dqc_stat" = "fail" ] && pass "CycloneDX JSON: distro-only-qualifier purl fails purl-namespace" \
+    || fail "CycloneDX JSON: purl-namespace status='$dqc_stat', expected fail"
+jq -e '.checks[] | select(.id=="purl-namespace") | .missing | index("pkg:rpm/openssl@3.0.7?distro=rhel-9")' \
     "$WORK/dqc_conformance.json" >/dev/null \
     && pass "CycloneDX JSON: missing list names the offending purl" \
     || fail "CycloneDX JSON: missing list lacks the distro-only-qualifier purl"
@@ -3102,9 +3102,9 @@ jq '.packages += [{
                     "referenceLocator":"pkg:rpm/openssl@3.0.7?distro=rhel-9"}]
 }]' "$FIX/good-spdx.json" > "$WORK/distro-qual-spdx.json"
 bash "$LIB/validate-sbom.sh" "$WORK/distro-qual-spdx.json" "$WORK/dqs" "supplier" >/dev/null 2>&1
-dqs_stat=$(jq -r '.checks[] | select(.id=="os-purl-namespace") | .status' "$WORK/dqs_conformance.json")
-[ "$dqs_stat" = "fail" ] && pass "SPDX JSON: distro-only-qualifier purl fails os-purl-namespace" \
-    || fail "SPDX JSON: os-purl-namespace status='$dqs_stat', expected fail"
+dqs_stat=$(jq -r '.checks[] | select(.id=="purl-namespace") | .status' "$WORK/dqs_conformance.json")
+[ "$dqs_stat" = "fail" ] && pass "SPDX JSON: distro-only-qualifier purl fails purl-namespace" \
+    || fail "SPDX JSON: purl-namespace status='$dqs_stat', expected fail"
 
 cp "$FIX/supplier-clean-tagvalue.spdx" "$WORK/distro-qual.spdx"
 cat >> "$WORK/distro-qual.spdx" <<'EOF'
@@ -3119,9 +3119,9 @@ PackageChecksum: SHA1: 1111111111111111111111111111111111111
 Relationship: SPDXRef-DOCUMENT DEPENDS_ON SPDXRef-Package-openssl
 EOF
 bash "$LIB/validate-sbom.sh" "$WORK/distro-qual.spdx" "$WORK/dqtv" "supplier" >/dev/null 2>&1
-dqtv_stat=$(jq -r '.checks[] | select(.id=="os-purl-namespace") | "\(.status) \(.detail)"' "$WORK/dqtv_conformance.json")
-[ "$dqtv_stat" = "fail 1 without distribution" ] && pass "SPDX Tag-Value: distro-only-qualifier purl fails os-purl-namespace" \
-    || fail "SPDX Tag-Value: os-purl-namespace = '$dqtv_stat', expected 'fail 1 without distribution'"
+dqtv_stat=$(jq -r '.checks[] | select(.id=="purl-namespace") | "\(.status) \(.detail)"' "$WORK/dqtv_conformance.json")
+[ "$dqtv_stat" = "fail 1 without namespace" ] && pass "SPDX Tag-Value: distro-only-qualifier purl fails purl-namespace" \
+    || fail "SPDX Tag-Value: purl-namespace = '$dqtv_stat', expected 'fail 1 without namespace'"
 
 # A real syft-style purl carries the distro as BOTH the namespace and a
 # `?distro=` qualifier (e.g. pkg:rpm/rocky/openssl@3.0.7?distro=rocky-9.3).
@@ -3130,9 +3130,9 @@ jq '.components += [
   {"type":"library","name":"openssl","version":"3.0.7","purl":"pkg:rpm/rocky/openssl@3.0.7?distro=rocky-9.3"}
 ]' "$FIX/good-cyclonedx.json" > "$WORK/distro-ns-cdx.json"
 bash "$LIB/validate-sbom.sh" "$WORK/distro-ns-cdx.json" "$WORK/dnc" "supplier" >/dev/null 2>&1
-dnc_stat=$(jq -r '.checks[] | select(.id=="os-purl-namespace") | .status' "$WORK/dnc_conformance.json")
+dnc_stat=$(jq -r '.checks[] | select(.id=="purl-namespace") | .status' "$WORK/dnc_conformance.json")
 [ "$dnc_stat" = "pass" ] && pass "CycloneDX JSON: namespace + distro= qualifier together still pass" \
-    || fail "CycloneDX JSON: os-purl-namespace status='$dnc_stat', expected pass"
+    || fail "CycloneDX JSON: purl-namespace status='$dnc_stat', expected pass"
 
 jq '.packages += [{
   "name":"openssl","SPDXID":"SPDXRef-Package-openssl","versionInfo":"3.0.7",
@@ -3141,9 +3141,9 @@ jq '.packages += [{
                     "referenceLocator":"pkg:rpm/rocky/openssl@3.0.7?distro=rocky-9.3"}]
 }]' "$FIX/good-spdx.json" > "$WORK/distro-ns-spdx.json"
 bash "$LIB/validate-sbom.sh" "$WORK/distro-ns-spdx.json" "$WORK/dns" "supplier" >/dev/null 2>&1
-dns_stat=$(jq -r '.checks[] | select(.id=="os-purl-namespace") | .status' "$WORK/dns_conformance.json")
+dns_stat=$(jq -r '.checks[] | select(.id=="purl-namespace") | .status' "$WORK/dns_conformance.json")
 [ "$dns_stat" = "pass" ] && pass "SPDX JSON: namespace + distro= qualifier together still pass" \
-    || fail "SPDX JSON: os-purl-namespace status='$dns_stat', expected pass"
+    || fail "SPDX JSON: purl-namespace status='$dns_stat', expected pass"
 
 cp "$FIX/supplier-clean-tagvalue.spdx" "$WORK/distro-ns.spdx"
 cat >> "$WORK/distro-ns.spdx" <<'EOF'
@@ -3158,9 +3158,118 @@ PackageChecksum: SHA1: 2222222222222222222222222222222222222
 Relationship: SPDXRef-DOCUMENT DEPENDS_ON SPDXRef-Package-openssl
 EOF
 bash "$LIB/validate-sbom.sh" "$WORK/distro-ns.spdx" "$WORK/dnstv" "supplier" >/dev/null 2>&1
-dnstv_stat=$(jq -r '.checks[] | select(.id=="os-purl-namespace") | .status' "$WORK/dnstv_conformance.json")
+dnstv_stat=$(jq -r '.checks[] | select(.id=="purl-namespace") | .status' "$WORK/dnstv_conformance.json")
 [ "$dnstv_stat" = "pass" ] && pass "SPDX Tag-Value: namespace + distro= qualifier together still pass" \
-    || fail "SPDX Tag-Value: os-purl-namespace status='$dnstv_stat', expected pass"
+    || fail "SPDX Tag-Value: purl-namespace status='$dnstv_stat', expected pass"
+
+echo "== conformance: purl-namespace covers every type whose namespace purl-spec requires =="
+# The namespace slot is not an OS-package question. A maven identifier built
+# from a display name instead of the package manager loses its groupId
+# (pkg:maven/org.slf4j.jcl-over-slf4j@2.0.15 in place of
+# pkg:maven/org.slf4j/jcl-over-slf4j@2.0.15): the syntax is well formed, the
+# component registers against nothing, and only this check sees it.
+jq '.components += [
+  {"type":"library","name":"jcl-over-slf4j","version":"2.0.15","purl":"pkg:maven/org.slf4j.jcl-over-slf4j@2.0.15"}
+]' "$FIX/good-cyclonedx.json" > "$WORK/mvn-ns-cdx.json"
+bash "$LIB/validate-sbom.sh" "$WORK/mvn-ns-cdx.json" "$WORK/mnc" "supplier" >/dev/null 2>&1
+mnc_stat=$(jq -r '.checks[] | select(.id=="purl-namespace") | .status' "$WORK/mnc_conformance.json")
+[ "$mnc_stat" = "fail" ] && pass "CycloneDX JSON: maven purl without a groupId fails purl-namespace" \
+    || fail "CycloneDX JSON: purl-namespace status='$mnc_stat', expected fail"
+jq -e '.checks[] | select(.id=="purl-namespace") | .missing | index("pkg:maven/org.slf4j.jcl-over-slf4j@2.0.15")' \
+    "$WORK/mnc_conformance.json" >/dev/null \
+    && pass "CycloneDX JSON: missing list names the maven purl" \
+    || fail "CycloneDX JSON: missing list lacks the groupId-less maven purl"
+
+jq '.packages += [{
+  "name":"jcl-over-slf4j","SPDXID":"SPDXRef-Package-jcl","versionInfo":"2.0.15",
+  "downloadLocation":"NOASSERTION",
+  "externalRefs":[{"referenceCategory":"PACKAGE-MANAGER","referenceType":"purl",
+                    "referenceLocator":"pkg:maven/org.slf4j.jcl-over-slf4j@2.0.15"}]
+}]' "$FIX/good-spdx.json" > "$WORK/mvn-ns-spdx.json"
+bash "$LIB/validate-sbom.sh" "$WORK/mvn-ns-spdx.json" "$WORK/mns" "supplier" >/dev/null 2>&1
+mns_stat=$(jq -r '.checks[] | select(.id=="purl-namespace") | .status' "$WORK/mns_conformance.json")
+[ "$mns_stat" = "fail" ] && pass "SPDX JSON: maven purl without a groupId fails purl-namespace" \
+    || fail "SPDX JSON: purl-namespace status='$mns_stat', expected fail"
+
+cp "$FIX/supplier-clean-tagvalue.spdx" "$WORK/mvn-ns.spdx"
+cat >> "$WORK/mvn-ns.spdx" <<'EOF'
+
+PackageName: jcl-over-slf4j
+SPDXID: SPDXRef-Package-jcl
+PackageVersion: 2.0.15
+PackageDownloadLocation: NOASSERTION
+ExternalRef: PACKAGE-MANAGER purl pkg:maven/org.slf4j.jcl-over-slf4j@2.0.15
+PackageLicenseConcluded: NOASSERTION
+PackageChecksum: SHA1: 3333333333333333333333333333333333333
+Relationship: SPDXRef-DOCUMENT DEPENDS_ON SPDXRef-Package-jcl
+EOF
+bash "$LIB/validate-sbom.sh" "$WORK/mvn-ns.spdx" "$WORK/mntv" "supplier" >/dev/null 2>&1
+mntv_stat=$(jq -r '.checks[] | select(.id=="purl-namespace") | "\(.status) \(.detail)"' "$WORK/mntv_conformance.json")
+[ "$mntv_stat" = "fail 1 without namespace" ] && pass "SPDX Tag-Value: maven purl without a groupId fails purl-namespace" \
+    || fail "SPDX Tag-Value: purl-namespace = '$mntv_stat', expected 'fail 1 without namespace'"
+
+# A maven purl that has its groupId is not touched by the check.
+jq '.components += [
+  {"type":"library","name":"jcl-over-slf4j","version":"2.0.15","purl":"pkg:maven/org.slf4j/jcl-over-slf4j@2.0.15"}
+]' "$FIX/good-cyclonedx.json" > "$WORK/mvn-ok-cdx.json"
+bash "$LIB/validate-sbom.sh" "$WORK/mvn-ok-cdx.json" "$WORK/mok" "supplier" >/dev/null 2>&1
+mok_stat=$(jq -r '.checks[] | select(.id=="purl-namespace") | .status' "$WORK/mok_conformance.json")
+[ "$mok_stat" = "pass" ] && pass "CycloneDX JSON: maven purl with its groupId passes purl-namespace" \
+    || fail "CycloneDX JSON: purl-namespace status='$mok_stat', expected pass"
+
+echo "== conformance: golang and huggingface report a missing namespace without failing =="
+# purl-spec requires a namespace for both, but an identifier of either can
+# legitimately have none: a Go module path can be a bare host, syft writes the
+# standard library as pkg:golang/stdlib, and a model published outside an
+# organisation has no owner segment. The gap is reported on the advisory row
+# instead, and the required row stays clean.
+jq '.components += [
+  {"type":"library","name":"stdlib","version":"1.26.4","purl":"pkg:golang/stdlib@1.26.4"}
+]' "$FIX/good-cyclonedx.json" > "$WORK/go-ns-cdx.json"
+bash "$LIB/validate-sbom.sh" "$WORK/go-ns-cdx.json" "$WORK/gns" "supplier" >/dev/null 2>&1
+gns=$(jq -r '"\(.result)|\(.checks[]|select(.id=="purl-namespace")|.status)|\(.checks[]|select(.id=="purl-namespace-advisory")|"\(.required)|\(.status)|\(.detail)")"' "$WORK/gns_conformance.json")
+[ "$gns" = "pass|pass|false|warn|1 without namespace" ] \
+    && pass "CycloneDX JSON: pkg:golang/stdlib warns on the advisory row and the SBOM still passes" \
+    || fail "golang namespace row = '$gns', expected 'pass|pass|false|warn|1 without namespace'"
+jq -e '.checks[] | select(.id=="purl-namespace-advisory") | .label | test("golang/huggingface")' \
+    "$WORK/gns_conformance.json" >/dev/null \
+    && pass "the advisory row names the types it measured" \
+    || fail "the advisory row does not name golang/huggingface"
+
+echo "== conformance: purl-type flags a type purl-spec does not define =="
+# A generator that rebuilds identifiers from a display name can invent a type
+# outright (pkg:applications/java@11.0.25). The syntax gate accepts it, and
+# pkg:generic is the only type the no-generic row knows about, so without this
+# check nothing reports it.
+jq '.components += [
+  {"type":"library","name":"java","version":"11.0.25","purl":"pkg:applications/java@11.0.25"}
+]' "$FIX/good-cyclonedx.json" > "$WORK/unk-type-cdx.json"
+bash "$LIB/validate-sbom.sh" "$WORK/unk-type-cdx.json" "$WORK/utd" "supplier" >/dev/null 2>&1
+utd=$(jq -r '"\(.result)|\(.checks[]|select(.id=="purl-type")|"\(.required)|\(.status)|\(.detail)")"' "$WORK/utd_conformance.json")
+[ "$utd" = "pass|false|warn|1 undefined type(s)" ] \
+    && pass "default profile: an undefined purl type warns and does not fail the SBOM" \
+    || fail "default profile purl-type = '$utd', expected 'pass|false|warn|1 undefined type(s)'"
+jq -e '.checks[] | select(.id=="purl-type") | .missing | index("pkg:applications/java@11.0.25")' \
+    "$WORK/utd_conformance.json" >/dev/null \
+    && pass "purl-type missing list names the offending purl" \
+    || fail "purl-type missing list lacks pkg:applications/java@11.0.25"
+
+CONFORMANCE_PROFILE=skt-submission bash "$LIB/validate-sbom.sh" "$WORK/unk-type-cdx.json" "$WORK/uts" "supplier" >/dev/null 2>&1
+uts=$(jq -r '"\(.result)|\(.checks[]|select(.id=="purl-type")|"\(.required)|\(.status)")"' "$WORK/uts_conformance.json")
+[ "$uts" = "fail|true|fail" ] \
+    && pass "skt-submission: an undefined purl type is a required failure" \
+    || fail "skt-submission purl-type = '$uts', expected 'fail|true|fail'"
+
+# Every type purl-spec defines passes, including the ones this pipeline emits.
+jq '.components += [
+  {"type":"library","name":"left-pad","version":"1.3.0","purl":"pkg:npm/left-pad@1.3.0"},
+  {"type":"library","name":"requests","version":"2.32.3","purl":"pkg:pypi/requests@2.32.3"},
+  {"type":"library","name":"serde","version":"1.0.210","purl":"pkg:cargo/serde@1.0.210"}
+]' "$FIX/good-cyclonedx.json" > "$WORK/known-type-cdx.json"
+bash "$LIB/validate-sbom.sh" "$WORK/known-type-cdx.json" "$WORK/ktd" "supplier" >/dev/null 2>&1
+ktd=$(jq -r '.checks[] | select(.id=="purl-type") | "\(.status)|\(.detail)"' "$WORK/ktd_conformance.json")
+[ "$ktd" = "pass|0 undefined type(s)" ] && pass "defined purl types pass the type check" \
+    || fail "purl-type on defined types = '$ktd', expected 'pass|0 undefined type(s)'"
 
 echo "== CONFORMANCE_PROFILE: skt-submission tightens PURL/no-generic; default stays as before =="
 

@@ -171,6 +171,8 @@ MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
 | `LICENSE_MIN_PCT` | — | `80` | Conformance check: minimum percentage of components with a license (recommended, warn only). Applies to a `--deep-cve` scan too, CLI or web UI |
 | `HASH_MIN_PCT` | — | `50` | Conformance check: minimum percentage of components with a hash (recommended, warn only). Applies to a `--deep-cve` scan too, CLI or web UI |
 | `FIELD_MIN_PCT` | — | `80` | Conformance check: minimum percentage coverage for advisory per-component regulatory fields. Applies to a `--deep-cve` scan too, CLI or web UI |
+| `PURL_TYPES_FILE` | — | `docker/lib/purl-types.json` | Conformance check: the purl-spec type data that says which types exist and which of them require a namespace |
+| `NS_ADVISORY_TYPES` | — | `golang huggingface` | Conformance check: types whose missing namespace is reported on the advisory row instead of failing the SBOM (space-separated) |
 
 > TRUSCA's (formerly TrustedOSS Portal) native ingest endpoint (`POST /v1/projects/{id}/sbom-ingest`, Bearer auth) is not Dependency-Track compatible. To push to a regular Dependency-Track server, keep `UPLOAD_TARGET=dependency-track` (the default).
 

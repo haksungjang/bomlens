@@ -171,6 +171,8 @@ MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
 | `LICENSE_MIN_PCT` | — | `80` | 적합성 검사: 라이선스를 가진 컴포넌트 비율의 최소 기준(권장, 경고만 표시). CLI든 웹 UI든 `--deep-cve` 스캔에도 적용됨 |
 | `HASH_MIN_PCT` | — | `50` | 적합성 검사: 해시를 가진 컴포넌트 비율의 최소 기준(권장, 경고만 표시). CLI든 웹 UI든 `--deep-cve` 스캔에도 적용됨 |
 | `FIELD_MIN_PCT` | — | `80` | 적합성 검사: 규제 대응용 컴포넌트별 필드의 참고 기준 커버리지. CLI든 웹 UI든 `--deep-cve` 스캔에도 적용됨 |
+| `PURL_TYPES_FILE` | — | `docker/lib/purl-types.json` | 적합성 검사: 어떤 purl 타입이 있고 그중 어떤 타입이 네임스페이스를 요구하는지 담은 purl-spec 데이터 |
+| `NS_ADVISORY_TYPES` | — | `golang huggingface` | 적합성 검사: 네임스페이스가 없어도 실패로 보지 않고 권고 항목으로만 보고할 타입(공백 구분) |
 
 > TRUSCA(구 TrustedOSS Portal)의 네이티브 ingest 엔드포인트(`POST /v1/projects/{id}/sbom-ingest`, Bearer 인증)는 Dependency-Track와 호환되지 않습니다. 일반 Dependency-Track 서버로 올릴 때는 `UPLOAD_TARGET=dependency-track`(기본값)을 그대로 두세요.
 
