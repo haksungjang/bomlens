@@ -14,6 +14,7 @@ const STEP_LABEL_KEY: Record<string, string> = {
   "verify-weights": "pipelineSteps.verifyWeights",
   "model-security": "pipelineSteps.modelSecurity",
   conformance: "pipelineSteps.conformance",
+  "resolve-purl": "pipelineSteps.resolvePurl",
   "describe-input": "pipelineSteps.describeInput",
   "suggest-vendored": "pipelineSteps.suggestVendored",
   docmeta: "pipelineSteps.docmeta",

@@ -645,6 +645,7 @@
     "verifyWeights": "model weight verification",
     "modelSecurity": "model security scanning",
     "conformance": "conformance validation",
+    "resolvePurl": "package repository lookup for the submitted identifiers",
     "describeInput": "input SBOM description generation",
     "suggestVendored": "vendored-source detection",
     "docmeta": "document metadata capture",

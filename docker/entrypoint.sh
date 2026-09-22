@@ -842,6 +842,16 @@ EOF
             *)              YOCTO_ARCHIVE=false ;;
         esac
         if [ "$YOCTO_ARCHIVE" = "false" ]; then
+        # Ask a package repository whether each identifier names something that
+        # exists. Opt-in (PURL_RESOLVE=true) because it is the only step here
+        # that needs the network, and it runs BEFORE the conformance check so
+        # the report can carry its answer on an advisory row. The submitted
+        # document is not touched; the answer lands in a sidecar.
+        if [ "${PURL_RESOLVE:-false}" = "true" ]; then
+            echo "[analyze] Looking up each PURL in its package repository..."
+            run_optional_step resolve-purl python3 "$LIBDIR/resolve-purl.py" \
+                "$ANALYZE_SBOM" "$OUT_PREFIX"
+        fi
         echo "[1/2] Validating supplier SBOM (conformance, original input)..."
         # Conformance never aborts the pipeline (best-effort report).
         run_optional_step conformance bash "$LIBDIR/validate-sbom.sh" "$ANALYZE_SBOM" "$OUT_PREFIX" "$PROJECT_NAME"

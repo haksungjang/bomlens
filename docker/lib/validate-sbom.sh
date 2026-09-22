@@ -948,6 +948,47 @@ esac
 [ -n "$CHECKS" ] || CHECKS='[{"id":"parse","label":"Parseable SBOM","required":true,"status":"fail","detail":"could not evaluate","missing":[]}]'
 
 # --------------------------------------------------------
+# Repository resolution (advisory, opt-in, format independent).
+#
+# docker/lib/resolve-purl.py asks a package repository whether each identifier
+# names something that exists, and leaves its answer in a sidecar beside the
+# report. That step runs before this one and only when the scan asked for it,
+# so its absence is the normal case and reads as "not checked", never as a gap.
+#
+# The row can only ever warn. An identifier that resolves to nothing is usually
+# a generator defect (a groupId repeated inside the artifactId, a vendor
+# display name in the namespace slot), but a package published only to a
+# company-internal repository answers exactly the same way, and a submission
+# may legitimately be full of them.
+# --------------------------------------------------------
+RESOLVE_FILE="${PURL_RESOLUTION_FILE:-${OUT_PREFIX}_purl-resolution.json}"
+if [ "$FORMAT" = "unknown" ]; then
+    : # nothing was read, so there are no identifiers to have looked up
+elif [ -f "$RESOLVE_FILE" ]; then
+    if RESOLVE_ROW=$(jq -c --argjson cap "$MISSING_CAP" '
+        (.counts // {}) as $c
+        | (($c.found // 0) + ($c.missing // 0)) as $checked
+        | [{id: "purl-resolution",
+            label: "PURL resolves in its repository (advisory)",
+            required: false,
+            source: (if $checked == 0 then "na" else "auto" end),
+            naKind: (if $checked == 0 then "not-applicable" else "" end),
+            status: (if ($c.missing // 0) == 0 then "pass" else "warn" end),
+            detail: (if $checked == 0 then "nothing could be looked up"
+                     else "\($c.missing // 0) of \($checked) not found in the repository" end),
+            missing: ((.missing // [])[0:$cap])}]' "$RESOLVE_FILE" 2>/dev/null); then
+        CHECKS=$(printf '%s\n%s' "$CHECKS" "$RESOLVE_ROW" | jq -cs 'add')
+    else
+        echo "[validate] WARN: could not read $RESOLVE_FILE; the repository-resolution row is omitted." >&2
+    fi
+else
+    CHECKS=$(printf '%s\n%s' "$CHECKS" '[{"id":"purl-resolution",
+        "label":"PURL resolves in its repository (advisory)","required":false,
+        "source":"na","naKind":"not-applicable","status":"pass",
+        "detail":"repository lookup not run","missing":[]}]' | jq -cs 'add')
+fi
+
+# --------------------------------------------------------
 # Join the regulatory crosswalk (best-effort) over EVERY check, not just the G7
 # elements: docker/lib/regulation-crosswalk.json is keyed by check id, so a plain
 # CycloneDX check picks up its CRA / BSI / NTIA references the same way a G7
@@ -1036,6 +1077,9 @@ if [ -f "$KO_CATALOG" ] && [ -f "$KO_REG" ]; then
           elif ($d|test("^[0-9]+ without namespace$")) then ($C["conformance.detail.no_namespace"]|gsub("%n%";($d|capture("(?<n>[0-9]+)").n)))
           elif ($d|test("^[0-9]+ undefined type\\(s\\)$")) then ($C["conformance.detail.undefined_type"]|gsub("%n%";($d|capture("(?<n>[0-9]+)").n)))
           elif $d=="purl type list unavailable" then $C["conformance.detail.no_type_list"]
+          elif $d=="repository lookup not run" then $C["conformance.detail.resolve_not_run"]
+          elif $d=="nothing could be looked up" then $C["conformance.detail.resolve_nothing"]
+          elif ($d|test("^[0-9]+ of [0-9]+ not found in the repository$")) then ($d|capture("^(?<a>[0-9]+) of (?<b>[0-9]+)")) as $m | ($C["conformance.detail.resolve_missing"]|gsub("%a%";$m.a)|gsub("%b%";$m.b))
           elif ($d|test("^[0-9]+ found$")) then ($C["conformance.detail.found"]|gsub("%n%";($d|capture("(?<n>[0-9]+)").n)))
           elif ($d|test("^[0-9]+ accepted SPDXVersion line\\(s\\)$")) then ($C["conformance.detail.spdxver"]|gsub("%n%";($d|capture("(?<n>[0-9]+)").n)))
           elif ($d|test("^[0-9]+ package\\(s\\)$")) then ($C["conformance.detail.package"]|gsub("%n%";($d|capture("(?<n>[0-9]+)").n)))

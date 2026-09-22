@@ -46,6 +46,7 @@ BomLens의 전체 옵션과 분석 모드, CI/CD 통합 방법, 트러블슈팅�
 | `--no-report` | false | 오픈소스위험분석보고서(risk-report) 생략 (아래 참고) |
 | `--lang <en\|ko>` | `en` | 사람이 읽는 적합성·AI 준수 개요 보고서(`.md`/`.html`)의 언어. SBOM과 JSON 보고서는 언어와 무관하게 영어로 유지 |
 | `--conformance-profile <default\|skt-submission>` | `default` | 적합성 검사 엄격도. `skt-submission`은 PURL 포함률 100%를 요구하고 `pkg:generic` 식별자가 하나라도 있으면 실패로 판정한다(SKT 공급사 제출 심사 기준과 동일). 웹 UI의 제출 전 점검 화면은 `skt-submission`이 기본값이지만 CLI는 아니므로, `--analyze`와 함께 명시적으로 지정해야 한다 |
+| `--resolve-purl` | 꺼짐 | `--analyze` 전용. 제출된 SBOM의 식별자가 실제 있는 패키지를 가리키는지 각 패키지 저장소에 조회해 적합성 보고서에 권고 항목으로 덧붙인다. 적합성 검사에서 네트워크를 쓰는 유일한 부분이다. 조회되지 않는 식별자는 보고만 하고 실패로 보지 않는다. 사내 저장소에만 올린 패키지도 같은 결과가 나오기 때문이다. 사내 네임스페이스는 `PURL_RESOLVE_IGNORE`로 제외한다 |
 | `--deep-license` | false | scancode 정밀 라이선스 탐지 (opt-in 이미지) |
 | `--deep-cve` | false | grype의 NVD CPE 매칭으로 두 번째 대조를 더한다 (opt-in `bomlens-deep-cve` 이미지, 자동으로 내려받음). BomLens는 Maven 컴포넌트에만 NVD 대조가 가능한 CPE를 붙여 주므로, Trivy가 놓치는 NVD 전용 CVE는 대부분 오래된 Maven 라이브러리에서 나온다. `--security`를 자동으로 켠다. NVD 실시간 버전 범위로 확인하지 못한 결과는 보고서에 버전 미검증으로 표시된다 — [정밀 CVE 대조 가이드](../guides/reports.ko.md) 참고 |
 | `--identify-vendored` | false | 패키지 매니저가 없는 C/C++ 소스에 복사돼 들어간(vendored) 오픈소스를 식별. 파일 지문을 OSSKB 서비스와 대조 (발행 이미지에 포함; 소스가 아니라 해시 전송). [내장 오픈소스 식별 가이드](../guides/identify-vendored.ko.md) 참고 |
