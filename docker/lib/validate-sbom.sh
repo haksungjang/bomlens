@@ -19,11 +19,10 @@
 # the pipeline: a non-conformant SBOM yields result="fail" but exit 0.
 #
 # Requirements:
-#   mandatory : spec version (CycloneDX 1.3-1.6 / SPDX 2.2-2.3; AI SBOMs also
-#               accept CycloneDX 1.7), timestamp, tool info, top component,
-#               name+version coverage, PURL coverage (>= threshold), PURL
-#               syntax, PURL namespace where the type requires one, no
-#               pkg:generic, transitive edges
+#   mandatory : spec version (CycloneDX 1.3-1.7 / SPDX 2.2-2.3), timestamp,
+#               tool info, top component, name+version coverage, PURL coverage
+#               (>= threshold), PURL syntax, PURL namespace where the type
+#               requires one, no pkg:generic, transitive edges
 #   recommended (warn only): license coverage, hash coverage
 #   AI SBOMs (machine-learning-model present): the full G7 minimum-element
 #               checklist is appended (7 clusters / 50 elements, data-driven from
@@ -73,10 +72,16 @@ FIELD_MIN_PCT="${FIELD_MIN_PCT:-80}"     # advisory: regulatory per-component fi
 MISSING_CAP=50                            # cap missing-item lists in the report
 
 # Accepted spec versions (space-separated), per the SKT submission
-# requirements. Override via env. AI SBOMs (ML-BOM) additionally accept
-# CycloneDX 1.7: the OWASP AIBOM Generator emits 1.7 and the G7 model fields
-# need it, while the plain dependency-SBOM submission range stays 1.3-1.6.
-CYCLONEDX_SPEC_VERSIONS="${CYCLONEDX_SPEC_VERSIONS:-1.3 1.4 1.5 1.6}"
+# requirements. Override via env.
+#
+# CycloneDX 1.7 is accepted for every kind of SBOM. It was released in October
+# 2025 and generators have been emitting it since, so a submission at 1.7 is a
+# current document, not an unsupported one. What this pipeline WRITES is still
+# 1.6 (docker/lib/cdx-version.sh) because the bundled Trivy cannot decode 1.7:
+# reading a version and emitting it are separate decisions. The AI list stays a
+# variable of its own so that narrowing CYCLONEDX_SPEC_VERSIONS by env never
+# rejects the AIBOM toolchain's own output, which is always 1.7.
+CYCLONEDX_SPEC_VERSIONS="${CYCLONEDX_SPEC_VERSIONS:-1.3 1.4 1.5 1.6 1.7}"
 AI_CYCLONEDX_SPEC_VERSIONS="${AI_CYCLONEDX_SPEC_VERSIONS:-$CYCLONEDX_SPEC_VERSIONS 1.7}"
 SPDX_SPEC_VERSIONS="${SPDX_SPEC_VERSIONS:-SPDX-2.2 SPDX-2.3 SPDX-3.0}"
 
@@ -305,7 +310,7 @@ cdx_checks() {
                             and (\$props | any(.name == \"bsi:component:archive\"))
                             and (\$props | any(.name == \"bsi:component:structured\"))) ] | length) as \$fprops_ok
     | [
-       {id:\"spec-version\", label:(\"Spec version (CycloneDX \" + (\$vers|join(\"/\")) + \")\"), required:true,
+       {id:\"spec-version\", label:(\"Spec version (CycloneDX \" + (\$vers|unique|join(\"/\")) + \")\"), required:true,
         status:(if (\$vers | index(\$sv)) != null then \"pass\" else \"fail\" end),
         detail:(\"CycloneDX \" + \$sv), missing:[]},
        {id:\"timestamp\", label:\"Timestamp (metadata.timestamp)\", required:true,

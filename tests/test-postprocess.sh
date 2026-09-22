@@ -3271,6 +3271,20 @@ ktd=$(jq -r '.checks[] | select(.id=="purl-type") | "\(.status)|\(.detail)"' "$W
 [ "$ktd" = "pass|0 undefined type(s)" ] && pass "defined purl types pass the type check" \
     || fail "purl-type on defined types = '$ktd', expected 'pass|0 undefined type(s)'"
 
+echo "== conformance: CycloneDX 1.7 is an accepted submission version =="
+# 1.7 has been released since October 2025 and generators emit it. What this
+# pipeline writes is still 1.6 (the bundled Trivy cannot read 1.7), which is a
+# separate decision from what it accepts on input.
+jq '.specVersion = "1.7"' "$FIX/good-cyclonedx.json" > "$WORK/cdx17.json"
+bash "$LIB/validate-sbom.sh" "$WORK/cdx17.json" "$WORK/c17" "supplier" >/dev/null 2>&1
+c17=$(jq -r '"\(.result)|\(.checks[]|select(.id=="spec-version")|"\(.status)|\(.detail)")"' "$WORK/c17_conformance.json")
+[ "$c17" = "pass|pass|CycloneDX 1.7" ] && pass "a CycloneDX 1.7 submission passes the spec-version check" \
+    || fail "CycloneDX 1.7 spec-version = '$c17', expected 'pass|pass|CycloneDX 1.7'"
+c17label=$(jq -r '.checks[] | select(.id=="spec-version") | .label' "$WORK/c17_conformance.json")
+[ "$c17label" = "Spec version (CycloneDX 1.3/1.4/1.5/1.6/1.7)" ] \
+    && pass "the spec-version label lists each accepted version once" \
+    || fail "spec-version label = '$c17label'"
+
 echo "== CONFORMANCE_PROFILE: skt-submission tightens PURL/no-generic; default stays as before =="
 
 # A pkg:generic component under the default profile: no-generic warns, does

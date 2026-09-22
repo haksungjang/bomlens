@@ -15,7 +15,7 @@ The criteria check whether an SBOM is good enough for dependency review. Require
 
 | Category | Criteria |
 |----------|----------|
-| Format | CycloneDX v1.3–1.6 or SPDX v2.2–2.3 |
+| Format | CycloneDX v1.3–1.7 or SPDX v2.2–2.3 |
 | Required metadata | timestamp, tool info, top-level component name and version |
 | Required component fields | name, version, PURL in standard `pkg:type/name@version` form, with the namespace the type requires (`pkg:maven/<groupId>/<artifactId>`, `pkg:rpm/<distro>/<name>`); a type purl-spec defines, and not `pkg:generic` |
 | Completeness | both direct and transitive dependencies included |
@@ -70,7 +70,7 @@ A self-generated scan produces the same conformance report file by default too (
 
 The conformance report is the per-item check of whether the received SBOM meets the quality criteria. Validation is based on the original input before conversion, so even for SPDX it checks the fields of the original SPDX.
 
-- If any required item falls short, it is a `fail`. The required items match the criteria table in [When to use it](#when-to-use-it) — spec version range (CycloneDX v1.3–1.6, SPDX v2.2–2.3), timestamp, tool info, top-level component, name/version coverage, PURL coverage and syntax (standard `pkg:type/name@version` form, no `pkg:generic`), the PURL namespace where the type requires one, and transitive dependencies. AI SBOMs are also accepted at CycloneDX 1.7, which the AIBOM toolchain emits.
+- If any required item falls short, it is a `fail`. The required items match the criteria table in [When to use it](#when-to-use-it) — spec version range (CycloneDX v1.3–1.7, SPDX v2.2–2.3), timestamp, tool info, top-level component, name/version coverage, PURL coverage and syntax (standard `pkg:type/name@version` form, no `pkg:generic`), the PURL namespace where the type requires one, and transitive dependencies.
 - The namespace check covers every type whose namespace purl-spec marks required, not only OS packages: a `pkg:maven` identifier without its groupId, or a `pkg:rpm` identifier that carries the distribution only as a `?distro=` qualifier, is well-formed text that resolves to nothing. `pkg:golang` and `pkg:huggingface` are reported on a separate advisory row, because an identifier of either can legitimately have no namespace (a Go module path can be a bare host; a model published outside an organization has no owner segment).
 - The PURL type is checked against the types purl-spec defines. A generator that rebuilds identifiers from a display name can invent one (`pkg:applications/java@11.0.25`), and nothing else in the report sees it. It warns under the default profile and fails under `skt-submission`. The list of types lives in `docker/lib/purl-types.json`.
 - If a recommended item falls short, it is a `warn`, not a `fail`. Besides license and hash coverage, this includes the advisory per-component fields the regulatory baselines call for — SHA-512 checksum coverage, component creator, component filename, source/distribution URI, the delivered-file properties (marked review when no scan can see the artifact), and the file component identifier coverage described below.

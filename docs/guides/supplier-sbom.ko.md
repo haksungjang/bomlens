@@ -15,7 +15,7 @@ description: 외부에서 받은 SBOM(CycloneDX/SPDX)이 요구사항을 충족�
 
 | 구분 | 기준 |
 |------|------|
-| 포맷 | CycloneDX v1.3~1.6 또는 SPDX v2.2~2.3 |
+| 포맷 | CycloneDX v1.3~1.7 또는 SPDX v2.2~2.3 |
 | 필수 메타데이터 | timestamp, 생성 도구 정보, 최상위 컴포넌트 이름과 버전 |
 | 필수 컴포넌트 필드 | name, version, 표준 `pkg:type/name@version` 형식의 PURL. 타입이 요구하는 네임스페이스 포함(`pkg:maven/<groupId>/<artifactId>`, `pkg:rpm/<배포판>/<이름>`), purl-spec에 정의된 타입 사용, `pkg:generic` 금지 |
 | 완전성 | 직접 의존성과 추이적(transitive) 의존성 모두 포함 |
@@ -70,7 +70,7 @@ Java(Maven) 비중이 큰 SBOM이라면 스캔 옵션에서 **심층 CVE 매칭 
 
 적합성 보고서는 받은 SBOM이 품질 기준을 갖췄는지 항목별로 점검한 결과입니다. 검증은 변환 전 원본을 기준으로 하므로, SPDX를 넣어도 원본 SPDX의 필드를 그대로 확인합니다.
 
-- 필수 항목이 하나라도 미달이면 `fail`입니다. 필수 항목은 [언제 쓰나](#언제-쓰나)의 기준 표와 같습니다. 스펙 버전 범위(CycloneDX v1.3~1.6, SPDX v2.2~2.3), timestamp, 도구 정보, 최상위 컴포넌트, name/version 커버리지, PURL 커버리지와 문법(표준 `pkg:type/name@version` 형식, `pkg:generic` 금지), 타입이 요구하는 PURL 네임스페이스, 추이적 의존성입니다. AI SBOM은 AIBOM 도구가 산출하는 CycloneDX 1.7도 허용합니다.
+- 필수 항목이 하나라도 미달이면 `fail`입니다. 필수 항목은 [언제 쓰나](#언제-쓰나)의 기준 표와 같습니다. 스펙 버전 범위(CycloneDX v1.3~1.7, SPDX v2.2~2.3), timestamp, 도구 정보, 최상위 컴포넌트, name/version 커버리지, PURL 커버리지와 문법(표준 `pkg:type/name@version` 형식, `pkg:generic` 금지), 타입이 요구하는 PURL 네임스페이스, 추이적 의존성입니다.
 - 네임스페이스 검사는 OS 패키지뿐 아니라 purl-spec이 네임스페이스를 필수로 규정한 모든 타입을 봅니다. groupId가 빠진 `pkg:maven` 식별자나 배포판을 `?distro=` 한정자로만 적은 `pkg:rpm` 식별자는 형식은 맞지만 어떤 패키지에도 연결되지 않습니다. `pkg:golang`과 `pkg:huggingface`는 네임스페이스가 없어도 올바른 식별자일 수 있어(Go 모듈 경로는 호스트 이름 하나일 수 있고, 조직 없이 공개된 모델에는 소유자 구간이 없습니다) 권고 항목으로 따로 보고합니다.
 - PURL 타입은 purl-spec에 정의된 타입인지 확인합니다. 표시용 이름에서 식별자를 되돌려 만드는 생성 도구는 규격에 없는 타입을 만들어 내기도 하는데(`pkg:applications/java@11.0.25`), 다른 검사 항목으로는 드러나지 않습니다. 기본 기준에서는 경고, `skt-submission`에서는 실패로 다룹니다. 타입 목록은 `docker/lib/purl-types.json`에 있습니다.
 - 권장 항목이 미달이면 `warn`이며, `fail`로 보지는 않습니다. 라이선스와 hash 커버리지 외에, 규제 기준선이 요구하는 컴포넌트별 권고 필드도 여기에 포함됩니다 — SHA-512 체크섬 커버리지, 컴포넌트 작성 주체, 컴포넌트 파일명, 소스·배포 URI, 전달 파일 속성(스캔으로 확인할 수 없으면 검토 필요로 표시), 그리고 아래에서 설명하는 파일 구성요소 식별자 포함률.
