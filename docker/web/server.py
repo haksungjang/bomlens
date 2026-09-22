@@ -3487,7 +3487,17 @@ def run_sibling_scan(image, mode, out_dir, on_log, *, upload_file=None, model_id
         # network), so an explicit env.get check like DEEP_LICENSE/BYTE_STABLE
         # above, not _bool_env.
         "-e", "STALENESS_ENRICH=%s" % ("true" if env.get("STALENESS_ENRICH") == "true" else "false"),
+        # Repository resolution for a submitted SBOM: opt-in for the same
+        # reason, and read the same way. entrypoint.sh runs it on the ANALYZE
+        # path only, so passing it for every mode costs nothing.
+        "-e", "PURL_RESOLVE=%s" % ("true" if env.get("PURL_RESOLVE") == "true" else "false"),
     ]
+    # Free-form companions to PURL_RESOLVE: a namespace list and a time budget.
+    # Passed by name so the value never reaches the argv, like API_KEY above,
+    # and only when the host set them.
+    for _k in ("PURL_RESOLVE_IGNORE", "PURL_RESOLVE_BUDGET"):
+        if env.get(_k):
+            args += ["-e", _k]
     # The profile the caller resolved (see the main handler's per-mode default),
     # re-derived from a closed allowlist like AI_USAGE_CONTEXT below, never the
     # env string itself, so an unrecognized value cannot reach the docker-run

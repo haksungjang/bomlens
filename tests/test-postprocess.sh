@@ -4797,6 +4797,65 @@ else
     fail "missing-purl-map marker not stamped (or wrong reason)" "$(jq -c '.metadata.properties' "$WORK/eol4.json")"
 fi
 
+echo "== repository resolution: an identifier that names nothing is reported, not failed (offline fixture) =="
+# resolve-purl.py asks a package repository whether each coordinate exists and
+# leaves the answer beside the report; validate-sbom.sh turns that into one
+# advisory row. The fixture directory stands in for deps.dev: a coordinate with
+# a file there exists, one without does not, so the network is never touched.
+PURL_RESOLVE_FIXTURE_DIR="$FIX/purl-resolution" \
+    python3 "$LIB/resolve-purl.py" "$FIX/purl-resolution-input.json" "$WORK/pres" >/dev/null 2>&1
+prc=$?
+[ "$prc" = "0" ] && pass "resolve-purl exits 0" || fail "resolve-purl rc=$prc"
+pcounts=$(jq -c '.counts' "$WORK/pres_purl-resolution.json" 2>/dev/null)
+# found: poi, drools-core, express. missing: the vendor-display-name namespace,
+# the artifactId that repeats its groupId, and the internal-only artifact --
+# a repository cannot tell the last one from the first two, which is why this
+# row can only ever warn. unchecked: the deb identifier, which no repository
+# this step knows how to ask about.
+[ "$pcounts" = '{"found":3,"missing":3,"unchecked":1}' ] \
+    && pass "coordinates are resolved, missing ones counted, unsupported types left unchecked" \
+    || fail "resolve-purl counts=$pcounts"
+jq -e '.missing | index("pkg:maven/org.drools/org.drools.drools-core-dynamic@7.67.2.Final-redhat-00054")' \
+    "$WORK/pres_purl-resolution.json" >/dev/null \
+    && pass "an artifactId that repeats its groupId is named" \
+    || fail "the groupId-repeating coordinate is not in the missing list"
+jq -e '.missing | index("pkg:maven/The%2BApache%2BSoftware%2BFoundation/poi@5.4.1")' \
+    "$WORK/pres_purl-resolution.json" >/dev/null \
+    && pass "a vendor display name in the namespace slot is named" \
+    || fail "the vendor-display-name coordinate is not in the missing list"
+[ "$(jq -r '.uncheckedReasons["unsupported-type"] // 0' "$WORK/pres_purl-resolution.json")" = "1" ] \
+    && pass "an identifier with no repository to ask is unchecked, not missing" \
+    || fail "unsupported-type=$(jq -r '.uncheckedReasons["unsupported-type"] // 0' "$WORK/pres_purl-resolution.json"), expected 1"
+
+# PURL_RESOLVE_IGNORE keeps a namespace that only exists internally out of the
+# query, so an internal artifact never reads as a defect.
+PURL_RESOLVE_FIXTURE_DIR="$FIX/purl-resolution" PURL_RESOLVE_IGNORE="com.acme.internal" \
+    python3 "$LIB/resolve-purl.py" "$FIX/purl-resolution-input.json" "$WORK/pres2" >/dev/null 2>&1
+pres2=$(jq -c '[.uncheckedReasons.ignored // 0, .counts.missing]' "$WORK/pres2_purl-resolution.json")
+[ "$pres2" = "[1,2]" ] \
+    && pass "PURL_RESOLVE_IGNORE drops an internal namespace, and it stops counting as missing" \
+    || fail "ignored/missing with PURL_RESOLVE_IGNORE = $pres2, expected [1,2]"
+
+# The report row: advisory, warns on a coordinate that resolves to nothing, and
+# never moves the verdict.
+cp "$WORK/pres_purl-resolution.json" "$WORK/prep_purl-resolution.json"
+bash "$LIB/validate-sbom.sh" "$FIX/purl-resolution-input.json" "$WORK/prep" "supplier" >/dev/null 2>&1
+prow=$(jq -r '"\(.result)|\(.checks[]|select(.id=="purl-resolution")|"\(.required)|\(.status)|\(.detail)")"' "$WORK/prep_conformance.json")
+[ "$prow" = "pass|false|warn|3 of 6 not found in the repository" ] \
+    && pass "the row warns, stays advisory, and the SBOM still passes" \
+    || fail "purl-resolution row = '$prow'"
+jq -e '.checks[] | select(.id=="purl-resolution") | .missing | length == 3' "$WORK/prep_conformance.json" >/dev/null \
+    && pass "the row lists the identifiers that resolved to nothing" \
+    || fail "the row does not carry the missing identifiers"
+
+# No sidecar: the lookup was not asked for, which is the default. The row says
+# so and counts as nothing to judge rather than as a gap.
+bash "$LIB/validate-sbom.sh" "$FIX/purl-resolution-input.json" "$WORK/pnorun" "supplier" >/dev/null 2>&1
+pnorun=$(jq -r '.checks[] | select(.id=="purl-resolution") | "\(.source)|\(.naKind)|\(.detail)"' "$WORK/pnorun_conformance.json")
+[ "$pnorun" = "na|not-applicable|repository lookup not run" ] \
+    && pass "without the lookup the row reads as not checked, not as a gap" \
+    || fail "purl-resolution without a sidecar = '$pnorun'"
+
 echo "== staleness: opt-in deps.dev version currency (enrich-staleness.py, offline fixture) =="
 cp "$FIX/staleness-components.json" "$WORK/stale.json"
 STALENESS_FIXTURE_DIR="$FIX/staleness" python3 "$LIB/enrich-staleness.py" "$WORK/stale.json" >/dev/null 2>&1
