@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v1.12.1] - 2026-09-23
+
+### Upgrade note
+
+- The conformance report's `os-purl-namespace` check is now `purl-namespace`, since it no longer covers only OS packages, and its detail reads "N without namespace" rather than "N without distribution". Anything that reads the report by that id needs the new one. Nothing else in the report's shape changed.
+
 ### Added
 
 - A source scan that runs a Maven or Gradle build (CLI, web UI and desktop app) now warns before the build starts when the Docker engine has less than about 4 GB of memory, and names the setting to change for Colima, Docker Desktop and Rancher Desktop. The scan is not stopped.
@@ -39,7 +45,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The conformance check accepts CycloneDX 1.7 for every kind of SBOM, not only for AI SBOMs. 1.7 has been released since October 2025 and generators emit it, so a submission at 1.7 is a current document. What BomLens writes is still 1.6, because the bundled vulnerability scanner cannot read 1.7.
-- The conformance check's `os-purl-namespace` row is now `purl-namespace`, since it no longer covers only OS packages, and its detail reads "N without namespace" rather than "N without distribution". Anything reading the report by that id needs the new one.
 - `scripts/check-setup.sh` now speaks English and Korean (`SBOM_LANG`, else the locale), checks the Docker engine's memory for Maven and Gradle builds as `check-setup.bat` now does, and tells apart a blocking problem (exit 1) from problems that do not block (exit 2, with their number in the result line). It used to exit 0 in both cases. `scripts/check-ux-heuristics.sh` keeps the message sets of the two scripts equal.
 - A PHP (Composer) source scan whose root `composer.json` has no committed `composer.lock` now resolves one itself (`composer update --no-dev --no-scripts --no-interaction`), the same as Ruby's `bundle lock` step already does for a missing `Gemfile.lock`. Previously nothing resolved it, and cdxgen came back with zero components and no indication anything was wrong. A resolve failure is now recorded on the SBOM instead of failing silently.
 
