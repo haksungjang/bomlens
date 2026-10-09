@@ -716,6 +716,18 @@
     "dsIntegrity": "무결성",
     "dsSource": "파생 출처",
     "dsUnresolved": "읽을 수 없음",
+    "dsSourceOf": "원천, {{relation}}",
+    "dsRelation": {
+      "extended": "확장",
+      "listed": "원천 목록"
+    },
+    "dsSourceCount_one": "원천 {{count}}개",
+    "dsSourceCount_other": "원천 {{count}}개",
+    "dsListedAbove": "위에 표시됨",
+    "dsSourceOriginal": "카드가 원본 데이터라고 밝힘",
+    "dsSourceUnverified": "검토 필요",
+    "dsTraceDepthLimit": "이 아래 원천은 읽지 않음 (추적 깊이 상한)",
+    "dsTraceCycle": "원천이 위쪽 데이터셋으로 되돌아감",
     "dsNoLicense": "표기 없음",
     "dsHashed": "콘텐츠 해시 기록됨",
     "dsNotHashed": "콘텐츠 해시 없음",

@@ -20,6 +20,8 @@ import { checkKind, groupG7ByCluster, registryTally, splitChecks } from "@/lib/c
 import {
   type AiModelData,
   type AssessmentGrade,
+  type DatasetRef,
+  datasetTreeRows,
   GradeBadge,
   type ModelAssessment,
   type ModelCard,
@@ -130,9 +132,23 @@ export function ModelsDatasets({
                 </tr>
               </thead>
               <tbody>
-                {data.datasets.map((d) => (
-                  <tr key={d.name} className="border-b last:border-0">
-                    <td className="px-3 py-2 align-top">
+                {datasetTreeRows(data.datasets).map(({ dataset: d, level, relation, repeat }, i) => (
+                  <tr key={`${d.ref ?? d.name}-${i}`} className="border-b last:border-0">
+                    <td
+                      className="px-3 py-2 align-top"
+                      // A traced source sits under the dataset it came from.
+                      style={level > 0 ? { paddingLeft: `${0.75 + level * 1.25}rem` } : undefined}
+                    >
+                      {level > 0 && (
+                        <span className="mr-1 text-muted-foreground" aria-hidden>
+                          └
+                        </span>
+                      )}
+                      {relation && (
+                        <span className="sr-only">
+                          {t("models.dsSourceOf", { relation: t(`models.dsRelation.${relation}`, relation) })}
+                        </span>
+                      )}
                       <span className="font-mono">{d.name}</span>
                       {d.version && (
                         <span className="text-muted-foreground">@{d.version}</span>
@@ -141,6 +157,14 @@ export function ModelsDatasets({
                         <Badge variant="outline" className="ml-1.5 align-middle">
                           {d.collectedBy}
                         </Badge>
+                      )}
+                      {relation && (
+                        <Badge variant="muted" className="ml-1.5 align-middle">
+                          {t(`models.dsRelation.${relation}`, relation)}
+                        </Badge>
+                      )}
+                      {repeat && (
+                        <span className="ml-1.5 text-muted-foreground">{t("models.dsListedAbove")}</span>
                       )}
                       {d.url && (
                         <a
@@ -185,10 +209,11 @@ export function ModelsDatasets({
                       </span>
                     </td>
                     <td className="px-3 py-2 align-top">
-                      {d.sources.length > 0 ? (
-                        <span className="break-all">{d.sources.join(", ")}</span>
-                      ) : (
+                      {/* A repeat row's sources are on its full row above. */}
+                      {repeat ? (
                         <span className="text-muted-foreground">—</span>
+                      ) : (
+                        <DatasetSources dataset={d} />
                       )}
                     </td>
                   </tr>
@@ -202,6 +227,48 @@ export function ModelsDatasets({
         <p className="text-xs text-muted-foreground">{t("models.disclaimer")}</p>
       )}
       {conformance ? <G7Disclosure conformance={conformance} /> : null}
+    </div>
+  );
+}
+
+/**
+ * The "Derived from" cell. When the pipeline traced sources, the traced ones are
+ * rows of their own beneath this one, so the cell only counts them and adds what
+ * the rows cannot show: a card that calls the data original, sources named in
+ * words (kept verbatim, never looked up, so marked for checking), and why the
+ * walk stopped here. Without tracing it lists the card's values as before.
+ */
+function DatasetSources({ dataset: d }: { dataset: DatasetRef }) {
+  const { t } = useTranslation();
+  const traced = d.depth !== undefined;
+  if (!traced) {
+    return d.sources.length > 0 ? (
+      <span className="break-all">{d.sources.join(", ")}</span>
+    ) : (
+      <span className="text-muted-foreground">—</span>
+    );
+  }
+  const original = d.sources.some((s) => s.trim().toLowerCase() === "original");
+  const parts = d.derivedFrom.length + d.unverifiedSources.length + (original ? 1 : 0);
+  if (parts === 0 && !d.trace) return <span className="text-muted-foreground">—</span>;
+  return (
+    <div className="space-y-1">
+      {d.derivedFrom.length > 0 && (
+        <div>{t("models.dsSourceCount", { count: d.derivedFrom.length })}</div>
+      )}
+      {original && <div>{t("models.dsSourceOriginal")}</div>}
+      {d.unverifiedSources.map((s) => (
+        <div key={s} className="flex flex-wrap items-center gap-1.5">
+          <span className="break-all">{s}</span>
+          <Badge variant="muted">{t("models.dsSourceUnverified")}</Badge>
+        </div>
+      ))}
+      {d.trace === "depth-limit" && (
+        <div className="text-muted-foreground">{t("models.dsTraceDepthLimit")}</div>
+      )}
+      {d.trace === "cycle" && (
+        <div className="text-muted-foreground">{t("models.dsTraceCycle")}</div>
+      )}
     </div>
   );
 }

@@ -716,6 +716,18 @@
     "dsIntegrity": "Integrity",
     "dsSource": "Derived from",
     "dsUnresolved": "Not readable",
+    "dsSourceOf": "Source, {{relation}}",
+    "dsRelation": {
+      "extended": "extended",
+      "listed": "listed"
+    },
+    "dsSourceCount_one": "{{count}} source",
+    "dsSourceCount_other": "{{count}} sources",
+    "dsListedAbove": "listed above",
+    "dsSourceOriginal": "The card says this data is original",
+    "dsSourceUnverified": "needs checking",
+    "dsTraceDepthLimit": "Sources below this level were not read (depth limit)",
+    "dsTraceCycle": "Its sources lead back to a dataset above it",
     "dsNoLicense": "None declared",
     "dsHashed": "Content digest recorded",
     "dsNotHashed": "No content digest",

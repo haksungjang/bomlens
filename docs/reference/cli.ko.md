@@ -87,6 +87,8 @@ BomLens의 전체 옵션과 분석 모드, CI/CD 통합 방법, 트러블슈팅�
 | `ENRICH_HF_SECURITY` | `true` | `--model` 스캔에서 HuggingFace가 자체 실행한 파일 보안 스캔 결과(파일별 ClamAV·picklescan)를 읽어 ML-BOM에 기록한다. 메타데이터만 읽고 파일은 내려받지 않는다. `false`면 조회를 건너뛴다 |
 | `AIBOM_VERIFY_MAX_FILES` | `5` | `--verify-weights`에서 모델당 내려받아 스캔할 pickle 계열 가중치 파일의 최대 개수. 상한을 넘는 나머지 파일은 대기열에 넣지 않고 그냥 확인하지 않는다 |
 | `AIBOM_VERIFY_MAX_BYTES` | `2147483648`(2GiB) | `--verify-weights`에서 이 크기를 넘는 가중치 파일(저장소가 선언한 크기든 실제로 내려받은 크기든)은 내려받거나 스캔하지 않고 건너뛴다 |
+| `AIBOM_DATASET_DEPTH` | `3` | `--model`에서 데이터셋 카드가 적은 원천(`source_datasets`)을 몇 단계 아래까지 읽어 함께 판정할지. `0`이면 예전처럼 모델 카드가 적은 데이터셋만 읽는다 |
+| `AIBOM_DATASET_MAX_LOOKUPS` | `40` | `--model`에서 스캔 한 번에 읽는 데이터셋의 최대 개수(원천 포함). 상한을 넘은 데이터셋은 이름만 기록하고 읽지 않았다고 표시한다 |
 | `COSIGN_KEY` | — | `--sign`에 쓰는 서명 키 경로 |
 | `FETCH_LICENSE` | `true` | 소스 스캔 시 의존성 라이선스를 자동 조회. `false`면 조회를 생략해 속도를 높임 |
 | `GOTOOLCHAIN` | `auto` | Go 소스 스캔에서 모듈을 해석할 Go 툴체인. 기본값에서는 `go.mod`가 스캐너 이미지보다 새 Go를 요구하면 그 버전을 내려받는다. `local`이면 이미지에 든 Go만 쓰고, 이런 프로젝트는 의존성 해석이 실패한다 |

@@ -67,10 +67,12 @@ fi
 # Everything runs inside one Python pass so the SBOM JSON is parsed/written once.
 # Each feature is guarded independently; a failure in one leaves the others (and
 # the original SBOM) intact.
-python3 - "$SBOM" "$MODEL_ID" "$CDXGEN_BIN" <<'PY' || echo "[enrich] enrichment skipped (python/network/tool unavailable)" >&2
+python3 - "$SBOM" "$MODEL_ID" "$CDXGEN_BIN" "$(dirname "$0")" <<'PY' || echo "[enrich] enrichment skipped (python/network/tool unavailable)" >&2
 import json, os, re, subprocess, sys, tempfile
 
 sbom_path, model_id, cdxgen_bin = sys.argv[1], sys.argv[2], sys.argv[3]
+sys.path.insert(0, sys.argv[4])
+import hf_dataset  # noqa: E402  (shared dataset reader, same directory)
 
 WEIGHT_EXTS = (".safetensors", ".bin", ".gguf", ".pt", ".pth", ".onnx", ".h5", ".ckpt", ".msgpack")
 
@@ -240,180 +242,44 @@ def card_get(info, key):
 # the gap visible is the point — a fabricated license would read as a reviewed
 # dataset. Same contract as the rest of this file.
 
-# Marks the components this step wrote, so a re-run can drop its own previous
-# output instead of appending a second copy of every dataset.
-DATASET_MARK = "bomlens:dataset:collectedBy"
-# A dataset repo can hold thousands of shards. The component hash list is
-# evidence that content digests exist and are recorded, not a manifest, so it is
-# capped and the true file count is recorded alongside it.
-DATASET_HASH_CAP = 64
+# The lookup, the component shape and the source walk live in hf_dataset.py, a
+# standard-library module shared with the dataset-only scan and the declaration
+# path, so every route reads a dataset the same way.
+DATASET_MARK = hf_dataset.DATASET_MARK
 
 
-def dataset_ref(ds_id):
-    return "dataset:huggingface/" + ds_id
-
-
-def build_dataset_component(api, ds_id):
-    """CycloneDX `data` component for one HuggingFace dataset id.
-
-    Returns (component, resolved). `resolved` is False when the repository could
-    not be read, in which case the component holds the name and nothing else.
-    """
-    url = "https://huggingface.co/datasets/" + ds_id
-    props = [{"name": DATASET_MARK, "value": "huggingface"}]
-    # The repository owner is this dataset's producer and the id already carries
-    # it, so it is recorded before the API call: a dataset that cannot be opened
-    # still says who published it. It goes on the component itself and not only
-    # in componentData.governance below, because that is where the G7 dataset
-    # cluster and the 2026 minimum elements look for a producer — a model that
-    # declares its training data was otherwise scored down for the datasets it
-    # added, each one counting as a component with no producer.
-    owner = ds_id.split("/")[0] if "/" in ds_id else None
-    comp = {
-        "type": "data",
-        "bom-ref": dataset_ref(ds_id),
-        "name": ds_id,
-        "externalReferences": [
-            {"type": "distribution", "url": url, "comment": "Dataset repository"}
-        ],
-        "properties": props,
-    }
-    if owner:
-        comp["authors"] = [{"name": owner}]
-        comp["supplier"] = {"name": owner, "url": ["https://huggingface.co/" + owner]}
-    # componentData (spec: component.data[]) is where CycloneDX describes what a
-    # data component actually holds.
-    cdata = {"type": "dataset", "name": ds_id, "contents": {"url": url}}
-    if owner:
-        cdata["governance"] = {"owners": [{"organization": {"name": owner}}]}
-
-    if api is None:
-        props.append({"name": "bomlens:dataset:unresolved", "value": "huggingface-unavailable"})
-        comp["data"] = [cdata]
-        return comp, False
-
+def _env_count(name, default):
+    raw = os.environ.get(name, "")
+    if raw == "":
+        return default
     try:
-        info = api.dataset_info(ds_id, files_metadata=True)
-    except Exception as e:
-        # Never put the exception text in the SBOM: it can carry request detail.
-        # The reason goes to the log, the fact goes to the BOM.
-        print(f"[enrich] dataset {ds_id} could not be read: {e}", file=sys.stderr)
-        props.append({"name": "bomlens:dataset:unresolved", "value": "not-readable"})
-        comp["data"] = [cdata]
-        return comp, False
-
-    # A dataset repo has no release version, only a commit. Recording it pins the
-    # snapshot that was read, which is what makes the hashes below meaningful.
-    # Short form in `version` to match the model component the generator writes;
-    # the full revision rides along as a property.
-    rev = getattr(info, "sha", None)
-    if rev:
-        comp["version"] = str(rev)[:8]
-        props.append({"name": "bomlens:dataset:revision", "value": str(rev)})
-
-    lic = card_get(info, "license")
-    if isinstance(lic, list):
-        lic = lic[0] if lic else None
-    if lic:
-        # Raw HuggingFace spelling ("cc-by-sa-4.0"). normalize-sbom.sh maps it to
-        # an SPDX id downstream, so it is recorded as a name rather than guessed
-        # into an id here.
-        comp["licenses"] = [{"license": {"name": str(lic)}}]
-
-    desc = getattr(info, "description", None) or card_get(info, "pretty_name")
-    if desc:
-        comp["description"] = str(desc)[:500]
-        cdata["description"] = comp["description"]
-
-    # Content digests: LFS-tracked files are the only ones exposing a SHA-256.
-    shas, total_files = [], 0
-    for s in (getattr(info, "siblings", None) or []):
-        total_files += 1
-        lfs = getattr(s, "lfs", None) or (s.get("lfs") if isinstance(s, dict) else None)
-        if lfs is None:
-            continue
-        sha = getattr(lfs, "sha256", None) or (lfs.get("sha256") if isinstance(lfs, dict) else None)
-        if sha and sha not in shas:
-            shas.append(sha)
-    if shas:
-        comp["hashes"] = [{"alg": "SHA-256", "content": s} for s in shas[:DATASET_HASH_CAP]]
-        props.append({"name": "bomlens:dataset:hashedFiles",
-                      "value": f"{min(len(shas), DATASET_HASH_CAP)} of {len(shas)}"})
-    if total_files:
-        props.append({"name": "bomlens:dataset:fileCount", "value": str(total_files)})
-
-    # What the dataset holds — the card's declared facets, recorded as-is.
-    facets = []
-    for key in ("task_categories", "size_categories", "language", "annotations_creators",
-                "multilinguality", "configs"):
-        val = card_get(info, key)
-        if not val:
-            continue
-        if isinstance(val, list):
-            val = ", ".join(str(v) for v in val if v is not None)
-        facets.append({"name": "hf:" + key, "value": str(val)[:200]})
-    # Risk-relevant card tags: recorded verbatim as a facet, and matched
-    # against the registry's tag signals (pii, not-for-all-audiences, …) so
-    # the assessment can read them. A tag is the publisher's own marker — its
-    # absence proves nothing, so only presence is ever stamped.
-    all_tags = [str(t) for t in (getattr(info, "tags", None) or []) if t is not None]
-    card_tags = card_get(info, "tags")
-    if isinstance(card_tags, list):
-        all_tags += [str(t) for t in card_tags if t is not None]
-    all_tags = list(dict.fromkeys(all_tags))
-    if all_tags:
-        facets.append({"name": "hf:tags", "value": ", ".join(all_tags)[:300]})
-    for tag in dict.fromkeys(t.lower() for t in all_tags):
-        sig = TAG_SIGNALS.get(tag)
-        if sig:
-            props.append({"name": "bomlens:dataset:signal", "value": sig})
-    if facets:
-        cdata["contents"]["properties"] = facets
-
-    # Provenance: the upstream this dataset derives from. HuggingFace allows both
-    # a bare marker ("original") and a reference ("extended|other/name"), so the
-    # values are carried verbatim rather than reinterpreted as ids.
-    for src in (card_get(info, "source_datasets") or []):
-        props.append({"name": "bomlens:dataset:sourceDataset", "value": str(src)[:200]})
-
-    # A bare id ("squad") carries no owner, but the API names one; taking it here
-    # is the only way such a dataset gets a producer at all.
-    if not owner:
-        api_owner = getattr(info, "author", None)
-        if api_owner:
-            comp["authors"] = [{"name": str(api_owner)}]
-            comp["supplier"] = {"name": str(api_owner),
-                                "url": ["https://huggingface.co/" + str(api_owner)]}
-            cdata["governance"] = {"owners": [{"organization": {"name": str(api_owner)}}]}
-
-    if getattr(info, "private", False):
-        props.append({"name": "bomlens:dataset:visibility", "value": "private"})
-    elif getattr(info, "gated", None):
-        props.append({"name": "bomlens:dataset:visibility", "value": "gated"})
-
-    comp["data"] = [cdata]
-    return comp, True
+        val = int(raw)
+        if val < 0:
+            raise ValueError
+        return val
+    except ValueError:
+        print(f"[enrich] {name}={raw!r} is not a whole number of zero or more; using {default}.",
+              file=sys.stderr)
+        return default
 
 
-def collect_datasets(api, declared):
-    """Resolve every dataset the model card declares.
+# How many levels of a dataset's own sources to follow, and how many datasets
+# one scan may read in total. 0 depth reads only what the card names.
+DATASET_DEPTH = _env_count("AIBOM_DATASET_DEPTH", 3)
+DATASET_MAX_LOOKUPS = _env_count("AIBOM_DATASET_MAX_LOOKUPS", 40)
 
-    Returns (components, bom-refs, resolved_count).
+
+def collect_datasets(declared):
+    """Read every dataset the model card declares, and their sources.
+
+    Returns (components, root bom-refs, resolved_root_count, source edges).
     """
     if not declared:
-        return [], [], 0
+        return [], [], 0, []
     ids = declared if isinstance(declared, list) else [declared]
-    seen, comps, refs, resolved = set(), [], [], 0
-    for raw in ids:
-        ds_id = str(raw).strip()
-        if not ds_id or ds_id in seen:
-            continue
-        seen.add(ds_id)
-        comp, ok = build_dataset_component(api, ds_id)
-        comps.append(comp)
-        refs.append(comp["bom-ref"])
-        resolved += 1 if ok else 0
-    return comps, refs, resolved
+    return hf_dataset.trace([str(i).strip() for i in ids if str(i or "").strip()],
+                            max_depth=DATASET_DEPTH, budget=DATASET_MAX_LOOKUPS,
+                            tag_signals=TAG_SIGNALS)
 
 
 def _card_dataset_name(entry):
@@ -463,11 +329,7 @@ def prune_prose_dataset_names(models, api, declared):
                 kept.append(entry)
                 continue
             if name not in checked:
-                try:
-                    api.dataset_info(name)
-                    checked[name] = True
-                except Exception:
-                    checked[name] = False
+                checked[name] = hf_dataset.dataset_exists(name)
             if checked[name]:
                 kept.append(entry)
             elif name not in dropped:
@@ -521,7 +383,13 @@ if hf_info is not None:
     has_config = any(n.lower() == "config.json" for n in filenames)
     datasets = card_get(hf_info, "datasets")
     has_datasets = bool(datasets)
-    dataset_comps, dataset_refs, resolved_datasets = collect_datasets(hf_api, datasets)
+    try:
+        dataset_comps, dataset_refs, resolved_datasets, source_edges = collect_datasets(datasets)
+    except Exception as e:
+        # A dataset answer of a shape nobody expected must not cost the model
+        # the rest of its enrichment. The datasets stay as the card named them.
+        print(f"[enrich] datasets skipped: {type(e).__name__}: {e}", file=sys.stderr)
+        dataset_comps, dataset_refs, resolved_datasets, source_edges = [], [], 0, []
     # Names the generator scraped out of the card's prose are removed here, before
     # the openness axis and the conformance report read them as disclosed training
     # data. The fact of the removal is stamped so the report can be traced back.
@@ -974,16 +842,24 @@ if hf_info is not None:
                 p.get("name") == DATASET_MARK for p in (c.get("properties") or [])
             )
 
+        removed = {c.get("bom-ref") for c in comps if ours(c) and c.get("bom-ref")}
         comps[:] = [c for c in comps if not ours(c)]
         comps.extend(dataset_comps)
         sbom["components"] = comps
 
         # dependencies[]: the model depends on the data it was trained on. This
         # is the relationship the G7 dataset cluster names, and what makes the
-        # dependency graph in the UI show the training data.
+        # dependency graph in the UI show the training data. Only the datasets
+        # the card names hang off the model; a dataset's sources hang off that
+        # dataset, so the model reaches them through it.
+        new_refs = {c["bom-ref"] for c in dataset_comps}
         deps = sbom.get("dependencies") or []
-        stale = set(dataset_refs)
+        stale = removed | new_refs
         deps = [d for d in deps if not (isinstance(d, dict) and d.get("ref") in stale)]
+        gone = removed - new_refs
+        for d in deps:
+            if isinstance(d, dict) and isinstance(d.get("dependsOn"), list):
+                d["dependsOn"] = [x for x in d["dependsOn"] if x not in gone]
         by_ref = {d.get("ref"): d for d in deps if isinstance(d, dict)}
         for m in models:
             mref = m.get("bom-ref")
@@ -994,16 +870,18 @@ if hf_info is not None:
                 entry = {"ref": mref, "dependsOn": []}
                 deps.append(entry)
                 by_ref[mref] = entry
-            on = entry.get("dependsOn") or []
-            for r in dataset_refs:
-                if r not in on:
-                    on.append(r)
-            entry["dependsOn"] = on
+            # The model's dataset edges are exactly the datasets its card names:
+            # a dataset that was a root on an earlier run and is now only a
+            # source must not keep its edge from the model.
+            on = [x for x in (entry.get("dependsOn") or []) if x not in removed and x not in new_refs]
+            entry["dependsOn"] = on + [r for r in dataset_refs if r not in on]
         # Every referenced ref needs its own node, even a leaf one.
-        for r in dataset_refs:
-            deps.append({"ref": r, "dependsOn": []})
+        for c in dataset_comps:
+            ref = c["bom-ref"]
+            deps.append({"ref": ref, "dependsOn": [t for f, t in source_edges if f == ref]})
         sbom["dependencies"] = deps
-        print(f"[enrich] datasets: {len(dataset_comps)} referenced, {resolved_datasets} resolved "
+        print(f"[enrich] datasets: {len(dataset_refs)} referenced, {resolved_datasets} resolved, "
+              f"{len(dataset_comps) - len(dataset_refs)} source(s) traced "
               f"(training-data={training_data}).", file=sys.stderr)
 
 def _ours(pedigree):

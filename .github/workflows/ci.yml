@@ -337,7 +337,12 @@ jobs:
       - name: Output regression snapshots
         run: bash tests/test-snapshot.sh
 
+      # BOMLENS_CDX_SCHEMA=1 makes the CycloneDX 1.7 schema check run here
+      # (scripts/check-cdx-schema.sh fetches the pinned CLI and verifies its
+      # checksum) instead of being skipped when the CLI is not installed.
       - name: AI SBOM post-process tests
+        env:
+          BOMLENS_CDX_SCHEMA: "1"
         run: bash tests/test-aibom.sh
 
       # No Docker: reads model files built on the spot (GGUF, safetensors, torch

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade note
+
+- An AI model scan now reads the datasets a dataset's card names as its sources (`source_datasets`) and judges them with it, so a model whose training data contains a source under stricter terms can grade lower than before (for example `caution` where it was `ok`). Compare with an earlier result using `--diff`. `AIBOM_DATASET_DEPTH=0` restores the previous behaviour.
+
+### Added
+
+- An AI model scan follows the sources a dataset's card names (`source_datasets`), up to three levels and 40 dataset lookups per scan (`AIBOM_DATASET_DEPTH`, `AIBOM_DATASET_MAX_LOOKUPS`). Each source becomes its own `data` component linked from the dataset in `dependencies[]`, with `bomlens:dataset:derivedFrom` on the dataset and `bomlens:dataset:depth` on every traced dataset. Only a value shaped like a HuggingFace dataset id is looked up; a source named in words is kept verbatim as `bomlens:dataset:sourceDataset:unverified`. A cycle, the depth limit and the lookup limit are recorded on the dataset where the walk stopped. The strictest verdict among a dataset's sources becomes part of that dataset's verdict (`bomlens:assessment:sources`), and through it the model's datasets axis. A source that could not be read, declares no license or is named only in words, and a dataset whose sources lie past the depth limit, read review. Placeholders such as `extended` alone, `unknown` or `N/A` are not looked up. Dataset lookups use `HF_ENDPOINT` and `REQUESTS_CA_BUNDLE` when they are set. The web UI shows traced sources as indented rows in the datasets table.
+- An AI model scan records each weight file's name next to its SHA-256 (`bomlens:weights:file`), the gate kind, the time of the revision it read, the hub's relation to the base model (`bomlens:lineage:relation`), a merged model's other parents, and the distributed weights scope (`bomlens:weights:scope`: full, adapter, quantized or merged) when the hub's signals agree. When no other tool supplied a pedigree, the base-model chain is written to `pedigree.ancestors[]` without a version.
+
+### Fixed
+
+- The note that names dataset names dropped from a model card's prose no longer disappears when the same SBOM is enriched a second time.
+
 ## [v1.12.1] - 2026-09-23
 
 ### Upgrade note

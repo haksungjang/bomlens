@@ -480,6 +480,25 @@ rc = server.run_sibling_scan(
 assert rc == 0, rc
 assert not any(a.startswith("AI_USAGE_CONTEXT") for a in captured["args"]), captured["args"]
 
+# The dataset-source walk limits are operator environment variables: forwarded
+# to the AIBOM sibling only as whole numbers, never as raw text.
+_saved_ds = {k: os.environ.get(k) for k in ("AIBOM_DATASET_DEPTH", "AIBOM_DATASET_MAX_LOOKUPS")}
+os.environ["AIBOM_DATASET_DEPTH"] = "0"
+os.environ["AIBOM_DATASET_MAX_LOOKUPS"] = "5; rm -rf /"
+captured.clear()
+rc = server.run_sibling_scan(
+    "ghcr.io/sktelecom/bomlens-aibom:1.5.0", "AIBOM", run_out,
+    lambda ln: None, model_id="openai/clip",
+)
+assert rc == 0, rc
+assert "AIBOM_DATASET_DEPTH=0" in captured["args"], captured["args"]
+assert not any(a.startswith("AIBOM_DATASET_MAX_LOOKUPS") for a in captured["args"]), captured["args"]
+for _k, _v in _saved_ds.items():
+    if _v is None:
+        os.environ.pop(_k, None)
+    else:
+        os.environ[_k] = _v
+
 # CONFORMANCE_PROFILE reaches the deep-cve sibling ANALYZE runs on when the base
 # image lacks grype: a missed forward would silently re-grade a submission
 # under review against the wrong thresholds. Forwarded only as one of the two

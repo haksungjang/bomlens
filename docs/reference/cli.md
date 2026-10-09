@@ -89,6 +89,8 @@ Environment variables adjust the behavior.
 | `ENRICH_HF_SECURITY` | `true` | Read HuggingFace's own file-security scan results (ClamAV and picklescan, per file) for `--model` scans and record them in the ML-BOM. Metadata only, no file download. Set `false` to skip the lookup |
 | `AIBOM_VERIFY_MAX_FILES` | `5` | With `--verify-weights`: maximum number of pickle-format weight files downloaded and scanned per model. Extra files beyond the cap are left unchecked, not queued |
 | `AIBOM_VERIFY_MAX_BYTES` | `2147483648` (2 GiB) | With `--verify-weights`: a weight file larger than this (by the repo's declared size, or by its actual downloaded size if that differs) is skipped rather than downloaded/scanned |
+| `AIBOM_DATASET_DEPTH` | `3` | With `--model`: how many levels of a dataset's own sources (`source_datasets` on its card) to read and judge with it. `0` reads only the datasets the model card names, as before |
+| `AIBOM_DATASET_MAX_LOOKUPS` | `40` | With `--model`: the most datasets one scan reads, sources included. Datasets past the limit are recorded by name as not read |
 | `COSIGN_KEY` | — | Path to the signing key used by `--sign` |
 | `FETCH_LICENSE` | `true` | Resolve dependency licenses during source scans. Set `false` to skip the lookup and run faster |
 | `GOTOOLCHAIN` | `auto` | Go source scans: which Go toolchain resolves the modules. By default, when `go.mod` asks for a newer Go than the scanner image carries, that version is downloaded. Set `local` to use only the image's own Go; dependency resolution then fails for such a project |

@@ -3542,6 +3542,14 @@ def run_sibling_scan(image, mode, out_dir, on_log, *, upload_file=None, model_id
             if env.get("AI_USAGE_CONTEXT") == _uc:
                 args += ["-e", "AI_USAGE_CONTEXT=%s" % _uc]
                 break
+        # How far the dataset-source walk goes: an operator's environment
+        # variable (no web form sets it), forwarded only as a re-formatted whole
+        # number so nothing but digits reaches the docker-run argv. Unset or not
+        # a number -> not forwarded, and enrich-aibom.sh keeps its own default.
+        for _dn in ("AIBOM_DATASET_DEPTH", "AIBOM_DATASET_MAX_LOOKUPS"):
+            _dv = os.environ.get(_dn, "").strip()
+            if re.fullmatch(r"[0-9]{1,6}", _dv):
+                args += ["-e", "%s=%d" % (_dn, int(_dv))]
     if upload_file is not None:
         # The upload lives under UPLOAD_DIR (inside OUTPUT_DIR), so --volumes-from
         # already exposes it at this same container path — read it in place, no extra
