@@ -277,7 +277,10 @@ jq --arg ctx "$CTX" --arg lang "$LANG_TAG" --slurpfile kb "$KB" '
   # never contaminates a different model verdict. Keyed by bom-ref, the id
   # dependencies[] uses. A model with no dataset edges gets no datasets axis —
   # the links are not guessed. datasets_axis($ref) is called per model below.
-  ( [ .components[]? | select(.type == "data")
+  # A dataset scanned on its own is the document root (metadata.component);
+  # it is judged with its sources the same way as one a model card names.
+  ( [ ([ .metadata.component? // empty | select(type == "object") ] + [ .components[]? ])[]
+      | select(.type == "data")
       | { key: (.["bom-ref"] // .name // ""),
           value: ({ name: (.name // "(unnamed)"),
                     unread: ([ (.properties // [])[] | select(.name == "bomlens:dataset:unresolved") ] | length > 0),

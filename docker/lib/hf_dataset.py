@@ -79,12 +79,23 @@ def fetch_dataset(ds_id):
     Returns (status, info). status is the HTTP status (200 on success), or None
     when nothing answered. info is the decoded JSON on 200 and None otherwise.
     """
+    return _fetch("datasets", ds_id)
+
+
+def fetch_model(model_id):
+    """Read one model's metadata (the endpoint `HfApi.model_info` calls), with
+    the same return shape, limits and credentials as fetch_dataset. A file://
+    base serves <dir>/models/<id>.json."""
+    return _fetch("models", model_id)
+
+
+def _fetch(kind, ds_id):
     if not _valid_id(ds_id):
         return 400, None
     base = (os.environ.get("BOMLENS_HF_API_BASE") or os.environ.get("HF_ENDPOINT") or DEFAULT_BASE).rstrip("/")
     if base.startswith("file://"):
         root = os.path.realpath(urllib.parse.urlparse(base).path)
-        path = os.path.realpath(os.path.join(root, "datasets", ds_id + ".json"))
+        path = os.path.realpath(os.path.join(root, kind, ds_id + ".json"))
         if not path.startswith(root + os.sep):
             return 400, None
         calls = os.path.join(root, "calls.log")
@@ -101,7 +112,7 @@ def fetch_dataset(ds_id):
         if status:
             return int(status), None
         return (200, doc) if isinstance(doc, dict) else (None, None)
-    url = f"{base}/api/datasets/{urllib.parse.quote(ds_id, safe='/')}?blobs=true"
+    url = f"{base}/api/{kind}/{urllib.parse.quote(ds_id, safe='/')}" + ("?blobs=true" if kind == "datasets" else "")
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
     token = os.environ.get("HF_TOKEN")
     if token and base.startswith("https://"):
@@ -300,7 +311,8 @@ def trace(roots, max_depth=3, budget=40, tag_signals=None):
         comp["properties"].append({"name": name, "value": value})
 
     def edge(frm, to):
-        if (frm, to) not in edges:
+        # A card that names itself among its sources is not a dependency.
+        if frm != to and (frm, to) not in edges:
             edges.append((frm, to))
 
     for raw in roots if isinstance(roots, list) else [roots]:
@@ -368,6 +380,8 @@ def trace(roots, max_depth=3, budget=40, tag_signals=None):
                 continue
             if kind == "text":
                 prop(comp, "bomlens:dataset:sourceDataset:unverified", str(target)[:200])
+                continue
+            if seen_id.get(target) == ref:
                 continue
             if target in seen_id:
                 prop(comp, "bomlens:dataset:derivedFrom", f"{relation} {seen_id[target]}")

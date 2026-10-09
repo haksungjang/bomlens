@@ -257,6 +257,24 @@ def safe_name(s):
     return s
 
 
+# A HuggingFace dataset given to the AI-model field: its address or a
+# "datasets/" prefix tells it from a model id, which has the same owner/name
+# form. The same rule as scan-sbom.sh. Returns (prefix matched, normalized ref).
+_HF_DATASET_PREFIX = re.compile(r"^(?:hf:|(?:https?://)?(?:www\.)?huggingface\.co/datasets/|datasets/)", re.I)
+_HF_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)?$")
+
+
+def hf_dataset_ref(target):
+    m = _HF_DATASET_PREFIX.match(target or "")
+    if not m:
+        return False, None
+    ds_id = "/".join(target[m.end():].split("/")[:2])
+    # fullmatch: "$" alone would let a trailing newline through.
+    if not _HF_ID.fullmatch(ds_id) or ".." in ds_id:
+        return True, None
+    return True, "hf:" + ds_id
+
+
 def output_prefix(project, version):
     """The {project}_{version} filename prefix every artifact of a scan shares."""
     return "%s_%s" % (safe_name(project), safe_name(version))
@@ -6322,7 +6340,17 @@ class Handler(BaseHTTPRequestHandler):
                 # about what a given string means.
                 if not target:
                     fail("HuggingFace model id (owner/name) or Figshare item required"); return
-                if "figshare" in target.lower():
+                is_dataset, ds_ref = hf_dataset_ref(target)
+                if is_dataset:
+                    # A HuggingFace dataset is read by one stdlib script in THIS
+                    # image, like a Figshare item: no Docker, no generator image.
+                    if not ds_ref:
+                        fail("Unsupported HuggingFace dataset reference (give datasets/<owner>/<name> "
+                             "or https://huggingface.co/datasets/<owner>/<name>)"); return
+                    mode = "DATASET"
+                    env["MODE"] = "DATASET"
+                    env["DATASET_REF"] = ds_ref
+                elif "figshare" in target.lower():
                     # A Figshare item is read by one stdlib script in THIS image
                     # against a public endpoint, so unlike the model path it needs
                     # neither Docker nor the generator image. The charset is wider

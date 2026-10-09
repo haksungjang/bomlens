@@ -751,9 +751,18 @@ EOF
         # public item endpoint needs no account, so this is one stdlib script in the
         # base image: no generator, no opt-in image, and it works for whoever can
         # reach the API. It writes its own metadata.component, like AIBOM.
+        # A HuggingFace dataset (hf:<owner>/<name>, as scan-sbom.sh and the web
+        # UI normalize it) is read the way a model scan reads each dataset its
+        # card names, sources included, by the same module.
         if [ -z "$DATASET_REF" ]; then echo "[ERROR] DATASET_REF required for DATASET mode."; exit 1; fi
-        echo "[1/2] figshare: describe $DATASET_REF"
-        python3 "$LIBDIR/scan-figshare.py" "$DATASET_REF" "$OUTPUT_FILE" "$PROJECT_VERSION"
+        case "$DATASET_REF" in
+            hf:*)
+                echo "[1/2] huggingface: describe dataset ${DATASET_REF#hf:}"
+                python3 "$LIBDIR/scan-hf-dataset.py" "$DATASET_REF" "$OUTPUT_FILE" "$PROJECT_VERSION" ;;
+            *)
+                echo "[1/2] figshare: describe $DATASET_REF"
+                python3 "$LIBDIR/scan-figshare.py" "$DATASET_REF" "$OUTPUT_FILE" "$PROJECT_VERSION" ;;
+        esac
         ;;
 
     MODELFILE)

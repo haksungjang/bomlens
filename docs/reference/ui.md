@@ -45,7 +45,7 @@ The New scan screen is two panes. On the left, pick a source — grouped into Co
 | Docker image | enter the image name | IMAGE |
 | AI model | enter a HuggingFace model id (`org/model`) | AIBOM |
 | Model file | upload a `.gguf`, `.safetensors`, `.pt`, … (up to 8 GB) | MODELFILE |
-| Published dataset | enter a Figshare item — its page URL, its DOI, or the item number — in the same field as the model id | DATASET |
+| Published dataset | enter a Figshare item (its page URL, its DOI, or the item number) or a HuggingFace dataset (`datasets/<owner>/<name>`, its `https://huggingface.co/datasets/...` address, or `hf:<owner>/<name>`) in the same field as the model id | DATASET |
 
 Firmware analysis, an AI model, and Deep CVE matching each run in their own opt-in image rather than the base one. Picking one of these shows a panel that checks whether that image is already present: if so, it names the version already installed; if not, it offers a **Download** button with the download size and, once started, layer-by-layer progress. Downloading it here, before the scan starts, avoids a multi-minute wait in the middle of a scan that would otherwise be indistinguishable from the analysis itself.
 

@@ -3471,6 +3471,7 @@ echo "[stub] scanning ${PROJECT_NAME} ${PROJECT_VERSION} (mode=$mode)"
   echo "TARGET_DIR=${TARGET_DIR:-}"
   echo "ANALYZE_SBOM=${ANALYZE_SBOM:-}"
   echo "YOCTO_BUILD_DIR=${YOCTO_BUILD_DIR:-}"
+  echo "DATASET_REF=${DATASET_REF:-}"
   # Counted here, while the scan is running: an extracted upload tree is removed
   # once the scan finishes, so a later check would always find it empty.
   echo "TARGET_DIR_FILES=$([ -n "${TARGET_DIR:-}" ] && find "$TARGET_DIR" -type f 2>/dev/null | wc -l | tr -d ' ' || echo 0)"; } > "${STUB_ENV_FILE:-/dev/null}"
@@ -4503,6 +4504,34 @@ if [ -z "$(sed -n 's/^API_KEY=//p' "$WORK/stub-env")" ] \
     pass "upload credId is single-use (reuse carries no token, upload stays off)"
 else
     fail "upload credId was reusable (token leaked to a second scan)" "$(cat "$WORK/stub-env")"
+fi
+
+echo "== a HuggingFace dataset in the AI-model field runs as DATASET here =="
+# A dataset id has the model id's owner/name form, so the address or the
+# "datasets/" prefix tells them apart, as in scan-sbom.sh. It needs neither
+# Docker nor the AI image: this server has neither and the scan still starts.
+echo ok > "$STUB_MODE_FILE"
+for pair in "datasets%2Fallenai%2Ftulu-3-sft-mixture|hf:allenai/tulu-3-sft-mixture" \
+            "https%3A%2F%2Fhuggingface.co%2Fdatasets%2Forg%2Fds%2Ftree%2Fmain|hf:org/ds" \
+            "huggingface.co%2Fdatasets%2Forg%2Fds|hf:org/ds" \
+            "hf%3Aorg%2Fds|hf:org/ds" \
+            "datasets%2Fsquad|hf:squad"; do
+    q="${pair%%|*}"; want="${pair##*|}"
+    rm -f "$WORK/stub-env"
+    sse_events "project=hfds&version=1.0&source=ai-model&target=$q" >/dev/null
+    if [ "$(sed -n 's/^MODE=//p' "$WORK/stub-env")" = "DATASET" ] \
+       && [ "$(sed -n 's/^DATASET_REF=//p' "$WORK/stub-env")" = "$want" ]; then
+        pass "source=ai-model with $want runs as DATASET (no Docker needed)"
+    else
+        fail "dataset reference not routed: $q" "$(cat "$WORK/stub-env" 2>/dev/null)"
+    fi
+done
+rm -f "$WORK/stub-env"
+events=$(sse_events "project=hfds&version=1.0&source=ai-model&target=datasets%2F..%2Fetc")
+if echo "$events" | grep -q "Unsupported HuggingFace dataset reference" && [ ! -f "$WORK/stub-env" ]; then
+    pass "a malformed dataset reference is refused before any scan"
+else
+    fail "malformed dataset reference was not refused" "$events"
 fi
 
 echo "== AI usage scenario param (usage= -> AI_USAGE_CONTEXT) =="

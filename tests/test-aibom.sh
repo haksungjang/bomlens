@@ -2036,6 +2036,79 @@ got=$(jq -r '[.metadata.component.properties[] | select(.name == "bomlens:assess
 [ -n "$got" ] && pass "a collected dataset is assessed (overall=$got)" \
     || fail "the dataset was not assessed"
 
+echo "== a HuggingFace dataset on its own becomes the root, with its sources =="
+# The same reading a model scan does for each dataset its card names, applied to
+# one dataset: the root data component and its traced sources carry the same
+# properties, and the assessment reaches the sources the same way.
+HFDS_PY="$LIB/scan-hf-dataset.py"
+for pair in \
+    "hf:org/mix|org/mix" \
+    "https://huggingface.co/datasets/org/mix|org/mix" \
+    "https://huggingface.co/datasets/org/mix/tree/main/data|org/mix" \
+    "huggingface.co/datasets/org/mix|org/mix" \
+    "datasets/org/mix|org/mix" \
+    "datasets/single|single" \
+    "org/mix|-" \
+    "https://huggingface.co/org/mix|-" \
+    "datasets/../etc|-" \
+    "datasets/-x/y|-"; do
+    ref="${pair%%|*}"; want="${pair##*|}"
+    got=$(python3 -I -c "
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location('h', sys.argv[1]); m = importlib.util.module_from_spec(spec)
+sys.path.insert(0, sys.argv[2]); spec.loader.exec_module(m)
+print(m.parse_reference(sys.argv[3]) or '-')" "$HFDS_PY" "$LIB" "$ref")
+    [ "$got" = "$want" ] && pass "dataset reference '$ref' -> $want" || fail "dataset reference '$ref' -> '$got', expected '$want'"
+done
+src_hub hfds
+src_ds org/mix odc-by '["extended|org/nc"]'
+src_ds org/nc cc-by-nc-4.0 '["original"]'
+BOMLENS_HF_API_BASE="file://$SRC" python3 -I "$HFDS_PY" "datasets/org/mix" "$WORK/hfds.json" 1.0 >/dev/null 2>"$WORK/hfds.err"
+rc=$?
+if [ "$rc" -eq 0 ] && jq -e '
+      .metadata.component.type == "data" and .metadata.component.name == "org/mix"
+      and .metadata.component.version == "1.0"
+      and .metadata.component["bom-ref"] == "dataset:huggingface/org/mix"
+      and ([.metadata.component.properties[] | select(.name == "bomlens:dataset:revision")] | length == 1)
+      and ([.metadata.component.properties[] | select(.name == "bomlens:dataset:derivedFrom") | .value]
+           == ["extended dataset:huggingface/org/nc"])
+      and ([.components[] | .name] == ["org/nc"])
+      and ([.components[0].properties[] | select(.name == "bomlens:dataset:depth") | .value] == ["1"])
+      and ([.dependencies[] | select(.ref == "dataset:huggingface/org/mix") | .dependsOn[]]
+           == ["dataset:huggingface/org/nc"])' "$WORK/hfds.json" >/dev/null; then
+    pass "the dataset is the root data component and its source is linked below it"
+else
+    fail "standalone dataset SBOM (rc=$rc)" "$(cat "$WORK/hfds.err"; jq -c '{root: .metadata.component.name, comps: [.components[].name], deps: .dependencies}' "$WORK/hfds.json" 2>/dev/null)"
+fi
+AI_USAGE_CONTEXT=product bash "$LIB/assess-ai-risk.sh" "$WORK/hfds.json" >/dev/null 2>&1
+{ [ "$(jq -r '[.metadata.component.properties[] | select(.name=="bomlens:assessment:sources") | .value] | first // ""' "$WORK/hfds.json")" = "caution" ] \
+  && [ "$(jq -r '[.metadata.component.properties[] | select(.name=="bomlens:assessment:overall") | .value] | first // ""' "$WORK/hfds.json")" = "caution" ]; } \
+    && pass "the non-commercial source reaches the root dataset's verdict" \
+    || fail "root verdict: $(jq -c '[.metadata.component.properties[] | select(.name|startswith("bomlens:assessment"))]' "$WORK/hfds.json")"
+cp "$WORK/hfds.json" "$WORK/cdx/hf-dataset.json"
+AIBOM_DATASET_DEPTH=0 BOMLENS_HF_API_BASE="file://$SRC" python3 -I "$HFDS_PY" "hf:org/mix" "$WORK/hfds0.json" >/dev/null 2>&1
+[ "$(jq '.components | length' "$WORK/hfds0.json")" = "0" ] && pass "depth 0 reads the dataset alone" || fail "depth 0 traced sources"
+BOMLENS_HF_API_BASE="file://$SRC" python3 -I "$HFDS_PY" "datasets/org/missing" "$WORK/hfds-miss.json" >/dev/null 2>"$WORK/hfds-miss.err"
+rc=$?
+{ [ "$rc" -eq 1 ] && [ ! -s "$WORK/hfds-miss.json" ] && grep -q "could not be read (not-readable)" "$WORK/hfds-miss.err" \
+  && grep -q "HF_TOKEN" "$WORK/hfds-miss.err"; } \
+    && pass "a dataset that cannot be read is an error with the reason, not an empty SBOM" \
+    || fail "unreadable dataset rc=$rc" "$(cat "$WORK/hfds-miss.err")"
+python3 -I "$HFDS_PY" "org/mix" "$WORK/hfds-bad.json" >/dev/null 2>&1
+[ $? -eq 1 ] && pass "a bare owner/name is refused here (it is a model id)" || fail "bare id accepted"
+mkdir -p "$SRC/datasets/org"; echo '{"__status": 429}' > "$SRC/datasets/org/busy.json"
+BOMLENS_HF_API_BASE="file://$SRC" python3 -I "$HFDS_PY" "datasets/org/busy" "$WORK/hfds-busy.json" >/dev/null 2>"$WORK/hfds-busy.err"
+{ [ $? -eq 1 ] && grep -q "(rate-limited)" "$WORK/hfds-busy.err" && grep -q "try again later" "$WORK/hfds-busy.err"; } \
+    && pass "a rate-limited hub is reported as such" || fail "rate limit" "$(cat "$WORK/hfds-busy.err")"
+src_ds org/self odc-by '["extended|org/self", "extended|org/nc"]'
+BOMLENS_HF_API_BASE="file://$SRC" python3 -I "$HFDS_PY" "datasets/org/self" "$WORK/hfds-self.json" >/dev/null 2>&1
+{ jq -e '[.dependencies[] | select(.ref as $r | .dependsOn | index($r))] | length == 0' "$WORK/hfds-self.json" >/dev/null \
+  && [ "$(jq -r '[.metadata.component.properties[] | select(.name=="bomlens:dataset:derivedFrom") | .value] | join("|")' "$WORK/hfds-self.json")" = "extended dataset:huggingface/org/nc" ]; } \
+    && pass "a card that names itself among its sources gets no self-dependency" || fail "self source" "$(jq -c .dependencies "$WORK/hfds-self.json")"
+AIBOM_DATASET_MAX_LOOKUPS=0 BOMLENS_HF_API_BASE="file://$SRC" python3 -I "$HFDS_PY" "datasets/org/mix" "$WORK/hfds-b0.json" >/dev/null 2>&1
+{ [ $? -eq 0 ] && [ "$(jq -r .metadata.component.name "$WORK/hfds-b0.json")" = "org/mix" ]; } \
+    && pass "a lookup budget of 0 still reads the dataset asked for" || fail "budget 0 failed the scan"
+
 echo "== what enrichment writes is valid CycloneDX 1.7 =="
 # The new properties, the pedigree built from the lineage chain and the traced
 # dataset sources must not cost the document its schema validity. Runs with the

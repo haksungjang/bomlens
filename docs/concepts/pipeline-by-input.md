@@ -61,6 +61,8 @@ There is a second AI input that runs entirely in the base image: a model **file*
 
 A third AI input runs in the base image too: a published research **dataset**, given as a Figshare item (`--model` with the item URL, its DOI, or the item number). The public item endpoint answers without an account, and the fields an SBOM wants — licence, DOI, authors, a digest per file — are fields there rather than prose in a card, so a stdlib reader transcribes them into a CycloneDX 1.7 `data` component that takes the same post-processing. It is the path for data a paper published, which is where a great deal of research data actually lives. A licence the item states as one we can place becomes an SPDX id; anything else is kept verbatim rather than guessed at, and an item nobody can read without an account is an error rather than a dataset described as having no licence.
 
+A HuggingFace dataset takes the same path. Give it with a prefix or an address (`datasets/<owner>/<name>`, `https://huggingface.co/datasets/<owner>/<name>` or `hf:<owner>/<name>`), since a bare `owner/name` is a model id. A stdlib reader takes the licence, the hub revision and a SHA-256 digest per file from the hub, and reads the datasets the card lists under `source_datasets` in the same way as the datasets a model card names. A gated or private dataset needs `HF_TOKEN`, and a dataset that cannot be read is an error rather than an empty SBOM.
+
 > The model card's disclosure (weights, architecture, training data, training process) and the G7 result appear in the web UI's Models & datasets and G7 sections — see the [web UI reference](../reference/ui.md). For a step-by-step walkthrough, see the [AI model guide](../guides/ai-model.md).
 
 ---

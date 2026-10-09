@@ -769,6 +769,24 @@ DOCKER_STUB_ARGV_DUMP=1 \
 in_log "<GENERATE_SPDX3=true>" && pass "AI scans write the SPDX 3.0.1 document by default" \
   || { fail "GENERATE_SPDX3 default not forwarded"; show; cat "$LOG"; }
 
+d="$(new_proj hf_dataset)"
+DOCKER_STUB_ARGV_DUMP=1 HF_TOKEN=hf_secret_value \
+  scan_in "$d" --project D --version 1 --model "https://huggingface.co/datasets/allenai/tulu-3-sft-mixture/tree/main" --generate-only
+{ in_out "Mode: DATASET" && in_log "<DATASET_REF=hf:allenai/tulu-3-sft-mixture>" && in_log "<HF_TOKEN>" \
+  && ! in_log "hf_secret_value"; } \
+  && pass "--model <dataset address> -> DATASET with hf:<id>, HF_TOKEN by name only" \
+  || { fail "--model <dataset address> not routed to DATASET"; show; cat "$LOG"; }
+d="$(new_proj hf_dataset_notoken)"
+DOCKER_STUB_ARGV_DUMP=1 HF_TOKEN='' HUGGING_FACE_HUB_TOKEN='' \
+  scan_in "$d" --project D --version 1 --model "datasets/org/ds" --generate-only
+{ in_log "<DATASET_REF=hf:org/ds>" && ! in_log "<HF_TOKEN>"; } \
+  && pass "no token set: HF_TOKEN is not passed at all" || { fail "HF_TOKEN passed without a token"; cat "$LOG"; }
+d="$(new_proj hf_dataset_oldname)"
+DOCKER_STUB_ARGV_DUMP=1 HF_TOKEN='' HUGGING_FACE_HUB_TOKEN=hf_old_name_value \
+  scan_in "$d" --project D --version 1 --model "datasets/org/ds" --generate-only
+{ in_log "<HF_TOKEN>" && ! in_log "hf_old_name_value"; } \
+  && pass "a token under the older name is passed as HF_TOKEN, by name only" || { fail "older token name not passed"; cat "$LOG"; }
+
 d="$(new_proj no_spdx3)"
 DOCKER_STUB_ARGV_DUMP=1 scan_in "$d" --project MNS --version 1 --model owner/repo --generate-only --no-spdx3
 in_log "<GENERATE_SPDX3=false>" && pass "--no-spdx3 reaches the container" || { fail "--no-spdx3 not forwarded"; show; cat "$LOG"; }

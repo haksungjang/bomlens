@@ -54,7 +54,7 @@ SBOM=/path/to/bomlens/scripts/scan-sbom.sh
 | 펌웨어 `.bin` | FIRMWARE | `$SBOM --target dev.bin --firmware --all --generate-only` | 〃 |
 | AI 모델(HuggingFace) | AIBOM | `$SBOM --model owner/name --generate-only` | 고지문, ML-BOM(1.7), 위험분석보고서(보안 없음) |
 | AI 모델 파일(GGUF, safetensors 등) | MODELFILE | `$SBOM --model-file ./model.gguf --generate-only` | 고지문, ML-BOM(1.7), 위험분석보고서(보안 없음) |
-| 공개 데이터셋(Figshare) | DATASET | `$SBOM --model <항목 주소> --generate-only` | 고지문, ML-BOM(1.7), 위험분석보고서(보안 없음) |
+| 공개 데이터셋(Figshare, HuggingFace) | DATASET | `$SBOM --model <항목 주소 또는 datasets/owner/name> --generate-only` | 고지문, ML-BOM(1.7), 위험분석보고서(보안 없음) |
 
 > 모든 명령에 `--project <이름> --version <버전>`이 필요합니다(아래 예시 참고).
 >
@@ -189,7 +189,16 @@ $SBOM --project cell-imaging-data --version 1.0.0 \
   --usage product --generate-only
 ```
 
-페이지 주소, DOI, 항목 번호 모두 되고, 계정도 별도 이미지도 필요 없습니다. 버전 지정 방법, 라이선스를 SPDX로 옮기는 규칙, 비공개·엠바고 항목 처리는 AI 모델 가이드의 [공개된 데이터셋 스캔](ai-model.ko.md#공개된-데이터셋-스캔)을 참고하세요.
+페이지 주소, DOI, 항목 번호 모두 되고, 계정도 별도 이미지도 필요 없습니다.
+
+HuggingFace에 있는 데이터셋도 같은 방법으로 스캔합니다. `datasets/<owner>/<name>`, `https://huggingface.co/datasets/<owner>/<name>` 주소, `hf:<owner>/<name>` 중 하나로 주면 됩니다. 앞에 아무것도 붙이지 않은 `owner/name`은 모델 id로 읽습니다. HuggingFace가 모델과 데이터셋에 같은 형식을 쓰기 때문입니다.
+
+```bash
+$SBOM --project tulu --version 1.0 \
+  --model datasets/allenai/tulu-3-sft-mixture --generate-only
+```
+
+버전 지정 방법, 라이선스를 SPDX로 옮기는 규칙, 비공개·엠바고 항목 처리, HuggingFace 데이터셋의 원천을 따라가는 방식은 AI 모델 가이드의 [공개된 데이터셋 스캔](ai-model.ko.md#공개된-데이터셋-스캔)을 참고하세요.
 
 **산출물**: 고지문, ML-BOM(CycloneDX 1.7), 위험분석보고서, 적합성 검사
 
@@ -236,7 +245,7 @@ UI 상단에서 스캔 대상을 고르고 각 형태에 맞게 입력합니다.
 | Docker 이미지 | 이미지명 입력 |
 | AI 모델 | HuggingFace 모델 id 입력 — Docker 엔진이 켜져 있으면 타일이 자동으로 나타남 |
 | 모델 파일 | `.gguf`, `.safetensors`, `.pt` 등 업로드(최대 8GB) |
-| 공개 데이터셋 | Figshare 아이템의 페이지 URL, DOI, 또는 아이템 번호를 모델 id와 같은 입력란에 입력 |
+| 공개 데이터셋 | Figshare 아이템(페이지 URL, DOI, 아이템 번호) 또는 HuggingFace 데이터셋(`datasets/<owner>/<name>`이나 `https://huggingface.co/datasets/...` 주소)을 모델 id와 같은 입력란에 입력 |
 
 이 표는 이 가이드가 다루는 시나리오 기준입니다. 전체 11개 스캔 대상은 [웹 UI 레퍼런스](../reference/ui.ko.md#새-스캔)를 참고하세요.
 

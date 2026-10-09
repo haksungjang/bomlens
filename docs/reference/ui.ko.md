@@ -45,7 +45,7 @@ cd ~/sbom-output      # 출력 폴더(아무 곳이나 가능)
 | Docker 이미지 | 이미지 이름 입력 | IMAGE |
 | AI 모델 | HuggingFace 모델 id(`org/model`) 입력 | AIBOM |
 | 모델 파일 | `.gguf`, `.safetensors`, `.pt` 등 업로드(최대 8GB) | MODELFILE |
-| 공개 데이터셋 | 모델 ID와 같은 칸에 Figshare 항목의 페이지 주소나 DOI, 항목 번호 입력 | DATASET |
+| 공개 데이터셋 | 모델 ID와 같은 칸에 Figshare 항목의 페이지 주소나 DOI, 항목 번호, 또는 HuggingFace 데이터셋(`datasets/<owner>/<name>`, `https://huggingface.co/datasets/...` 주소, `hf:<owner>/<name>`) 입력 | DATASET |
 
 펌웨어 분석, AI 모델, Deep CVE 매칭은 각각 기본 이미지가 아닌 자체 opt-in 이미지에서 실행됩니다. 이 중 하나를 고르면 그 이미지가 이미 있는지 확인하는 패널이 나타납니다. 이미 있으면 설치된 버전을 표시하고, 없으면 내려받을 용량과 함께 **다운로드** 버튼을 보여주며 시작하면 레이어별 진행 상황도 표시합니다. 스캔을 시작하기 전에 여기서 미리 받아 두면, 스캔 도중 분석과 구분되지 않는 몇 분짜리 대기가 생기는 것을 피할 수 있습니다.
 

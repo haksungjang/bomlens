@@ -142,6 +142,15 @@ The item becomes a CycloneDX `data` component carrying its licence, its DOI, its
 
 An institutional DOI that does not carry "figshare" (`10.25916/sut.33412285.v1`) cannot be told apart from any other DOI, so give the item URL for those. A private, embargoed or withdrawn item cannot be read without an account, and is reported as an error rather than described as a dataset with no licence.
 
+A dataset on HuggingFace is scanned the same way, also in the base image with no account. Give it as `datasets/<owner>/<name>`, as `https://huggingface.co/datasets/<owner>/<name>` (anything after the name, such as `/tree/main`, is ignored), or as `hf:<owner>/<name>`. A bare `owner/name` stays a model id, because the hub uses the same form for both, so the prefix or the address is what marks a dataset:
+
+```bash
+./scripts/scan-sbom.sh --project tulu --version 1.0 \
+  --model datasets/allenai/tulu-3-sft-mixture --generate-only
+```
+
+The dataset becomes the SBOM's root `data` component with its licence, the hub revision it was read at (`bomlens:dataset:revision`) and a SHA-256 digest per file. The datasets its card lists under `source_datasets` are traced the same way as the datasets a model card names (same `AIBOM_DATASET_DEPTH` and `AIBOM_DATASET_MAX_LOOKUPS` limits), appear as rows under it in Models & datasets, and their risk verdicts reach the root. A gated or private dataset needs `HF_TOKEN`, and a dataset that cannot be read is reported as an error rather than written as an empty SBOM.
+
 **Deliverables**: notice, ML-BOM (CycloneDX 1.7), risk report, conformance check.
 
 ## Reading the result

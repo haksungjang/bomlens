@@ -142,6 +142,15 @@ pickle은 데이터 형식이 아닙니다. 불러오는 순간 스트림이 지
 
 이름에 "figshare"가 없는 기관 DOI(`10.25916/sut.33412285.v1`)는 다른 DOI와 구분할 수 없으므로 항목 주소를 주십시오. 비공개, 엠바고, 철회된 항목은 계정 없이 읽을 수 없으며, 라이선스가 없는 데이터셋으로 기록하지 않고 오류로 알립니다.
 
+HuggingFace에 있는 데이터셋도 같은 방법으로 스캔하며, 역시 기본 이미지에서 계정 없이 처리합니다. `datasets/<owner>/<name>`, `https://huggingface.co/datasets/<owner>/<name>`(이름 뒤의 `/tree/main` 같은 부분은 무시), `hf:<owner>/<name>` 중 하나로 주면 됩니다. HuggingFace가 모델과 데이터셋에 같은 형식을 쓰므로 앞에 아무것도 붙이지 않은 `owner/name`은 모델 id로 읽습니다. 데이터셋이라는 것은 접두어나 주소로 구분합니다.
+
+```bash
+./scripts/scan-sbom.sh --project tulu --version 1.0 \
+  --model datasets/allenai/tulu-3-sft-mixture --generate-only
+```
+
+데이터셋은 SBOM의 루트 `data` 컴포넌트가 되며 라이선스, 조회한 허브 리비전(`bomlens:dataset:revision`), 파일별 SHA-256 값을 담습니다. 카드의 `source_datasets`에 적힌 데이터셋은 모델 카드가 적은 데이터셋과 같은 방식으로 따라가며(`AIBOM_DATASET_DEPTH`, `AIBOM_DATASET_MAX_LOOKUPS` 제한도 같음), **모델·데이터셋** 화면에서 그 아래 행으로 표시되고, 각 원천의 위험 판정이 루트까지 반영됩니다. 접근 제한이 있거나 비공개인 데이터셋은 `HF_TOKEN`이 필요하며, 읽을 수 없는 데이터셋은 빈 SBOM으로 기록하지 않고 오류로 알립니다.
+
 **산출물**: 고지문, ML-BOM(CycloneDX 1.7), 위험분석보고서, 적합성 검사.
 
 ## 결과 읽기

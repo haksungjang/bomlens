@@ -127,6 +127,32 @@ SCANOSS_API_URL="${SCANOSS_API_URL:-}"; SCANOSS_API_KEY="${SCANOSS_API_KEY:-}"
 # Passed to docker as a bare `-e HF_TOKEN` (name, no value) so the secret never
 # lands in argv where `ps` could read it.
 HF_TOKEN="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-}}"
+# Exported: `docker run -e HF_TOKEN` reads the value from this process's
+# environment, which a plain assignment from the older name does not reach.
+[ -n "$HF_TOKEN" ] && export HF_TOKEN
+
+# Whether a --model value names a HuggingFace dataset: hf:<id>, datasets/<id>
+# or its huggingface.co/datasets/<id> address (prefix in any case, anything
+# after the name ignored). Sets HF_DATASET_ID and returns 0 for a dataset, 2
+# for a dataset prefix with an id the hub could not hold, 1 otherwise. The
+# same rule as hf_dataset_ref in docker/web/server.py; the id is checked as a
+# whole string, so a newline cannot slip a second line past it.
+hf_dataset_ref() {
+    HF_DATASET_ID=""
+    local rest first after matched=1
+    shopt -s nocasematch
+    if [[ "$1" =~ ^(hf:|(https?://)?(www\.)?huggingface\.co/datasets/|datasets/)(.*)$ ]]; then
+        matched=0; rest="${BASH_REMATCH[4]}"
+    fi
+    shopt -u nocasematch
+    [ "$matched" -eq 0 ] || return 1
+    first="${rest%%/*}"
+    if [ "$first" != "$rest" ]; then after="${rest#*/}"; HF_DATASET_ID="$first/${after%%/*}"; else HF_DATASET_ID="$first"; fi
+    if [[ "$HF_DATASET_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?$ ]] && [[ "$HF_DATASET_ID" != *..* ]]; then
+        return 0
+    fi
+    return 2
+}
 GIT_URL=""; GIT_REF=""; NO_REPORT="false"; GENERATE_REPORT="false"
 INGEST_SOURCE="false"; INGEST_ROOTFS="false"; INGEST_ARCHIVE=""; SCAN_INPUT_DIR=""; CLEANUP_DIRS=()
 MERGE_FILES=()
@@ -296,6 +322,11 @@ Options:
                          image. An institutional DOI that does not carry
                          "figshare" cannot be told apart from any other DOI, so
                          give the item URL for those.
+                         A HuggingFace dataset is taken as datasets/<owner>/<name>,
+                         its https://huggingface.co/datasets/... address, or
+                         hf:<owner>/<name>, and is described in the base image
+                         with the sources its card names. A bare owner/name is
+                         always a model.
                          Mutually exclusive with --target/--analyze/--git/--merge.
   --model-file <path>    Read one AI model FILE (GGUF, safetensors, PyTorch,
                          pickle, npz, npy, ONNX) and describe it from its own
@@ -1585,7 +1616,15 @@ elif [ -n "$MODEL" ]; then
     # handed a link to", so one option takes both and the reference decides which
     # path runs. An institutional DOI carrying no "figshare" (10.25916/sut.…)
     # cannot be told apart from any other DOI: give the item url for those.
-    case "$MODEL" in
+    # A HuggingFace dataset needs its "datasets/" prefix (or its address): a bare
+    # owner/name is a model id, and the hub uses the same form for both.
+    # The dataset forms are decided first, so a dataset whose name contains
+    # "figshare" is still read from the hub.
+    hf_rc=0; hf_dataset_ref "$MODEL" || hf_rc=$?
+    case "$hf_rc:$MODEL" in
+        0:*) MODEL="hf:$HF_DATASET_ID"; MODE="DATASET" ;;
+        2:*) echo "[ERROR] --model: not a HuggingFace dataset reference. Use datasets/<owner>/<name> or https://huggingface.co/datasets/<owner>/<name>."
+             exit 1 ;;
         *figshare*) MODE="DATASET" ;;
         *)          MODE="AIBOM" ;;
     esac
@@ -1596,7 +1635,9 @@ elif [ -n "$MODEL" ]; then
     # Default the project name to the model's last segment (owner/name -> name).
     # A Figshare reference has no such name, so the item number stands in until
     # the fetch replaces the root component with the item's real title.
-    if [ "$MODE" = "DATASET" ]; then
+    if [ "$MODE" = "DATASET" ] && [ -n "${HF_DATASET_ID:-}" ]; then
+        [ -n "$PROJECT_NAME" ] || PROJECT_NAME="${HF_DATASET_ID##*/}"
+    elif [ "$MODE" = "DATASET" ]; then
         [ -n "$PROJECT_NAME" ] || PROJECT_NAME="figshare-$(printf '%s' "$MODEL" | tr -cd '0-9' | tail -c 12)"
     else
         [ -n "$PROJECT_NAME" ] || PROJECT_NAME="${MODEL##*/}"
@@ -2165,9 +2206,12 @@ else
                 # own environment instead. AIBOM only — no other mode needs it.
                 [ -n "$HF_TOKEN" ] && ENVV="$ENVV -e HF_TOKEN"
                 RUN_IMAGE="$AIBOM_IMAGE" ;;
-        # Base image: reading a Figshare item is one stdlib Python script and one
-        # public API call, so this needs neither the generator image nor an account.
-        DATASET) VOL="-v \"$(hostpath "$OUTPUT_HOST_DIR")\":/host-output"; ENVV="-e DATASET_REF=\"$MODEL\"" ;;
+        # Base image: reading a Figshare item or a HuggingFace dataset is one
+        # stdlib Python script against a public API, so this needs neither the
+        # generator image nor an account. A HuggingFace token, when set, is
+        # passed by name only (as for AIBOM) so a gated dataset can be read.
+        DATASET) VOL="-v \"$(hostpath "$OUTPUT_HOST_DIR")\":/host-output"; ENVV="-e DATASET_REF=\"$MODEL\""
+                 case "$MODEL" in hf:*) [ -n "$HF_TOKEN" ] && ENVV="$ENVV -e HF_TOKEN" ;; esac ;;
         ANALYZE)
             if [ -z "$ANALYZE_SBOM" ]; then
                 # A Yocto build directory with no SPDX document: the build tree is
