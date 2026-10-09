@@ -478,6 +478,13 @@ def prune_prose_dataset_names(models, api, declared):
             params.pop("datasets", None)
     return dropped
 
+# Filled by the lineage walk below and read after the cdxgen harvest; empty when
+# the hub could not be read.
+lineage_items, _bases, relation = [], [], None
+# Marks a pedigree this step built, so a re-run replaces its own and never a
+# pedigree that came from cdxgen or from the generator.
+PEDIGREE_MARK = "bomlens:lineage:source"
+
 if hf_info is not None:
     siblings = getattr(hf_info, "siblings", None) or []
     # file name -> LFS SHA-256 (only LFS-tracked files expose a content hash)
@@ -500,6 +507,13 @@ if hf_info is not None:
         for name, sha in file_sha.items()
         if name.lower().endswith(WEIGHT_EXTS)
     ]
+    # hashes[] above keeps the digests and drops the names, so a reader cannot
+    # tell which digest belongs to which file. The pairs are kept here as well,
+    # one property per file in sha256sum's "<digest>  <path>" layout, so a later
+    # step can describe each weight file on its own. Capped like the dataset
+    # digests; the true count rides along.
+    WEIGHT_FILE_CAP = 256
+    weight_files = sorted((n, s) for n, s in file_sha.items() if n.lower().endswith(WEIGHT_EXTS))
 
     gated = getattr(hf_info, "gated", None)          # False | "auto" | "manual" | None
     private = bool(getattr(hf_info, "private", False))
@@ -555,6 +569,27 @@ if hf_info is not None:
     if weight_fmts:
         weights_props.append({"name": "bomlens:weights:formats", "value": ",".join(weight_fmts)})
         weights_props.append({"name": "bomlens:weights:pickleFiles", "value": str(pickle_files)})
+    for name, sha in weight_files[:WEIGHT_FILE_CAP]:
+        weights_props.append({"name": "bomlens:weights:file", "value": f"{sha}  {name}"})
+    if len(weight_files) > WEIGHT_FILE_CAP:
+        weights_props.append({"name": "bomlens:weights:filesRecorded",
+                              "value": f"{WEIGHT_FILE_CAP} of {len(weight_files)}"})
+
+    # ---- Repository facts kept for later steps ------------------------------
+    # The gate kind (auto-approved or manually reviewed) and the time of the
+    # revision that was read. Neither is a judgement: the time is when the
+    # repository last changed, not when the model was released, and nothing
+    # downstream may read it as a release date.
+    repo_props = []
+    if gated in ("auto", "manual"):
+        repo_props.append({"name": "bomlens:hf:gated", "value": str(gated)})
+    _rev_time = getattr(hf_info, "last_modified", None)
+    if _rev_time:
+        try:
+            _rev_time = _rev_time.isoformat()
+        except AttributeError:
+            pass
+        repo_props.append({"name": "bomlens:hf:revisionTime", "value": str(_rev_time)[:40]})
 
     # ---- File security: HuggingFace's own scan results ----------------------
     # HuggingFace runs ClamAV and picklescan over every repository and exposes
@@ -777,8 +812,26 @@ if hf_info is not None:
     # flag an ancestor whose license the registry marks inheritable when this
     # model declares something else.
     lineage_props = []
+    # (id, license, unreadable) per ancestor walked, nearest first. Kept for the pedigree
+    # built after the cdxgen harvest, which may supply its own.
+    lineage_items = []
     _base = card_get(hf_info, "base_model")
     _bases = _base if isinstance(_base, list) else ([_base] if _base else [])
+    _bases = [str(b).strip() for b in _bases if str(b or "").strip()]
+    # How this model relates to its direct parent, as the hub tags it:
+    # base_model:<relation>:<id>. Only the four relations the hub documents are
+    # read; a bare base_model:<id> tag says nothing about the relation.
+    LINEAGE_RELATIONS = ("finetune", "quantized", "adapter", "merge")
+    relation = None
+    if _bases:
+        rels = set()
+        for t in tags:
+            parts = str(t).split(":", 2)
+            if len(parts) == 3 and parts[0] == "base_model" and parts[1] in LINEAGE_RELATIONS \
+               and parts[2] == _bases[0]:
+                rels.add(parts[1])
+        # Two relations to the same parent is a contradiction, not a choice.
+        relation = rels.pop() if len(rels) == 1 else None
     if _bases:
         chain, visited = [], {model_id}
         own_term = _match_term(model_license)
@@ -792,11 +845,13 @@ if hf_info is not None:
             except Exception as e:
                 print(f"[enrich] lineage: {cur} unreadable: {e}", file=sys.stderr)
                 chain.append(f"{cur}:unreadable")
+                lineage_items.append((cur, None, True))
                 break
             blic = card_get(binfo, "license")
             if isinstance(blic, list):
                 blic = blic[0] if blic else None
             chain.append(f"{cur}:{blic or 'none'}")
+            lineage_items.append((cur, str(blic) if blic else None, False))
             bterm = _match_term(blic)
             if conflict is None and bterm and bterm.get("inheritable") \
                and (own_term is None or own_term.get("key") != bterm.get("key")):
@@ -815,6 +870,46 @@ if hf_info is not None:
                                       "value": f"{conflict[0]} ({conflict[1]})"})
             print(f"[enrich] lineage: {len(chain)} ancestor(s), "
                   f"conflict={'yes' if conflict else 'no'}.", file=sys.stderr)
+        if relation:
+            lineage_props.append({"name": "bomlens:lineage:relation", "value": relation})
+        # The chain follows the first parent only. A merge names several; the
+        # others are recorded by id so they are not silently lost, and are not
+        # walked (their licenses are not read).
+        if len(_bases) > 1:
+            lineage_props.append({"name": "bomlens:lineage:otherParents",
+                                  "value": ", ".join(dict.fromkeys(_bases[1:]))[:500]})
+
+    # ---- Distributed weights scope (observed signals only) ------------------
+    # Whether the repository ships full weights, an adapter that needs its base
+    # model to run, a quantized copy, or a merge. Read from what the hub states:
+    # the base_model relation tag, the file list, and the declared library. A
+    # value is written only when the signals agree; when they disagree the
+    # signals themselves are recorded and the scope is left for a person.
+    scope_signals = {}
+    if relation == "adapter":
+        scope_signals["tag"] = "adapter"
+    elif relation == "quantized":
+        scope_signals["tag"] = "quantized"
+    elif relation == "merge":
+        scope_signals["tag"] = "merged"
+    base_names = [n.rsplit("/", 1)[-1].lower() for n in filenames]
+    adapter_files = any(b == "adapter_config.json" for b in base_names) and \
+        any(b.startswith("adapter_model.") for b in base_names)
+    full_weights = any(n.lower().endswith(WEIGHT_EXTS)
+                       and not n.rsplit("/", 1)[-1].lower().startswith("adapter_model.")
+                       for n in filenames)
+    if adapter_files and not full_weights:
+        scope_signals["files"] = "adapter"
+    if str(library or "").lower() == "peft":
+        scope_signals["library"] = "adapter"
+    if relation == "finetune" and full_weights and not adapter_files:
+        scope_signals["tag"] = "full"
+    scope_values = set(scope_signals.values())
+    if len(scope_values) == 1:
+        weights_props.append({"name": "bomlens:weights:scope", "value": scope_values.pop()})
+    elif len(scope_values) > 1:
+        weights_props.append({"name": "bomlens:weights:scopeSignals",
+                              "value": ", ".join(f"{k}:{v}" for k, v in sorted(scope_signals.items()))})
 
     # A card that says "other" leaves the generator with no id to copy, so it
     # guesses one from the LICENSE text by substring — "limited" or "submit" in an
@@ -844,22 +939,28 @@ if hf_info is not None:
                     existing.append(h)
                     seen.add((h["alg"], h["content"]))
             m["hashes"] = existing
+        # A second run finds the prose names already gone, so it drops nothing;
+        # the note from the first run is carried over instead of being erased.
+        prior_dropped = [str(p.get("value")) for p in (m.get("properties") or [])
+                         if p.get("name") == "bomlens:card:datasetNameDropped" and p.get("value")]
+        dropped_note = ", ".join(prose_dropped)[:300] if prose_dropped else (prior_dropped[0] if prior_dropped else "")
         # Replace any prior openness/scan/weights properties so re-runs stay
         # idempotent (same contract as the DATASET_MARK components below).
         props = [p for p in (m.get("properties") or [])
                  if not str(p.get("name", "")).startswith(
                      ("openness:", "bomlens:hf:scan:", "bomlens:weights:",
                       "bomlens:license:", "bomlens:lineage:",
+                      "bomlens:hf:gated", "bomlens:hf:revisionTime",
                       "bomlens:card:datasetName"))]
         for name, value in openness.items():
             props.append({"name": name, "value": value})
         props.extend(scan_props)
         props.extend(weights_props)
+        props.extend(repo_props)
         props.extend(lic_props)
         props.extend(lineage_props)
-        if prose_dropped:
-            props.append({"name": "bomlens:card:datasetNameDropped",
-                          "value": ", ".join(prose_dropped)[:300]})
+        if dropped_note:
+            props.append({"name": "bomlens:card:datasetNameDropped", "value": dropped_note})
         m["properties"] = props
     print(f"[enrich] HuggingFace: {len(weight_hashes)} weight hash(es), openness assessed "
           f"(weights={openness['openness:weights']}).", file=sys.stderr)
@@ -905,6 +1006,19 @@ if hf_info is not None:
         print(f"[enrich] datasets: {len(dataset_comps)} referenced, {resolved_datasets} resolved "
               f"(training-data={training_data}).", file=sys.stderr)
 
+def _ours(pedigree):
+    anc = (pedigree or {}).get("ancestors") if isinstance(pedigree, dict) else None
+    return bool(anc) and all(
+        any(p.get("name") == PEDIGREE_MARK for p in (a.get("properties") or []))
+        for a in anc if isinstance(a, dict))
+
+
+# A pedigree this step wrote on an earlier run is dropped first, so the harvest
+# below and the rebuild after it see the document as the generator left it.
+for m in models:
+    if _ours(m.get("pedigree")):
+        m.pop("pedigree", None)
+
 # ---- cdxgen -t ai: pedigree / performance metrics ---------------------------
 # Gated on the HuggingFace fetch having succeeded: cdxgen hits the same API over
 # the same network, so when hf_info is None (offline, gated model, or the hub
@@ -948,6 +1062,47 @@ elif cdxgen_bin:
     print("[enrich] cdxgen harvest skipped (HuggingFace unreachable, so it would fail too).", file=sys.stderr)
 else:
     print("[enrich] cdxgen harvest disabled or not present; skipping pedigree/metrics.", file=sys.stderr)
+
+# ---- Pedigree from the lineage chain ----------------------------------------
+# CycloneDX records where a component came from in pedigree.ancestors[]. When
+# cdxgen supplied none, the chain walked above is turned into ancestor
+# components: the id, a purl without a version, and the license the ancestor's
+# own card declares. No version is written. The revision the walk saw is the
+# ancestor's current head, not the one this model was trained from, and writing
+# it would read as that.
+def _lineage_ancestor(idx, anc_id, lic, rel, unreadable=False):
+    props = [{"name": PEDIGREE_MARK, "value": "chain"}]
+    if idx == 0 and rel:
+        props.append({"name": "bomlens:lineage:relation", "value": rel})
+    if unreadable:
+        props.append({"name": "bomlens:lineage:unreadable", "value": "true"})
+    comp = {
+        "type": "machine-learning-model",
+        "bom-ref": "lineage:huggingface/" + anc_id,
+        "name": anc_id,
+        "purl": "pkg:huggingface/" + anc_id,
+        "properties": props,
+    }
+    if lic and lic != "none":
+        comp["licenses"] = [{"license": {"name": lic}}]
+    return comp
+
+
+if lineage_items or len(_bases) > 1:
+    ancestors = [_lineage_ancestor(i, a, lic, relation, unreadable=bad)
+                 for i, (a, lic, bad) in enumerate(lineage_items)]
+    seen_ids = {a for a, _, _ in lineage_items}
+    for other in _bases[1:]:
+        if other not in seen_ids:
+            seen_ids.add(other)
+            ancestors.append(_lineage_ancestor(len(ancestors), other, None, None))
+    built = 0
+    for m in models:
+        if not m.get("pedigree") and ancestors:
+            m["pedigree"] = {"ancestors": [dict(a) for a in ancestors]}
+            built += 1
+    if built:
+        print(f"[enrich] pedigree: {len(ancestors)} ancestor(s) from the lineage chain.", file=sys.stderr)
 
 # ---- The document's subject is the model ------------------------------------
 # CycloneDX names what an SBOM is about in metadata.component. The generator puts

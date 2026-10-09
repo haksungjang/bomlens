@@ -935,6 +935,89 @@ ENRICH_CDXGEN=false PYTHONPATH="$WORK/hfstub" \
     bash "$LIB/enrich-aibom.sh" "$WORK/lin.json" acme/llama-finetune >/dev/null 2>&1
 [ "$(lprop bomlens:lineage:conflict)" = "" ] && pass "a correctly declared family license raises no conflict" || fail "conflict='$(lprop bomlens:lineage:conflict)' on the aligned case"
 
+echo "== enrichment keeps the repository facts a later step needs =="
+# Weight file names next to their digests, the gate kind, the revision time,
+# how the model relates to its base, a merge's other parents, the distributed
+# weights scope when the hub's signals agree, and a pedigree built from the
+# chain. The base model's current head revision is read by the walk and must
+# not be written anywhere: it is not the revision this model was trained from.
+mk_fact_stub() {  # $1 = tags (python list), $2 = files (python list of (name, sha)), $3 = library
+    cat > "$WORK/hfstub/huggingface_hub.py" <<STUB
+import datetime
+
+
+class _S:
+    def __init__(self, rfilename, sha=None):
+        self.rfilename = rfilename
+        self.lfs = {"sha256": sha} if sha else None
+
+
+class _Info:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+MODEL = _Info(
+    siblings=[_S(n, s) for n, s in $2], gated="manual", private=False, tags=$1,
+    last_modified=datetime.datetime(2025, 4, 15, 9, 30, tzinfo=datetime.timezone.utc),
+    card_data={"license": "llama3", "base_model": ["org/base", "org/other"], "library_name": "$3"},
+)
+BASE = _Info(
+    siblings=[], gated=False, private=False, tags=[], sha="f00dfeed" * 5,
+    card_data={"license": "llama3", "base_model": None},
+)
+
+
+class HfApi:
+    def model_info(self, mid, files_metadata=False, securityStatus=False):
+        return BASE if mid == "org/base" else MODEL
+
+    def dataset_info(self, did, files_metadata=False):
+        raise RuntimeError("404 not found")
+STUB
+}
+fact_run() {
+    cp "$FIX/aibom-owasp-1_7.json" "$WORK/fact.json"
+    ENRICH_HF_SECURITY=false ENRICH_CDXGEN=false PYTHONPATH="$WORK/hfstub" \
+        bash "$LIB/enrich-aibom.sh" "$WORK/fact.json" acme/support-adapter >/dev/null 2>&1
+}
+fprop() { jq -r --arg n "$1" '[([.metadata.component // empty] + [.components[]?])[] | select(.type=="machine-learning-model") | .properties[]? | select(.name==$n) | .value] | join("|")' "$WORK/fact.json"; }
+fmodel() { jq -c '[([.metadata.component // empty] + [.components[]?])[] | select(.type=="machine-learning-model")] | first' "$WORK/fact.json"; }
+ADAPTER_SHA="$(printf 'c%.0s' $(seq 64))"
+mk_fact_stub '["base_model:adapter:org/base"]' "[(\"adapter_config.json\", None), (\"adapter_model.safetensors\", \"$ADAPTER_SHA\")]" peft
+fact_run
+[ "$(fprop bomlens:weights:file)" = "$ADAPTER_SHA  adapter_model.safetensors" ] && pass "each weight file keeps its name next to its digest" || fail "weights:file='$(fprop bomlens:weights:file)'"
+[ "$(fprop bomlens:hf:gated)" = "manual" ] && pass "the gate kind is recorded" || fail "hf:gated='$(fprop bomlens:hf:gated)'"
+case "$(fprop bomlens:hf:revisionTime)" in 2025-04-15T09:30:00*) pass "the revision time is recorded" ;; *) fail "revisionTime='$(fprop bomlens:hf:revisionTime)'" ;; esac
+[ "$(fprop bomlens:lineage:relation)" = "adapter" ] && pass "the hub's relation to the base model is recorded" || fail "relation='$(fprop bomlens:lineage:relation)'"
+[ "$(fprop bomlens:lineage:otherParents)" = "org/other" ] && pass "a second base model is recorded, not dropped" || fail "otherParents='$(fprop bomlens:lineage:otherParents)'"
+[ "$(fprop bomlens:weights:scope)" = "adapter" ] && pass "agreeing signals give the adapter scope" || fail "weights:scope='$(fprop bomlens:weights:scope)'"
+anc=$(fmodel | jq -c '[.pedigree.ancestors[]? | {n:.name, p:.purl, l:([.licenses[]?.license.name]|join(",")), v:(.version // "")}]')
+[ "$anc" = '[{"n":"org/base","p":"pkg:huggingface/org/base","l":"llama3","v":""},{"n":"org/other","p":"pkg:huggingface/org/other","l":"","v":""}]' ] \
+    && pass "the pedigree lists both parents with no version" || fail "ancestors=$anc"
+if grep -q "f00dfeed" "$WORK/fact.json"; then
+    fail "the base model's current head revision leaked into the SBOM"
+else
+    pass "the base model's current head revision is written nowhere"
+fi
+fact_twice=$(cp "$WORK/fact.json" "$WORK/fact-1.json"; ENRICH_HF_SECURITY=false ENRICH_CDXGEN=false PYTHONPATH="$WORK/hfstub" \
+    bash "$LIB/enrich-aibom.sh" "$WORK/fact.json" acme/support-adapter >/dev/null 2>&1; diff <(jq -S . "$WORK/fact-1.json") <(jq -S . "$WORK/fact.json") >/dev/null && echo same)
+[ "$fact_twice" = "same" ] && pass "enriching twice leaves the facts unchanged" || fail "a second run changed the document"
+# Disagreeing signals: the tag says quantized, the files say adapter.
+mk_fact_stub '["base_model:quantized:org/base"]' "[(\"adapter_config.json\", None), (\"adapter_model.safetensors\", \"$ADAPTER_SHA\")]" ""
+fact_run
+{ [ -z "$(fprop bomlens:weights:scope)" ] && [ "$(fprop bomlens:weights:scopeSignals)" = "files:adapter, tag:quantized" ]; } \
+    && pass "disagreeing signals leave the scope unset and record why" || fail "scope='$(fprop bomlens:weights:scope)' signals='$(fprop bomlens:weights:scopeSignals)'"
+# A fine-tune that ships full weights.
+mk_fact_stub '["base_model:finetune:org/base"]' "[(\"model.safetensors\", \"$ADAPTER_SHA\"), (\"config.json\", None)]" transformers
+fact_run
+[ "$(fprop bomlens:weights:scope)" = "full" ] && pass "a fine-tune shipping full weights reads full" || fail "weights:scope='$(fprop bomlens:weights:scope)'"
+# No relation tag and nothing else: no scope is guessed.
+mk_fact_stub '[]' "[(\"model.safetensors\", \"$ADAPTER_SHA\")]" transformers
+fact_run
+{ [ -z "$(fprop bomlens:weights:scope)" ] && [ -z "$(fprop bomlens:lineage:relation)" ]; } \
+    && pass "without a signal neither the scope nor the relation is guessed" || fail "scope='$(fprop bomlens:weights:scope)' relation='$(fprop bomlens:lineage:relation)'"
+
 echo "== resolved dataset components carry the dataset cluster =="
 # enrich-aibom.sh resolves every dataset the model card names into a CycloneDX
 # `data` component (license, digests, upstream) linked through dependencies[].
