@@ -98,6 +98,7 @@ KNOWN_ARTIFACT_SUFFIXES=(
     _scancode.json _files.json _source.json _input.json
     _yocto_vex.json _security_epss.json _vendored.cdx.json _gate.result
     _ai-profile.json _ai-profile.md _vex.cdx.json
+    _bom.spdx3.json _bom.spdx3.json.sig _spdx3-check.json _spdx3-check.md _ai-declaration.template.json
     _modelica.cdx.json _cocoapods.cdx.json _conda.cdx.json
     _security_cvebintool.json _security_grype.json _security_yocto.json
 )
@@ -1598,6 +1599,62 @@ if [ "${GENERATE_SPDX:-false}" = "true" ]; then
     fi
 fi
 
+# SPDX 3.0.1 AI document (AI scans, on unless GENERATE_SPDX3=false): the
+# finished CycloneDX BOM written with the AI and Dataset profiles, plus a check
+# saying which fields came from the scan, which from the publisher's declaration,
+# and which required ones are still open. The declaration is the file given with
+# --ai-declare, or else the one a previous run or the web UI left in the output
+# folder. A refused declaration is reported and the document is written without
+# it, as a draft. Like the SPDX 2.3 export, a failure here leaves the CycloneDX
+# SBOM and everything else untouched. Before signing, so --sign covers it.
+SPDX3_FILE="${OUT_PREFIX}_bom.spdx3.json"
+if [ "$AI_MODEL_SCAN" = "true" ] && [ "${GENERATE_SPDX3:-true}" != "false" ]; then
+    SPDX3_DECL=""
+    if [ -n "${AI_DECLARATION_FILE:-}" ]; then
+        if [ -f "$AI_DECLARATION_FILE" ]; then
+            SPDX3_DECL="$AI_DECLARATION_FILE"
+        else
+            echo "[WARN] --ai-declare: the declaration is not visible inside the container ($AI_DECLARATION_FILE). If it is a symbolic link, pass the real file." >&2
+        fi
+    elif [ -n "$HOST_OUTPUT_DIR" ] && [ -f "$HOST_OUTPUT_DIR/${OUT_PREFIX}_ai-declaration.json" ]; then
+        SPDX3_DECL="$HOST_OUTPUT_DIR/${OUT_PREFIX}_ai-declaration.json"
+        echo "[INFO] SPDX 3.0.1: applying the declaration kept in the output folder (${OUT_PREFIX}_ai-declaration.json)."
+    fi
+    SPDX3_ARGS=(convert --bom "$OUTPUT_FILE" --out-dir . --prefix "$OUT_PREFIX")
+    [ "${BYTE_STABLE:-false}" = "true" ] && SPDX3_ARGS+=(--stable)
+    spdx3_rc=0
+    if [ -n "$SPDX3_DECL" ]; then
+        python3 "$LIBDIR/convert-to-spdx3-ai.py" "${SPDX3_ARGS[@]}" --declaration "$SPDX3_DECL" || spdx3_rc=$?
+        if [ "$spdx3_rc" -eq 2 ]; then
+            echo "[ERROR] The AI declaration was refused (reasons above). The SPDX 3.0.1 document is written without it, as a draft. Fix the file and run again." >&2
+            SPDX3_DECL=""
+            spdx3_rc=0
+            python3 "$LIBDIR/convert-to-spdx3-ai.py" "${SPDX3_ARGS[@]}" || spdx3_rc=$?
+        fi
+    else
+        python3 "$LIBDIR/convert-to-spdx3-ai.py" "${SPDX3_ARGS[@]}" || spdx3_rc=$?
+    fi
+    if [ "$spdx3_rc" -eq 0 ] && [ -f "$SPDX3_FILE" ]; then
+        ARTIFACTS+=("$SPDX3_FILE" "${OUT_PREFIX}_spdx3-check.json" "${OUT_PREFIX}_spdx3-check.md")
+        # The empty declaration for this scan: the fields a person fills, for
+        # the datasets and base models this scan found. Edit it and pass it
+        # back with --ai-declare.
+        if python3 "$LIBDIR/convert-to-spdx3-ai.py" template --bom "$OUTPUT_FILE" --out-dir . \
+               --prefix "$OUT_PREFIX" 2>/dev/null; then
+            ARTIFACTS+=("${OUT_PREFIX}_ai-declaration.template.json")
+        fi
+        # Keep an accepted --ai-declare file with the results, so a re-scan and
+        # the web UI start from it. A file already in the output folder is
+        # that same file and is left where it is.
+        if [ -n "${AI_DECLARATION_FILE:-}" ] && [ "$SPDX3_DECL" = "$AI_DECLARATION_FILE" ]; then
+            cp "$AI_DECLARATION_FILE" "${OUT_PREFIX}_ai-declaration.json" \
+                && ARTIFACTS+=("${OUT_PREFIX}_ai-declaration.json")
+        fi
+    else
+        echo "[WARN] SPDX 3.0.1 AI document failed; the CycloneDX SBOM and other artifacts are unaffected."
+    fi
+fi
+
 if [ "${SIGN_SBOM:-false}" = "true" ]; then
     if command -v cosign >/dev/null 2>&1 && [ -n "${COSIGN_KEY:-}" ]; then
         echo "[INFO] Signing SBOM with cosign..."
@@ -1623,6 +1680,16 @@ if [ "${SIGN_SBOM:-false}" = "true" ]; then
                 ARTIFACTS+=("${SPDX_FILE}.sig")
             else
                 echo "[ERROR] cosign could not sign the SPDX SBOM."; SIGN_FAILED=1
+            fi
+        fi
+        # A draft is signed too: the signature says this file came from this
+        # scan, not that the document is complete.
+        if [ -f "$SPDX3_FILE" ]; then
+            if cosign sign-blob "${COSIGN_SIGN_FLAGS[@]}" --key "$COSIGN_KEY" \
+                   --output-signature "${SPDX3_FILE}.sig" "$SPDX3_FILE"; then
+                ARTIFACTS+=("${SPDX3_FILE}.sig")
+            else
+                echo "[ERROR] cosign could not sign the SPDX 3.0.1 AI document."; SIGN_FAILED=1
             fi
         fi
         # The conformance sidecar files (generated earlier, before signing could

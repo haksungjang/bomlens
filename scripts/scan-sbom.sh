@@ -114,6 +114,7 @@ fail_on_bad_coverage() {
     exit 1
 }
 FORCE_FIRMWARE="false"; ANALYZE_SBOM=""; MODEL=""; MODEL_FILE=""; VEX_FILE=""
+AI_DECLARE_FILE=""; GENERATE_SPDX3="true"
 # Set when --target turned out to be a Yocto build directory: the folder the
 # user pointed at, while ANALYZE_SBOM holds the image SBOM found inside it.
 YOCTO_BUILD_DIR=""
@@ -150,6 +151,8 @@ while [[ "$#" -gt 0 ]]; do
         # The statements attach to vulnerability rows, which come from the security
         # report, so asking for a VEX asks for that report too (as --deep-cve does).
         --vex) VEX_FILE="$2"; GENERATE_SECURITY="true"; shift ;;
+        --ai-declare) AI_DECLARE_FILE="$2"; shift ;;
+        --no-spdx3) GENERATE_SPDX3="false" ;;
         --usage) USAGE_CONTEXT="$2"; shift ;;
         --merge)
             # Variadic: absorb every following token until the next option (a
@@ -243,6 +246,20 @@ Options:
                          statements are shown on its findings. A document for a
                          different product or version, or one that is not
                          CycloneDX VEX, is reported and skipped.
+  --ai-declare <file>    For an AI model or dataset scan: the publisher's
+                         declaration (JSON) of what a scan cannot read, such as
+                         release dates, who made the model and the data, and
+                         which datasets trained or tested it. Written into the
+                         SPDX 3.0.1 AI document only; the CycloneDX SBOM is not
+                         changed. Every AI scan writes an empty one to start
+                         from, <Project>_<Version>_ai-declaration.template.json.
+                         A file that names a field, value or dataset the scan
+                         does not have is refused and the document stays a
+                         draft. The accepted file is kept with the results and
+                         applied again on the next scan of the same version.
+  --no-spdx3             For an AI model or dataset scan: do not write the
+                         SPDX 3.0.1 AI document (<Project>_<Version>_bom.spdx3.json)
+                         and its check
   --sbom-author <name>   Entity that generated this SBOM — the organisation or
                          person running the scan, not the tool and not whoever
                          wrote the software. Use the full name, no acronyms.
@@ -572,6 +589,7 @@ SBOM_PULL="${SBOM_PULL:-missing}"
 # ========================================================
 if [ "$UI_MODE" = "true" ]; then
     [ -z "$VEX_FILE" ] || { echo "[ERROR] --vex is not offered with --ui (import a VEX from the Vulnerabilities screen instead)."; exit 1; }
+    [ -z "$AI_DECLARE_FILE" ] || { echo "[ERROR] --ai-declare is not offered with --ui (fill the declaration on the Models & datasets screen instead)."; exit 1; }
     [ "${#FAIL_ON[@]}" -eq 0 ] || { echo "[ERROR] --fail-on is not offered with --ui (it exits on one scan's result; the UI runs many)."; exit 1; }
     [ "$FAIL_ON_CONFORMANCE" = "true" ] && { echo "[ERROR] --fail-on-conformance is not offered with --ui (it exits on one scan's result; the UI runs many)."; exit 1; }
     docker_check
@@ -657,6 +675,7 @@ fi
 if [ -n "$DIFF_OLD" ]; then
     [ "${#FAIL_ON[@]}" -eq 0 ] || { echo "[ERROR] --fail-on cannot be combined with --diff (a diff judges no scan)."; exit 1; }
     [ -z "$VEX_FILE" ] || { echo "[ERROR] --vex cannot be combined with --diff (a diff writes no SBOM to attach statements to)."; exit 1; }
+    [ -z "$AI_DECLARE_FILE" ] || { echo "[ERROR] --ai-declare cannot be combined with --diff (a diff writes no AI document to declare into)."; exit 1; }
     docker_check
     [ -f "$DIFF_OLD" ] || { echo "[ERROR] --diff: old SBOM not found: $DIFF_OLD"; exit 1; }
     [ -f "$DIFF_NEW" ] || { echo "[ERROR] --diff: new SBOM not found: $DIFF_NEW"; exit 1; }
@@ -938,8 +957,8 @@ pp_env() {
     # secret never lands on the `docker run` argv where a local `ps` could read
     # it. Their values ride the exported shell env (see the export before each
     # `docker run`), matching the web-server path. Non-secret fields keep =value.
-    printf ' -e GENERATE_NOTICE=%s -e GENERATE_SECURITY=%s -e GENERATE_SPDX=%s -e SECURITY_ENRICH=%s -e GENERATE_REPORT=%s -e DEEP_LICENSE=%s -e IDENTIFY_VENDORED=%s -e SCANOSS_API_URL=%q -e SCANOSS_API_KEY -e SIGN_SBOM=%s -e BYTE_STABLE=%s -e REPORT_LANG=%s -e UPLOAD_ENABLED=%s -e PROJECT_NAME=%q -e PROJECT_VERSION=%q -e HOST_OUTPUT_DIR=/host-output -e HOST_UID=%s -e HOST_GID=%s -e API_KEY -e API_URL=%q -e UPLOAD_TARGET=%q -e TRUSCA_PROJECT_ID=%q -e TRUSCA_REF=%q -e TRUSCA_RELEASE=%q -e ENRICH_CDXGEN=%s -e ENRICH_EOL=%s -e ENRICH_MALICIOUS=%s -e STALENESS_ENRICH=%s -e DEEP_CVE=%s -e SECURITY_NVD_VERIFY=%s -e ENRICH_HF_SECURITY=%s -e VERIFY_MODEL_WEIGHTS=%s -e AIBOM_VERIFY_MAX_FILES=%q -e AIBOM_VERIFY_MAX_BYTES=%q -e AIBOM_DATASET_DEPTH=%q -e AIBOM_DATASET_MAX_LOOKUPS=%q -e AI_USAGE_CONTEXT=%q -e PROJECT_LICENSE=%q -e SBOM_AUTHOR=%q -e SRC_TREE_EXCLUDE=%q -e SOURCE_TREE_MAX=%q -e SOURCE_SNAPSHOT_MAX_TOTAL=%q -e SOURCE_SNAPSHOT_MAX_FILE=%q -e SOURCE_SNAPSHOT_MAX_FILES=%q -e FW_VERSTR_MAX_FILES=%q -e FW_VERSTR_MAX_BYTES=%q -e FW_ELF_MAX_FILES=%q -e FW_KERNEL_MAX_FILES=%q -e FW_KERNEL_MAX_BYTES=%q -e FW_KERNEL_MAX_VERSIONS=%q -e FW_EXTRA_ROOTS=%q -e FW_MAX_EXTRA_ROOTS=%q -e FW_CONTAINER_MEMBERSHIP=%q -e PURL_MIN_PCT=%q -e LICENSE_MIN_PCT=%q -e HASH_MIN_PCT=%q -e FIELD_MIN_PCT=%q -e CONFORMANCE_PROFILE=%s -e PURL_RESOLVE=%s -e PURL_RESOLVE_IGNORE -e PURL_RESOLVE_BUDGET' \
-        "$GENERATE_NOTICE" "$GENERATE_SECURITY" "$GENERATE_SPDX" "$SECURITY_ENRICH" "$GENERATE_REPORT" "$DEEP_LICENSE" "$IDENTIFY_VENDORED" "$SCANOSS_API_URL" "$SIGN_SBOM" "$BYTE_STABLE" "$REPORT_LANG" "$UPLOAD_VAR" "$PROJECT_NAME" "$PROJECT_VERSION" "$(id -u)" "$(id -g)" "$SERVER_URL" "$UPLOAD_TARGET" "$TRUSCA_PROJECT_ID" "$TRUSCA_REF" "$TRUSCA_RELEASE" "${ENRICH_CDXGEN:-true}" "${ENRICH_EOL:-true}" "${ENRICH_MALICIOUS:-true}" "${STALENESS_ENRICH:-false}" "$DEEP_CVE" "${SECURITY_NVD_VERIFY:-false}" "${ENRICH_HF_SECURITY:-true}" "$VERIFY_WEIGHTS" "${AIBOM_VERIFY_MAX_FILES:-}" "${AIBOM_VERIFY_MAX_BYTES:-}" "${AIBOM_DATASET_DEPTH:-}" "${AIBOM_DATASET_MAX_LOOKUPS:-}" "${USAGE_CONTEXT:-${AI_USAGE_CONTEXT:-}}" "${PROJECT_LICENSE:-}" "${SBOM_AUTHOR:-}" "${SRC_TREE_EXCLUDE:-}" \
+    printf ' -e GENERATE_NOTICE=%s -e GENERATE_SECURITY=%s -e GENERATE_SPDX=%s -e SECURITY_ENRICH=%s -e GENERATE_REPORT=%s -e DEEP_LICENSE=%s -e IDENTIFY_VENDORED=%s -e SCANOSS_API_URL=%q -e SCANOSS_API_KEY -e SIGN_SBOM=%s -e BYTE_STABLE=%s -e REPORT_LANG=%s -e UPLOAD_ENABLED=%s -e PROJECT_NAME=%q -e PROJECT_VERSION=%q -e HOST_OUTPUT_DIR=/host-output -e HOST_UID=%s -e HOST_GID=%s -e API_KEY -e API_URL=%q -e UPLOAD_TARGET=%q -e TRUSCA_PROJECT_ID=%q -e TRUSCA_REF=%q -e TRUSCA_RELEASE=%q -e ENRICH_CDXGEN=%s -e ENRICH_EOL=%s -e ENRICH_MALICIOUS=%s -e STALENESS_ENRICH=%s -e DEEP_CVE=%s -e SECURITY_NVD_VERIFY=%s -e ENRICH_HF_SECURITY=%s -e VERIFY_MODEL_WEIGHTS=%s -e AIBOM_VERIFY_MAX_FILES=%q -e AIBOM_VERIFY_MAX_BYTES=%q -e AIBOM_DATASET_DEPTH=%q -e AIBOM_DATASET_MAX_LOOKUPS=%q -e GENERATE_SPDX3=%s -e AI_USAGE_CONTEXT=%q -e PROJECT_LICENSE=%q -e SBOM_AUTHOR=%q -e SRC_TREE_EXCLUDE=%q -e SOURCE_TREE_MAX=%q -e SOURCE_SNAPSHOT_MAX_TOTAL=%q -e SOURCE_SNAPSHOT_MAX_FILE=%q -e SOURCE_SNAPSHOT_MAX_FILES=%q -e FW_VERSTR_MAX_FILES=%q -e FW_VERSTR_MAX_BYTES=%q -e FW_ELF_MAX_FILES=%q -e FW_KERNEL_MAX_FILES=%q -e FW_KERNEL_MAX_BYTES=%q -e FW_KERNEL_MAX_VERSIONS=%q -e FW_EXTRA_ROOTS=%q -e FW_MAX_EXTRA_ROOTS=%q -e FW_CONTAINER_MEMBERSHIP=%q -e PURL_MIN_PCT=%q -e LICENSE_MIN_PCT=%q -e HASH_MIN_PCT=%q -e FIELD_MIN_PCT=%q -e CONFORMANCE_PROFILE=%s -e PURL_RESOLVE=%s -e PURL_RESOLVE_IGNORE -e PURL_RESOLVE_BUDGET' \
+        "$GENERATE_NOTICE" "$GENERATE_SECURITY" "$GENERATE_SPDX" "$SECURITY_ENRICH" "$GENERATE_REPORT" "$DEEP_LICENSE" "$IDENTIFY_VENDORED" "$SCANOSS_API_URL" "$SIGN_SBOM" "$BYTE_STABLE" "$REPORT_LANG" "$UPLOAD_VAR" "$PROJECT_NAME" "$PROJECT_VERSION" "$(id -u)" "$(id -g)" "$SERVER_URL" "$UPLOAD_TARGET" "$TRUSCA_PROJECT_ID" "$TRUSCA_REF" "$TRUSCA_RELEASE" "${ENRICH_CDXGEN:-true}" "${ENRICH_EOL:-true}" "${ENRICH_MALICIOUS:-true}" "${STALENESS_ENRICH:-false}" "$DEEP_CVE" "${SECURITY_NVD_VERIFY:-false}" "${ENRICH_HF_SECURITY:-true}" "$VERIFY_WEIGHTS" "${AIBOM_VERIFY_MAX_FILES:-}" "${AIBOM_VERIFY_MAX_BYTES:-}" "${AIBOM_DATASET_DEPTH:-}" "${AIBOM_DATASET_MAX_LOOKUPS:-}" "$GENERATE_SPDX3" "${USAGE_CONTEXT:-${AI_USAGE_CONTEXT:-}}" "${PROJECT_LICENSE:-}" "${SBOM_AUTHOR:-}" "${SRC_TREE_EXCLUDE:-}" \
         "${SOURCE_TREE_MAX:-}" "${SOURCE_SNAPSHOT_MAX_TOTAL:-}" "${SOURCE_SNAPSHOT_MAX_FILE:-}" "${SOURCE_SNAPSHOT_MAX_FILES:-}" \
         "${FW_VERSTR_MAX_FILES:-}" "${FW_VERSTR_MAX_BYTES:-}" "${FW_ELF_MAX_FILES:-}" \
         "${FW_KERNEL_MAX_FILES:-}" "${FW_KERNEL_MAX_BYTES:-}" "${FW_KERNEL_MAX_VERSIONS:-}" \
@@ -978,6 +997,16 @@ vex_run() {
     local d f
     d="$(cd "$(dirname "$VEX_FILE")" && pwd)"; f="$(basename "$VEX_FILE")"
     printf ' -v %q:/vex-in/vex.json:ro -e VEX_FILE=/vex-in/vex.json' "$(hostpath "$d/$f")"
+}
+
+# --ai-declare: mounted the same way as --vex, one file, read-only, at a fixed
+# container path (see the comment above for why the user's name is kept out of
+# the env value).
+declare_run() {
+    [ -n "$AI_DECLARE_FILE" ] || return 0
+    local d f
+    d="$(cd "$(dirname "$AI_DECLARE_FILE")" && pwd)"; f="$(basename "$AI_DECLARE_FILE")"
+    printf ' -v %q:/declare-in/declaration.json:ro -e AI_DECLARATION_FILE=/declare-in/declaration.json' "$(hostpath "$d/$f")"
 }
 
 # --fail-on: the conditions travel to the container as one comma-separated value.
@@ -1463,6 +1492,10 @@ if [ -z "$GIT_URL" ] && [ -n "$TARGET" ] && is_git_url "$TARGET"; then
     GIT_URL="$TARGET"; TARGET=""
 fi
 # Host-only check, made before anything is cloned or downloaded.
+if [ -n "$AI_DECLARE_FILE" ] && [ ! -f "$AI_DECLARE_FILE" ]; then
+    echo "[ERROR] --ai-declare file not found: $AI_DECLARE_FILE"
+    echo "[ERROR] Pass the path of a declaration (JSON). Every AI scan writes an empty one to start from: <Project>_<Version>_ai-declaration.template.json."; exit 1
+fi
 if [ -n "$VEX_FILE" ] && [ ! -f "$VEX_FILE" ]; then
     echo "[ERROR] --vex file not found: $VEX_FILE"
     echo "[ERROR] Pass the path of a CycloneDX VEX document (JSON), e.g. --vex supplier-vex.json."; exit 1
@@ -1756,6 +1789,12 @@ fi
 
 if [ -n "${USAGE_CONTEXT:-}" ] && [ "$MODE" != "AIBOM" ] && [ "$MODE" != "MODELFILE" ] && [ "$MODE" != "DATASET" ]; then
     echo "[ERROR] --usage applies to AI model and dataset scans only (use it with --model or --model-file)."; exit 1
+fi
+
+if { [ -n "$AI_DECLARE_FILE" ] || [ "$GENERATE_SPDX3" = "false" ]; } \
+   && [ "$MODE" != "AIBOM" ] && [ "$MODE" != "MODELFILE" ] && [ "$MODE" != "DATASET" ]; then
+    _flag="--ai-declare"; [ -n "$AI_DECLARE_FILE" ] || _flag="--no-spdx3"
+    echo "[ERROR] $_flag applies to AI model and dataset scans only (use it with --model or --model-file)."; exit 1
 fi
 
 if [ "$VERIFY_WEIGHTS" = "true" ] && [ "$MODE" != "AIBOM" ]; then
@@ -2102,7 +2141,7 @@ FALLBACK_SH
         -v "\"$(hostpath "$SCAN_INPUT_DIR")\"":/src -v "\"$(hostpath "$OUTPUT_HOST_DIR")\"":/host-output \
         -w /host-output \
         --add-host=host.docker.internal:host-gateway \
-        -e MODE=POSTPROCESS -e BOMLENS_RUN_INPUT="$OUTPUT_FILE" -e NESTED_ROOTFS_HINT="\"$NESTED_ROOTFS_HINT\"" $(pp_env)$(cosign_run)$(vex_run)$(gate_run) \
+        -e MODE=POSTPROCESS -e BOMLENS_RUN_INPUT="$OUTPUT_FILE" -e NESTED_ROOTFS_HINT="\"$NESTED_ROOTFS_HINT\"" $(pp_env)$(cosign_run)$(vex_run)$(declare_run)$(gate_run) \
         "\"$POSTPROCESS_IMAGE\""
 else
     # image / binary / rootfs / firmware / aibom / analyze / merge: scanner image
@@ -2183,7 +2222,7 @@ else
     # shellcheck disable=SC2046
     eval "$DOCKER_MSYS"docker run --rm $VOL \
         --add-host=host.docker.internal:host-gateway \
-        -e MODE="$MODE" -e BOMLENS_ARTIFACT_CLEANUP=1 $ENVV $(pp_env)$(cosign_run)$(vex_run)$(gate_run) \
+        -e MODE="$MODE" -e BOMLENS_ARTIFACT_CLEANUP=1 $ENVV $(pp_env)$(cosign_run)$(vex_run)$(declare_run)$(gate_run) \
         "\"$RUN_IMAGE\""
 fi
 
@@ -2236,6 +2275,18 @@ if [ "$GENERATE_ONLY" = "true" ]; then
     fi
     if [ "$GENERATE_SPDX" = "true" ]; then
         summary_line "SPDX:" "${P}_bom.spdx.json" || note_missing "SPDX export"
+    fi
+    if { [ "$MODE" = "AIBOM" ] || [ "$MODE" = "MODELFILE" ] || [ "$MODE" = "DATASET" ]; } \
+       && [ "$GENERATE_SPDX3" = "true" ]; then
+        summary_line "SPDX 3.0.1 AI:" "${P}_bom.spdx3.json" "${P}_spdx3-check.md" \
+            || note_missing "SPDX 3.0.1 AI document"
+        summary_line "AI declaration template:" "${P}_ai-declaration.template.json" || true
+        # An accepted --ai-declare file is kept next to the results; when it is
+        # missing the declaration was refused, and the document is a draft.
+        if [ -n "$AI_DECLARE_FILE" ]; then
+            summary_line "AI declaration:" "${P}_ai-declaration.json" \
+                || note_missing "AI declaration (refused, see the reasons above; the SPDX 3.0.1 document is a draft)"
+        fi
     fi
     # Conformance comes from both modes that can validate a BOM: ANALYZE (format
     # checks on a supplier SBOM) and AIBOM (the G7 minimum-element checklist).

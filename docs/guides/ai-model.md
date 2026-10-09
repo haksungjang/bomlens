@@ -158,6 +158,23 @@ In the web UI, an AI/ML SBOM adds two sections to the left rail.
 
 The same data is in the artifacts: the ML-BOM (`_bom.json`, CycloneDX 1.7) and the conformance report (`_conformance.*`).
 
+## The SPDX 3.0.1 AI document
+
+Every AI model and dataset scan also writes the result as an SPDX 3.0.1 document with the AI and Dataset profiles, `{Project}_{Version}_bom.spdx3.json`, next to the CycloneDX ML-BOM. The CycloneDX file stays the primary record; the SPDX document is built from it, plus whatever the model's publisher declares.
+
+A scan can fill what it reads: the model's name, revision, download address, publisher on the hub, licence, architecture, limitations and weight files with their digests; each dataset's address, licence and data type where its card says; the base models and the datasets the card names. It cannot know when the model was released, who made it, which datasets trained it and which only tested it, or the revision of the base model it started from. SPDX 3.0.1 makes several of these required and gives them no "unknown" value, so until they are declared the document is a draft: it says so in its comment, and `{Project}_{Version}_spdx3-check.md` lists each open field.
+
+To fill them, edit the empty declaration the scan writes, `{Project}_{Version}_ai-declaration.template.json`, and scan again with it:
+
+```bash
+./scripts/scan-sbom.sh --project my-llm --version 1.0 \
+  --model "acme/support-adapter" --ai-declare my-llm_1.0_ai-declaration.template.json --generate-only
+```
+
+The declared values go into the SPDX document only, each marked as declared, and never into the CycloneDX SBOM. A declaration that names a dataset or base model the scan did not find, a value outside a field's list, or a date not written as `YYYY-MM-DDThh:mm:ssZ` is refused with the reasons. Some fields are a judgement the tool never makes for you: whether the model uses sensitive personal information, its safety risk level, and its autonomy. The check lists them as needing a decision, and leaving them empty is allowed.
+
+Two rules apply. A value that is not in the scan and not declared is left out rather than estimated, and a base model is written by its id and licence only, so nothing the publisher declares about the model is copied onto it. `--no-spdx3` skips the document.
+
 ## Reading the conformance report
 
 The G7 block leads with a headline such as "N / 41 present". The denominator counts only the checks that have an automated source — 41 of the 51 — so the number states what the tool could verify on its own. The 10 review-only elements appear next to it as a separate "need review" count, and any automated check that found nothing is counted as advisory.

@@ -211,6 +211,11 @@ ARTIFACT_SUFFIXES = (
     # CVE statements received from a supplier as a CycloneDX VEX document
     # (POST /vex-import, import-vex.py), kept apart from the user's own `_vex.json`.
     "_vex_imported.json",
+    # SPDX 3.0.1 AI document (AI scans): the document, its signature, the check
+    # of what is filled and what is open, the publisher's declaration (kept
+    # across re-scans, like _vex.json) and the empty declaration to start from.
+    "_bom.spdx3.json", "_bom.spdx3.json.sig", "_spdx3-check.json", "_spdx3-check.md",
+    "_ai-declaration.json", "_ai-declaration.template.json",
 )
 
 # Recent-scans sidebar shows the newest N; older scans stay on disk but are not
