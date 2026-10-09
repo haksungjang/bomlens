@@ -26,6 +26,7 @@ import {
   LONG_TEXT,
   MODEL_USE_FIELDS,
   modelMainFields,
+  MODEL_LICENSE_FIELD,
   remainingRequired,
   saveBlockers,
   stepOf,
@@ -794,6 +795,16 @@ export function AiDeclarationWizard({
             />
           )}
           {modelMainFields(index, decl).map(modelField)}
+          {decl.model && "license" in decl.model && (
+            <Field
+              ns="model"
+              field={MODEL_LICENSE_FIELD}
+              value={decl.model.license}
+              problem={problemAt("model", "license")}
+              showProblems={reviewed}
+              onChange={(v) => set({ kind: "model" }, "license", v)}
+            />
+          )}
           {useFields.length > 0 && (
             <Disclosure
               defaultOpen={hasIssueIn("model", useFields)}

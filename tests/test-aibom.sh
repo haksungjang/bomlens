@@ -2144,6 +2144,35 @@ jq -e '[.metadata.component.properties[] | select(.name == "bomlens:lineage:conf
     && pass "an ancestor whose terms pass to derivatives is flagged on the declared model" || fail "lineage conflict not flagged"
 { ! grep -q "Acme AI Lab" "$WORK/decl.json" && ! grep -q "2025-04-15" "$WORK/decl.json"; } \
     && pass "declared makers and dates stay out of the CycloneDX SBOM" || fail "declared values leaked into the CycloneDX SBOM"
+jq -e '.metadata.component | has("licenses") | not' "$WORK/decl.json" >/dev/null \
+    && pass "with no licence declared the model has none" || fail "a licence appeared without a declaration"
+# The model's own licence is the one declared value the SBOM carries: the whole
+# SBOM is the publisher's statement, and without it the model is only "review".
+jq '.model.license = "llama3.1"' "$ROOT_DIR/tests/fixtures/spdx3/declaration-complete.json" > "$WORK/decl-lic.json"
+BOMLENS_HF_API_BASE="file://$SRC" python3 -I "$DECL_PY" "$WORK/decl-lic.json" "$WORK/decl-lic-bom.json" acme 1.0 >/dev/null 2>&1
+{ jq -e '.metadata.component.licenses == [{"license": {"name": "llama3.1"}}]' "$WORK/decl-lic-bom.json" >/dev/null \
+  && jq -e '[.metadata.component.properties[] | select(.name == "bomlens:lineage:conflict")] | length == 0' "$WORK/decl-lic-bom.json" >/dev/null; } \
+    && pass "a declared licence is the model's, and an ancestor under the same terms is no conflict" \
+    || fail "declared model licence" "$(jq -c '.metadata.component | {licenses, properties}' "$WORK/decl-lic-bom.json")"
+AI_USAGE_CONTEXT=product bash "$LIB/assess-ai-risk.sh" "$WORK/decl-lic-bom.json" >/dev/null 2>&1
+lic_axis=$(jq -r '[.metadata.component.properties[] | select(.name=="bomlens:assessment:license") | .value] | first // ""' "$WORK/decl-lic-bom.json")
+{ [ -n "$lic_axis" ] && [ "$lic_axis" != "review" ]; } \
+    && pass "the declared licence is judged ($lic_axis), not left for review" || fail "declared licence axis=$lic_axis"
+cp "$WORK/decl-lic-bom.json" "$WORK/cdx/declared-model-license.json"
+jq '.model.license = "apache-2.0"' "$ROOT_DIR/tests/fixtures/spdx3/declaration-complete.json" > "$WORK/decl-lic3.json"
+BOMLENS_HF_API_BASE="file://$SRC" python3 -I "$DECL_PY" "$WORK/decl-lic3.json" "$WORK/decl-lic3-bom.json" acme 1.0 >/dev/null 2>&1
+jq -e '[.metadata.component.properties[] | select(.name == "bomlens:lineage:conflict") | .value] == ["true"]' "$WORK/decl-lic3-bom.json" >/dev/null \
+    && pass "a declared licence on other terms than an inheriting ancestor is still flagged" || fail "lineage conflict lost with a declared licence"
+jq '.model.license = "  "' "$ROOT_DIR/tests/fixtures/spdx3/declaration-complete.json" > "$WORK/decl-lic4.json"
+python3 -I "$DECL_PY" "$WORK/decl-lic4.json" "$WORK/decl-lic4-bom.json" acme 1.0 --offline >/dev/null 2>&1
+{ [ $? -eq 0 ] && jq -e '.metadata.component | has("licenses") | not' "$WORK/decl-lic4-bom.json" >/dev/null; } \
+    && pass "a licence of only spaces is no licence" || fail "blank declared licence"
+jq '.model.license = "apache-2.0"' "$ROOT_DIR/tests/fixtures/spdx3/declaration-complete.json" > "$WORK/decl-lic2.json"
+BOMLENS_HF_API_BASE="file://$SRC" python3 -I "$DECL_PY" "$WORK/decl-lic2.json" "$WORK/decl-lic2-bom.json" acme 1.0 >/dev/null 2>&1
+python3 -I "$LIB/convert-to-spdx3-ai.py" check --bom "$WORK/decl-lic2-bom.json" --declaration "$WORK/decl-lic2.json" > "$WORK/decl-lic2-check.json" 2>/dev/null
+jq -e '[.relationships[] | select(.type == "hasDeclaredLicense")] | first | .status == "declared"' "$WORK/decl-lic2-check.json" >/dev/null \
+    && pass "the SPDX 3.0.1 document records the licence as declared, not as read" \
+    || fail "declared licence status" "$(jq -c '[.relationships[] | select(.type == "hasDeclaredLicense")]' "$WORK/decl-lic2-check.json")"
 cp "$WORK/decl.json" "$WORK/cdx/declared-model.json"
 python3 -I "$LIB/convert-to-spdx3-ai.py" check --bom "$WORK/decl.json" \
     --declaration "$ROOT_DIR/tests/fixtures/spdx3/declaration-complete.json" > "$WORK/decl-check.json" 2>/dev/null
@@ -2193,7 +2222,7 @@ python3 -I "$DECL_PY" "$ROOT_DIR/tests/fixtures/spdx3/declaration-complete.json"
 [ "$(jq -r .metadata.component.name "$WORK/decl-name.json" 2>/dev/null)" = "--offline" ] \
     && pass "a project named --offline is still a project name" || fail "--offline as a project name"
 for bad in '[]' '{"model":{"baseModels":[{"ref":"../etc"}]}}' '{"datasets":[{"ref":"huggingface:a b"}]}' 'not json' \
-           '{"model":{"baseModels":5}}' '{"datasets":7}'; do
+           '{"model":{"baseModels":5}}' '{"datasets":7}' '{"model":{"license":"my own terms"}}' '{"model":{"license":5}}' '{"model":{"license":[]}}'; do
     printf '%s' "$bad" > "$WORK/decl-bad.json"
     python3 -I "$DECL_PY" "$WORK/decl-bad.json" "$WORK/decl-bad-bom.json" acme 1.0 --offline >/dev/null 2>&1
     [ $? -eq 2 ] && pass "refused before writing: $bad" || fail "not refused: $bad"

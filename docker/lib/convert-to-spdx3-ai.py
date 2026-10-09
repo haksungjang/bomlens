@@ -218,7 +218,7 @@ def apply_rule(name, comp, mapping):
 
 # ---- the declaration ----------------------------------------------------------
 
-MODEL_KEYS_EXTRA = ("baseModels",)
+MODEL_KEYS_EXTRA = ("baseModels", "license")
 DATASET_KEYS_EXTRA = ("ref", "local", "name", "role", "sources")
 SOURCE_RELATIONS = ("extended", "other")
 # A licence a person writes for a source the tool could not read: a hub
@@ -463,6 +463,13 @@ def validate_declaration(raw, mapping, bom, root):
                 val = _check_value(mfields[k], v, f"model.{k}", errs)
                 if val is not None:
                     out["model"][k] = val
+        lic = model.get("license")
+        if lic is not None and not (isinstance(lic, str) and not lic.strip()):
+            if not isinstance(lic, str) or not (lic.strip().lower() in HUB_LICENSE_TAGS
+                                                or SPDX_ID_RE.match(lic.strip())):
+                errs.append("model.license: a hub licence tag or an SPDX licence id")
+            else:
+                out["modelLicense"] = lic.strip()
         bms = model.get("baseModels") or []
         if not isinstance(bms, list):
             errs.append("model.baseModels: expected a list")
@@ -664,6 +671,13 @@ class Builder:
         table = (self.mapping["rules"].get("hubLicenseToSpdx") or {}).get("map") or {}
         return table.get(str(name or "").strip().lower())
 
+    def declared_expr(self, lic):
+        """The SPDX expression for a licence a person declared: a hub tag that
+        names exactly one SPDX licence, or a LicenseRef-; otherwise None."""
+        if not lic:
+            return None
+        return self.spdx_id_for_name(lic) or (lic if lic.startswith("LicenseRef-") else None)
+
     def license_el(self, expr):
         if expr is None:
             return "expandedlicensing_NoAssertionLicense"
@@ -697,26 +711,33 @@ class Builder:
                   "creationInfo": CREATION_INFO, "annotationType": "review" if review else "other",
                   "subject": subject, "statement": statement})
 
-    def declared_licenses(self, el_id, comp):
-        """hasDeclaredLicense for an element, from what the component declares.
-        A licence named but not given as an SPDX id is not guessed into one."""
-        targets, names = [], []
+    def scanned_licenses(self, comp):
+        """(SPDX expressions, licence names that are not SPDX ids) a component
+        declares. A licence named but not given as an SPDX id is not guessed
+        into one."""
+        exprs, names = [], []
         for e in comp.get("licenses") or []:
             if not isinstance(e, dict):
                 continue
             if e.get("expression"):
-                targets.append(self.license_el(str(e["expression"])))
+                exprs.append(str(e["expression"]))
                 continue
             lic = e.get("license") if isinstance(e.get("license"), dict) else {}
             lid = lic.get("id")
             mapped = self.spdx_id_for_name(lic.get("name")) if not lid else None
             if lid and LICENSE_ID_RE.match(str(lid)):
                 # CycloneDX restricts license.id to SPDX identifiers.
-                targets.append(self.license_el(str(lid)))
+                exprs.append(str(lid))
             elif mapped:
-                targets.append(self.license_el(mapped))
+                exprs.append(mapped)
             elif lid or lic.get("name"):
                 names.append(str(lid or lic.get("name")))
+        return list(dict.fromkeys(exprs)), names
+
+    def declared_licenses(self, el_id, comp):
+        """hasDeclaredLicense for an element, from what the component declares."""
+        exprs, names = self.scanned_licenses(comp)
+        targets = [self.license_el(x) for x in exprs]
         if names:
             self.annotate(el_id, "Declared licence named "
                           + ", ".join(repr(n) for n in names)
@@ -944,7 +965,7 @@ def _build_model(b, bom, comp, decl):
     if any(r.get("source") == "cdx:supplier" for r in b.check_elements[-1]["fields"]
            if r["id"] == "suppliedBy"):
         b.annotate(el["spdxId"], "suppliedBy is the account that publishes the repository on HuggingFace.")
-    b.declared_licenses(el["spdxId"], comp)
+    _model_license(b, el["spdxId"], comp, decl.get("modelLicense"))
 
     # Weight files: name next to digest, kept by enrich-aibom.sh.
     files = []
@@ -959,6 +980,76 @@ def _build_model(b, bom, comp, decl):
 
     _base_models(b, el["spdxId"], props, decl)
     return el["spdxId"]
+
+
+# A card licence that says nothing about the terms: a declared one may take its place.
+UNSTATED_LICENSE_NAMES = {"other", "unknown", "none", "noassertion"}
+
+
+def _model_license(b, el_id, comp, declared):
+    """hasDeclaredLicense for the model.
+
+    A scanned model: the licence the scan read stands, and a declared one that
+    differs from it (compared without case) is listed for review. A declared
+    licence fills the place only when the scan read none, or only "other".
+
+    A model described from the declaration alone (bomlens:origin=declared-input):
+    its SBOM carries the licence declare-ai-model.py wrote from the declaration,
+    and that is the licence the risk assessment judged, so it is the one
+    recorded, as declared. A declaration saved later with another licence is
+    listed for review until the model is scanned again with it."""
+    exprs, names = b.scanned_licenses(comp)
+    seen = {x.lower() for x in exprs + names}
+    if _one(_props(comp), "bomlens:origin") == "declared-input":
+        targets = [b.license_el(x) for x in exprs]
+        unmapped = []
+        for n in names:
+            expr = b.declared_expr(n)
+            if expr:
+                targets.append(b.license_el(expr))
+            else:
+                unmapped.append(n)
+        if unmapped or not targets:
+            targets.append(b.license_el(None))
+        targets = list(dict.fromkeys(targets))
+        real = any(t != "expandedlicensing_NoAssertionLicense" for t in targets)
+        if exprs or names:
+            b.relationship(el_id, "hasDeclaredLicense", targets, status="declared" if real else "noAssertion")
+            note = "Licence from the publisher's declaration: " + ", ".join(exprs + names) + "."
+            if unmapped:
+                note += (" " + ", ".join(repr(n) for n in unmapped)
+                         + " is not an SPDX identifier, recorded as NoAssertionLicense.")
+            b.annotate(el_id, note)
+        else:
+            b.relationship(el_id, "hasDeclaredLicense", targets, status="noAssertion")
+        if declared and declared.lower() not in seen:
+            b.messages.append({"level": "review", "element": el_id,
+                               "text": f"declared model licence {declared!r} is not the one this SBOM was built "
+                                       f"with ({', '.join(exprs + names) or 'none'}); scan again to apply it"})
+        return
+    if not declared:
+        b.declared_licenses(el_id, comp)
+        return
+    expr = b.declared_expr(declared)
+    stated = exprs or [n for n in names if n.strip().lower() not in UNSTATED_LICENSE_NAMES]
+    if stated:
+        b.declared_licenses(el_id, comp)
+        if declared.lower() not in seen and (expr is None or expr not in exprs):
+            b.annotate(el_id, f"The publisher's declaration gives the licence {declared!r}; the licence the "
+                       "scan read is kept.", review=True)
+            b.messages.append({"level": "review", "element": el_id,
+                               "text": f"declared model licence {declared!r} differs from the one the scan read "
+                                       f"({', '.join(stated)})"})
+        return
+    b.relationship(el_id, "hasDeclaredLicense", b.license_el(expr), status="declared" if expr else "noAssertion")
+    if expr:
+        note = f"Licence from the publisher's declaration: {declared}."
+    else:
+        note = (f"Licence declared by the publisher as {declared!r}; not an SPDX identifier, recorded as "
+                "NoAssertionLicense.")
+    if names:
+        note += " The scan read the licence named " + ", ".join(repr(n) for n in names) + "."
+    b.annotate(el_id, note)
 
 
 def _base_models(b, model_id, props, decl):
@@ -1262,6 +1353,10 @@ def template(bom, mapping, root):
         chain = [i.rpartition(":")[0] or i for i in (_one(props, "bomlens:lineage:chain") or "").split(" > ") if i]
         chain += [x.strip() for x in (_one(props, "bomlens:lineage:otherParents") or "").split(",") if x.strip()]
         model["baseModels"] = [{"ref": c, "revision": ""} for c in dict.fromkeys(chain)]
+        exprs, names = Builder(mapping, "template").scanned_licenses(root)
+        if _one(props, "bomlens:origin") != "declared-input" and not exprs \
+                and all(n.strip().lower() in UNSTATED_LICENSE_NAMES for n in names):
+            model["license"] = ""
         out["model"] = model
     # A role says how the model used a dataset, so only the datasets its card
     # names get one; a traced source of another dataset does not.

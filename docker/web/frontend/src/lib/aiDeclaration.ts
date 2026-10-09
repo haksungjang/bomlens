@@ -243,11 +243,29 @@ export interface BaseModelEntry {
   revision: string;
 }
 
-/** The model's answers by field id, plus the base models' revisions. */
+/** The model's answers by field id, plus the base models' revisions and the
+ *  model's own licence. */
 export interface ModelAnswers {
   [field: string]: Value | BaseModelEntry[] | undefined;
   baseModels?: BaseModelEntry[];
+  license?: string;
 }
+
+/**
+ * The model's own licence. SPDX 3.0.1 writes a licence as a hasDeclaredLicense
+ * relationship, not a property, so the mapping has no field for it; the
+ * declaration takes it as `model.license`, a hub licence tag or an SPDX id.
+ * The server's empty declaration asks for it only when the scan found none.
+ */
+export const MODEL_LICENSE_FIELD: MapField = {
+  id: "license",
+  type: "license",
+  min: 0,
+  max: 1,
+  noAssertion: false,
+  source: { kind: "user" },
+  declarable: true,
+};
 
 export interface Declaration {
   schema: string;
@@ -380,7 +398,7 @@ const blankOf = (f: MapField): Value => (f.max === "*" ? [] : f.type === "Agent"
  * added by id.
  */
 export function createTemplate(index: FieldIndex): Declaration {
-  const model: ModelAnswers = { baseModels: [] };
+  const model: ModelAnswers = { baseModels: [], license: "" };
   for (const f of Object.values(index.ai_AIPackage)) {
     if ((f.source.kind === "user" || f.declarable) && f.id !== "packageVersion") model[f.id] = blankOf(f);
   }
@@ -494,6 +512,8 @@ export type Problem =
   | "sourceName"
   /** A source licence that is neither a hub licence tag nor an SPDX id. */
   | "sourceLicense"
+  /** The model's licence is neither a hub licence tag nor an SPDX id. */
+  | "license"
   /** The same source twice. */
   | "sourceTwice"
   /** A dataset named as its own source. */
@@ -587,6 +607,8 @@ export function issues(index: FieldIndex, decl: Declaration, authorFromScan: boo
   }
   if (decl.model) {
     visit("model", index.ai_AIPackage, decl.model);
+    const lic = typeof decl.model.license === "string" ? decl.model.license.trim() : "";
+    if (lic && !SPDX_ID_RE.test(lic)) out.push({ where: "model", field: "license", problem: "license" });
     (decl.model.baseModels ?? []).forEach((b, i) => {
       if (!isHubId(b.ref)) out.push({ where: `model.baseModels[${i}]`, field: "ref", problem: "hubId" });
       if (!isEmpty(b.revision) && !REVISION_RE.test(b.revision.trim()))

@@ -419,6 +419,20 @@ describe("a declaration with no scan behind it", () => {
     expect(isHubId("org/x")).toBe(true);
     expect(isHubId("org/../x")).toBe(false);
   });
+
+  it("asks for the model's licence, checks it as the converter does and saves it", () => {
+    const d = createTemplate(index);
+    expect(d.model!.license).toBe("");
+    expect(toFile(d, true).model).not.toHaveProperty("license");
+    d.model!.license = "my own terms";
+    expect(saveBlockers(issues(index, d, false))).toEqual([{ where: "model", field: "license", problem: "license" }]);
+    expect(stepOf({ where: "model", field: "license", problem: "license" })).toBe("model");
+    d.model!.license = " llama3.1 ";
+    expect(saveBlockers(issues(index, d, false))).toEqual([]);
+    expect(toFile(d, true).model!.license).toBe("llama3.1");
+    // A saved licence comes back on a re-run.
+    expect(startCreate(index, toFile(d, true)).model!.license).toBe("llama3.1");
+  });
 });
 
 describe("sources a publisher declares for a dataset", () => {

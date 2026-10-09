@@ -152,7 +152,8 @@ refuse() {  # $1 label, $2 jq edit applied to the complete declaration
     rc=$?
     { [ "$rc" -eq 2 ] && jq -e '.refused | length > 0' "$WORK/bad.out" >/dev/null; } && pass "refused: $1" || fail "not refused: $1 (rc=$rc)"
 }
-refuse "an unknown key" '.model.license = "MIT"'
+refuse "an unknown key" '.model.licence = "MIT"'
+refuse "a model licence that is neither a hub tag nor an SPDX id" '.model.license = "my own terms"'
 refuse "a value outside the field's list" '.model.safetyRiskAssessment = "critical"'
 refuse "noAssertion on a field with no unknown value" '.model.safetyRiskAssessment = "noAssertion"'
 refuse "noAssertion mixed with values" '.datasets[3].datasetType = ["text", "noAssertion"]'
@@ -393,6 +394,89 @@ python3 -I "$CONV" template --bom "$FIX/bom-ai-sample.json" --out-dir "$OUT" --p
 [ "$(jq -c '[.datasets[].sources]' "$OUT/${P}_ai-declaration.template.json")" = '[[],[],[]]' ] \
     && pass "the template offers an empty sources list for every dataset" || fail "template sources"
 
+echo "== the model's licence a publisher declares =="
+# The licence the scan read stands; a declared one fills its place only when
+# the scan has none as an SPDX id, and one that differs is listed for review.
+model_lic() { jq -r '([.["@graph"][] | select(.type=="ai_AIPackage") | .spdxId] | first) as $m
+  | [.["@graph"][] | select(.relationshipType=="hasDeclaredLicense" and .from==$m) | .to[]] | map(split("/") | last) | join(",")' "$DOC"; }
+model_lic_status() { jq -r '[.relationships[] | select(.type=="hasDeclaredLicense")] | first | .status' "$CHK"; }
+jq '.model.license = "MIT"' "$FIX/declaration-complete.json" > "$WORK/decl-lic.json"
+convert "$WORK/decl-lic.json"
+{ [ $? -eq 0 ] && [ "$(model_lic)" = "Apache-2.0" ] && [ "$(model_lic_status)" = "auto" ] \
+  && grep -q "declared model licence 'MIT' differs from the one the scan read (Apache-2.0)" "$CHK"; } \
+    && pass "a declared licence that differs from the scanned one is listed for review, the scan's kept" \
+    || fail "differing declared licence: $(model_lic) $(model_lic_status)"
+jq '.model.license = "apache-2.0"' "$FIX/declaration-complete.json" > "$WORK/decl-lic.json"
+convert "$WORK/decl-lic.json"
+! grep -q "declared model licence" "$CHK" && pass "a declared licence that agrees with the scan raises nothing" || fail "agreeing licence listed for review"
+jq 'del(.metadata.component.licenses)' "$FIX/bom-ai-sample.json" > "$WORK/nolic.json"
+rm -f "$OUT"/*
+python3 -I "$CONV" convert --bom "$WORK/nolic.json" --out-dir "$OUT" --prefix "$P" --declaration "$WORK/decl-lic.json" --stable 2>/dev/null
+{ [ "$(model_lic)" = "Apache-2.0" ] && [ "$(model_lic_status)" = "declared" ] \
+  && grep -q "Licence from the publisher's declaration: apache-2.0." "$DOC"; } \
+    && pass "a declared licence fills a model the scan found none for, as declared" \
+    || fail "declared licence on an unlicensed model: $(model_lic) $(model_lic_status)"
+jq '.model.license = "llama3.1"' "$FIX/declaration-complete.json" > "$WORK/decl-lic2.json"
+rm -f "$OUT"/*
+python3 -I "$CONV" convert --bom "$WORK/nolic.json" --out-dir "$OUT" --prefix "$P" --declaration "$WORK/decl-lic2.json" --stable 2>/dev/null
+{ [ "$(model_lic)" = "expandedlicensing_NoAssertionLicense" ] && [ "$(model_lic_status)" = "noAssertion" ] \
+  && grep -q "Licence declared by the publisher as 'llama3.1'; not an SPDX identifier" "$DOC"; } \
+    && pass "a declared hub tag with no SPDX id is kept in words" || fail "unmapped declared model licence: $(model_lic)"
+python3 -I "$CONV" template --bom "$WORK/nolic.json" --out-dir "$OUT" --prefix nolic 2>/dev/null
+python3 -I "$CONV" template --bom "$FIX/bom-ai-sample.json" --out-dir "$OUT" --prefix withlic 2>/dev/null
+{ [ "$(jq -r '.model.license' "$OUT/nolic_ai-declaration.template.json")" = "" ] \
+  && [ "$(jq -r '.model | has("license")' "$OUT/withlic_ai-declaration.template.json")" = "false" ]; } \
+    && pass "the template asks for the licence only when the scan found none" || fail "template licence question"
+lic_case() {  # <bom jq edit> <declared licence>
+    jq "$1" "$FIX/bom-ai-sample.json" > "$WORK/lic-bom.json"
+    jq --arg l "$2" '.model.license = $l' "$FIX/declaration-complete.json" > "$WORK/lic-decl.json"
+    rm -f "$OUT"/*
+    python3 -I "$CONV" convert --bom "$WORK/lic-bom.json" --out-dir "$OUT" --prefix "$P" --declaration "$WORK/lic-decl.json" --stable 2>/dev/null
+}
+lic_case '.metadata.component.licenses = [{"license": {"id": "GPL-3.0-only"}}]' "gpl-3.0-only"
+{ [ "$(model_lic)" = "GPL-3.0-only" ] && ! grep -q "declared model licence" "$CHK"; } \
+    && pass "an SPDX id declared in another case is the scanned one, not a difference" || fail "case-only difference listed: $(model_lic)"
+lic_case 'del(.metadata.component.licenses)' "LicenseRef-acme-model"
+{ [ "$(model_lic)" = "LicenseRef-acme-model" ] && [ "$(model_lic_status)" = "declared" ]; } \
+    && pass "a declared LicenseRef- is written as an expression" || fail "LicenseRef licence: $(model_lic) $(model_lic_status)"
+lic_case '.metadata.component.licenses = [{"license": {"name": "llama3"}}]' "mit"
+{ [ "$(model_lic)" = "expandedlicensing_NoAssertionLicense" ] \
+  && grep -q "declared model licence 'mit' differs from the one the scan read (llama3)" "$CHK"; } \
+    && pass "a declared licence against a card's named licence is listed for review, not filled in" \
+    || fail "named card licence overridden: $(model_lic)"
+lic_case '.metadata.component.licenses = [{"license": {"name": "other"}}]' "mit"
+{ [ "$(model_lic)" = "MIT" ] && [ "$(model_lic_status)" = "declared" ] && ! grep -q "declared model licence" "$CHK" \
+  && grep -q "The scan read the licence named 'other'" "$DOC"; } \
+    && pass "a card that says only 'other' takes the declared licence, and the card's word is kept" \
+    || fail "'other' card licence: $(model_lic) $(model_lic_status)"
+python3 -I "$CONV" template --bom "$WORK/lic-bom.json" --out-dir "$OUT" --prefix other 2>/dev/null
+[ "$(jq -r '.model.license' "$OUT/other_ai-declaration.template.json")" = "" ] \
+    && pass "the template asks for the licence when the card says only 'other'" || fail "template on an 'other' card"
+jq '.model.license = "   "' "$FIX/declaration-complete.json" > "$WORK/lic-blank.json"
+python3 -I "$CONV" check --bom "$FIX/bom-ai-sample.json" --declaration "$WORK/lic-blank.json" >/dev/null 2>&1
+[ $? -eq 0 ] && pass "a licence of only spaces is no answer, as in the builder and the web UI" || fail "blank licence refused"
+refuse "a model licence that is not text" '.model.license = []'
+# A model built from the declaration alone: its SBOM's licence is the declared
+# one; a later declaration with another one asks for a new scan.
+jq '.metadata.component.licenses = [{"license": {"name": "apache-2.0"}}]
+    | .metadata.component.properties += [{"name": "bomlens:origin", "value": "declared-input"}]' \
+   "$FIX/bom-ai-sample.json" > "$WORK/declared-bom.json"
+rm -f "$OUT"/*
+python3 -I "$CONV" convert --bom "$WORK/declared-bom.json" --out-dir "$OUT" --prefix "$P" --declaration "$FIX/declaration-complete.json" --stable 2>/dev/null
+{ [ "$(model_lic)" = "Apache-2.0" ] && [ "$(model_lic_status)" = "declared" ]; } \
+    && pass "a declared model's licence is recorded as declared, also when the current declaration leaves it out" \
+    || fail "declared-input licence: $(model_lic) $(model_lic_status)"
+jq '.model.license = "mit"' "$FIX/declaration-complete.json" > "$WORK/lic-mit.json"
+rm -f "$OUT"/*
+python3 -I "$CONV" convert --bom "$WORK/declared-bom.json" --out-dir "$OUT" --prefix "$P" --declaration "$WORK/lic-mit.json" --stable 2>/dev/null
+{ [ "$(model_lic)" = "Apache-2.0" ] \
+  && grep -q "declared model licence 'mit' is not the one this SBOM was built with (Apache-2.0); scan again to apply it" "$CHK"; } \
+    && pass "a changed licence on a declared model asks for a new scan; the SBOM's is the one recorded" \
+    || fail "declared-input licence change: $(model_lic)"
+python3 -I "$CONV" template --bom "$WORK/declared-bom.json" --out-dir "$OUT" --prefix decl 2>/dev/null
+[ "$(jq -r '.model | has("license")' "$OUT/decl_ai-declaration.template.json")" = "false" ] \
+    && pass "the template does not ask a declared model for its licence again" || fail "template asks a declared model"
+
 echo "== bad input is reported, not written =="
 echo '{"bomFormat":"CycloneDX","specVersion":"1.7","components":[{"type":"library","name":"x"}]}' > "$WORK/lib.json"
 python3 -I "$CONV" convert --bom "$WORK/lib.json" --out-dir "$OUT" --prefix x 2>/dev/null
@@ -423,7 +507,7 @@ convert
     && pass "without a declaration the check says none" || fail "no-declaration inputs"
 
 echo "== a refused declaration with --declaration-fallback =="
-jq '.model.license = "MIT"' "$FIX/declaration-complete.json" > "$WORK/refused.json"
+jq '.model.license = "my own terms"' "$FIX/declaration-complete.json" > "$WORK/refused.json"
 rm -f "$OUT"/*
 python3 -I "$CONV" convert --bom "$FIX/bom-ai-sample.json" --out-dir "$OUT" --prefix "$P" \
     --declaration "$WORK/refused.json" --declaration-fallback --stable 2>/dev/null

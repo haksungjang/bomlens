@@ -72,6 +72,8 @@ test("the tile opens the questions; finishing them uploads the declaration and s
   await flow.locator('[data-question="model.releaseTime"] input').fill("2025-04-15");
   await flow.locator('[data-question="model.downloadLocation"] input').fill("https://models.example.com/acme");
   await flow.locator('[data-question="model.suppliedBy"] input').first().fill("Acme");
+  // The model's own licence, which the risk assessment judges it on.
+  await flow.locator('[data-question="model.license"] input').fill("apache-2.0");
   await flow.getByRole("button", { name: /^Next/ }).click();
 
   // Data: a hub dataset by id, whose address the scan reads.
@@ -94,6 +96,7 @@ test("the tile opens the questions; finishing them uploads the declaration and s
       releaseTime: "2025-04-15T00:00:00Z",
       downloadLocation: "https://models.example.com/acme",
       suppliedBy: { type: "Organization", name: "Acme" },
+      license: "apache-2.0",
       baseModels: [{ ref: "Qwen/Qwen2.5-0.5B", revision: "" }],
     },
     datasets: [{ ref: "huggingface:HuggingFaceH4/ultrachat_200k", role: "trainedOn" }],

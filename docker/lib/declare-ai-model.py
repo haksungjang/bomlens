@@ -17,11 +17,16 @@ CycloneDX ML-BOM the rest of the pipeline works from:
                           first, the others as bomlens:lineage:otherParents)
     datasets[].ref     -> data components read from the hub with the sources
                           their cards name (hf_dataset.trace, the same limits)
+    model.license      -> the model's licence, as the name it was declared with,
+                          so the risk assessment judges the model on it
 
-What the declaration says about the model itself (dates, makers, revisions,
-the weights scope, judgments) is not written here: the CycloneDX document holds
-what was observed, and the SPDX 3.0.1 document is where declared values go,
-each marked as declared (convert-to-spdx3-ai.py reads the same file).
+What else the declaration says about the model itself (dates, makers,
+revisions, the weights scope, judgments) is not written here: the CycloneDX
+document holds what was observed, and the SPDX 3.0.1 document is where
+declared values go, each marked as declared (convert-to-spdx3-ai.py reads the
+same file). The licence is the exception: the whole SBOM is the publisher's
+statement here (bomlens:origin=declared-input), and a model with no licence
+could only be judged "review".
 
 --offline reads nothing from the network: base models and datasets are written
 by id only. The web UI uses it to check a declaration against the document it
@@ -60,6 +65,9 @@ def _load_kb():
 
 KB = _load_kb()
 LICENSE_TERMS = KB.get("licenseTerms") or []
+HUB_LICENSE_TAGS = {str(t).lower() for t in (KB.get("hfLicenseTags") or [])}
+# A hub licence tag or an SPDX licence id, as convert-to-spdx3-ai.py takes it.
+LICENSE_RE = re.compile(r"^(LicenseRef-[A-Za-z0-9.-]+|[A-Za-z0-9][A-Za-z0-9.+-]{0,99})$")
 TAG_SIGNALS = {str(e.get("tag", "")).lower(): str(e.get("signal", ""))
                for e in (KB.get("datasetTagSignals") or []) if e.get("tag") and e.get("signal")}
 
@@ -133,7 +141,18 @@ def declared_ids(raw):
     return bases, datasets
 
 
-def lineage(bases, offline):
+def declared_license(raw):
+    """The model's licence as declared, checked as convert-to-spdx3-ai.py checks it."""
+    model = raw.get("model") if isinstance(raw.get("model"), dict) else {}
+    lic = model.get("license")
+    if lic is None or (isinstance(lic, str) and not lic.strip()):
+        return None
+    if not isinstance(lic, str) or not (lic.strip().lower() in HUB_LICENSE_TAGS or LICENSE_RE.match(lic.strip())):
+        raise Refused("model.license: a hub licence tag or an SPDX licence id")
+    return lic.strip()
+
+
+def lineage(bases, offline, own_license=None):
     """The properties a model scan writes for its base models."""
     if not bases:
         return [], [], [], []
@@ -162,11 +181,13 @@ def lineage(bases, offline):
         cur = str(nxt) if nxt else None
     props = [{"name": "bomlens:lineage:chain", "value": " > ".join(chain)[:500]},
              {"name": "bomlens:lineage:rootLicense", "value": chain[-1].rsplit(":", 1)[-1]}]
-    # The declared model states no licence of its own here, so any ancestor
-    # whose terms pass to derivatives is a condition this model carries.
+    # An ancestor whose terms pass to derivatives is a condition this model
+    # carries, unless the model is declared under those same terms (the rule
+    # enrich-aibom.sh applies to a scanned model).
+    own_term = _match_term(own_license)
     for anc, lic in items:
         term = _match_term(lic)
-        if term and term.get("inheritable"):
+        if term and term.get("inheritable") and (own_term is None or own_term.get("key") != term.get("key")):
             props += [{"name": "bomlens:lineage:conflict", "value": "true"},
                       {"name": "bomlens:lineage:conflictWith", "value": f"{anc} ({lic})"}]
             break
@@ -199,7 +220,8 @@ def pedigree(items, walked, others):
 
 def build(raw, project_name, project_version, offline):
     bases, ds_ids = declared_ids(raw)
-    lineage_props, items, walked, others = lineage(bases, offline)
+    own_license = declared_license(raw)
+    lineage_props, items, walked, others = lineage(bases, offline, own_license)
     model = {
         "type": "machine-learning-model",
         "bom-ref": f"model:declared/{project_name}@{project_version}",
@@ -207,6 +229,10 @@ def build(raw, project_name, project_version, offline):
         "version": project_version,
         "properties": [{"name": "bomlens:origin", "value": "declared-input"}] + lineage_props,
     }
+    if own_license:
+        # Kept as the name it was declared with: a hub tag is not an SPDX id,
+        # and the SPDX 3.0.1 converter maps one only where the tag names one.
+        model["licenses"] = [{"license": {"name": own_license}}]
     if walked and not offline:
         model["pedigree"] = {"ancestors": pedigree(items, walked, others)}
     if offline:

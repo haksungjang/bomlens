@@ -1043,9 +1043,9 @@ m2=$(python3 -c "import os,sys;print(os.stat(sys.argv[1]).st_mtime_ns)" "$OUT/ai
 
 post_decl() { curl -s -o "${2:-/dev/null}" -w '%{http_code}' -X POST -H "Content-Type: application/json" --data-binary "$1" "$BASE/ai-declaration?id=${3:-aidecl_1.0}"; }
 [ "$(post_decl '{}' /dev/null '../../etc')" = "400" ] && pass "/ai-declaration blocks a traversal id (400)" || fail "traversal id on /ai-declaration"
-[ "$(post_decl '{"schema":"bomlens-ai-declaration/1","model":{"license":"MIT"}}' "$WORK/decl-bad.json")" = "422" ] \
+[ "$(post_decl '{"schema":"bomlens-ai-declaration/1","model":{"license":"my own terms"}}' "$WORK/decl-bad.json")" = "422" ] \
     && python3 -c "import json,sys; r=json.load(open(sys.argv[1]))['reasons']; assert any('license' in x for x in r), r" "$WORK/decl-bad.json" 2>/dev/null \
-    && pass "/ai-declaration refuses an unknown field with the reason (422)" || fail "unknown field on /ai-declaration" "$(cat "$WORK/decl-bad.json" 2>/dev/null)"
+    && pass "/ai-declaration refuses a value it cannot take, with the reason (422)" || fail "bad value on /ai-declaration" "$(cat "$WORK/decl-bad.json" 2>/dev/null)"
 [ ! -f "$OUT/aidecl_1.0/aidecl_1.0_ai-declaration.json" ] && pass "a refused declaration is not saved" || fail "a refused declaration was saved"
 python3 -c "print('{\"pad\":\"' + 'x' * 1100000 + '\"}')" > "$WORK/big-decl.json"
 big=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Content-Type: application/json" --data-binary "@$WORK/big-decl.json" "$BASE/ai-declaration?id=aidecl_1.0")
@@ -1134,7 +1134,7 @@ touch -t 200001010000 "$OUT/aidecl_1.0/aidecl_1.0_ai-declaration.json"
 # it, and the refusal keeps being reported on later calls.
 python3 -c "
 import json, sys
-d = json.load(open(sys.argv[1])); d['model']['license'] = 'MIT'
+d = json.load(open(sys.argv[1])); d['model']['license'] = 'my own terms'
 json.dump(d, open(sys.argv[1], 'w'))" "$OUT/aidecl_1.0/aidecl_1.0_ai-declaration.json"
 r1=$(curl -fsS "$BASE/spdx3-export?id=aidecl_1.0" 2>/dev/null)
 r2=$(curl -fsS "$BASE/spdx3-export?id=aidecl_1.0" 2>/dev/null)
@@ -4263,7 +4263,7 @@ if [ "$(sed -n 's/^MODE=//p' "$WORK/stub-env")" = "AIDECLARE" ] \
 else
     fail "ai-declare did not route to AIDECLARE" "$(cat "$WORK/stub-env" 2>/dev/null; tail -3 "$WORK/server3.log")"
 fi
-echo '{"schema":"bomlens-ai-declaration/1","model":{"license":"MIT"}}' > "$WORK/bad-decl.json"
+echo '{"schema":"bomlens-ai-declaration/1","model":{"license":"my own terms"}}' > "$WORK/bad-decl.json"
 rm -f "$WORK/stub-env"
 events=$(sse3 "project=decl&version=1.0&source=ai-declare&token=$(up3 "$WORK/bad-decl.json")")
 if echo "$events" | grep -q "The AI declaration was refused" && echo "$events" | grep -q "license" \
