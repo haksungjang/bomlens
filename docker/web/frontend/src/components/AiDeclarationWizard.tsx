@@ -16,6 +16,7 @@ import {
   AGENT_TYPES,
   DATASET_MORE_FIELDS,
   ROLES,
+  SOURCE_RELATIONS,
   dateToDeclared,
   declaredToDate,
   isEmpty,
@@ -37,6 +38,7 @@ import {
   type FieldIndex,
   type Issue,
   type MapField,
+  type SourceEntry,
   type Spdx3Check,
   type StepId,
   type Value,
@@ -426,6 +428,134 @@ function Field({
  * make. It asks only what the scan left open (the server's empty declaration
  * lists exactly that) and shows what the scan already filled as read-only.
  */
+/**
+ * The sources of one dataset: those already on record (traced from its card,
+ * read-only) and those the publisher adds, by hub id (read from the hub at the
+ * next scan) or named in words with the licence they know. There is no
+ * "unknown" here: a licence left empty is recorded as not stated.
+ */
+function SourcesEditor({
+  name,
+  onRecord,
+  sources,
+  problems,
+  allowHub,
+  showProblems,
+  onChange,
+}: {
+  name: string;
+  onRecord: string[];
+  sources: SourceEntry[];
+  problems: Issue["problem"][];
+  /** Data the hub does not hold takes sources named in words only. */
+  allowHub: boolean;
+  showProblems?: boolean;
+  onChange: (v: SourceEntry[]) => void;
+}) {
+  const { t } = useTranslation();
+  const id = useId();
+  const [touched, setTouched] = useState(false);
+  const set = (i: number, v: SourceEntry) => onChange(sources.map((x, j) => (j === i ? v : x)));
+  const shown = touched || showProblems ? problems : [];
+  const errId = `${id}-err`;
+  const row = (i: number) => i + 1;
+  return (
+    <div
+      role="group"
+      aria-labelledby={`${id}-label`}
+      aria-describedby={shown.length ? errId : undefined}
+      className="space-y-2 rounded-md border border-dashed p-3"
+      data-sources={name}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setTouched(true);
+      }}
+    >
+      <div id={`${id}-label`} className="text-sm font-medium">
+        {t("aiDecl.sources.label")}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {onRecord.length ? t("aiDecl.sources.onRecord", { list: onRecord.join(", ") }) : t("aiDecl.sources.none")}
+      </p>
+      {sources.map((src, i) => (
+        <div key={i} className="flex flex-wrap items-center gap-2" data-source-row={i}>
+          {src.ref !== undefined ? (
+            <span className="font-mono text-sm">{src.ref.replace(/^huggingface:/, "")}</span>
+          ) : (
+            <>
+              <Input
+                className="min-w-[10rem] flex-1"
+                aria-label={t("aiDecl.sources.nameN", { n: row(i) })}
+                aria-invalid={shown.length > 0 || undefined}
+                aria-describedby={shown.length ? errId : undefined}
+                placeholder={t("aiDecl.sources.name")}
+                value={src.name ?? ""}
+                onChange={(e) => set(i, { ...src, name: e.target.value })}
+              />
+              <Input
+                className="w-44"
+                aria-label={t("aiDecl.sources.licenseN", { n: row(i) })}
+                aria-invalid={shown.length > 0 || undefined}
+                aria-describedby={shown.length ? errId : undefined}
+                placeholder={t("aiDecl.sources.licensePlaceholder")}
+                value={src.license ?? ""}
+                onChange={(e) => set(i, { ...src, license: e.target.value })}
+              />
+            </>
+          )}
+          <Select
+            aria-label={t("aiDecl.sources.relationN", { n: row(i) })}
+            value={src.relation}
+            onChange={(e) => set(i, { ...src, relation: e.target.value as SourceEntry["relation"] })}
+            className="h-10"
+          >
+            {SOURCE_RELATIONS.map((r) => (
+              <option key={r} value={r}>
+                {t(`aiDecl.sources.rel.${r}`)}
+              </option>
+            ))}
+          </Select>
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label={t("aiDecl.removeRow", {
+              name: src.ref?.replace(/^huggingface:/, "") || src.name || t("aiDecl.sources.nameN", { n: row(i) }),
+            })}
+            onClick={() => onChange(sources.filter((_, j) => j !== i))}
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      ))}
+      {allowHub && (
+        <AddById
+          label={t("aiDecl.sources.addHub")}
+          placeholder={t("aiDecl.examplePrefix", { example: "allenai/c4" })}
+          button={t("aiDecl.sources.addButton")}
+          onAdd={(hubId) => {
+            const ref = `huggingface:${hubId}`;
+            const lower = hubId.toLowerCase();
+            // Already a declared source, or already on record from the card.
+            if (sources.some((x) => x.ref?.toLowerCase() === ref.toLowerCase())) return;
+            if (onRecord.some((x) => x.toLowerCase() === lower)) return;
+            onChange([...sources, { ref, relation: "extended" }]);
+          }}
+        />
+      )}
+      <Button variant="outline" size="sm" onClick={() => onChange([...sources, { name: "", license: "", relation: "other" }])}>
+        <Plus className="h-3.5 w-3.5" />
+        {t("aiDecl.sources.addNamed")}
+      </Button>
+      <div id={errId} aria-live="polite">
+        {[...new Set(shown)].map((p) => (
+          <p key={p} className="text-xs text-risk-critical-fg">
+            {t(`aiDecl.problem.${p}`)}
+          </p>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /** Adds an id (a base model, a hub dataset) from a text box. */
 function AddById({
   label,
@@ -691,7 +821,7 @@ export function AiDeclarationWizard({
               key={k}
               ns="dataset"
               field={index.dataset_DatasetPackage[k]}
-              value={d[k]}
+              value={d[k] as Value | undefined}
               problem={problemAt(where, k)}
               showProblems={reviewed}
               onChange={(v) => set({ kind: "dataset", index: i }, k, v)}
@@ -774,6 +904,20 @@ export function AiDeclarationWizard({
                   </div>
                 )}
                 {main.map(field)}
+                <SourcesEditor
+                  name={d.ref ?? `local-${i}`}
+                  onRecord={
+                    check?.relationships
+                      .filter((r) => r.type === "descendantOf" && r.fromLabel && r.fromLabel === d.ref?.replace(/^huggingface:/, ""))
+                      .map((r) => r.toLabel ?? "")
+                      .filter(Boolean) ?? []
+                  }
+                  sources={d.sources ?? []}
+                  problems={all.filter((x) => x.where === where && x.field === "sources").map((x) => x.problem)}
+                  allowHub={!local}
+                  showProblems={reviewed}
+                  onChange={(v) => set({ kind: "dataset", index: i }, "sources", v as unknown as Value)}
+                />
                 {more.length > 0 && (
                   <Disclosure
                     defaultOpen={hasIssueIn(where, more)}

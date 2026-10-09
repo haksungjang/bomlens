@@ -696,7 +696,8 @@
     "cargoLicenseMetadata": "Rust 크레이트 라이선스 조회",
     "composerInstall": "PHP Composer 의존성 해석",
     "pnpmWorkspaceTree": "pnpm 워크스페이스 의존성 트리 해석",
-    "enrichDistroSupplier": "OS 패키지 공급자 정보 보강"
+    "enrichDistroSupplier": "OS 패키지 공급자 정보 보강",
+    "declaredSources": "AI 선언에 적은 데이터셋 원천 조회"
   },
   "pipelineNote": {
     "titleScan": "일부 데이터가 없을 수 있습니다",
@@ -1411,7 +1412,12 @@
       "revision": "커밋 해시나 태그를 쓰세요(영문, 숫자, '.', '_', '-').",
       "noAssertionMixed": "\"모름\"은 다른 값과 함께 고를 수 없습니다.",
       "localIncomplete": "이 데이터의 이름과 주소를 입력하거나 삭제하세요. 둘 다 없으면 선언을 저장할 수 없습니다.",
-      "hubId": "owner/name 형식의 HuggingFace ID를 쓰세요."
+      "hubId": "owner/name 형식의 HuggingFace ID를 쓰세요.",
+      "sourceName": "라이선스를 적으려면 원천 이름이 필요합니다.",
+      "sourceLicense": "cc-by-4.0 같은 HuggingFace 라이선스 태그나 SPDX 라이선스 ID를 쓰세요.",
+      "sourceTwice": "같은 원천이 두 번 들어 있습니다.",
+      "sourceSelf": "데이터셋은 자기 자신의 원천이 될 수 없습니다.",
+      "sourceHubOnLocal": "허브에 없는 데이터에는 문장으로 적는 원천만 넣을 수 있습니다."
     },
     "base": {
       "revision": {
@@ -1665,6 +1671,23 @@
       "data": "모델을 학습하거나 평가한 데이터를 추가하세요. HuggingFace ID로 추가하거나, 허브에 없는 데이터로 추가할 수 있습니다.",
       "legal": "스캔이 읽을 수 있는 사실이 아니라 판단이 필요한 항목입니다. 확인한 것만 답하세요.",
       "preview": "스캔을 시작하면 적은 기반 모델과 데이터셋을 허브에서 읽은 뒤 SBOM과 SPDX 3.0.1 문서를 만듭니다."
+    },
+    "sources": {
+      "label": "이 데이터의 원천",
+      "onRecord": "이미 기록된 원천: {{list}}",
+      "none": "이 데이터에 기록된 원천이 없습니다.",
+      "name": "문장으로 적는 원천",
+      "licensePlaceholder": "예: cc-by-4.0",
+      "rel": {
+        "extended": "이를 확장함",
+        "other": "기타"
+      },
+      "addHub": "HuggingFace 원천(ID)",
+      "addNamed": "문장으로 적는 원천 추가",
+      "addButton": "원천 추가",
+      "nameN": "문장으로 적는 원천 {{n}}",
+      "licenseN": "원천 {{n}}의 라이선스",
+      "relationN": "원천 {{n}}의 사용 방식"
     }
   }
 }

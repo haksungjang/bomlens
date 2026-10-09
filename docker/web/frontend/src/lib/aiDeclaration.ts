@@ -92,6 +92,8 @@ export interface CheckRelationship {
   type: string;
   status: string | null;
   note?: string;
+  /** The name of the element it starts from. */
+  fromLabel?: string;
   /** The names of the elements it points to, where the check describes them. */
   toLabel?: string;
 }
@@ -162,6 +164,7 @@ export function parseCheck(raw: unknown): Spdx3Check | null {
             type: typeof r.type === "string" ? r.type : "",
             status: typeof r.status === "string" ? r.status : null,
             note: typeof r.note === "string" ? r.note : undefined,
+            fromLabel: typeof r.from === "string" ? labels.get(r.from) : undefined,
             toLabel: to.length ? to.join(", ") : undefined,
           };
         })
@@ -201,6 +204,8 @@ export const ROLES = ["trainedOn", "testedOn", "other"] as const;
 export const URI_SCHEMES = ["http", "https", "s3", "gs", "ftp", "sftp", "git", "git+https", "git+ssh", "hf"];
 export const MAX_TEXT = 4000;
 const REVISION_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+/** A hub licence tag or an SPDX licence id, as the converter takes it. */
+const SPDX_ID_RE = /^(LicenseRef-[A-Za-z0-9.-]+|[A-Za-z0-9][A-Za-z0-9.+-]{0,99})$/;
 const DATE_TIME_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/;
 
 export interface Agent {
@@ -213,12 +218,24 @@ export interface DictEntry {
 }
 export type Value = string | string[] | Agent | Agent[] | DictEntry[] | null;
 
+/** A source a publisher declares for a dataset: a hub dataset by id (read
+ *  from the hub at the next scan) or one named in words with its licence. */
+export interface SourceEntry {
+  ref?: string;
+  name?: string;
+  license?: string;
+  relation: "extended" | "other";
+}
+
+export const SOURCE_RELATIONS = ["extended", "other"] as const;
+
 export interface DeclDataset {
   ref?: string;
   local?: string;
   name?: string;
   role?: string;
-  [field: string]: Value | undefined;
+  sources?: SourceEntry[];
+  [field: string]: Value | SourceEntry[] | undefined;
 }
 
 export interface BaseModelEntry {
@@ -296,6 +313,10 @@ export function startDeclaration(template: unknown, saved?: unknown): Declaratio
 /** No answer: nothing typed, an agent with no name, a setting row with neither
  *  a name nor a value. Such rows are dropped from the saved file. */
 export function isEmpty(v: unknown): boolean {
+  // A declared source: empty only when it names nothing at all (a licence
+  // without a name is not empty; it is reported as a problem instead).
+  if (isObj(v) && "relation" in v)
+    return !String(v.ref ?? "").trim() && !String(v.name ?? "").trim() && !String(v.license ?? "").trim();
   return (
     v === undefined ||
     v === null ||
@@ -319,7 +340,7 @@ export function isBlankLocal(d: DeclDataset): boolean {
 
 /** A new, empty dataset the hub does not hold. */
 export function emptyLocalDataset(index: FieldIndex): DeclDataset {
-  const d: DeclDataset = { local: "", name: "", role: "" };
+  const d: DeclDataset = { local: "", name: "", role: "", sources: [] };
   for (const f of Object.values(index.dataset_DatasetPackage)) {
     if (f.source.kind === "user" || f.declarable) d[f.id] = f.max === "*" ? [] : f.type === "Agent" ? null : "";
   }
@@ -420,7 +441,7 @@ export function startCreate(index: FieldIndex, saved: unknown): Declaration {
 /** A HuggingFace dataset added by id: the scan reads its address, publisher
  *  and licence from the hub, so only what the hub cannot say is asked. */
 export function hubDatasetEntry(index: FieldIndex, id: string): DeclDataset {
-  const d: DeclDataset = { ref: `huggingface:${id}`, role: "" };
+  const d: DeclDataset = { ref: `huggingface:${id}`, role: "", sources: [] };
   for (const f of Object.values(index.dataset_DatasetPackage)) {
     if (f.source.kind === "user" || (f.declarable && f.source.kind === "rule")) d[f.id] = blankOf(f);
   }
@@ -469,6 +490,16 @@ export type Problem =
   | "noAssertionMixed"
   /** Not a HuggingFace id (owner/name). */
   | "hubId"
+  /** A source with a licence but no name. */
+  | "sourceName"
+  /** A source licence that is neither a hub licence tag nor an SPDX id. */
+  | "sourceLicense"
+  /** The same source twice. */
+  | "sourceTwice"
+  /** A dataset named as its own source. */
+  | "sourceSelf"
+  /** A hub source on data the hub does not hold (nothing would read it). */
+  | "sourceHubOnLocal"
   /** A dataset the hub does not hold, partly filled but missing its name or
    *  address: the server would refuse the whole declaration. */
   | "localIncomplete";
@@ -568,6 +599,23 @@ export function issues(index: FieldIndex, decl: Declaration, authorFromScan: boo
     visit(where, index.dataset_DatasetPackage, d);
     if (d.local !== undefined && (isEmpty(d.name) || isEmpty(d.downloadLocation)))
       out.push({ where, field: "local", problem: "localIncomplete" });
+    const seen = new Set<string>();
+    (d.sources ?? []).forEach((src) => {
+      const name = (src.name ?? "").trim();
+      const lic = (src.license ?? "").trim();
+      if (!src.ref && !name) {
+        if (lic) out.push({ where, field: "sources", problem: "sourceName" });
+        return;
+      }
+      if (lic && !SPDX_ID_RE.test(lic)) out.push({ where, field: "sources", problem: "sourceLicense" });
+      if (textLength(name) > MAX_TEXT) out.push({ where, field: "sources", problem: "tooLong" });
+      if (src.ref && d.ref && src.ref.toLowerCase() === d.ref.toLowerCase())
+        out.push({ where, field: "sources", problem: "sourceSelf" });
+      if (src.ref && d.local !== undefined) out.push({ where, field: "sources", problem: "sourceHubOnLocal" });
+      const key = src.ref ? `ref:${src.ref.toLowerCase()}` : `name:${name.toLowerCase()}`;
+      if (seen.has(key)) out.push({ where, field: "sources", problem: "sourceTwice" });
+      seen.add(key);
+    });
   });
   return out;
 }

@@ -421,3 +421,36 @@ describe("a declaration with no scan behind it", () => {
   });
 });
 
+describe("sources a publisher declares for a dataset", () => {
+  it("keeps hub and named sources, drops an empty row, and reports what the converter would refuse", () => {
+    const d = fresh();
+    d.datasets[0].sources = [
+      { ref: "huggingface:org/c4", relation: "extended" },
+      { name: "Old crawl", license: "cc-by-4.0", relation: "other" },
+      { name: "", license: "", relation: "other" },
+    ];
+    expect(issues(index, d, true).filter((i) => i.field === "sources")).toEqual([]);
+    expect(toFile(d).datasets[0].sources).toEqual([
+      { ref: "huggingface:org/c4", relation: "extended" },
+      { name: "Old crawl", license: "cc-by-4.0", relation: "other" },
+    ]);
+    d.datasets[0].sources = [
+      { name: "", license: "mit", relation: "other" },
+      { name: "X", license: "my own terms", relation: "other" },
+      { name: "x", relation: "other" },
+    ];
+    expect(saveBlockers(issues(index, d, true)).map((i) => i.problem)).toEqual(["sourceName", "sourceLicense", "sourceTwice"]);
+  });
+
+  it("refuses what the converter refuses: a dataset as its own source, a hub source on local data", () => {
+    const d = fresh();
+    d.datasets[0].sources = [{ ref: "huggingface:ORG/open-ds", relation: "extended" }];
+    d.datasets[0].ref = "huggingface:org/open-ds";
+    expect(saveBlockers(issues(index, d, true)).map((i) => i.problem)).toEqual(["sourceSelf"]);
+    const l = fresh();
+    l.datasets.push({ ...emptyLocalDataset(index), local: "logs", name: "Logs", downloadLocation: "https://x.example/l",
+                      sources: [{ ref: "huggingface:a/b", relation: "other" }] });
+    expect(saveBlockers(issues(index, l, true)).map((i) => i.problem)).toEqual(["sourceHubOnLocal"]);
+  });
+});
+

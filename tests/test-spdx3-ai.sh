@@ -334,6 +334,65 @@ for f in aibom-owasp-1_7.json aibom-datasets-1_7.json; do
     fi
 done
 
+echo "== sources a publisher declares for a dataset =="
+# A hub dataset already read is linked as it is; one not read yet and one
+# named in words get elements of their own, marked declared and for review.
+jq '.datasets[0].sources = [
+      {"ref": "huggingface:org/upstream", "relation": "extended"},
+      {"ref": "huggingface:org/new-src", "relation": "other"},
+      {"name": "Wikipedia dump 2023-01", "license": "cc-by-sa-3.0", "relation": "extended"}]
+    | .datasets[3].sources = [{"name": "Call-centre transcripts", "relation": "other"}]' \
+   "$FIX/declaration-complete.json" > "$WORK/decl-src.json"
+before=$(convert "$FIX/declaration-complete.json"; rels descendantOf)
+convert "$WORK/decl-src.json"
+[ $? -eq 0 ] && pass "a declaration with sources is accepted" || fail "sources refused" "$(cat "$WORK/err")"
+[ "$(rels descendantOf)" -eq $((before + 3)) ] \
+    && pass "a source already traced is not linked twice; the others are linked" || fail "descendantOf $before -> $(rels descendantOf)"
+{ [ "$(el dataset_DatasetPackage org/new-src | jq -r .software_downloadLocation)" = "https://huggingface.co/datasets/org/new-src" ] \
+  && [ "$(el dataset_DatasetPackage 'Wikipedia dump 2023-01' | jq -r .name)" = "Wikipedia dump 2023-01" ]; } \
+    && pass "a hub source not read yet and a source named in words get their own elements" || fail "declared source elements"
+jq -e '[.["@graph"][] | select(.type=="simplelicensing_LicenseExpression") | .simplelicensing_licenseExpression] | index("CC-BY-SA-3.0") != null' "$DOC" >/dev/null \
+    && pass "a declared hub licence tag is written as its SPDX id" || fail "declared source licence"
+{ grep -q "declared source org/new-src is read at the next scan" "$CHK" \
+  && grep -q "source 'Call-centre transcripts' declared by the publisher, not verified" "$CHK" \
+  && grep -q "not verified by the tool" "$DOC"; } \
+    && pass "declared sources are listed for review and annotated as not verified" || fail "declared source review"
+grep -q "no sources stated for org/pii-ds" "$CHK" && ! grep -q "no sources stated for org/open-ds" "$CHK" \
+    && pass "a dataset with no source on record is listed for review" || fail "sources not stated"
+if [ -n "${JSPY:-}" ]; then
+    # The declared elements lack what only a scan or a later declaration can
+    # give (dates, makers): when the schema finds the document incomplete, the
+    # check has to say it is a draft.
+    "$JSPY" -c "
+import json, sys, jsonschema
+schema = json.load(open(sys.argv[1])); doc = json.load(open(sys.argv[2])); chk = json.load(open(sys.argv[3]))
+errs = list(jsonschema.Draft202012Validator(schema).iter_errors(doc))
+assert not errs or chk['draft'] is True, 'schema errors in a document the check calls complete'
+" "$FIX/spdx-json-schema.json" "$DOC" "$CHK" \
+        && pass "the document with declared sources says it is a draft" || fail "declared sources draft state"
+fi
+jq '.datasets[0].sources = [{"name": "Gated crawl", "license": "openrail++"}]' "$FIX/declaration-complete.json" > "$WORK/decl-src2.json"
+convert "$WORK/decl-src2.json"
+{ jq -e '[.relationships[] | select(.type == "hasDeclaredLicense" and .status == "noAssertion")] | length > 0' "$CHK" >/dev/null \
+  && grep -q "not an SPDX identifier, recorded as NoAssertionLicense" "$DOC" \
+  && ! jq -e '[.["@graph"][] | select(.simplelicensing_licenseExpression == "openrail++")] | length > 0' "$DOC" >/dev/null; } \
+    && pass "a declared licence that is not an SPDX id is kept in words, the expression NoAssertion" \
+    || fail "unmapped declared licence written as an expression"
+grep -q "no sources stated for org/upstream" "$CHK" && fail "a traced source is listed as having no sources" \
+    || pass "sources found only by tracing are not listed as missing theirs"
+refuse "a source with both ref and name" '.datasets[0].sources = [{"ref": "huggingface:a/b", "name": "x"}]'
+refuse "a dataset as its own source, spelled differently" '.datasets[0].sources = [{"ref": "huggingface:Org/Open-DS"}]'
+refuse "a source whose name is only spaces" '.datasets[0].sources = [{"name": "   "}]'
+refuse "a hub source on data the hub does not hold" '.datasets[3].sources = [{"ref": "huggingface:a/b"}]'
+refuse "a licence on a hub source" '.datasets[0].sources = [{"ref": "huggingface:a/b", "license": "mit"}]'
+refuse "a licence that is neither a hub tag nor an SPDX id" '.datasets[0].sources = [{"name": "x", "license": "my own terms"}]'
+refuse "a dataset as its own source" '.datasets[0].sources = [{"ref": "huggingface:org/open-ds"}]'
+refuse "a source listed twice" '.datasets[0].sources = [{"name": "X"}, {"name": "x"}]'
+refuse "an unknown relation" '.datasets[0].sources = [{"name": "x", "relation": "derived"}]'
+python3 -I "$CONV" template --bom "$FIX/bom-ai-sample.json" --out-dir "$OUT" --prefix "$P" 2>/dev/null
+[ "$(jq -c '[.datasets[].sources]' "$OUT/${P}_ai-declaration.template.json")" = '[[],[],[]]' ] \
+    && pass "the template offers an empty sources list for every dataset" || fail "template sources"
+
 echo "== bad input is reported, not written =="
 echo '{"bomFormat":"CycloneDX","specVersion":"1.7","components":[{"type":"library","name":"x"}]}' > "$WORK/lib.json"
 python3 -I "$CONV" convert --bom "$WORK/lib.json" --out-dir "$OUT" --prefix x 2>/dev/null

@@ -2199,6 +2199,90 @@ for bad in '[]' '{"model":{"baseModels":[{"ref":"../etc"}]}}' '{"datasets":[{"re
     [ $? -eq 2 ] && pass "refused before writing: $bad" || fail "not refused: $bad"
 done
 
+echo "== sources the publisher declares by hub id are read and judged =="
+# A card that lists no sources leaves them unknown; a declaration can name them
+# by hub id. They are read from the hub before the assessment, so the verdict
+# reflects their recorded licence, and linked as declared.
+APPLY_PY="$LIB/apply-declared-sources.py"
+src_hub declsrc
+src_ds org/plain odc-by '[]'
+src_ds org/nc cc-by-nc-4.0 '["original"]'
+BOMLENS_HF_API_BASE="file://$SRC" python3 -I "$HFDS_PY" "datasets/org/plain" "$WORK/ds-plain.json" 1.0 >/dev/null 2>&1
+cat > "$WORK/decl-sources.json" <<'JSON'
+{"schema": "bomlens-ai-declaration/1",
+ "datasets": [{"ref": "huggingface:org/plain",
+               "sources": [{"ref": "huggingface:org/nc", "relation": "extended"},
+                           {"name": "Old crawl", "license": "cc-by-4.0", "relation": "other"}]}]}
+JSON
+BOMLENS_HF_API_BASE="file://$SRC" python3 -I "$APPLY_PY" "$WORK/ds-plain.json" "$WORK/decl-sources.json" >/dev/null 2>&1
+if jq -e '
+      ([.components[].name] == ["org/nc"])
+      and ([.components[0].properties[] | select(.name == "bomlens:dataset:depth") | .value] == ["1"])
+      and ([.metadata.component.properties[] | select(.name == "bomlens:dataset:derivedFrom:declared") | .value]
+           == ["extended dataset:huggingface/org/nc"])
+      and ([.metadata.component.properties[] | select(.name == "bomlens:dataset:derivedFrom") | .value]
+           == ["extended dataset:huggingface/org/nc"])
+      and ([.dependencies[] | select(.ref == "dataset:huggingface/org/plain") | .dependsOn[]] == ["dataset:huggingface/org/nc"])' \
+      "$WORK/ds-plain.json" >/dev/null; then
+    pass "a source declared by hub id is read, placed one level below, and linked as declared"
+else
+    fail "declared hub source" "$(jq -c '{comps: [.components[] | {name, properties}], deps: .dependencies}' "$WORK/ds-plain.json")"
+fi
+AI_USAGE_CONTEXT=product bash "$LIB/assess-ai-risk.sh" "$WORK/ds-plain.json" >/dev/null 2>&1
+[ "$(jq -r '[.metadata.component.properties[] | select(.name=="bomlens:assessment:sources") | .value] | first // ""' "$WORK/ds-plain.json")" = "caution" ] \
+    && pass "the declared source's licence reaches the dataset's verdict" || fail "declared source not judged"
+cp "$WORK/ds-plain.json" "$WORK/cdx/declared-sources.json"
+cp "$WORK/ds-plain.json" "$WORK/ds-plain-again.json"
+BOMLENS_HF_API_BASE="file://$SRC" python3 -I "$APPLY_PY" "$WORK/ds-plain-again.json" "$WORK/decl-sources.json" >/dev/null 2>&1
+[ "$(jq '[.metadata.component.properties[] | select(.name == "bomlens:dataset:derivedFrom:declared")] | length' "$WORK/ds-plain-again.json")" = "1" ] \
+    && [ "$(jq '.components | length' "$WORK/ds-plain-again.json")" = "1" ] \
+    && pass "applying the same declaration twice changes nothing" || fail "declared sources applied twice"
+python3 -I "$LIB/convert-to-spdx3-ai.py" check --bom "$WORK/ds-plain.json" --declaration "$WORK/decl-sources.json" > "$WORK/ds-plain-check.json" 2>/dev/null
+{ [ $? -eq 0 ] && grep -q "source 'Old crawl' declared by the publisher, not verified" "$WORK/ds-plain-check.json"; } \
+    && pass "the converter takes the same declaration: the hub source as read, the named one as declared" \
+    || fail "declared sources in the SPDX check" "$(head -c 400 "$WORK/ds-plain-check.json")"
+# Through the converter: the source read from the hub is recorded as declared,
+# not as something the card said.
+python3 -I "$LIB/convert-to-spdx3-ai.py" convert --bom "$WORK/ds-plain.json" --declaration "$WORK/decl-sources.json" \
+    --out-dir "$WORK" --prefix=dsplain >/dev/null 2>&1
+jq -e '[.relationships[] | select(.type == "descendantOf")] | length == 2 and all(.status == "declared")' "$WORK/dsplain_spdx3-check.json" >/dev/null \
+    && grep -q "declared by the publisher: extended" "$WORK/dsplain_bom.spdx3.json" \
+    && pass "a declared source read from the hub keeps its declared status in the SPDX document" \
+    || fail "declared source status" "$(jq -c '.relationships' "$WORK/dsplain_spdx3-check.json")"
+# A declaration the converter refuses is not applied at all.
+jq '.datasets[0].sources += [{"name": "Y", "license": "my own terms"}]' "$WORK/decl-sources.json" > "$WORK/decl-src-bad.json"
+BOMLENS_HF_API_BASE="file://$SRC" python3 -I "$HFDS_PY" "datasets/org/plain" "$WORK/ds-plain-r.json" 1.0 >/dev/null 2>&1
+BOMLENS_HF_API_BASE="file://$SRC" python3 -I "$APPLY_PY" "$WORK/ds-plain-r.json" "$WORK/decl-src-bad.json" >/dev/null 2>&1
+[ "$(jq '.components | length' "$WORK/ds-plain-r.json")" = "0" ] \
+    && pass "a refused declaration's sources are not read" || fail "refused declaration was applied"
+# A source declared for a dataset this scan does not have is not read.
+echo '{"schema":"bomlens-ai-declaration/1","datasets":[{"ref":"huggingface:org/gone","sources":[{"ref":"huggingface:org/nc"}]}]}' > "$WORK/decl-gone.json"
+cp "$WORK/ds-plain-r.json" "$WORK/ds-plain-g.json"
+BOMLENS_HF_API_BASE="file://$SRC" python3 -I "$APPLY_PY" "$WORK/ds-plain-g.json" "$WORK/decl-gone.json" >/dev/null 2>&1
+[ "$(jq '.components | length' "$WORK/ds-plain-g.json")" = "0" ] \
+    && pass "a source of a dataset not in the scan is not read" || fail "orphan source components added"
+# The same dataset under another spelling is not added twice.
+src_ds org/mixsrc odc-by '["extended|org/nc"]'
+BOMLENS_HF_API_BASE="file://$SRC" python3 -I "$HFDS_PY" "datasets/org/mixsrc" "$WORK/ds-mix.json" 1.0 >/dev/null 2>&1
+echo '{"schema":"bomlens-ai-declaration/1","datasets":[{"ref":"huggingface:org/mixsrc","sources":[{"ref":"huggingface:org/NC","relation":"extended"}]}]}' > "$WORK/decl-case.json"
+BOMLENS_HF_API_BASE="file://$SRC" python3 -I "$APPLY_PY" "$WORK/ds-mix.json" "$WORK/decl-case.json" >/dev/null 2>&1
+[ "$(jq '[.components[] | select(.name | ascii_downcase == "org/nc")] | length' "$WORK/ds-mix.json")" = "1" ] \
+    && pass "a declared source under another spelling is the dataset already read" || fail "case-different source added twice"
+# A declared source that closes a loop with a card is marked as a cycle.
+src_ds org/loop-a odc-by '[]'
+src_ds org/loop-b odc-by '["extended|org/loop-a"]'
+BOMLENS_HF_API_BASE="file://$SRC" python3 -I "$HFDS_PY" "datasets/org/loop-a" "$WORK/ds-loop.json" 1.0 >/dev/null 2>&1
+echo '{"schema":"bomlens-ai-declaration/1","datasets":[{"ref":"huggingface:org/loop-a","sources":[{"ref":"huggingface:org/loop-b"}]}]}' > "$WORK/decl-loop.json"
+BOMLENS_HF_API_BASE="file://$SRC" python3 -I "$APPLY_PY" "$WORK/ds-loop.json" "$WORK/decl-loop.json" >/dev/null 2>&1
+[ "$(jq '[.metadata.component, .components[] | .properties[]? | select(.name == "bomlens:dataset:sourceTrace" and .value == "cycle")] | length' "$WORK/ds-loop.json")" = "2" ] \
+    && pass "a loop through a declared source is marked as a cycle on both datasets" \
+    || fail "declared cycle not marked" "$(jq -c '[.metadata.component, .components[] | {name, p: [.properties[]? | select(.name|test("sourceTrace|derivedFrom"))]}]' "$WORK/ds-loop.json")"
+printf 'not json' > "$WORK/decl-junk.json"
+cp "$WORK/hfds.json" "$WORK/hfds-junk.json"
+python3 -I "$APPLY_PY" "$WORK/hfds-junk.json" "$WORK/decl-junk.json"; rc=$?
+{ [ "$rc" -eq 0 ] && cmp -s "$WORK/hfds.json" "$WORK/hfds-junk.json"; } \
+    && pass "an unreadable declaration leaves the SBOM as it was" || fail "junk declaration changed the SBOM (rc=$rc)"
+
 echo "== what enrichment writes is valid CycloneDX 1.7 =="
 # The new properties, the pedigree built from the lineage chain and the traced
 # dataset sources must not cost the document its schema validity. Runs with the

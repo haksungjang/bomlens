@@ -696,7 +696,8 @@
     "cargoLicenseMetadata": "Rust crate license lookup",
     "composerInstall": "PHP Composer dependency resolution",
     "pnpmWorkspaceTree": "pnpm workspace dependency tree resolution",
-    "enrichDistroSupplier": "OS package supplier enrichment"
+    "enrichDistroSupplier": "OS package supplier enrichment",
+    "declaredSources": "Dataset sources named in the AI declaration"
   },
   "pipelineNote": {
     "titleScan": "Some data may be incomplete",
@@ -1411,7 +1412,12 @@
       "revision": "Use a commit hash or a tag (letters, digits, '.', '_' and '-').",
       "noAssertionMixed": "\"Unknown\" cannot be chosen together with other values.",
       "localIncomplete": "Give this data a name and an address, or remove it. Without them the declaration cannot be saved.",
-      "hubId": "Use a HuggingFace id such as owner/name."
+      "hubId": "Use a HuggingFace id such as owner/name.",
+      "sourceName": "A licence needs the source's name.",
+      "sourceLicense": "Use a HuggingFace licence tag or an SPDX licence id, such as cc-by-4.0.",
+      "sourceTwice": "The same source is listed twice.",
+      "sourceSelf": "A dataset cannot be its own source.",
+      "sourceHubOnLocal": "Data the hub does not hold takes sources named in words only."
     },
     "base": {
       "revision": {
@@ -1665,6 +1671,23 @@
       "data": "Add the datasets the model was trained or evaluated on: by HuggingFace id, or as data the hub does not hold.",
       "legal": "These are judgments, not facts a scan can read. Answer only what you have checked.",
       "preview": "Starting the scan reads the base models and datasets you named from the hub, then writes the SBOM and the SPDX 3.0.1 document."
+    },
+    "sources": {
+      "label": "Where this data came from",
+      "onRecord": "Already on record: {{list}}",
+      "none": "No source is on record for this data.",
+      "name": "Source named in words",
+      "licensePlaceholder": "e.g. cc-by-4.0",
+      "rel": {
+        "extended": "Extended from it",
+        "other": "Other"
+      },
+      "addHub": "Source on HuggingFace (id)",
+      "addNamed": "Add a source named in words",
+      "addButton": "Add source",
+      "nameN": "Source named in words {{n}}",
+      "licenseN": "Licence of source {{n}}",
+      "relationN": "How source {{n}} was used"
     }
   }
 }

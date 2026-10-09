@@ -219,7 +219,83 @@ def apply_rule(name, comp, mapping):
 # ---- the declaration ----------------------------------------------------------
 
 MODEL_KEYS_EXTRA = ("baseModels",)
-DATASET_KEYS_EXTRA = ("ref", "local", "name", "role")
+DATASET_KEYS_EXTRA = ("ref", "local", "name", "role", "sources")
+SOURCE_RELATIONS = ("extended", "other")
+# A licence a person writes for a source the tool could not read: a hub
+# licence tag (the list in ai-risk-knowledge.json) or an SPDX licence id.
+SPDX_ID_RE = re.compile(r"^(LicenseRef-[A-Za-z0-9.-]+|[A-Za-z0-9][A-Za-z0-9.+-]{0,99})$")
+
+
+def _hub_license_tags():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ai-risk-knowledge.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return {str(t).lower() for t in (json.load(fh).get("hfLicenseTags") or [])}
+    except (OSError, ValueError):
+        return set()
+
+
+HUB_LICENSE_TAGS = _hub_license_tags()
+
+
+def _check_sources(v, where, self_ref, errs):
+    """Sources a person declares for a dataset: a hub dataset by id (read from
+    the hub on the next scan) or one named in words with the licence they
+    know. Returns the normalized list."""
+    if _empty(v):
+        return []
+    if not isinstance(v, list):
+        errs.append(f"{where}: expected a list")
+        return []
+    out, seen = [], set()
+    for j, src in enumerate(v):
+        w = f"{where}[{j}]"
+        if not isinstance(src, dict) or set(src) - {"ref", "name", "license", "relation"}:
+            errs.append(f"{w}: a source is {{\"ref\" or \"name\", \"license\", \"relation\"}}")
+            continue
+        has_ref = not _empty(src.get("ref"))
+        has_name = isinstance(src.get("name"), str) and bool(src["name"].strip())
+        if has_ref == has_name:
+            errs.append(f"{w}: give exactly one of 'ref' (a hub dataset) or 'name' (one named in words)")
+            continue
+        relation = src.get("relation") or "other"
+        if relation not in SOURCE_RELATIONS:
+            errs.append(f"{w}.relation: must be one of {', '.join(SOURCE_RELATIONS)}")
+            continue
+        entry = {"relation": relation}
+        if has_ref:
+            ref = src["ref"]
+            ds_id = ref[len("huggingface:"):] if isinstance(ref, str) and ref.startswith("huggingface:") else None
+            if not ds_id or not HUB_ID_RE.match(ds_id) or ".." in ds_id:
+                errs.append(f"{w}.ref: expected huggingface:<owner>/<name>")
+                continue
+            if self_ref and ("dataset:huggingface/" + ds_id).lower() == self_ref.lower():
+                errs.append(f"{w}.ref: a dataset is not its own source")
+                continue
+            if not _empty(src.get("license")):
+                errs.append(f"{w}.license: the licence of a hub dataset is read from the hub; "
+                            "'license' is only for a source named in words")
+                continue
+            entry["ref"], key = ds_id, "ref:" + ds_id.lower()
+        else:
+            name = src["name"]
+            if not isinstance(name, str) or len(name) > MAX_TEXT:
+                errs.append(f"{w}.name: expected text up to {MAX_TEXT} characters")
+                continue
+            entry["name"], key = name.strip(), "name:" + name.strip().lower()
+            lic = src.get("license")
+            if not _empty(lic):
+                if not isinstance(lic, str) or not (lic.strip().lower() in HUB_LICENSE_TAGS
+                                                    or SPDX_ID_RE.match(lic.strip())):
+                    errs.append(f"{w}.license: a hub licence tag or an SPDX licence id")
+                    continue
+                entry["license"] = lic.strip()
+        if key in seen:
+            errs.append(f"{w}: listed twice")
+            continue
+        seen.add(key)
+        out.append(entry)
+    return out
 
 
 def _check_agent(v, where, errs):
@@ -442,6 +518,16 @@ def validate_declaration(raw, mapping, bom, root):
                 val = _check_value(dfields[k], v, f"{where}.{k}", errs)
                 if val is not None:
                     entry[k] = val
+        own = ("dataset:huggingface/" + d["ref"][len("huggingface:"):]
+               if isinstance(d.get("ref"), str) and d["ref"].startswith("huggingface:") else None)
+        srcs = _check_sources(d.get("sources"), f"{where}.sources", own, errs)
+        if has_local and any("ref" in x for x in srcs):
+            # Nothing reads the sources of data the hub does not hold, so a hub
+            # id there would stay "to be read" for good.
+            errs.append(f"{where}.sources: data the hub does not hold takes sources named in words only")
+            srcs = []
+        if srcs:
+            entry["sources"] = srcs
         role = d.get("role")
         if not _empty(role):
             if role not in ROLES:
@@ -551,6 +637,8 @@ class Builder:
         self.check_elements = []
         self.check_relationships = []
         self.messages = []
+        # The licence each source named in words was first declared with.
+        self.declared_source_license = {}
 
     def ident(self, kind, key):
         return self.base + kind + "/" + urllib.parse.quote(str(key), safe="")
@@ -770,6 +858,7 @@ def build(bom, mapping, prefix, declaration, stable):
 
     data = data_components(bom, root)
     ds_ids = {}
+    local_ids = []
     if root.get("type") == "machine-learning-model":
         root_id = _build_model(b, bom, root, decl)
     else:
@@ -794,12 +883,24 @@ def build(bom, mapping, prefix, declaration, stable):
                                note="card-declared dataset, role not stated")
         for local in decl["locals"]:
             lid = _build_local_dataset(b, local)
+            local_ids.append((local, lid))
+            if local.get("sources"):
+                _declared_sources(b, lid, local["sources"], ds_ids)
             role = local.get("role")
             if role:
                 b.relationship(root_id, role, lid, status="declared")
             else:
                 b.relationship(root_id, "other", lid, comment="role not stated", status="review",
                                note="declared dataset, role not stated")
+
+    for i, c in enumerate(data):
+        declared = decl["datasets"].get(c.get("bom-ref")) or {}
+        if declared.get("sources"):
+            _declared_sources(b, ds_ids[_dkey(c, i)], declared["sources"], ds_ids)
+    primary = ({root.get("bom-ref")} if root.get("type") != "machine-learning-model" else
+               {x for d in (bom.get("dependencies") or []) if isinstance(d, dict)
+                and d.get("ref") == root.get("bom-ref") for x in (d.get("dependsOn") or [])})
+    _sources_not_stated(b, data, decl, ds_ids, primary, local_ids)
 
     b.relationship(doc_id, "describes", root_id, status=None)
     doc["rootElement"] = [root_id]
@@ -974,11 +1075,111 @@ def _dataset_sources(b, data, ds_ids):
     for i, c in enumerate(data):
         props = _props(c)
         frm = ds_ids.get(_dkey(c, i))
+        declared = set(props.get("bomlens:dataset:derivedFrom:declared", []))
         for v in props.get("bomlens:dataset:derivedFrom", []):
             relation, _, ref = v.partition(" ")
-            if ref in ds_ids:
+            if ref not in ds_ids:
+                continue
+            if v in declared:
+                # Read from the hub, but named by the publisher, not the card.
+                b.relationship(frm, "descendantOf", ds_ids[ref], comment=f"declared by the publisher: {relation}",
+                               status="declared")
+            else:
                 b.relationship(frm, "descendantOf", ds_ids[ref], comment=f"source_datasets: {relation}",
                                status="auto")
+
+
+def _declared_sources(b, frm, sources, ds_ids):
+    """The sources a publisher declared for one dataset. A hub dataset the scan
+    has read is linked by _dataset_sources (apply-declared-sources.py put it in
+    the SBOM); one it has not read yet (declared after the scan) and one named
+    only in words get an element of their own, marked as declared and not read
+    by the tool."""
+    linked = {(r["from"], t) for r in b.check_relationships if r["type"] == "descendantOf" for t in r["to"]}
+    for src in sources:
+        comment = f"declared by the publisher: {src['relation']}"
+        if "ref" in src:
+            ref = "dataset:huggingface/" + src["ref"]
+            if ref in ds_ids:
+                to = ds_ids[ref]
+                if (frm, to) not in linked:
+                    b.relationship(frm, "descendantOf", to, comment=comment, status="declared")
+                continue
+            el = {"type": "dataset_DatasetPackage", "spdxId": b.ident("dataset/declared", src["ref"]),
+                  "creationInfo": CREATION_INFO}
+            if el["spdxId"] not in b.ids:
+                b.add(el)
+                b.fill("dataset_DatasetPackage", el, src["ref"], None, {}, {})
+                el["name"] = src["ref"]
+                url = "https://huggingface.co/datasets/" + src["ref"]
+                el["software_downloadLocation"] = url
+                for row in b.check_elements[-1]["fields"]:
+                    if row["id"] == "name":
+                        row["status"], row["display"] = "declared", src["ref"]
+                    elif row["id"] == "downloadLocation":
+                        row["status"], row["display"] = "declared", url
+                b.relationship(el["spdxId"], "hasDeclaredLicense", b.license_el(None), status="noAssertion")
+                b.annotate(el["spdxId"], "A source the publisher named by its hub id; the next scan reads it "
+                           "from the hub.", review=True)
+                b.messages.append({"level": "review", "element": el["spdxId"],
+                                   "text": f"declared source {src['ref']} is read at the next scan"})
+            if (frm, el["spdxId"]) not in linked:
+                b.relationship(frm, "descendantOf", el["spdxId"], comment=comment, status="declared")
+        else:
+            el = {"type": "dataset_DatasetPackage",
+                  "spdxId": b.ident("dataset/source", src["name"].lower()), "creationInfo": CREATION_INFO}
+            lic = src.get("license")
+            if el["spdxId"] not in b.ids:
+                b.add(el)
+                b.fill("dataset_DatasetPackage", el, src["name"], None, {}, {})
+                el["name"] = src["name"]
+                for row in b.check_elements[-1]["fields"]:
+                    if row["id"] == "name":
+                        row["status"], row["display"] = "declared", src["name"]
+                # Only a licence that is an SPDX id is written as one (a hub tag
+                # that names exactly one, or a LicenseRef-); anything else is
+                # kept in words and the expression is NoAssertion, as for a card.
+                expr = (b.spdx_id_for_name(lic) or (lic if lic.startswith("LicenseRef-") else None)) if lic else None
+                b.relationship(el["spdxId"], "hasDeclaredLicense", b.license_el(expr),
+                               status="declared" if expr else "noAssertion")
+                note = "A source the publisher named in words"
+                if lic and expr:
+                    note += f", with the licence {lic} as they declared it"
+                elif lic:
+                    note += (f", with a licence declared as {lic!r}; not an SPDX identifier, recorded as "
+                             "NoAssertionLicense")
+                b.annotate(el["spdxId"], note + "; not verified by the tool.", review=True)
+                b.messages.append({"level": "review", "element": el["spdxId"],
+                                   "text": f"source {src['name']!r} declared by the publisher, not verified"})
+                b.declared_source_license[el["spdxId"]] = lic
+            elif lic and b.declared_source_license.get(el["spdxId"]) != lic:
+                b.annotate(el["spdxId"], f"Another dataset declares the licence {lic!r} for this source; "
+                           "the first one declared is recorded.", review=True)
+            if (frm, el["spdxId"]) not in linked:
+                b.relationship(frm, "descendantOf", el["spdxId"], comment=comment, status="declared")
+
+
+def _sources_not_stated(b, data, decl, ds_ids, primary, local_ids):
+    """A dataset the model was built from (or the dataset a scan describes)
+    with no source on record anywhere: not in its card, not traced, not marked
+    original, not declared. Listed for review, since a mixture's terms can come
+    from where it was built from. Sources found only by tracing are not listed:
+    the publisher has nothing to decide about them."""
+    for i, c in enumerate(data):
+        if c.get("bom-ref") not in primary:
+            continue
+        props = _props(c)
+        if any(props.get(n) for n in ("bomlens:dataset:sourceDataset", "bomlens:dataset:derivedFrom",
+                                       "bomlens:dataset:sourceDataset:unverified", "bomlens:dataset:unresolved")):
+            continue
+        if (decl["datasets"].get(c.get("bom-ref")) or {}).get("sources"):
+            continue
+        b.messages.append({"level": "review", "element": ds_ids[_dkey(c, i)],
+                           "text": f"no sources stated for {c.get('name') or 'a dataset'}"})
+    for local, lid in local_ids:
+        if not local.get("sources"):
+            b.messages.append({"level": "review", "element": lid,
+                               "text": f"no sources stated for {local['name']}"})
 
 
 def _build_local_dataset(b, local):
@@ -1076,6 +1277,7 @@ def template(bom, mapping, root):
         entry = {"ref": "huggingface:" + ref[len("dataset:huggingface/"):]}
         if ref in card_refs:
             entry["role"] = ""
+        entry["sources"] = []
         for fid, f in _user_fields(mapping, "dataset_DatasetPackage").items():
             src = f["source"]
             auto = (extract(c, src["from"], bom) if src["kind"] == "cdx"

@@ -404,3 +404,34 @@ test("filling a declared model's fields keeps the base models and datasets its d
   expect(saved.model.baseModels).toEqual([{ ref: "org/base", revision: "" }]);
   expect(saved.datasets.map((d) => d.ref)).toContain("huggingface:org/ds");
 });
+
+test("a dataset's sources can be declared: by hub id, or named in words with a licence", async ({ page }) => {
+  const state = await stub(page);
+  await openModels(page);
+  const flow = await openFlow(page);
+  await flow.getByRole("button", { name: "Training data" }).click();
+  const box = flow.locator('[data-sources="huggingface:org/ds"]');
+  await expect(box).toContainText("No source is on record for this data.");
+  await box.getByLabel("Source on HuggingFace (id)").fill("allenai/c4");
+  await box.getByRole("button", { name: "Add source" }).click();
+  await box.getByRole("button", { name: "Add a source named in words" }).click();
+  await box.getByLabel("Source named in words 2", { exact: true }).fill("Old crawl");
+  await box.getByLabel("Licence of source 2", { exact: true }).fill("my own terms");
+  // Two rows can be told apart, and the sources box passes the automated checks.
+  await expect(box.getByLabel("Source named in words 2", { exact: true })).toBeVisible();
+  const axe = await new AxeBuilder({ page }).include('[data-testid="ai-declaration"]')
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+  expect(axe.violations).toEqual([]);
+  await flow.getByRole("button", { name: "Review" }).click();
+  await expect(flow.getByRole("button", { name: "Save" })).toBeDisabled();
+  await flow.getByRole("button", { name: /Training data: / }).click();
+  await box.getByLabel("Licence of source 2", { exact: true }).fill("cc-by-4.0");
+  await flow.getByRole("button", { name: "Review" }).click();
+  await flow.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByTestId("spdx3-band")).toBeVisible();
+  const saved = state.saved as { datasets: { ref?: string; sources?: unknown[] }[] };
+  expect(saved.datasets.find((d) => d.ref === "huggingface:org/ds")?.sources).toEqual([
+    { ref: "huggingface:allenai/c4", relation: "extended" },
+    { name: "Old crawl", license: "cc-by-4.0", relation: "other" },
+  ]);
+});

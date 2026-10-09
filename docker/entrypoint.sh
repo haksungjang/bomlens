@@ -1339,6 +1339,16 @@ fi
 # registry's not-legal-advice disclaimer. Self-gates on the presence of a
 # machine-learning-model component, so ANALYZE of a plain SBOM is a no-op.
 if [ "$AI_MODEL_SCAN" = "true" ] || [ "$SCAN_MODE" = "ANALYZE" ]; then
+    # Sources the publisher named by hub id are read from the hub first, so the
+    # assessment judges them with the dataset (the SPDX 3.0.1 block below
+    # records them as declared). The same declaration that block applies.
+    DECL_FOR_SOURCES="${AI_DECLARATION_FILE:-}"
+    if [ -z "$DECL_FOR_SOURCES" ] && [ -n "${HOST_OUTPUT_DIR:-}" ]; then
+        DECL_FOR_SOURCES="$HOST_OUTPUT_DIR/${OUT_PREFIX}_ai-declaration.json"
+    fi
+    if [ "$AI_MODEL_SCAN" = "true" ] && [ -n "$DECL_FOR_SOURCES" ] && [ -f "$DECL_FOR_SOURCES" ]; then
+        run_optional_step declared-sources python3 "$LIBDIR/apply-declared-sources.py" "$OUTPUT_FILE" "$DECL_FOR_SOURCES"
+    fi
     run_optional_step assess-ai-risk bash "$LIBDIR/assess-ai-risk.sh" "$OUTPUT_FILE"
 fi
 
