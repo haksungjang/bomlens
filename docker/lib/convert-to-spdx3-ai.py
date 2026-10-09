@@ -20,14 +20,19 @@ publisher declares them, and the document is marked a draft until then. Values
 for a base model are never copied from the model itself, and the reverse.
 
 Subcommands
-  convert   --bom F --out-dir D --prefix P [--declaration F] [--map M] [--stable]
+  convert   --bom F --out-dir D --prefix=P [--declaration F [--declaration-fallback]]
+            [--map M] [--stable]
   check     --bom F [--declaration F] [--map M]          (check JSON on stdout)
-  template  --bom F --out-dir D --prefix P [--map M]     (empty declaration)
+  template  --bom F --out-dir D --prefix=P [--map M]     (empty declaration)
 
-Exit status: 0 done (a draft is still done), 1 bad input, 2 declaration refused.
+Exit status: 0 done (a draft is still done), 1 bad input, 2 declaration refused
+(with --declaration-fallback the document is still written, without it), 3 the
+SBOM holds no model or dataset. Pass the prefix as --prefix=P: a scan's prefix
+can begin with "-".
 """
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -42,8 +47,17 @@ DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 HUB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?$")
 REVISION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 LOCAL_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
-PREFIX_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@+-]{0,199}$")
+# The scan's own file-name prefix: entrypoint.sh keeps [A-Za-z0-9.-] and joins
+# project and version with "_", so a project named only in Korean gives "_1.0".
+# No path separator can get through; "." and ".." are refused below.
+PREFIX_RE = re.compile(r"^[A-Za-z0-9._@+-]{1,200}$")
+# Exit codes: 0 written, 1 a fault (unreadable input, bad arguments), 2 the
+# declaration was refused, 3 the SBOM holds no model or dataset to describe.
+EXIT_REFUSED = 2
+EXIT_NO_AI = 3
 LICENSE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+-]*$")
+# A value as the check shows it is cut here; the document holds it in full.
+DISPLAY_MAX = 200
 MAX_DECLARATION_BYTES = 1024 * 1024
 MAX_TEXT = 4000
 AGENT_TYPES = ("Organization", "Person", "Agent")
@@ -624,8 +638,10 @@ class Builder:
                           status="auto" if any(t != "expandedlicensing_NoAssertionLicense" for t in targets)
                           else "noAssertion")
 
-    def fill(self, etype, el, label, comp, bom, declared):
-        """Write every mapped field of one element and record where each came from."""
+    def fill(self, etype, el, label, comp, bom, declared, key=None):
+        """Write every mapped field of one element and record where each came from.
+        `key` is how a declaration names the element ("model", "huggingface:<id>",
+        "local:<slug>"); None for one a declaration cannot address."""
         rows = []
         overrides = []
         for fid, f in self.mapping["_fields"][etype].items():
@@ -661,6 +677,8 @@ class Builder:
                 status = origin
                 self._write(el, f, value)
             row = {"id": fid, "status": status}
+            if value is not None:
+                row["display"] = _display(value)
             if origin == "auto" and src["kind"] == "cdx":
                 row["source"] = "cdx:" + src["from"]
                 if src.get("meaning"):
@@ -675,7 +693,10 @@ class Builder:
         if declared_ids:
             self.annotate(el["spdxId"], "Values from the publisher's declaration: "
                           + ", ".join(declared_ids) + ".")
-        self.check_elements.append({"spdxId": el["spdxId"], "type": etype, "label": label, "fields": rows})
+        entry = {"spdxId": el["spdxId"], "type": etype, "label": label, "fields": rows}
+        if key:
+            entry["declarationKey"] = key
+        self.check_elements.append(entry)
 
     def _write(self, el, f, value):
         key, t = f["json"], f["type"]
@@ -729,9 +750,12 @@ def build(bom, mapping, prefix, declaration, stable):
         ci["createdBy"] = [b.agent(a) for a in authors]
     row = {"id": "createdBy",
            "status": "auto" if scanned_authors else ("declared" if declared_authors else "missingRequired")}
+    if authors:
+        row["display"] = _display(authors)
     if scanned_authors:
         row["source"] = "cdx:documentAuthors"
-    b.check_elements.append({"spdxId": doc_id, "type": "CreationInfo", "label": "document", "fields": [row]})
+    b.check_elements.append({"spdxId": doc_id, "type": "CreationInfo", "label": "document", "fields": [row],
+                             "declarationKey": "document"})
     tools = []
     for t in ((bom.get("metadata") or {}).get("tools") or {}).get("components") or []:
         if isinstance(t, dict) and t.get("name"):
@@ -807,7 +831,7 @@ def _build_model(b, bom, comp, decl):
     el = {"type": "ai_AIPackage", "spdxId": b.ident("model", purl or comp.get("name") or "model"),
           "creationInfo": CREATION_INFO}
     b.add(el)
-    b.fill("ai_AIPackage", el, comp.get("name") or "model", comp, bom, decl["model"])
+    b.fill("ai_AIPackage", el, comp.get("name") or "model", comp, bom, decl["model"], key="model")
     props = _props(comp)
     for rtype, refs in (("vcs", _refs(comp, "vcs")), ("documentation", _refs(comp, "documentation"))):
         for u in refs:
@@ -902,6 +926,17 @@ def _base_models(b, model_id, props, decl):
                            "text": f"The hub's signals disagree on the distributed weights ({signals})."})
 
 
+def _display(v):
+    """A short text form of a written value, for the check and the screens."""
+    if isinstance(v, dict):
+        if "key" in v:
+            return f"{v['key']}={v.get('value', '')}"
+        return str(v.get("name", ""))
+    if isinstance(v, list):
+        return ", ".join(_display(x) for x in v)[:DISPLAY_MAX]
+    return str(v)[:DISPLAY_MAX]
+
+
 def _dkey(comp, index):
     """The key a dataset is known by: its bom-ref, or for one without, its name
     and position, so two unreferenced datasets with one name stay two."""
@@ -912,7 +947,9 @@ def _build_dataset(b, bom, comp, declared, key):
     el = {"type": "dataset_DatasetPackage",
           "spdxId": b.ident("dataset", key), "creationInfo": CREATION_INFO}
     b.add(el)
-    b.fill("dataset_DatasetPackage", el, comp.get("name") or "dataset", comp, bom, declared or {})
+    bref = comp.get("bom-ref") or ""
+    dkey = ("huggingface:" + bref[len("dataset:huggingface/"):]) if bref.startswith("dataset:huggingface/") else None
+    b.fill("dataset_DatasetPackage", el, comp.get("name") or "dataset", comp, bom, declared or {}, key=dkey)
     props = _props(comp)
     if any(r.get("source") == "cdx:supplier" for r in b.check_elements[-1]["fields"] if r["id"] == "suppliedBy"):
         b.annotate(el["spdxId"], "suppliedBy is the account that publishes the repository on HuggingFace.")
@@ -945,11 +982,11 @@ def _build_local_dataset(b, local):
     el = {"type": "dataset_DatasetPackage", "spdxId": b.ident("dataset/local", local["local"]),
           "creationInfo": CREATION_INFO}
     b.add(el)
-    b.fill("dataset_DatasetPackage", el, local["name"], None, {}, local)
+    b.fill("dataset_DatasetPackage", el, local["name"], None, {}, local, key="local:" + local["local"])
     el["name"] = local["name"]
     for row in b.check_elements[-1]["fields"]:
         if row["id"] == "name":
-            row["status"] = "declared"
+            row["status"], row["display"] = "declared", local["name"]
     b.relationship(el["spdxId"], "hasDeclaredLicense", b.license_el(None), status="noAssertion")
     b.annotate(el["spdxId"], "A dataset the publisher declared; the hub does not hold it, so nothing "
                "about it was read by the tool.")
@@ -1022,12 +1059,20 @@ def template(bom, mapping, root):
         chain += [x.strip() for x in (_one(props, "bomlens:lineage:otherParents") or "").split(",") if x.strip()]
         model["baseModels"] = [{"ref": c, "revision": ""} for c in dict.fromkeys(chain)]
         out["model"] = model
+    # A role says how the model used a dataset, so only the datasets its card
+    # names get one; a traced source of another dataset does not.
+    card_refs = set()
+    if root is not None and root.get("type") == "machine-learning-model":
+        card_refs = {x for d in (bom.get("dependencies") or []) if isinstance(d, dict)
+                     and d.get("ref") == root.get("bom-ref") for x in (d.get("dependsOn") or [])}
     datasets = []
     for c in data_components(bom, root):
         ref = c.get("bom-ref") or ""
         if not ref.startswith("dataset:huggingface/"):
             continue
-        entry = {"ref": "huggingface:" + ref[len("dataset:huggingface/"):], "role": ""}
+        entry = {"ref": "huggingface:" + ref[len("dataset:huggingface/"):]}
+        if ref in card_refs:
+            entry["role"] = ""
         for fid, f in _user_fields(mapping, "dataset_DatasetPackage").items():
             src = f["source"]
             auto = (extract(c, src["from"], bom) if src["kind"] == "cdx"
@@ -1041,6 +1086,27 @@ def template(bom, mapping, root):
 
 
 # ---- files ---------------------------------------------------------------------
+
+def file_digest(path):
+    """SHA-256 of a file's bytes, or None when it cannot be read."""
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+    except OSError:
+        return None
+    return h.hexdigest()
+
+
+def tool_digest(map_path):
+    """SHA-256 over this converter and its mapping: a new release that writes
+    the document differently makes earlier documents out of date."""
+    h = hashlib.sha256()
+    for path in (os.path.abspath(__file__), map_path):
+        h.update((file_digest(path) or "-").encode())
+    return h.hexdigest()
+
 
 def write_json(path, obj):
     tmp = f"{path}.{secrets.token_hex(6)}.tmp"
@@ -1067,13 +1133,16 @@ def main(argv):
     ap.add_argument("--out-dir")
     ap.add_argument("--prefix")
     ap.add_argument("--stable", action="store_true")
+    ap.add_argument("--declaration-fallback", action="store_true",
+                    help="convert: when the declaration is refused, write the document without it "
+                         "(the check records the refusal) and still exit 2")
     a = ap.parse_args(argv)
 
     if a.command in ("convert", "template"):
         if not a.out_dir or not a.prefix:
             print("[spdx3] --out-dir and --prefix are required for " + a.command, file=sys.stderr)
             return 1
-        if not PREFIX_RE.match(a.prefix):
+        if not PREFIX_RE.match(a.prefix) or a.prefix in (".", ".."):
             print(f"[spdx3] --prefix {a.prefix!r} must be a plain file-name prefix", file=sys.stderr)
             return 1
         if not os.path.isdir(a.out_dir):
@@ -1090,7 +1159,7 @@ def main(argv):
     if root is None:
         print("[spdx3] the SBOM holds no machine-learning-model or dataset component; nothing to write.",
               file=sys.stderr)
-        return 1
+        return EXIT_NO_AI
 
     if a.command == "template":
         write_json(os.path.join(a.out_dir, f"{a.prefix}_ai-declaration.template.json"),
@@ -1098,6 +1167,7 @@ def main(argv):
         print(f"[spdx3] wrote {a.prefix}_ai-declaration.template.json", file=sys.stderr)
         return 0
 
+    refused = None
     try:
         declaration = read_declaration(a.declaration, mapping, bom, root)
     except Refused as e:
@@ -1106,13 +1176,26 @@ def main(argv):
             sys.stdout.write("\n")
         for m in e.messages:
             print(f"[spdx3] declaration refused: {m}", file=sys.stderr)
-        return 2
+        if a.command != "convert" or not a.declaration_fallback:
+            return EXIT_REFUSED
+        declaration, refused = None, e.messages
     except OSError as e:
         print(f"[spdx3] cannot read the declaration: {e}", file=sys.stderr)
-        return 1
+        if a.command != "convert" or not a.declaration_fallback:
+            return 1
+        declaration, refused = None, [f"the declaration could not be read: {e.strerror or e}"]
 
     prefix = a.prefix or str(root.get("name") or "ai").replace("/", "_")
     document, check = build(bom, mapping, prefix, declaration, a.stable)
+    # What this check was made from, so a reader (the web UI) can tell whether
+    # the files still match the SBOM, the declaration and this converter.
+    check["inputs"] = {"bom": file_digest(a.bom),
+                       "declaration": file_digest(a.declaration) if a.declaration else None,
+                       "tool": tool_digest(a.map)}
+    if refused is not None:
+        check["declaration"] = {"state": "refused", "reasons": refused[:50]}
+    else:
+        check["declaration"] = {"state": "applied" if declaration is not None else "none"}
     if a.command == "check":
         json.dump(check, sys.stdout, indent=2, ensure_ascii=False)
         sys.stdout.write("\n")
@@ -1123,7 +1206,7 @@ def main(argv):
     state = "draft, {} required field(s) open".format(check["counts"]["missingRequired"]) \
         if check["draft"] else "complete"
     print(f"[spdx3] wrote {a.prefix}_bom.spdx3.json ({state}).", file=sys.stderr)
-    return 0
+    return EXIT_REFUSED if refused is not None else 0
 
 
 if __name__ == "__main__":

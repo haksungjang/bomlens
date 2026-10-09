@@ -1620,16 +1620,19 @@ if [ "$AI_MODEL_SCAN" = "true" ] && [ "${GENERATE_SPDX3:-true}" != "false" ]; th
         SPDX3_DECL="$HOST_OUTPUT_DIR/${OUT_PREFIX}_ai-declaration.json"
         echo "[INFO] SPDX 3.0.1: applying the declaration kept in the output folder (${OUT_PREFIX}_ai-declaration.json)."
     fi
-    SPDX3_ARGS=(convert --bom "$OUTPUT_FILE" --out-dir . --prefix "$OUT_PREFIX")
+    # --prefix= keeps a prefix that begins with "-" from reading as an option.
+    SPDX3_ARGS=(convert --bom "$OUTPUT_FILE" --out-dir . "--prefix=$OUT_PREFIX")
     [ "${BYTE_STABLE:-false}" = "true" ] && SPDX3_ARGS+=(--stable)
     spdx3_rc=0
     if [ -n "$SPDX3_DECL" ]; then
-        python3 "$LIBDIR/convert-to-spdx3-ai.py" "${SPDX3_ARGS[@]}" --declaration "$SPDX3_DECL" || spdx3_rc=$?
+        # With --declaration-fallback a refused declaration still gives the
+        # document (exit 2), and the check records the refusal for the web UI.
+        python3 "$LIBDIR/convert-to-spdx3-ai.py" "${SPDX3_ARGS[@]}" --declaration "$SPDX3_DECL" \
+            --declaration-fallback || spdx3_rc=$?
         if [ "$spdx3_rc" -eq 2 ]; then
             echo "[ERROR] The AI declaration was refused (reasons above). The SPDX 3.0.1 document is written without it, as a draft. Fix the file and run again." >&2
             SPDX3_DECL=""
             spdx3_rc=0
-            python3 "$LIBDIR/convert-to-spdx3-ai.py" "${SPDX3_ARGS[@]}" || spdx3_rc=$?
         fi
     else
         python3 "$LIBDIR/convert-to-spdx3-ai.py" "${SPDX3_ARGS[@]}" || spdx3_rc=$?
@@ -1640,7 +1643,7 @@ if [ "$AI_MODEL_SCAN" = "true" ] && [ "${GENERATE_SPDX3:-true}" != "false" ]; th
         # the datasets and base models this scan found. Edit it and pass it
         # back with --ai-declare.
         if python3 "$LIBDIR/convert-to-spdx3-ai.py" template --bom "$OUTPUT_FILE" --out-dir . \
-               --prefix "$OUT_PREFIX" 2>/dev/null; then
+               "--prefix=$OUT_PREFIX" 2>/dev/null; then
             ARTIFACTS+=("${OUT_PREFIX}_ai-declaration.template.json")
         fi
         # Keep an accepted --ai-declare file with the results, so a re-scan and

@@ -136,6 +136,14 @@ b=$(el software_Package org/base-instruct)
 grep -q "Values from the publisher's declaration" "$DOC" && pass "declared values are annotated as declared" || fail "no declaration annotation"
 [ "$(jq -r '[.["@graph"][] | select(.type=="CreationInfo") | .createdBy[0]] | first | split("/") | last' "$DOC")" = "Organization%3AAcme%20AI%20Lab" ] \
     && pass "the declared author is the creator, not the tool" || fail "createdBy"
+# The screens tie each checked element to the declaration item that fills it,
+# and show filled values without reading the document.
+[ "$(jq -c '[.elements[] | .declarationKey // "-"]' "$CHK")" = '["document","model","huggingface:org/open-ds","huggingface:org/pii-ds","huggingface:org/upstream","local:support-logs-2025"]' ] \
+    && pass "each checked element names the declaration item it maps to" || fail "declarationKey: $(jq -c '[.elements[] | .declarationKey]' "$CHK")"
+{ [ "$(jq -r '.elements[] | select(.declarationKey=="model") | .fields[] | select(.id=="hyperparameter") | .display' "$CHK")" = "learning_rate=2e-5, lora_rank=16" ] \
+  && [ "$(jq -r '.elements[0].fields[0].display' "$CHK")" = "Acme AI Lab" ] \
+  && [ "$(jq '[.elements[].fields[] | select(.status=="optional" or .status=="missingRequired" or .status=="judgment") | has("display")] | any' "$CHK")" = "false" ]; } \
+    && pass "a filled field carries a display value, an empty one none" || fail "display values"
 
 echo "== a declaration the scan does not match is refused =="
 refuse() {  # $1 label, $2 jq edit applied to the complete declaration
@@ -200,6 +208,8 @@ T="$OUT/${P}_ai-declaration.template.json"
 { [ -f "$T" ] && [ "$(jq -c '[.model.baseModels[].ref]' "$T")" = '["org/base-instruct","org/base","org/other"]' ] \
   && [ "$(jq -r '.model | has("releaseTime") and (has("name") | not)' "$T")" = "true" ] \
   && [ "$(jq '.datasets | length' "$T")" -eq 3 ]; } && pass "the template lists the fields a person fills" || fail "template content" "$(head -c 400 "$T")"
+[ "$(jq -c '[.datasets[] | has("role")]' "$T")" = '[true,true,false]' ] \
+    && pass "only the datasets the card names are offered a role" || fail "template roles: $(jq -c '[.datasets[] | {ref, role}]' "$T")"
 python3 -I "$CONV" check --bom "$FIX/bom-ai-sample.json" --declaration "$T" >/dev/null 2>&1
 [ $? -eq 0 ] && pass "an untouched template is accepted (empty means not declared)" || fail "the template itself is refused"
 
@@ -326,9 +336,42 @@ done
 echo "== bad input is reported, not written =="
 echo '{"bomFormat":"CycloneDX","specVersion":"1.7","components":[{"type":"library","name":"x"}]}' > "$WORK/lib.json"
 python3 -I "$CONV" convert --bom "$WORK/lib.json" --out-dir "$OUT" --prefix x 2>/dev/null
-[ $? -eq 1 ] && pass "an SBOM with no model or dataset is refused" || fail "non-AI SBOM accepted"
+[ $? -eq 3 ] && pass "an SBOM with no model or dataset is refused with its own exit code (3)" || fail "non-AI SBOM accepted"
 python3 -I "$CONV" convert --bom "$FIX/bom-ai-sample.json" --out-dir "$OUT" --prefix "../escape" 2>/dev/null
 [ $? -eq 1 ] && pass "a prefix that is a path is refused" || fail "path prefix accepted"
+python3 -I "$CONV" convert --bom "$FIX/bom-ai-sample.json" --out-dir "$OUT" --prefix=.. 2>/dev/null
+[ $? -eq 1 ] && pass "a prefix of .. is refused" || fail ".. prefix accepted"
+
+echo "== the prefix a scan gives a project named in Korean =="
+# entrypoint.sh keeps [A-Za-z0-9.-]: a project named only in Korean becomes
+# "_1.0", and one starting with "-" keeps the dash.
+rm -f "$OUT"/*
+python3 -I "$CONV" convert --bom "$FIX/bom-ai-sample.json" --out-dir "$OUT" --prefix=_1.0 2>/dev/null \
+  && [ -f "$OUT/_1.0_bom.spdx3.json" ] && pass "a prefix that starts with _ is written" || fail "_1.0 prefix refused"
+python3 -I "$CONV" template --bom "$FIX/bom-ai-sample.json" --out-dir "$OUT" --prefix=-x_1.0 2>/dev/null \
+  && [ -f "$OUT/-x_1.0_ai-declaration.template.json" ] && pass "a prefix that starts with - is taken as --prefix=" || fail "-x prefix refused"
+
+echo "== the check records what it was made from =="
+convert "$FIX/declaration-complete.json"
+{ [ "$(jq -r .inputs.bom "$CHK")" = "$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$FIX/bom-ai-sample.json")" ] \
+  && [ "$(jq -r .inputs.declaration "$CHK")" = "$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$FIX/declaration-complete.json")" ] \
+  && [ "$(jq -r '.inputs.tool | length' "$CHK")" = "64" ] \
+  && [ "$(jq -r .declaration.state "$CHK")" = "applied" ]; } \
+    && pass "the check holds the digests of the SBOM, the declaration and the converter" || fail "inputs: $(jq -c '{inputs, declaration}' "$CHK")"
+convert
+{ [ "$(jq -r .inputs.declaration "$CHK")" = "null" ] && [ "$(jq -r .declaration.state "$CHK")" = "none" ]; } \
+    && pass "without a declaration the check says none" || fail "no-declaration inputs"
+
+echo "== a refused declaration with --declaration-fallback =="
+jq '.model.license = "MIT"' "$FIX/declaration-complete.json" > "$WORK/refused.json"
+rm -f "$OUT"/*
+python3 -I "$CONV" convert --bom "$FIX/bom-ai-sample.json" --out-dir "$OUT" --prefix "$P" \
+    --declaration "$WORK/refused.json" --declaration-fallback --stable 2>/dev/null
+rc=$?
+{ [ "$rc" -eq 2 ] && [ -f "$DOC" ] && [ "$(jq -r .draft "$CHK")" = "true" ] \
+  && [ "$(jq -r .declaration.state "$CHK")" = "refused" ] \
+  && jq -e '.declaration.reasons | any(test("license"))' "$CHK" >/dev/null; } \
+    && pass "the document is written without it, exit 2, and the check keeps the reasons" || fail "fallback rc=$rc $(jq -c .declaration "$CHK" 2>/dev/null)"
 
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed"

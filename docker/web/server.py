@@ -25,6 +25,7 @@
 #   docker-image  -> MODE=IMAGE on <target>
 import glob
 import io
+import hashlib
 import json
 import os
 import re
@@ -1385,6 +1386,90 @@ def _component_risk_index(run_id):
 VEX_STATES = ("affected", "not_affected", "fixed", "under_investigation")
 MAX_VEX_DETAIL = 2000  # chars; a short justification, not a report
 MAX_VEX_IMPORT_BYTES = 4 * 1024 * 1024  # a received VEX document, not a bulk feed
+# The publisher's declaration for the SPDX 3.0.1 AI document. The converter
+# refuses anything larger itself; this stops the read before it.
+MAX_AI_DECLARATION_BYTES = 1024 * 1024
+SPDX3_CONVERTER = "convert-to-spdx3-ai.py"
+SPDX3_MAP = "spdx3-ai-map.json"
+
+
+def spdx3_usable():
+    """Whether this image carries the SPDX 3.0.1 AI converter (an older or a
+    desktop image might not); the UI hides the document's controls when not."""
+    return os.path.isfile(os.path.join(LIB_DIR, SPDX3_CONVERTER))
+
+
+def spdx3_summary(run_id):
+    """The check behind a scan's SPDX 3.0.1 AI document: draft or complete, the
+    counts by where values came from. Read fresh each time (no cache), since a
+    saved declaration rewrites it after the scan. None when there is none."""
+    path = run_file(run_id, "_spdx3-check.json")
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            check = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(check, dict) or not isinstance(check.get("counts"), dict):
+        return None
+    doc = run_file(run_id, "_bom.spdx3.json")
+    decl = check.get("declaration") if isinstance(check.get("declaration"), dict) else {}
+    state = decl.get("state") if decl.get("state") in ("none", "applied", "refused") else "none"
+    reasons = [str(x)[:500] for x in (decl.get("reasons") or []) if isinstance(x, str)][:50] \
+        if state == "refused" and isinstance(decl.get("reasons"), list) else []
+    return {
+        "draft": bool(check.get("draft")),
+        "counts": {k: int(v) for k, v in check["counts"].items() if isinstance(v, int)},
+        "name": os.path.basename(doc) if doc and os.path.isfile(doc) else None,
+        "check": os.path.basename(path),
+        # Whether the saved declaration went into the document. "refused" keeps
+        # saying so until the declaration is fixed, not only on the call that
+        # found it.
+        "declaration": {"state": state, "reasons": reasons},
+    }
+
+
+# One conversion at a time: the document, its check and its Markdown are each
+# replaced atomically, but only this lock keeps them a matching set.
+_spdx3_lock = threading.Lock()
+
+
+def _sha256_file(path):
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+    except OSError:
+        return None
+    return h.hexdigest()
+
+
+def spdx3_tool_digest():
+    """The converter's own digest of itself and its mapping (tool_digest in
+    convert-to-spdx3-ai.py, which must stay the same computation)."""
+    h = hashlib.sha256()
+    for name in (SPDX3_CONVERTER, SPDX3_MAP):
+        h.update((_sha256_file(os.path.join(LIB_DIR, name)) or "-").encode())
+    return h.hexdigest()
+
+
+def spdx3_up_to_date(bom, decl, check_path):
+    """Whether the written document still matches the SBOM, the saved
+    declaration (or its absence) and this converter, by the digests the check
+    recorded. Content, not modification times: a copied, restored or deleted
+    declaration is noticed either way."""
+    try:
+        with open(check_path, encoding="utf-8") as fh:
+            inputs = (json.load(fh) or {}).get("inputs")
+    except (OSError, ValueError, AttributeError):
+        return False
+    if not isinstance(inputs, dict):
+        return False
+    want_decl = _sha256_file(decl) if os.path.isfile(decl) else None
+    return (inputs.get("bom") == _sha256_file(bom) and inputs.get("declaration") == want_decl
+            and inputs.get("tool") == spdx3_tool_digest())
 
 # Serializes read-modify-write on one run's *_vex.json. A single global lock
 # is fine: saves are rare, human-paced actions, never a hot path.
@@ -2627,6 +2712,9 @@ def scan_detail(run_id):
         # AI compliance profile card (AI SBOMs only); None otherwise. Paired with
         # the done-event payload below — keep both in sync.
         "aiProfile": ai_profile_summary(run_id),
+        # The SPDX 3.0.1 AI document's check (AI scans only); None otherwise.
+        # Paired with the done-event payload below — keep both in sync.
+        "spdx3": spdx3_summary(run_id),
         "scanoss": scanoss_status(run_id),
         # How the scan was launched (source + toggles), saved as a sidecar so the
         # UI can offer "re-scan with the same settings". None for pre-feature
@@ -4492,6 +4580,8 @@ class Handler(BaseHTTPRequestHandler):
                 # /spdx-export), not chosen before a scan, so the frontend gates
                 # the export button on this rather than on a scan-form toggle.
                 "spdxExport": spdx_convert_usable(),
+                # The SPDX 3.0.1 AI document and its declaration screens.
+                "spdx3": spdx3_usable(),
                 "spdxSibling": not spdx_convert_capable() and docker_cli_present() and docker_capable(),
                 # Whether a HuggingFace credential was handed to this container, so
                 # the UI can say that private/gated models resolve. A boolean only —
@@ -4513,8 +4603,8 @@ class Handler(BaseHTTPRequestHandler):
                 # path (what the user recognizes).
                 "scanRoots": EXTRA_SCAN_ROOTS,
             }))
-        elif path in ("/spdx-export", "/vex-export"):
-            # Both write a file into the output folder over GET, so they get
+        elif path in ("/spdx-export", "/vex-export", "/spdx3-export", "/ai-declaration-template"):
+            # All write a file into the output folder over GET, so they get
             # the same Origin check /scan-stream does.
             if not _origin_allowed(self.headers.get("Origin")):
                 self._send(403, json.dumps({"error": "bad origin"}))
@@ -4522,8 +4612,14 @@ class Handler(BaseHTTPRequestHandler):
             qs = urllib.parse.parse_qs(parsed.query)
             if path == "/spdx-export":
                 self._spdx_export(qs)
-            else:
+            elif path == "/vex-export":
                 self._vex_export(qs)
+            elif path == "/spdx3-export":
+                self._spdx3_export(qs)
+            else:
+                self._ai_declaration_template(qs)
+        elif path == "/spdx3-map":
+            self._spdx3_map()
         elif path == "/file":
             self._serve_file(urllib.parse.parse_qs(parsed.query))
         elif path == "/scans":
@@ -4575,6 +4671,8 @@ class Handler(BaseHTTPRequestHandler):
             self._vex_verdict_save(urllib.parse.parse_qs(parsed.query))
         elif parsed.path == "/vex-import":
             self._vex_import(urllib.parse.parse_qs(parsed.query))
+        elif parsed.path == "/ai-declaration":
+            self._ai_declaration_save(urllib.parse.parse_qs(parsed.query))
         else:
             self._send(404, json.dumps({"error": "not found"}))
 
@@ -4996,6 +5094,206 @@ class Handler(BaseHTTPRequestHandler):
             "name": os.path.basename(spdx),
             "results": list_results(rid),
         }))
+
+    # ---- SPDX 3.0.1 AI document --------------------------------------------
+    def _spdx3_paths(self, rid):
+        """(bom, folder, prefix, declaration) for a scan, or None after a reply.
+        A scan still running owns its folder (and may be rewriting the SBOM),
+        so it is answered 409 before anything is read or written."""
+        if not scan_id_ok(rid):
+            self._send(400, json.dumps({"error": "invalid scan id"}))
+            return None
+        bom = run_file(rid, "_bom.json")
+        if not bom or not os.path.isfile(bom):
+            self._send(404, json.dumps({"error": "no CycloneDX SBOM for this scan"}))
+            return None
+        if not spdx3_usable():
+            self._send(503, json.dumps({"error": "the SPDX 3.0.1 AI document is not available here"}))
+            return None
+        if self._spdx3_busy(rid):
+            return None
+        folder = os.path.dirname(bom)
+        prefix = os.path.basename(bom)[: -len("_bom.json")]
+        return bom, folder, prefix, os.path.join(folder, prefix + "_ai-declaration.json")
+
+    def _spdx3_busy(self, rid):
+        with _scan_lock:
+            busy = rid in _scan_active
+        if busy:
+            self._send(409, json.dumps({"error": "this scan is still running"}))
+        return busy
+
+    def _spdx3_run(self, args):
+        """Run the converter; None when it could not run or ran too long."""
+        script = os.path.join(LIB_DIR, SPDX3_CONVERTER)
+        try:
+            return subprocess.run([sys.executable, script] + args,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        except (OSError, subprocess.SubprocessError) as err:
+            sys.stderr.write("[ui] SPDX 3.0.1 converter did not finish: %s\n" % err)
+            return None
+
+    def _spdx3_convert(self, rid, bom, folder, prefix, decl):
+        """Write the document and its check; call with _spdx3_lock held.
+        Returns "ok", "noai" (the SBOM holds no model or dataset) or "fail".
+
+        A kept declaration the scan no longer matches does not stop the
+        document: --declaration-fallback writes it without the declaration and
+        the check records why, which spdx3_summary then reports. A signature
+        the CLI's --sign made over the earlier document no longer verifies once
+        the document changes, so it is removed rather than left to mislead."""
+        args = ["convert", "--bom", bom, "--out-dir", folder, "--prefix=" + prefix]
+        if (scanmeta(rid) or {}).get("byteStable"):
+            args.append("--stable")
+        if os.path.isfile(decl):
+            args += ["--declaration", decl, "--declaration-fallback"]
+        doc = os.path.join(folder, prefix + "_bom.spdx3.json")
+        before = _sha256_file(doc)
+        r = self._spdx3_run(args)
+        if r is None:
+            return "fail"
+        if r.returncode == 3:
+            return "noai"
+        ok = r.returncode == 0
+        if r.returncode == 2:
+            # 2 is also what argparse exits with on a usage error; with the
+            # fallback a refusal still writes a fresh check saying "refused".
+            ok = ((spdx3_summary(rid) or {}).get("declaration", {}).get("state") == "refused"
+                  and spdx3_up_to_date(bom, decl, os.path.join(folder, prefix + "_spdx3-check.json")))
+        if not ok or not os.path.isfile(doc):
+            sys.stderr.write("[ui] SPDX 3.0.1 conversion failed for %s (exit %s): %s\n"
+                             % (rid, r.returncode, r.stderr.decode("utf-8", "replace")[-500:]))
+            return "fail"
+        sig = doc + ".sig"
+        if os.path.isfile(sig) and _sha256_file(doc) != before:
+            try:
+                os.remove(sig)
+            except OSError:
+                pass
+        return "ok"
+
+    def _spdx3_reply(self, rid, outcome, name):
+        if outcome == "noai":
+            self._send(409, json.dumps({"error": "this scan holds no AI model or dataset"}))
+        elif outcome != "ok":
+            self._send(500, json.dumps({"error": "SPDX 3.0.1 conversion failed"}))
+        else:
+            self._send(200, json.dumps({"name": name, "results": list_results(rid),
+                                        "spdx3": spdx3_summary(rid)}))
+
+    def _spdx3_export(self, qs):
+        """Write a scan's SPDX 3.0.1 AI document (GET /spdx3-export?id=).
+
+        Unlike /spdx-export, an existing document is rebuilt when it no longer
+        matches the SBOM, the saved declaration or this converter (by the
+        digests its check recorded): the declaration keeps changing after the
+        scan, and the document must follow it. Otherwise the file on disk is
+        returned as it is. Responds with the document's name, the refreshed
+        results listing and the check summary."""
+        rid = (qs.get("id") or [""])[0]
+        paths = self._spdx3_paths(rid)
+        if paths is None:
+            return
+        bom, folder, prefix, decl = paths
+        doc = os.path.join(folder, prefix + "_bom.spdx3.json")
+        outcome = "ok"
+        with _spdx3_lock:
+            check = os.path.join(folder, prefix + "_spdx3-check.json")
+            if not (os.path.isfile(doc) and spdx3_up_to_date(bom, decl, check)):
+                outcome = self._spdx3_convert(rid, bom, folder, prefix, decl)
+        self._spdx3_reply(rid, outcome, os.path.basename(doc))
+
+    def _ai_declaration_template(self, qs):
+        """Write the empty declaration for a scan (GET /ai-declaration-template?id=),
+        rebuilt on every call: it lists what the current SBOM has."""
+        rid = (qs.get("id") or [""])[0]
+        paths = self._spdx3_paths(rid)
+        if paths is None:
+            return
+        bom, folder, prefix, _ = paths
+        r = self._spdx3_run(["template", "--bom", bom, "--out-dir", folder, "--prefix=" + prefix])
+        if r is not None and r.returncode == 3:
+            self._send(409, json.dumps({"error": "this scan holds no AI model or dataset"}))
+            return
+        if r is None or r.returncode != 0:
+            self._send(500, json.dumps({"error": "could not write the empty declaration"}))
+            return
+        self._send(200, json.dumps({"name": prefix + "_ai-declaration.template.json",
+                                    "results": list_results(rid)}))
+
+    def _ai_declaration_save(self, qs):
+        """Save the publisher's declaration for a scan (POST /ai-declaration?id=,
+        the declaration as the request body) and rewrite the SPDX 3.0.1 document
+        with it. The declaration is checked against the scan first; a refused one
+        is answered 422 with the reasons and nothing is written. A scan still
+        running owns its folder, so saving into it is refused (409), checked
+        again just before the write since the check can take a while."""
+        rid = (qs.get("id") or [""])[0]
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        if length <= 0 or length > MAX_AI_DECLARATION_BYTES:
+            self._send(413 if length > MAX_AI_DECLARATION_BYTES else 400,
+                       json.dumps({"error": "bad request size"}))
+            return
+        paths = self._spdx3_paths(rid)
+        if paths is None:
+            return
+        bom, folder, prefix, decl = paths
+        try:
+            body = self.rfile.read(length)
+        except OSError:
+            self._send(400, json.dumps({"error": "could not read the request"}))
+            return
+        tmp = "%s.%s.tmp" % (decl, secrets.token_hex(4))
+        try:
+            with open(tmp, "wb") as fh:
+                fh.write(body)
+            r = self._spdx3_run(["check", "--bom", bom, "--declaration", tmp])
+            if r is not None and r.returncode == 3:
+                self._send(409, json.dumps({"error": "this scan holds no AI model or dataset"}))
+                return
+            if r is not None and r.returncode == 2:
+                try:
+                    reasons = json.loads(r.stdout.decode("utf-8", "replace")).get("refused")
+                except (ValueError, AttributeError):
+                    reasons = None
+                # 2 without the converter's own refusal is a usage error, not a verdict.
+                if isinstance(reasons, list):
+                    self._send(422, json.dumps({"error": "declaration refused",
+                                                "reasons": [str(x)[:500] for x in reasons[:50]]}))
+                    return
+            if r is None or r.returncode != 0:
+                self._send(500, json.dumps({"error": "the declaration could not be checked"}))
+                return
+            with _spdx3_lock:
+                if self._spdx3_busy(rid):
+                    return
+                os.replace(tmp, decl)
+                outcome = self._spdx3_convert(rid, bom, folder, prefix, decl)
+        except OSError as err:
+            sys.stderr.write("[ui] AI declaration save failed for %s: %s\n" % (rid, err))
+            self._send(500, json.dumps({"error": "could not save"}))
+            return
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        self._spdx3_reply(rid, outcome, prefix + "_bom.spdx3.json")
+
+    def _spdx3_map(self):
+        """The field mapping the declaration screens draw their questions from."""
+        path = os.path.join(LIB_DIR, SPDX3_MAP)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                body = fh.read()
+            json.loads(body)
+        except (OSError, ValueError):
+            self._send(503, json.dumps({"error": "the SPDX 3.0.1 mapping is not available here"}))
+            return
+        self._send(200, body)
 
     def _vex_export(self, qs):
         """Write the judgements recorded for a scan as a CycloneDX VEX document
@@ -6214,6 +6512,7 @@ class Handler(BaseHTTPRequestHandler):
                 # AI compliance profile card (AI SBOMs only); None otherwise.
                 # Paired with scan_detail() so a re-opened scan carries it too.
                 "aiProfile": ai_profile_summary(run_id),
+                "spdx3": spdx3_summary(run_id),
                 "scanoss": scanoss_status(run_id),
                 # The inputs + toggles this scan ran with (no secrets); also saved
                 # as the run-folder sidecar so a re-opened scan carries it too.
