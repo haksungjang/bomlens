@@ -88,7 +88,7 @@ const SBOM = {
 
 async function stub(
   page: Page,
-  opts: { capable?: boolean; withSummary?: boolean; saved?: unknown; refuse?: string[] } = {},
+  opts: { capable?: boolean; withSummary?: boolean; saved?: unknown; refuse?: string[]; declared?: boolean } = {},
 ) {
   const state = { complete: false, saved: null as unknown, exported: 0 };
   const results = opts.saved ? [...RESULTS, { name: `${P}_ai-declaration.json`, size: 50 }] : RESULTS;
@@ -102,7 +102,9 @@ async function stub(
   const done = {
     ok: true, mode: "AIBOM", id: P, results, security: null, conformance: null,
     spdx3: opts.withSummary === false ? null : summary(false),
-    scanConfig: { source: "hf-model", target: "acme/model", project: "model", version: "1.0" },
+    scanConfig: opts.declared
+      ? { source: "ai-declare", target: "", project: "model", version: "1.0" }
+      : { source: "hf-model", target: "acme/model", project: "model", version: "1.0" },
     sbom: { components: 1, componentType: "machine-learning-model",
             componentList: [{ name: "acme/model", version: "1", group: "", purl: "", type: "machine-learning-model", licenses: [] }] },
   };
@@ -384,4 +386,21 @@ test("the artifact cards write the document and take a declaration file", async 
     buffer: Buffer.from(JSON.stringify({ schema: "bomlens-ai-declaration/1", model: { releaseTime: "2025-04-15T00:00:00Z" } })),
   });
   await expect.poll(() => state.saved).toEqual({ schema: "bomlens-ai-declaration/1", model: { releaseTime: "2025-04-15T00:00:00Z" } });
+});
+
+test("filling a declared model's fields keeps the base models and datasets its declaration named", async ({ page }) => {
+  const original = {
+    schema: "bomlens-ai-declaration/1",
+    model: { baseModels: [{ ref: "org/base", revision: "" }] },
+    datasets: [{ ref: "huggingface:org/ds", role: "trainedOn" }],
+  };
+  const state = await stub(page, { declared: true, saved: original });
+  await openModels(page);
+  const flow = await openFlow(page);
+  await flow.getByRole("button", { name: "Review" }).click();
+  await flow.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByTestId("spdx3-band")).toBeVisible();
+  const saved = state.saved as { model: { baseModels: unknown[] }; datasets: { ref?: string }[] };
+  expect(saved.model.baseModels).toEqual([{ ref: "org/base", revision: "" }]);
+  expect(saved.datasets.map((d) => d.ref)).toContain("huggingface:org/ds");
 });

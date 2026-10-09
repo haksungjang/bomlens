@@ -792,9 +792,25 @@ DOCKER_STUB_ARGV_DUMP=1 scan_in "$d" --project MNS --version 1 --model owner/rep
 in_log "<GENERATE_SPDX3=false>" && pass "--no-spdx3 reaches the container" || { fail "--no-spdx3 not forwarded"; show; cat "$LOG"; }
 
 d="$(new_proj ai_declare_source)"; printf '{"name":"x","version":"1.0.0"}\n' > "$d/package.json"; printf '{}\n' > "$d/d.json"
-scan_in "$d" --project ADS --version 1 --generate-only --ai-declare d.json
+scan_in "$d" --project ADS --version 1 --generate-only --target . --ai-declare d.json
 { [ "$RC" -ne 0 ] && in_out "--ai-declare applies to AI model and dataset scans only"; } \
   && pass "--ai-declare is refused for a source scan" || { fail "--ai-declare accepted for a source scan"; show; }
+d="$(new_proj ai_declare_alone)"; printf '{}\n' > "$d/d.json"
+DOCKER_STUB_ARGV_DUMP=1 HF_TOKEN='' HUGGING_FACE_HUB_TOKEN='' \
+  scan_in "$d" --project ADA --version 1 --generate-only --ai-declare d.json
+{ in_out "Mode: AIDECLARE" && in_log "<MODE=AIDECLARE>" && in_log "<AI_DECLARATION_FILE=/declare-in/declaration.json>" \
+  && ! in_log "<HF_TOKEN>"; } \
+  && pass "--ai-declare alone describes the model from the declaration (AIDECLARE, file mounted)" \
+  || { fail "--ai-declare alone did not select AIDECLARE"; show; cat "$LOG"; }
+DOCKER_STUB_ARGV_DUMP=1 HF_TOKEN=hf_decl_value \
+  scan_in "$d" --project ADA --version 1 --generate-only --ai-declare d.json
+{ in_log "<HF_TOKEN>" && ! in_log "hf_decl_value"; } \
+  && pass "a declared model passes HF_TOKEN by name only" || { fail "HF_TOKEN not passed for AIDECLARE"; cat "$LOG"; }
+scan_in "$d" --project ADA --version 1 --generate-only --ai-declare d.json --no-spdx3
+{ [ "$RC" -ne 0 ] && in_out "--no-spdx3 cannot be used when --ai-declare is the input"; } \
+  && pass "--no-spdx3 is refused when the declaration is the input" || { fail "--no-spdx3 accepted for AIDECLARE"; show; }
+scan_in "$d" --project ADA --version 1 --generate-only --ai-declare d.json --usage product
+in_out "Mode: AIDECLARE" && pass "--usage applies to a declared model too" || { fail "--usage refused for AIDECLARE"; show; }
 scan_in "$d" --project ADS --version 1 --generate-only --no-spdx3
 { [ "$RC" -ne 0 ] && in_out "--no-spdx3 applies to AI model and dataset scans only"; } \
   && pass "--no-spdx3 is refused for a source scan" || { fail "--no-spdx3 accepted for a source scan"; show; }

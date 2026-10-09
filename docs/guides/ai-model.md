@@ -184,6 +184,15 @@ The declared values go into the SPDX document only, each marked as declared, and
 
 In the web UI there is no file to edit: **Models & datasets** shows the document's state and a **Fill in empty fields** button that asks for the open fields one step at a time and saves them as the declaration (see [the web UI reference](../reference/ui.md#ai-surfaces)). The saved declaration is the same `{Project}_{Version}_ai-declaration.json` file, so a re-scan applies it again, from the CLI as well.
 
+A model being prepared for release has no repository or file to scan, so it can be described from the declaration alone: give `--ai-declare <file>` without `--model` or `--model-file`, or pick **Enter model information** on the web UI's New scan screen, which asks the same questions and starts the scan with the answers.
+
+```bash
+./scripts/scan-sbom.sh --project support-bot --version 1.0 \
+  --ai-declare support-bot-declaration.json --generate-only
+```
+
+The model becomes the SBOM's subject under the project name and version, marked `bomlens:origin=declared-input`. The base models listed in `model.baseModels[].ref` and the datasets in `datasets[].ref` (`huggingface:<owner>/<name>`) are read from the hub by id, so their lineage, licences and traced sources are the same as in a model scan, and `datasets[].local` holds data the hub does not have. The risk assessment, the G7 check and this document follow as usual. No hub supplies the download address and supplier, so the document stays a draft until they are declared.
+
 Two rules apply. A value that is not in the scan and not declared is left out rather than estimated, and a base model is written by its id and licence only, so nothing the publisher declares about the model is copied onto it. `--no-spdx3` skips the document.
 
 ## Reading the conformance report

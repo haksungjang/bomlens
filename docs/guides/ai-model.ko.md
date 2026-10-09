@@ -184,6 +184,15 @@ HuggingFace에 있는 데이터셋도 같은 방법으로 스캔하며, 역시 �
 
 웹 UI에서는 파일을 고칠 필요가 없습니다. **모델·데이터셋** 화면이 문서의 상태와 **빈 항목 채우기** 버튼을 보여 주고, 버튼을 누르면 비어 있는 항목을 단계별로 물어 선언으로 저장합니다([웹 UI 레퍼런스](../reference/ui.ko.md#ai-전용-섹션) 참고). 저장된 선언은 같은 `{Project}_{Version}_ai-declaration.json` 파일이므로, CLI로 다시 스캔해도 그대로 적용됩니다.
 
+출시를 준비 중인 모델에는 스캔할 저장소나 파일이 없으므로, 선언만으로 기술할 수 있습니다. `--model`이나 `--model-file` 없이 `--ai-declare <파일>`만 주거나, 웹 UI 새 스캔 화면에서 **모델 정보 직접 입력**을 고릅니다. 이 타일은 같은 내용을 질문으로 묻고 그 답으로 스캔을 시작합니다.
+
+```bash
+./scripts/scan-sbom.sh --project support-bot --version 1.0 \
+  --ai-declare support-bot-declaration.json --generate-only
+```
+
+모델은 프로젝트 이름과 버전으로 SBOM의 주 대상이 되고 `bomlens:origin=declared-input`으로 표시됩니다. `model.baseModels[].ref`에 적은 기반 모델과 `datasets[].ref`(`huggingface:<owner>/<name>`)에 적은 데이터셋은 허브에서 id로 읽으므로 계보, 라이선스, 원천 추적 결과가 모델 스캔과 같고, 허브에 없는 데이터는 `datasets[].local`에 적습니다. 위험 판정, G7 검사, 이 문서는 평소처럼 이어집니다. 내려받기 주소와 공급자는 어느 허브에서도 얻을 수 없으므로, 선언할 때까지 문서는 초안으로 남습니다.
+
 두 가지 규칙을 지킵니다. 스캔에 없고 선언하지도 않은 값은 추정하지 않고 비워 두며, 기반 모델은 id와 라이선스로만 기록하므로 모델에 대해 선언한 내용이 기반 모델로 옮겨지지 않습니다. `--no-spdx3`를 주면 이 문서를 만들지 않습니다.
 
 ## 적합성 보고서 읽는 법

@@ -71,7 +71,9 @@
     "browse": "Choose file",
     "replaceFile": "Replace",
     "removeFile": "Remove the chosen file",
-    "uploadingPercent": "Uploading… {{percent}}%"
+    "uploadingPercent": "Uploading… {{percent}}%",
+    "aiDeclare": "Enter model information",
+    "aiDeclareHint": "For a model that has no HuggingFace repository or file to read yet. Answer a few questions about it (its base models, the data it was trained on, its release date and the like) and BomLens builds the SBOM and the SPDX 3.0.1 AI document from them. Base models and datasets you name by their HuggingFace id are read from the hub."
   },
   "options": {
     "notice": "Notice",
@@ -595,7 +597,8 @@
     "catCode": "Code",
     "catArtifact": "Artifact",
     "catSbom": "SBOM",
-    "catAiModel": "AI model"
+    "catAiModel": "AI model",
+    "startQuestions": "Start the questions"
   },
   "run": {
     "stageGenerate": "Generate SBOM",
@@ -1225,7 +1228,8 @@
     "image": "Container image",
     "file": "Uploaded file",
     "sbom": "Received SBOM",
-    "model": "AI model"
+    "model": "AI model",
+    "declaration": "Declaration"
   },
   "image": {
     "ready": "The image for this input is already downloaded.",
@@ -1374,7 +1378,8 @@
       "model": "The SPDX AI profile requires who wrote the document and when the model was released. Neither can be read from the hub.",
       "data": "The AI document records what data the model was made from. Whoever receives it uses this to check sources and terms of use.",
       "legal": "Whether personal data was used and how risky the model is are judgments. The tool never fills them for you.",
-      "preview": "The file holds only what you entered. Required fields still empty keep the document a draft, which you can finish later."
+      "preview": "The file holds only what you entered. Required fields still empty keep the document a draft, which you can finish later.",
+      "baseCreate": "SPDX records which model this one was built from. Naming the base model lets the scan read its licence, and a licence that passes to derivatives shows up in the risk verdict."
     },
     "side": {
       "baseTitle": "Base models",
@@ -1405,13 +1410,19 @@
       "emptyKey": "Each setting needs a name.",
       "revision": "Use a commit hash or a tag (letters, digits, '.', '_' and '-').",
       "noAssertionMixed": "\"Unknown\" cannot be chosen together with other values.",
-      "localIncomplete": "Give this data a name and an address, or remove it. Without them the declaration cannot be saved."
+      "localIncomplete": "Give this data a name and an address, or remove it. Without them the declaration cannot be saved.",
+      "hubId": "Use a HuggingFace id such as owner/name."
     },
     "base": {
       "revision": {
         "label": "Revision (commit or tag, optional)",
         "example": "a8b602d9dafd3a75d382e62757d83d89fca3be54",
         "hint": "The commit hash or tag in the model card or your training script. Leave it empty if you do not know it."
+      },
+      "add": {
+        "label": "Base model (HuggingFace id)",
+        "button": "Add",
+        "hint": "The model this one was fine-tuned, quantized or merged from. Its lineage and licence are read from the hub when the scan runs. Leave the list empty for a model trained from scratch."
       }
     },
     "group": {
@@ -1639,6 +1650,21 @@
       "datasetUpdateMechanism": {
         "label": "How it is updated"
       }
+    },
+    "hub": {
+      "add": {
+        "label": "Dataset on HuggingFace (id)",
+        "button": "Add"
+      }
+    },
+    "readAtScan": "Read at scan",
+    "startScan": "Start the scan",
+    "questionHintCreate": {
+      "base": "Add the models this one was built from, if any. A revision makes the lineage reproducible.",
+      "model": "What the hub cannot say about a model that is not published there.",
+      "data": "Add the datasets the model was trained or evaluated on: by HuggingFace id, or as data the hub does not hold.",
+      "legal": "These are judgments, not facts a scan can read. Answer only what you have checked.",
+      "preview": "Starting the scan reads the base models and datasets you named from the hub, then writes the SBOM and the SPDX 3.0.1 document."
     }
   }
 }

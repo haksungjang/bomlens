@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { parseMap, startDeclaration, type Declaration, type FieldIndex } from "./aiDeclaration";
+import { createTemplate, parseMap, startDeclaration, type Declaration, type FieldIndex } from "./aiDeclaration";
 import { declarationReducer, type DeclarationState } from "./useAiDeclaration";
 
 const index = parseMap(
@@ -71,5 +71,22 @@ describe("declarationReducer", () => {
     expect(s.step).toBe("preview");
     const fresh = start().decl;
     expect(declarationReducer(s, { type: "reset", decl: fresh, step: "base" })).toEqual({ step: "base", decl: fresh });
+  });
+
+  it("adds and removes the base models and hub datasets of a declaration with no scan behind it", () => {
+    let s: DeclarationState = { step: "base", decl: createTemplate(index) };
+    s = declarationReducer(s, { type: "addBase", ref: " org/base " });
+    s = declarationReducer(s, { type: "addBase", ref: "org/base" });
+    expect(s.decl.model!.baseModels).toEqual([{ ref: "org/base", revision: "" }]);
+    s = declarationReducer(s, { type: "addHub", index, id: "org/ds" });
+    s = declarationReducer(s, { type: "addHub", index, id: "org/ds" });
+    expect(s.decl.datasets.map((d) => d.ref)).toEqual(["huggingface:org/ds"]);
+    // The hub gives the address and the publisher; they are not asked.
+    expect(s.decl.datasets[0]).not.toHaveProperty("downloadLocation");
+    expect(s.decl.datasets[0]).toHaveProperty("originatedBy");
+    s = declarationReducer(s, { type: "removeHub", index: 0 });
+    s = declarationReducer(s, { type: "removeBase", index: 0 });
+    expect(s.decl.datasets).toEqual([]);
+    expect(s.decl.model!.baseModels).toEqual([]);
   });
 });

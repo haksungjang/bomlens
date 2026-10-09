@@ -97,6 +97,7 @@ const PROVENANCE_ICON: Record<ProvenanceKind, LucideIcon> = {
   file: FileText,
   sbom: FileJson,
   model: Cpu,
+  declaration: FileText,
 };
 
 /** Which body copy explains why cdxgen fell back to a direct-deps-only scan. */

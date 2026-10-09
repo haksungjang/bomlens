@@ -341,6 +341,92 @@ export function slugFor(name: string, taken: string[], n: number): string {
   return slug;
 }
 
+// ---- a declaration with no scan behind it (MODE AIDECLARE) --------------------------
+
+/** The HuggingFace id shape the converter and the server accept. */
+export const HUB_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*(\/[A-Za-z0-9][A-Za-z0-9._-]*)?$/;
+
+export function isHubId(id: string): boolean {
+  return HUB_ID_RE.test(id) && !id.includes("..");
+}
+
+const blankOf = (f: MapField): Value => (f.max === "*" ? [] : f.type === "Agent" ? null : "");
+
+/**
+ * The empty declaration for a model described from the declaration alone.
+ * Every field a publisher can declare is asked, except the version: the scan's
+ * own version is the model's. Base models and datasets start empty and are
+ * added by id.
+ */
+export function createTemplate(index: FieldIndex): Declaration {
+  const model: ModelAnswers = { baseModels: [] };
+  for (const f of Object.values(index.ai_AIPackage)) {
+    if ((f.source.kind === "user" || f.declarable) && f.id !== "packageVersion") model[f.id] = blankOf(f);
+  }
+  return { schema: DECLARATION_SCHEMA, document: { createdBy: [] }, model, datasets: [], relationships: [] };
+}
+
+/**
+ * For a scan made from a declaration (AIDECLARE), the saved file is the scan's
+ * input, not only its supplement. Filling its open fields later must keep the
+ * base models and hub datasets it named, or the next run would lose them.
+ * `file` is what the fill wrote; `original` the declaration it started from.
+ */
+export function keepDeclaredIds(file: Declaration, original: unknown): Declaration {
+  const prev = isObj(original) ? original : {};
+  const model = isObj(prev.model) ? prev.model : {};
+  const out: Declaration = clone(file);
+  const bases = Array.isArray(model.baseModels) ? model.baseModels.filter(isObj) : [];
+  if (out.model && bases.length) {
+    const revs = new Map((out.model.baseModels ?? []).map((b) => [b.ref, b.revision]));
+    out.model.baseModels = bases
+      .filter((b) => typeof b.ref === "string")
+      .map((b) => ({
+        ref: b.ref as string,
+        revision: revs.get(b.ref as string) ?? (typeof b.revision === "string" ? b.revision : ""),
+      }));
+    // A revision answered for an ancestor the hub showed (not one it named)
+    // is kept too; the builder treats a walked ancestor as one, not a parent.
+    for (const [ref, revision] of revs) {
+      if (!out.model.baseModels.some((b) => b.ref === ref)) out.model.baseModels.push({ ref, revision });
+    }
+  }
+  const have = new Set(out.datasets.map((d) => d.ref).filter(Boolean));
+  for (const d of Array.isArray(prev.datasets) ? prev.datasets : []) {
+    if (isObj(d) && typeof d.ref === "string" && !have.has(d.ref)) out.datasets.push({ ref: d.ref });
+  }
+  return out;
+}
+
+/** The questions for re-running a declared model: the empty declaration with
+ *  the saved one's base models and hub datasets added back, and its answers
+ *  laid over it. */
+export function startCreate(index: FieldIndex, saved: unknown): Declaration {
+  const t = createTemplate(index);
+  const prev = isObj(saved) ? saved : {};
+  const model = isObj(prev.model) ? prev.model : {};
+  for (const b of Array.isArray(model.baseModels) ? model.baseModels : []) {
+    const ref = isObj(b) && typeof b.ref === "string" ? b.ref : "";
+    if (ref && !t.model!.baseModels!.some((x) => x.ref === ref)) t.model!.baseModels!.push({ ref, revision: "" });
+  }
+  for (const d of Array.isArray(prev.datasets) ? prev.datasets : []) {
+    const ref = isObj(d) && typeof d.ref === "string" ? d.ref : "";
+    if (ref.startsWith("huggingface:") && !t.datasets.some((x) => x.ref === ref))
+      t.datasets.push(hubDatasetEntry(index, ref.slice("huggingface:".length)));
+  }
+  return startDeclaration(t, saved) ?? t;
+}
+
+/** A HuggingFace dataset added by id: the scan reads its address, publisher
+ *  and licence from the hub, so only what the hub cannot say is asked. */
+export function hubDatasetEntry(index: FieldIndex, id: string): DeclDataset {
+  const d: DeclDataset = { ref: `huggingface:${id}`, role: "" };
+  for (const f of Object.values(index.dataset_DatasetPackage)) {
+    if (f.source.kind === "user" || (f.declarable && f.source.kind === "rule")) d[f.id] = blankOf(f);
+  }
+  return d;
+}
+
 // ---- dates ------------------------------------------------------------------------
 
 /** "2025-04-15" as the declaration writes it ("2025-04-15T00:00:00Z"). */
@@ -381,6 +467,8 @@ export type Problem =
   | "emptyKey"
   | "revision"
   | "noAssertionMixed"
+  /** Not a HuggingFace id (owner/name). */
+  | "hubId"
   /** A dataset the hub does not hold, partly filled but missing its name or
    *  address: the server would refuse the whole declaration. */
   | "localIncomplete";
@@ -469,6 +557,7 @@ export function issues(index: FieldIndex, decl: Declaration, authorFromScan: boo
   if (decl.model) {
     visit("model", index.ai_AIPackage, decl.model);
     (decl.model.baseModels ?? []).forEach((b, i) => {
+      if (!isHubId(b.ref)) out.push({ where: `model.baseModels[${i}]`, field: "ref", problem: "hubId" });
       if (!isEmpty(b.revision) && !REVISION_RE.test(b.revision.trim()))
         out.push({ where: `model.baseModels[${i}]`, field: "revision", problem: "revision" });
     });
@@ -511,7 +600,7 @@ function pruned(v: Value | undefined): Value | undefined {
  * only what the publisher said. A dataset with nothing declared is left out,
  * and so is one the hub does not hold that was added and never filled.
  */
-export function toFile(decl: Declaration): Declaration {
+export function toFile(decl: Declaration, keepBases = false): Declaration {
   const out: Declaration = { schema: DECLARATION_SCHEMA, document: {}, datasets: [], relationships: [] };
   const agents = pruned(decl.document.createdBy as Value);
   if (agents) out.document.createdBy = agents as Agent[];
@@ -522,8 +611,11 @@ export function toFile(decl: Declaration): Declaration {
       const p = pruned(v as Value);
       if (p !== undefined) m[k] = p;
     }
-    const bases = (decl.model.baseModels ?? []).filter((b) => !isEmpty(b.revision));
-    if (bases.length) m.baseModels = bases.map((b) => ({ ref: b.ref, revision: b.revision.trim() }));
+    // A scan's base models are known to it, so only a revision is worth
+    // writing; with no scan behind it (keepBases), the ids are the declaration.
+    const bases = (decl.model.baseModels ?? []).filter((b) => keepBases || !isEmpty(b.revision));
+    if (bases.length)
+      m.baseModels = bases.map((b) => (isEmpty(b.revision) ? { ref: b.ref, revision: "" } : { ref: b.ref, revision: b.revision.trim() }));
     out.model = m;
   }
   for (const d of decl.datasets) {
@@ -535,7 +627,7 @@ export function toFile(decl: Declaration): Declaration {
     }
     if (d.local !== undefined) {
       if (!isBlankLocal(d)) out.datasets.push({ local: d.local, ...e });
-    } else if (Object.keys(e).length) out.datasets.push({ ref: d.ref, ...e });
+    } else if (Object.keys(e).length || keepBases) out.datasets.push({ ref: d.ref, ...e });
   }
   return out;
 }
@@ -585,10 +677,11 @@ export function judgmentFields(index: FieldIndex, decl: Declaration): string[] {
 }
 
 /** The steps this declaration needs, in order. A dataset scan has no model, so
- *  it asks only about the data. */
-export function stepsFor(index: FieldIndex, decl: Declaration): StepId[] {
+ *  it asks only about the data. A declaration with no scan behind it (create)
+ *  always offers the base-model step, where base models are added. */
+export function stepsFor(index: FieldIndex, decl: Declaration, create = false): StepId[] {
   const steps: StepId[] = [];
-  if (decl.model?.baseModels?.length) steps.push("base");
+  if (decl.model && (create || decl.model.baseModels?.length)) steps.push("base");
   if (decl.model) steps.push("model");
   steps.push("data");
   if (judgmentFields(index, decl).length) steps.push("legal");

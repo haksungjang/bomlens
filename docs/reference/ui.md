@@ -31,7 +31,7 @@ The global actions (New scan, Scan management) live in the top bar, and the rail
 
 ## New scan
 
-The New scan screen is two panes. On the left, pick a source — grouped into Code (current folder, a directory path, a GitHub URL, a ZIP upload), Artifact (a Docker image, a package or build artifact, a firmware image), SBOM (analyze an existing SBOM) and AI model (generate an ML-BOM from a HuggingFace model, or from a model file you upload) — and fill in the source-specific input below the tiles. On the right, enter the project name and version, choose the outputs to generate, and start the scan.
+The New scan screen is two panes. On the left, pick a source — grouped into Code (current folder, a directory path, a GitHub URL, a ZIP upload), Artifact (a Docker image, a package or build artifact, a firmware image), SBOM (analyze an existing SBOM) and AI model (generate an ML-BOM from a HuggingFace model, from a model file you upload, or from model information you enter) — and fill in the source-specific input below the tiles. On the right, enter the project name and version, choose the outputs to generate, and start the scan.
 
 | Scan target | Input method | Backend mode |
 |-------------|--------------|--------------|
@@ -46,6 +46,7 @@ The New scan screen is two panes. On the left, pick a source — grouped into Co
 | AI model | enter a HuggingFace model id (`org/model`) | AIBOM |
 | Model file | upload a `.gguf`, `.safetensors`, `.pt`, … (up to 8 GB) | MODELFILE |
 | Published dataset | enter a Figshare item (its page URL, its DOI, or the item number) or a HuggingFace dataset (`datasets/<owner>/<name>`, its `https://huggingface.co/datasets/...` address, or `hf:<owner>/<name>`) in the same field as the model id | DATASET |
+| Enter model information | for a model that has no repository or file yet: **Start the questions** asks for its base models (HuggingFace id, revision optional), the model information (the document author unless the form's SBOM author is set, release date, download address, supplier), the training data (HuggingFace datasets by id and data the hub does not hold) and the decisions, then shows a review. "Start the scan" has the server check the answers first; a refusal is shown with its reasons in the review, with the answers kept, and only an accepted declaration is uploaded and scanned. Upload to a server is not offered for this input. A re-scan reopens the questions at the review step with the saved answers. The tile is locked when the image lacks the scripts for it | AIDECLARE |
 
 Firmware analysis, an AI model, and Deep CVE matching each run in their own opt-in image rather than the base one. Picking one of these shows a panel that checks whether that image is already present: if so, it names the version already installed; if not, it offers a **Download** button with the download size and, once started, layer-by-layer progress. Downloading it here, before the scan starts, avoids a multi-minute wait in the middle of a scan that would otherwise be indistinguishable from the analysis itself.
 

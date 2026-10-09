@@ -59,11 +59,14 @@ fi
 # research dataset read from Figshare, not software moving through a build. Neither
 # pre-build nor post-build is true of it, so leaving the field absent is the honest
 # answer rather than a gap to warn about.
+# AIDECLARE describes a model from its publisher's declaration, before it is
+# published or built into anything: CycloneDX's `design` phase.
 LIFECYCLE=""
 case "$MODE" in
     SOURCE|POSTPROCESS)                 LIFECYCLE="pre-build" ;;
     ROOTFS|IMAGE|BINARY|FIRMWARE|AIBOM|MODELFILE) LIFECYCLE="post-build" ;;
     MERGE|DATASET)                      LIFECYCLE="" ;;
+    AIDECLARE)                          LIFECYCLE="design" ;;
     *)
         echo "[docmeta] WARN: no lifecycle phase defined for MODE=$MODE; leaving it unset." >&2
         ;;

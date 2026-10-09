@@ -63,6 +63,8 @@ A third AI input runs in the base image too: a published research **dataset**, g
 
 A HuggingFace dataset takes the same path. Give it with a prefix or an address (`datasets/<owner>/<name>`, `https://huggingface.co/datasets/<owner>/<name>` or `hf:<owner>/<name>`), since a bare `owner/name` is a model id. A stdlib reader takes the licence, the hub revision and a SHA-256 digest per file from the hub, and reads the datasets the card lists under `source_datasets` in the same way as the datasets a model card names. A gated or private dataset needs `HF_TOKEN`, and a dataset that cannot be read is an error rather than an empty SBOM.
 
+A model that is not published yet has nothing to read, so the last AI input is its publisher's declaration alone (`--ai-declare <file>` without `--model`, `--model-file` or `--target`, or the web UI's "Enter model information" tile). A stdlib script in the base image makes the model the SBOM's subject, named by the project and version and marked `bomlens:origin=declared-input`, and reads the base models and HuggingFace datasets the declaration names from the hub by id, as a model scan does. The declared values themselves go only into the SPDX 3.0.1 AI document, not the CycloneDX SBOM. The same post-processing follows, and the SBOM's lifecycle phase is `design`.
+
 > The model card's disclosure (weights, architecture, training data, training process) and the G7 result appear in the web UI's Models & datasets and G7 sections — see the [web UI reference](../reference/ui.md). For a step-by-step walkthrough, see the [AI model guide](../guides/ai-model.md).
 
 ---

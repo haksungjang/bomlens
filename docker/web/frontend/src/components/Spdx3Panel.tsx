@@ -16,6 +16,7 @@ import {
   type Spdx3Summary,
 } from "@/lib/api";
 import {
+  keepDeclaredIds,
   parseCheck,
   parseMap,
   startDeclaration,
@@ -33,7 +34,14 @@ import { Spdx3Fields, Spdx3StatusBand } from "./Spdx3StatusBand";
 /** Answers in progress, by scan. Leaving the section (or the scan) and coming
  *  back reopens the questions where they were; saving or cancelling drops
  *  them. Kept for the page's life only, never written anywhere. */
-type Draft = { index: FieldIndex; initial: Declaration; current: Declaration; step: StepId };
+type Draft = {
+  index: FieldIndex;
+  initial: Declaration;
+  current: Declaration;
+  step: StepId;
+  /** The declaration saved before, as read. */
+  original: unknown;
+};
 const drafts = new Map<string, Draft>();
 
 async function readJson(scanId: string | null, name: string): Promise<unknown | null> {
@@ -59,6 +67,7 @@ export function Spdx3Panel({
   results,
   onPatch,
   onFillingChange,
+  declaredScan = false,
 }: {
   scanId: string | null;
   /** Shown above the steps: the project and version. */
@@ -68,6 +77,9 @@ export function Spdx3Panel({
   onPatch?: (patch: Partial<DoneEvent>) => void;
   /** The question flow took over the screen (true) or gave it back. */
   onFillingChange?: (filling: boolean) => void;
+  /** The scan was made from a declaration (AIDECLARE): its saved file is the
+   *  scan's input, so the ids it names are kept when it is saved again. */
+  declaredScan?: boolean;
 }) {
   const { t } = useTranslation();
   const { toast } = useToast();
@@ -147,7 +159,7 @@ export function Spdx3Panel({
     }
     if (tpl) onPatch?.({ results: tpl.results });
     setClosed(false);
-    setFill({ index, initial, current: initial, step: "base" });
+    setFill({ index, initial, current: initial, step: "base", original: saved });
   };
 
   const close = () => {
@@ -166,7 +178,7 @@ export function Spdx3Panel({
 
   const save = async (file: Declaration) => {
     if (!scanId) return null;
-    const res = await saveAiDeclaration(scanId, file);
+    const res = await saveAiDeclaration(scanId, declaredScan && fill ? keepDeclaredIds(file, fill.original) : file);
     if (!res.ok) return res;
     onPatch?.({ results: res.results, spdx3: res.spdx3 });
     close();

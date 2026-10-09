@@ -10,6 +10,7 @@ import { useReducer } from "react";
 
 import {
   emptyLocalDataset,
+  hubDatasetEntry,
   slugFor,
   type Declaration,
   type FieldIndex,
@@ -34,6 +35,12 @@ export type DeclarationAction =
   | { type: "set"; target: Target; field: string; value: Value }
   | { type: "addLocal"; index: FieldIndex }
   | { type: "removeLocal"; index: number }
+  /** A declaration with no scan behind it names its own base models and hub
+   *  datasets; a scan's are what the scan found and cannot be added to. */
+  | { type: "addBase"; ref: string }
+  | { type: "removeBase"; index: number }
+  | { type: "addHub"; index: FieldIndex; id: string }
+  | { type: "removeHub"; index: number }
   | { type: "reset"; decl: Declaration; step: StepId };
 
 export function declarationReducer(state: DeclarationState, action: DeclarationAction): DeclarationState {
@@ -79,6 +86,44 @@ export function declarationReducer(state: DeclarationState, action: DeclarationA
       // Only a dataset the publisher added can be taken away; the scanned ones
       // are what the scan found.
       if (!d || d.local === undefined) return state;
+      return {
+        ...state,
+        decl: { ...state.decl, datasets: state.decl.datasets.filter((_, i) => i !== action.index) },
+      };
+    }
+    case "addBase": {
+      const ref = action.ref.trim();
+      const bases = state.decl.model?.baseModels ?? [];
+      if (!state.decl.model || !ref || bases.some((b) => b.ref.toLowerCase() === ref.toLowerCase())) return state;
+      return {
+        ...state,
+        decl: { ...state.decl, model: { ...state.decl.model, baseModels: [...bases, { ref, revision: "" }] } },
+      };
+    }
+    case "removeBase": {
+      const bases = state.decl.model?.baseModels;
+      if (!state.decl.model || !bases?.[action.index]) return state;
+      return {
+        ...state,
+        decl: {
+          ...state.decl,
+          model: { ...state.decl.model, baseModels: bases.filter((_, i) => i !== action.index) },
+        },
+      };
+    }
+    case "addHub": {
+      const id = action.id.trim();
+      const ref = `huggingface:${id}`;
+      if (!state.decl.model || !id || state.decl.datasets.some((d) => d.ref?.toLowerCase() === ref.toLowerCase()))
+        return state;
+      return {
+        ...state,
+        decl: { ...state.decl, datasets: [...state.decl.datasets, hubDatasetEntry(action.index, id)] },
+      };
+    }
+    case "removeHub": {
+      const d = state.decl.datasets[action.index];
+      if (!d || d.ref === undefined) return state;
       return {
         ...state,
         decl: { ...state.decl, datasets: state.decl.datasets.filter((_, i) => i !== action.index) },

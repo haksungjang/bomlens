@@ -33,6 +33,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -104,6 +105,10 @@ MAX_BYTES = {
     # rather than memory. 8 GB admits the common quantizations; anything past it
     # belongs on the CLI, which reads the file in place with no transfer at all.
     "model": 8 * 1024 * 1024 * 1024,  # 8 GB
+    # The publisher's declaration for a model described from it alone (MODE
+    # AIDECLARE). The converter refuses a declaration over 1 MiB; the margin is
+    # the multipart framing around it.
+    "declaration": 1024 * 1024 + 64 * 1024,
 }
 # Accepted extensions per upload kind (lowercased).
 UPLOAD_EXTS = {
@@ -134,6 +139,7 @@ UPLOAD_EXTS = {
     # CLI's --model-file instead of being guessed at here.
     "model": (".gguf", ".safetensors", ".pt", ".pth", ".ckpt", ".pkl", ".pickle",
               ".onnx", ".npz", ".npy"),
+    "declaration": (".json",),
     "firmware": (".bin", ".img", ".squashfs", ".sqsh", ".ubi", ".ubifs",
                  ".trx", ".chk", ".fw", ".rom", ".dlf",
                  # Compressed firmware images (unblob unpacks these), e.g. the
@@ -1409,6 +1415,43 @@ MAX_VEX_IMPORT_BYTES = 4 * 1024 * 1024  # a received VEX document, not a bulk fe
 MAX_AI_DECLARATION_BYTES = 1024 * 1024
 SPDX3_CONVERTER = "convert-to-spdx3-ai.py"
 SPDX3_MAP = "spdx3-ai-map.json"
+
+
+def ai_declare_usable():
+    """Whether this image can describe a model from its declaration alone (the
+    builder and the converter are both here). The new-scan tile follows it."""
+    return spdx3_usable() and os.path.isfile(os.path.join(LIB_DIR, "declare-ai-model.py"))
+
+
+def _declaration_refusal(path, project, version):
+    """Why a declaration cannot describe a model on its own, or [] when it can:
+    the SBOM declare-ai-model.py would write (offline, ids only) is built in a
+    scratch folder and the converter's check is run against it."""
+    work = tempfile.mkdtemp(prefix="decl-check-")
+    try:
+        bom = os.path.join(work, "bom.json")
+        r = subprocess.run([sys.executable, os.path.join(LIB_DIR, "declare-ai-model.py"), path, bom,
+                            project, version, "--offline"],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        if r.returncode != 0:
+            # Only the builder's own refusal is shown, never a traceback line.
+            lines = [ln.split("declaration refused: ", 1)[1] for ln in
+                     r.stderr.decode("utf-8", "replace").splitlines() if "declaration refused: " in ln]
+            return lines[-1:] or ["the declaration could not be read"]
+        r = subprocess.run([sys.executable, os.path.join(LIB_DIR, SPDX3_CONVERTER), "check",
+                            "--bom", bom, "--declaration", path],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        if r.returncode == 2:
+            try:
+                return [str(x)[:300] for x in (json.loads(r.stdout.decode("utf-8", "replace")).get("refused")
+                                               or ["the declaration was refused"])]
+            except ValueError:
+                return ["the declaration was refused"]
+        return [] if r.returncode == 0 else ["the declaration could not be checked"]
+    except (OSError, subprocess.SubprocessError):
+        return ["the declaration could not be checked"]
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def spdx3_usable():
@@ -2766,7 +2809,7 @@ _DIAG_OPTION_KEYS = (
 _DIAG_SOURCES = frozenset((
     "current-dir", "rootfs-dir", "scan-target-src", "yocto-build-dir",
     "docker-image", "git-url", "zip-upload", "package-upload", "sbom-upload",
-    "firmware-upload", "model-upload", "ai-model",
+    "firmware-upload", "model-upload", "ai-model", "ai-declare",
 ))
 _DIAG_WORD_RE = re.compile(r"[A-Za-z0-9_.-]{1,40}")
 # One warning or error line in the summary is cut here, so a single runaway line
@@ -4600,6 +4643,8 @@ class Handler(BaseHTTPRequestHandler):
                 "spdxExport": spdx_convert_usable(),
                 # The SPDX 3.0.1 AI document and its declaration screens.
                 "spdx3": spdx3_usable(),
+                # A model described from the declaration alone (new-scan tile).
+                "aiDeclare": ai_declare_usable(),
                 "spdxSibling": not spdx_convert_capable() and docker_cli_present() and docker_capable(),
                 # Whether a HuggingFace credential was handed to this container, so
                 # the UI can say that private/gated models resolve. A boolean only —
@@ -4691,6 +4736,8 @@ class Handler(BaseHTTPRequestHandler):
             self._vex_import(urllib.parse.parse_qs(parsed.query))
         elif parsed.path == "/ai-declaration":
             self._ai_declaration_save(urllib.parse.parse_qs(parsed.query))
+        elif parsed.path == "/ai-declaration-check":
+            self._ai_declaration_check(urllib.parse.parse_qs(parsed.query))
         else:
             self._send(404, json.dumps({"error": "not found"}))
 
@@ -5300,6 +5347,48 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 pass
         self._spdx3_reply(rid, outcome, prefix + "_bom.spdx3.json")
+
+    def _ai_declaration_check(self, qs):
+        """Check a declaration for a model described from it alone, before any
+        upload or scan (POST /ai-declaration-check?project=&version=, the
+        declaration as the body). The same check the scan start makes, answered
+        while the questions are still open so the answers are not lost:
+        200 {ok: true}, or 422 with the reasons."""
+        project = (qs.get("project") or [""])[0].strip()
+        version = (qs.get("version") or [""])[0].strip()
+        if not project or not version or len(project) > 200 or len(version) > 200:
+            self._send(400, json.dumps({"error": "project and version are required"}))
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        if length <= 0 or length > MAX_AI_DECLARATION_BYTES:
+            self._send(413 if length > MAX_AI_DECLARATION_BYTES else 400,
+                       json.dumps({"error": "bad request size"}))
+            return
+        if not ai_declare_usable():
+            self._send(503, json.dumps({"error": "not available here"}))
+            return
+        try:
+            body = self.rfile.read(length)
+        except OSError:
+            self._send(400, json.dumps({"error": "could not read the request"}))
+            return
+        work = tempfile.mkdtemp(prefix="decl-in-")
+        try:
+            path = os.path.join(work, "declaration.json")
+            with open(path, "wb") as fh:
+                fh.write(body)
+            reasons = _declaration_refusal(path, project, version)
+        except OSError:
+            reasons = ["the declaration could not be checked"]
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+        if reasons:
+            self._send(422, json.dumps({"error": "declaration refused", "reasons": reasons[:50]}))
+        else:
+            self._send(200, json.dumps({"ok": True}))
 
     def _spdx3_map(self):
         """The field mapping the declaration screens draw their questions from."""
@@ -6331,6 +6420,24 @@ class Handler(BaseHTTPRequestHandler):
                 mode = "MODELFILE"
                 env["MODE"] = "MODELFILE"
                 env["TARGET_FILE"] = up
+
+            elif source == "ai-declare":
+                # A model described from its publisher's declaration alone. The
+                # declaration is checked against the SBOM it will produce (built
+                # offline, ids only) before the scan starts, so a refusal is
+                # answered here with its reasons rather than as a draft later.
+                # Runs in THIS image: stdlib scripts and public hub reads only.
+                if not ai_declare_usable():
+                    fail("Describing a model from its declaration is not available in this image."); return
+                up = resolve_upload(token)
+                if not up:
+                    fail("uploaded declaration not found (re-upload)"); return
+                reasons = _declaration_refusal(up, project, version)
+                if reasons:
+                    fail("The AI declaration was refused: " + "; ".join(reasons[:5])); return
+                mode = "AIDECLARE"
+                env["MODE"] = "AIDECLARE"
+                env["AI_DECLARATION_FILE"] = up
 
             elif source == "ai-model":
                 # One field takes both AI inputs a person is handed a link to: a

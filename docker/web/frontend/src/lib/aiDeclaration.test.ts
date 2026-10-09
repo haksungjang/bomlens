@@ -8,9 +8,14 @@ import { describe, expect, it } from "vitest";
 import {
   bandSegments,
   checkValue,
+  createTemplate,
   dateToDeclared,
+  startCreate,
   declaredToDate,
   emptyLocalDataset,
+  hubDatasetEntry,
+  isHubId,
+  keepDeclaredIds,
   issues,
   judgmentFields,
   modelMainFields,
@@ -343,3 +348,76 @@ describe("slugFor", () => {
     expect(slugFor("고객상담 로그", [], 3)).toBe("dataset-3");
   });
 });
+
+describe("a declaration with no scan behind it", () => {
+  it("asks every declarable model field but the version, and keeps the ids in the file", () => {
+    const d = createTemplate(index);
+    expect(Object.keys(d.model!)).toContain("downloadLocation");
+    expect(Object.keys(d.model!)).toContain("weightsScope");
+    expect(d.model).not.toHaveProperty("packageVersion");
+    expect(stepsFor(index, d, true)[0]).toBe("base");
+    d.model!.baseModels = [{ ref: "org/base", revision: "" }];
+    d.datasets = [hubDatasetEntry(index, "org/ds")];
+    const file = toFile(d, true);
+    expect(file.model!.baseModels).toEqual([{ ref: "org/base", revision: "" }]);
+    expect(file.datasets).toEqual([{ ref: "huggingface:org/ds" }]);
+    // Without keepBases (a scan's declaration), an id with no revision says nothing.
+    expect(toFile(d).model).not.toHaveProperty("baseModels");
+  });
+
+  it("re-running a declared model restores its base models, datasets and answers", () => {
+    const saved = {
+      schema: "bomlens-ai-declaration/1",
+      model: { releaseTime: "2025-04-15T00:00:00Z", baseModels: [{ ref: "org/base", revision: "abc" }] },
+      datasets: [
+        { ref: "huggingface:org/ds", role: "trainedOn" },
+        { local: "logs", name: "Logs", downloadLocation: "https://x.example/logs" },
+      ],
+    };
+    const d = startCreate(index, saved);
+    expect(d.model!.baseModels).toEqual([{ ref: "org/base", revision: "abc" }]);
+    expect(d.model!.releaseTime).toBe("2025-04-15T00:00:00Z");
+    expect(d.datasets.map((x) => x.ref ?? `local:${x.local}`)).toEqual(["huggingface:org/ds", "local:logs"]);
+    expect(d.datasets[0].role).toBe("trainedOn");
+    expect(toFile(d, true)).toEqual({
+      schema: "bomlens-ai-declaration/1",
+      document: {},
+      model: { releaseTime: "2025-04-15T00:00:00Z", baseModels: [{ ref: "org/base", revision: "abc" }] },
+      datasets: saved.datasets,
+      relationships: [],
+    });
+  });
+
+  it("filling a declared model's fields later keeps the ids its declaration named", () => {
+    const original = {
+      schema: "bomlens-ai-declaration/1",
+      model: { baseModels: [{ ref: "org/base", revision: "" }] },
+      datasets: [{ ref: "huggingface:org/ds", role: "trainedOn" }],
+    };
+    // What a fill writes: only answered fields; a base model without a
+    // revision and a dataset with nothing new are left out.
+    const filled: Declaration = {
+      schema: "bomlens-ai-declaration/1",
+      document: {},
+      model: { releaseTime: "2025-04-15T00:00:00Z", baseModels: [{ ref: "org/root", revision: "v1" }] },
+      datasets: [],
+      relationships: [],
+    };
+    const out = keepDeclaredIds(filled, original);
+    expect(out.model!.baseModels).toEqual([
+      { ref: "org/base", revision: "" },
+      { ref: "org/root", revision: "v1" },
+    ]);
+    expect(out.datasets).toEqual([{ ref: "huggingface:org/ds" }]);
+    expect(out.model!.releaseTime).toBe("2025-04-15T00:00:00Z");
+  });
+
+  it("refuses a base model that is not a hub id", () => {
+    const d = createTemplate(index);
+    d.model!.baseModels = [{ ref: "not an id", revision: "" }];
+    expect(saveBlockers(issues(index, d, false))).toEqual([{ where: "model.baseModels[0]", field: "ref", problem: "hubId" }]);
+    expect(isHubId("org/x")).toBe(true);
+    expect(isHubId("org/../x")).toBe(false);
+  });
+});
+

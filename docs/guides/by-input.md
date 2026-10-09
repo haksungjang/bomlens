@@ -55,6 +55,7 @@ SBOM=/path/to/bomlens/scripts/scan-sbom.sh
 | AI model (HuggingFace) | AIBOM | `$SBOM --model owner/name --generate-only` | notice, ML-BOM (1.7), risk report (no security) |
 | AI model file (GGUF, safetensors, …) | MODELFILE | `$SBOM --model-file ./model.gguf --generate-only` | notice, ML-BOM (1.7), risk report (no security) |
 | Published dataset (Figshare or HuggingFace) | DATASET | `$SBOM --model <item URL or datasets/owner/name> --generate-only` | notice, ML-BOM (1.7), risk report (no security) |
+| Model not yet published (declaration only) | AIDECLARE | `$SBOM --ai-declare declaration.json --generate-only` | notice, ML-BOM (1.7), risk report (no security), SPDX 3.0.1 AI document |
 
 > Every command also needs `--project <name> --version <version>` (see examples below).
 >
@@ -202,6 +203,19 @@ For version selection, the licence-to-SPDX mapping, how a private or embargoed i
 
 **Deliverables**: notice, ML-BOM (CycloneDX 1.7), risk report, conformance check
 
+### When the model has no repository or file yet
+
+A model being prepared for release has no HuggingFace repository and no file to read. Give its publisher's declaration alone, without `--model`, `--model-file` or `--target`:
+
+```bash
+./scripts/scan-sbom.sh --project support-bot --version 1.0 \
+  --ai-declare support-bot-declaration.json --generate-only
+```
+
+The declaration names the base models (`model.baseModels[].ref`) and the HuggingFace datasets (`datasets[].ref`, as `huggingface:<owner>/<name>`), which are read from the hub by id as in a model scan. Data the hub does not hold goes under `datasets[].local`. The scan runs in the base image and passes `HF_TOKEN` when it is set. In the web UI, the **Enter model information** tile in the AI model group asks the same questions step by step and uses the answers as the declaration. See [The SPDX 3.0.1 AI document](ai-model.md#the-spdx-301-ai-document) in the AI model guide.
+
+**Deliverables**: notice, ML-BOM (CycloneDX 1.7), risk report, G7 conformance, SPDX 3.0.1 AI document
+
 ### When you have the model file, not the model id
 
 A supplier ships weights rather than a Hub link, or the model is internal and was never published. Point at the file itself:
@@ -246,8 +260,9 @@ Pick a scan target at the top of the UI and provide the matching input.
 | AI model | enter a HuggingFace model id — the tile appears automatically whenever Docker is running |
 | Model file | upload a `.gguf`, `.safetensors`, `.pt`, etc. (up to 8 GB) |
 | Published dataset | enter a Figshare item (its page URL, its DOI, or the item number) or a HuggingFace dataset (`datasets/<owner>/<name>` or its `https://huggingface.co/datasets/...` address) in the same field as the model id |
+| Enter model information | answer the questions about a model that has no repository or file yet (base models, training data, release date and the like) |
 
-This table lists what the input scenarios in this guide cover; the full set (11 targets) is in the [web UI reference](../reference/ui.md#new-scan).
+This table lists what the input scenarios in this guide cover; the full set (12 targets) is in the [web UI reference](../reference/ui.md#new-scan).
 
 For source-code scans (current folder, GitHub URL, ZIP upload), an **Advanced scan options** section offers toggles (License scan / ScanCode, File-level identification / SCANOSS) that change how the source is analyzed rather than which files are produced, both off by default. See [Advanced scan options](../reference/ui.md#new-scan) in the Web UI reference for what each one does and per-target availability.
 

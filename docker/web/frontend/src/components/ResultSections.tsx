@@ -216,6 +216,7 @@ export function ResultSection({
               : (scanId ?? "")
           }
           onResultPatch={onResultPatch}
+          declaredScan={result.scanConfig?.source === "ai-declare"}
         />
       ) : null;
     }

@@ -660,6 +660,9 @@ export type SourceType =
   // one needs no account and no network, and works on a model that was never
   // published.
   | "model-upload"
+  // A model described from its publisher's declaration alone (MODE AIDECLARE).
+  // The form opens the questions; their answers are uploaded as the declaration.
+  | "ai-declare"
   | "docker-image";
 
 export const SOURCE_TYPES: SourceType[] = [
@@ -672,6 +675,7 @@ export const SOURCE_TYPES: SourceType[] = [
   "firmware-upload",
   "ai-model",
   "model-upload",
+  "ai-declare",
   "docker-image",
 ];
 
@@ -686,7 +690,7 @@ export function formSourceOf(source: SourceType): SourceType {
   return source === "yocto-build-dir" ? "rootfs-dir" : source;
 }
 
-export type UploadKind = "zip" | "sbom" | "firmware" | "package" | "model";
+export type UploadKind = "zip" | "sbom" | "firmware" | "package" | "model" | "declaration";
 
 /** How the user intends to use a scanned AI model. Sent with the scan start so
  *  the pipeline grades the license assessment against this use, and stamped
@@ -901,6 +905,8 @@ export interface Capabilities {
   /** The image carries the SPDX 3.0.1 AI converter, so the AI document, its
    *  check and the declaration screens are available. */
   spdx3?: boolean;
+  /** A model can be described from its declaration alone (new-scan tile). */
+  aiDeclare?: boolean;
   /** SPDX export goes through a sibling container, so the first export may pull
    *  the scanner image — worth saying before the wait. */
   spdxSibling?: boolean;
@@ -1201,6 +1207,29 @@ export async function saveAiDeclaration(id: string, declaration: unknown): Promi
     });
     if (!res.ok) return await spdx3Failure(res, "could not save");
     return { ok: true, ...((await res.json()) as Spdx3Written) };
+  } catch {
+    return { ok: false, status: 0, error: "network" };
+  }
+}
+
+/**
+ * Check a declaration for a model described from it alone, before it is
+ * uploaded and the scan started: the server's own scan-start check, answered
+ * while the questions are still open. Resolves null when it is accepted.
+ */
+export async function checkAiDeclaration(
+  project: string,
+  version: string,
+  declaration: unknown,
+): Promise<Spdx3Failure | null> {
+  try {
+    const q = `project=${encodeURIComponent(project)}&version=${encodeURIComponent(version)}`;
+    const res = await fetch(`/ai-declaration-check?${q}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(declaration),
+    });
+    return res.ok ? null : await spdx3Failure(res, "could not check");
   } catch {
     return { ok: false, status: 0, error: "network" };
   }

@@ -19,6 +19,7 @@ import {
   dateToDeclared,
   declaredToDate,
   isEmpty,
+  isHubId,
   issues as findIssues,
   judgmentFields,
   LONG_TEXT,
@@ -425,6 +426,60 @@ function Field({
  * make. It asks only what the scan left open (the server's empty declaration
  * lists exactly that) and shows what the scan already filled as read-only.
  */
+/** Adds an id (a base model, a hub dataset) from a text box. */
+function AddById({
+  label,
+  placeholder,
+  button,
+  onAdd,
+}: {
+  label: string;
+  placeholder: string;
+  button: string;
+  onAdd: (id: string) => void;
+}) {
+  const { t } = useTranslation();
+  const id = useId();
+  const [value, setValue] = useState("");
+  const v = value.trim();
+  const bad = v !== "" && !isHubId(v);
+  const add = () => {
+    if (!v || bad) return;
+    onAdd(v);
+    setValue("");
+  };
+  return (
+    <div className="space-y-1.5">
+      <label htmlFor={id} className="text-sm font-medium">
+        {label}
+      </label>
+      <div className="flex gap-2">
+        <Input
+          id={id}
+          value={value}
+          placeholder={placeholder}
+          aria-describedby={`${id}-err`}
+          aria-invalid={bad || undefined}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              add();
+            }
+          }}
+        />
+        <Button variant="outline" onClick={add} disabled={!v || bad}>
+          <Plus className="h-3.5 w-3.5" />
+          {button}
+        </Button>
+      </div>
+      <div id={`${id}-err`} aria-live="polite">
+        {bad && <p className="text-xs text-risk-critical-fg">{t("aiDecl.problem.hubId")}</p>}
+      </div>
+    </div>
+  );
+}
+
 export function AiDeclarationWizard({
   title,
   index,
@@ -434,6 +489,8 @@ export function AiDeclarationWizard({
   onCancel,
   onSave,
   onDraft,
+  mode = "fill",
+  authorFromScan: authorGiven,
 }: {
   title: string;
   index: FieldIndex;
@@ -447,9 +504,17 @@ export function AiDeclarationWizard({
   /** Called with the answers as they change, so leaving the section and coming
    *  back does not lose them. */
   onDraft?: (decl: Declaration, step: StepId) => void;
+  /** "fill": the open fields of a finished scan. "create": a model described
+   *  from the declaration alone, before any scan (base models and datasets
+   *  are added here, and saving starts the scan). */
+  mode?: "fill" | "create";
+  /** The scan names the document's author itself (--sbom-author), so the
+   *  question is not asked. Read from the check when not given. */
+  authorFromScan?: boolean;
 }) {
   const { t } = useTranslation();
-  const steps = useMemo(() => stepsFor(index, initial), [index, initial]);
+  const create = mode === "create";
+  const steps = useMemo(() => stepsFor(index, initial, create), [index, initial, create]);
   const [state, dispatch] = useAiDeclaration(
     initial,
     initialStep && steps.includes(initialStep) ? initialStep : steps[0],
@@ -470,6 +535,7 @@ export function AiDeclarationWizard({
   }, [decl, step, onDraft]);
 
   const authorFromScan =
+    authorGiven ??
     check?.elements.find((e) => e.type === "CreationInfo")?.fields.find((f) => f.id === "createdBy")?.status === "auto";
   const all = findIssues(index, decl, authorFromScan);
   const blockers = saveBlockers(all);
@@ -508,7 +574,7 @@ export function AiDeclarationWizard({
   const save = async () => {
     setSaving(true);
     setFailure(null);
-    const res = await onSave(toFile(decl));
+    const res = await onSave(toFile(decl, create));
     setSaving(false);
     if (res) setFailure(res);
   };
@@ -516,15 +582,47 @@ export function AiDeclarationWizard({
   let body: ReactNode;
   let why: string;
   if (step === "base") {
-    why = "base";
+    why = create ? "baseCreate" : "base";
     body = (
       <div className="space-y-3">
+        {create && (
+          <Card>
+            <CardContent className="p-4">
+              <AddById
+                label={t("aiDecl.base.add.label")}
+                placeholder={t("aiDecl.examplePrefix", { example: "Qwen/Qwen2.5-0.5B" })}
+                button={t("aiDecl.base.add.button")}
+                onAdd={(ref) => dispatch({ type: "addBase", ref })}
+              />
+              <p className="mt-1.5 text-xs text-muted-foreground">{t("aiDecl.base.add.hint")}</p>
+            </CardContent>
+          </Card>
+        )}
         {(decl.model?.baseModels ?? []).map((b, i) => (
-          <Card key={b.ref}>
+          <Card key={b.ref} data-base={b.ref}>
             <CardContent className="space-y-2 p-4">
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-sm font-medium">{b.ref}</span>
-                <Badge tone="low">{t("spdx3.status.auto")}</Badge>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-sm font-medium">{b.ref}</span>
+                  {create ? (
+                    <Badge tone="info">{t("spdx3.status.declared")}</Badge>
+                  ) : (
+                    <Badge tone="low">{t("spdx3.status.auto")}</Badge>
+                  )}
+                </div>
+                {create && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    aria-label={t("aiDecl.removeRow", { name: b.ref })}
+                    onClick={() => {
+                      dispatch({ type: "removeBase", index: i });
+                      heading.current?.focus();
+                    }}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                )}
               </div>
               <label className="block text-sm font-medium" htmlFor={`base-rev-${i}`}>
                 {t("aiDecl.base.revision.label")}
@@ -611,7 +709,11 @@ export function AiDeclarationWizard({
                     ) : (
                       <div className="flex items-center gap-2">
                         <span className="font-mono text-sm font-semibold">{d.ref?.replace(/^huggingface:/, "")}</span>
-                        <Badge tone="low">{t("spdx3.status.auto")}</Badge>
+                        {create ? (
+                          <Badge tone="info">{t("aiDecl.readAtScan")}</Badge>
+                        ) : (
+                          <Badge tone="low">{t("spdx3.status.auto")}</Badge>
+                        )}
                       </div>
                     )}
                     {(supplier || download) && (
@@ -620,8 +722,19 @@ export function AiDeclarationWizard({
                       </p>
                     )}
                   </div>
-                  {local && (
-                    <Button variant="ghost" size="sm" onClick={() => dispatch({ type: "removeLocal", index: i })}>
+                  {(local || create) && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label={t("aiDecl.removeRow", {
+                        name: local ? (d.name as string) || t("aiDecl.localTitle") : d.ref?.replace(/^huggingface:/, ""),
+                      })}
+                      onClick={() => {
+                        dispatch({ type: local ? "removeLocal" : "removeHub", index: i });
+                        // The button is gone; the question heading keeps the keyboard in the step.
+                        heading.current?.focus();
+                      }}
+                    >
                       <Trash2 className="h-4 w-4" />
                       {t("aiDecl.removeLocal")}
                     </Button>
@@ -676,6 +789,18 @@ export function AiDeclarationWizard({
             </Card>
           );
         })}
+        {create && (
+          <Card>
+            <CardContent className="p-4">
+              <AddById
+                label={t("aiDecl.hub.add.label")}
+                placeholder={t("aiDecl.examplePrefix", { example: "HuggingFaceH4/ultrachat_200k" })}
+                button={t("aiDecl.hub.add.button")}
+                onAdd={(id) => dispatch({ type: "addHub", index, id })}
+              />
+            </CardContent>
+          </Card>
+        )}
         {decl.model && (
           <Button variant="outline" size="sm" onClick={() => dispatch({ type: "addLocal", index })}>
             <Plus className="h-3.5 w-3.5" />
@@ -742,7 +867,7 @@ export function AiDeclarationWizard({
         </Card>
         <Disclosure summary={<span className="text-sm font-medium">{t("aiDecl.preview.file")}</span>}>
           <pre className="mt-2 max-h-80 overflow-auto rounded-md border bg-muted/40 p-3 text-xs">
-            {JSON.stringify(toFile(decl), null, 2)}
+            {JSON.stringify(toFile(decl, create), null, 2)}
           </pre>
         </Disclosure>
         {failure && (
@@ -821,7 +946,9 @@ export function AiDeclarationWizard({
           <h2 ref={heading} tabIndex={-1} className="text-xl font-semibold focus:outline-none">
             {t(`aiDecl.question.${step}`)}
           </h2>
-          <p className="mt-1 text-sm text-muted-foreground">{t(`aiDecl.questionHint.${step}`)}</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {t(create ? `aiDecl.questionHintCreate.${step}` : `aiDecl.questionHint.${step}`)}
+          </p>
         </div>
         {body}
         <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
@@ -837,7 +964,7 @@ export function AiDeclarationWizard({
             {step === "preview" ? (
               <Button onClick={save} disabled={saving || blockers.length > 0}>
                 {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-                {t("aiDecl.save")}
+                {create ? t("aiDecl.startScan") : t("aiDecl.save")}
               </Button>
             ) : (
               <Button onClick={() => go(steps[stepIndex + 1])}>

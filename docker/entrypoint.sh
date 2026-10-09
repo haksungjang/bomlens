@@ -26,6 +26,7 @@ set -e
 #   - IMAGE/BINARY/ROOTFS : syft scan -> SBOM
 #   - FIRMWARE    : unpack firmware -> syft + cve-bin-tool -> SBOM (opt-in image)
 #   - MODELFILE   : read one AI model file's own header -> ML-BOM (offline)
+#   - AIDECLARE   : an AI model described from the publisher's declaration alone
 #   - ANALYZE     : validate + convert a supplier SBOM -> conformance + risk report
 #   - MERGE       : combine several CycloneDX SBOMs (layered server delivery)
 #   - DIFF        : compare two already-generated AI-model SBOMs (drift report)
@@ -491,7 +492,7 @@ generate_sbom_cdxgen() {
 # inter-package or static-linked dependencies) -- these stay `unknown` unless a
 # failure signal is present, then `incomplete`.
 #
-# AIBOM/MODELFILE/DATASET/MERGE: no signal this design defines a value for --
+# AIBOM/MODELFILE/DATASET/AIDECLARE/MERGE: no signal this design defines a value for --
 # fixed `unknown`. ANALYZE with no compositions of its own is the same
 # (`unknown`); ANALYZE that already carries a supplier's own compositions is
 # never reached here at all (the early return below).
@@ -532,7 +533,7 @@ mark_compositions_aggregate() {
                 aggregate="unknown"
             fi
             ;;
-        AIBOM|MODELFILE|DATASET|MERGE|ANALYZE)
+        AIBOM|MODELFILE|DATASET|AIDECLARE|MERGE|ANALYZE)
             aggregate="unknown"
             ;;
         *)
@@ -558,12 +559,13 @@ mark_compositions_aggregate() {
 
 # Modes whose SBOM describes an AI asset rather than a software project: the
 # model-card path (AIBOM, from a HuggingFace id), the model-file path
-# (MODELFILE, from the file itself) and the dataset path (DATASET, from a
-# published research item). They share the AI post-processing — risk assessment,
+# (MODELFILE, from the file itself), the dataset path (DATASET, from a
+# published research item) and the declaration path (AIDECLARE, from what the
+# publisher states). They share the AI post-processing — risk assessment,
 # G7 conformance, the AI profile — and skip the package-oriented enrichments,
 # which have no purl, no CPE and no release cycle to match on.
 case "$SCAN_MODE" in
-    AIBOM|MODELFILE|DATASET) AI_MODEL_SCAN=true ;;
+    AIBOM|MODELFILE|DATASET|AIDECLARE) AI_MODEL_SCAN=true ;;
     *) AI_MODEL_SCAN=false ;;
 esac
 
@@ -792,6 +794,24 @@ EOF
             "$OUTPUT_FILE" "$TARGET_FILE"
         ;;
 
+    AIDECLARE)
+        # A model with no hub repository and no file to read yet: the
+        # publisher's declaration is the input. declare-ai-model.py writes the
+        # model component and reads only what the declaration points at on the
+        # hub (its base models' lineage, its datasets and their sources), so the
+        # assessment and G7 run as for any AI scan. The declared values
+        # themselves go into the SPDX 3.0.1 document below, not into this SBOM.
+        if [ -z "${AI_DECLARATION_FILE:-}" ] || [ ! -f "$AI_DECLARATION_FILE" ]; then
+            echo "[ERROR] AI_DECLARATION_FILE required for AIDECLARE mode."; exit 1
+        fi
+        echo "[1/2] declaration: describe $PROJECT_NAME $PROJECT_VERSION"
+        if ! python3 "$LIBDIR/declare-ai-model.py" "$AI_DECLARATION_FILE" "$OUTPUT_FILE" \
+                "$PROJECT_NAME" "$PROJECT_VERSION"; then
+            echo "[ERROR] The AI declaration could not be read (reason above). Fix the file and run again."
+            exit 1
+        fi
+        ;;
+
     MERGE)
         # Combine several already-generated CycloneDX SBOMs into one (e.g. a
         # server's OS rootfs layer + application layer + static-link layer).
@@ -906,7 +926,7 @@ EOF
         ;;
 
     *)
-        echo "[ERROR] Unknown MODE: $SCAN_MODE (expected SOURCE/IMAGE/BINARY/ROOTFS/FIRMWARE/AIBOM/MODELFILE/DATASET/ANALYZE/MERGE/POSTPROCESS/UI/DIFF)"
+        echo "[ERROR] Unknown MODE: $SCAN_MODE (expected SOURCE/IMAGE/BINARY/ROOTFS/FIRMWARE/AIBOM/MODELFILE/DATASET/AIDECLARE/ANALYZE/MERGE/POSTPROCESS/UI/DIFF)"
         exit 1
         ;;
 esac
@@ -1181,7 +1201,7 @@ case "$SCAN_MODE" in
     BINARY|FIRMWARE|MODELFILE)
         run_optional_step docmeta bash "$LIBDIR/stamp-document-metadata.sh" "$OUTPUT_FILE" "$SCAN_MODE" "$TARGET_FILE"
         ;;
-    SOURCE|POSTPROCESS|ROOTFS|IMAGE|AIBOM|DATASET|MERGE)
+    SOURCE|POSTPROCESS|ROOTFS|IMAGE|AIBOM|DATASET|AIDECLARE|MERGE)
         run_optional_step docmeta bash "$LIBDIR/stamp-document-metadata.sh" "$OUTPUT_FILE" "$SCAN_MODE"
         ;;
 esac
@@ -1638,6 +1658,12 @@ if [ "$AI_MODEL_SCAN" = "true" ] && [ "${GENERATE_SPDX3:-true}" != "false" ]; th
         # document (exit 2), and the check records the refusal for the web UI.
         python3 "$LIBDIR/convert-to-spdx3-ai.py" "${SPDX3_ARGS[@]}" --declaration "$SPDX3_DECL" \
             --declaration-fallback || spdx3_rc=$?
+        if [ "$spdx3_rc" -eq 2 ] && [ "$SCAN_MODE" = "AIDECLARE" ]; then
+            # Here the declaration is the input, not a supplement: without it
+            # the result is a model with a name and nothing else.
+            echo "[ERROR] The AI declaration was refused (reasons above). Fix the file and run again." >&2
+            exit 1
+        fi
         if [ "$spdx3_rc" -eq 2 ]; then
             echo "[ERROR] The AI declaration was refused (reasons above). The SPDX 3.0.1 document is written without it, as a draft. Fix the file and run again." >&2
             SPDX3_DECL=""

@@ -2109,6 +2109,96 @@ AIBOM_DATASET_MAX_LOOKUPS=0 BOMLENS_HF_API_BASE="file://$SRC" python3 -I "$HFDS_
 { [ $? -eq 0 ] && [ "$(jq -r .metadata.component.name "$WORK/hfds-b0.json")" = "org/mix" ]; } \
     && pass "a lookup budget of 0 still reads the dataset asked for" || fail "budget 0 failed the scan"
 
+echo "== a model described from its publisher's declaration alone (AIDECLARE) =="
+# No hub repository and no file: the declaration names the base models and the
+# datasets, which are read from the hub by id the way a model scan reads them.
+# Declared values (dates, makers) never enter the CycloneDX SBOM.
+DECL_PY="$LIB/declare-ai-model.py"
+src_hub decl
+mkdir -p "$SRC/models/org"
+echo '{"id":"org/base-instruct","cardData":{"license":"llama3.1","base_model":"org/base"}}' > "$SRC/models/org/base-instruct.json"
+echo '{"id":"org/base","cardData":{"license":"apache-2.0"}}' > "$SRC/models/org/base.json"
+src_ds org/open-ds cc-by-4.0 '["extended|org/upstream"]'
+src_ds org/upstream cc-by-nc-4.0 '["original"]'
+src_ds org/pii-ds cc-by-4.0 '[]'
+BOMLENS_HF_API_BASE="file://$SRC" python3 -I "$DECL_PY" "$ROOT_DIR/tests/fixtures/spdx3/declaration-complete.json" "$WORK/decl.json" acme 1.0 >/dev/null 2>"$WORK/decl.err"
+rc=$?
+if [ "$rc" -eq 0 ] && jq -e '
+      .metadata.component.type == "machine-learning-model" and .metadata.component.name == "acme"
+      and .metadata.component.version == "1.0"
+      and ([.metadata.component.properties[] | select(.name == "bomlens:origin") | .value] == ["declared-input"])
+      and ([.metadata.component.properties[] | select(.name == "bomlens:lineage:chain") | .value]
+           == ["org/base-instruct:llama3.1 > org/base:apache-2.0"])
+      and ([.components[].name] | sort == ["org/open-ds", "org/pii-ds", "org/upstream"])
+      and ([.dependencies[] | select(.ref == "dataset:huggingface/org/open-ds") | .dependsOn[]] == ["dataset:huggingface/org/upstream"])' \
+      "$WORK/decl.json" >/dev/null; then
+    pass "the declared model is the root, its base models are walked and its datasets traced"
+else
+    fail "declared model SBOM (rc=$rc)" "$(cat "$WORK/decl.err"; jq -c '{root: .metadata.component, comps: [.components[].name]}' "$WORK/decl.json" 2>/dev/null)"
+fi
+# The chain is written in the model-scan format, so assess-ai-risk.sh reads it alike.
+grep -q 'chain.append(f"{cur}:{blic or '"'"'none'"'"'}")' "$LIB/enrich-aibom.sh" \
+    && grep -q 'chain.append(f"{cur}:{lic or '"'"'none'"'"'}")' "$DECL_PY" \
+    && pass "the lineage chain uses the same id:license format as a model scan" || fail "lineage chain format diverged"
+jq -e '[.metadata.component.properties[] | select(.name == "bomlens:lineage:conflict") | .value] == ["true"]' "$WORK/decl.json" >/dev/null \
+    && pass "an ancestor whose terms pass to derivatives is flagged on the declared model" || fail "lineage conflict not flagged"
+{ ! grep -q "Acme AI Lab" "$WORK/decl.json" && ! grep -q "2025-04-15" "$WORK/decl.json"; } \
+    && pass "declared makers and dates stay out of the CycloneDX SBOM" || fail "declared values leaked into the CycloneDX SBOM"
+cp "$WORK/decl.json" "$WORK/cdx/declared-model.json"
+python3 -I "$LIB/convert-to-spdx3-ai.py" check --bom "$WORK/decl.json" \
+    --declaration "$ROOT_DIR/tests/fixtures/spdx3/declaration-complete.json" > "$WORK/decl-check.json" 2>/dev/null
+[ "$(jq -c '[.elements[] | .label as $l | .fields[] | select(.status == "missingRequired") | "\($l):\(.id)"]' "$WORK/decl-check.json")" = '["acme:downloadLocation","acme:suppliedBy"]' ] \
+    && pass "the declaration fits the SBOM built from it; only the model's address and supplier stay open" \
+    || fail "declaration against its own SBOM" "$(head -c 400 "$WORK/decl-check.json")"
+AI_USAGE_CONTEXT=product bash "$LIB/assess-ai-risk.sh" "$WORK/decl.json" >/dev/null 2>&1
+[ "$(jq -r '[.metadata.component.properties[] | select(.name=="bomlens:assessment:datasets") | .value] | first // ""' "$WORK/decl.json")" = "caution" ] \
+    && pass "the declared model's datasets are judged, sources included" || fail "declared model datasets axis"
+# Offline: ids only, nothing read (the web UI checks a declaration this way).
+rm -f "$SRC/calls.log"
+BOMLENS_HF_API_BASE="file://$SRC" python3 -I "$DECL_PY" "$ROOT_DIR/tests/fixtures/spdx3/declaration-complete.json" "$WORK/decl-off.json" acme 1.0 --offline >/dev/null 2>&1
+{ [ ! -s "$SRC/calls.log" ] && [ "$(jq '.components | length' "$WORK/decl-off.json")" = "3" ] \
+  && [ "$(jq -r '[.metadata.component.properties[] | select(.name=="bomlens:lineage:chain") | .value] | first' "$WORK/decl-off.json")" = "org/base-instruct:unread" ]; } \
+    && pass "--offline reads nothing and still names every base model and dataset" || fail "--offline read the hub"
+python3 -I "$LIB/convert-to-spdx3-ai.py" check --bom "$WORK/decl-off.json" \
+    --declaration "$ROOT_DIR/tests/fixtures/spdx3/declaration-complete.json" >/dev/null 2>&1
+[ $? -eq 0 ] && pass "an offline SBOM is enough to check a declaration before a scan" || fail "offline check refused"
+# A base model the hub cannot open is recorded, not guessed.
+echo '{"schema":"bomlens-ai-declaration/1","model":{"baseModels":[{"ref":"org/missing"}]}}' > "$WORK/decl-miss.json"
+BOMLENS_HF_API_BASE="file://$SRC" python3 -I "$DECL_PY" "$WORK/decl-miss.json" "$WORK/decl-miss-bom.json" acme 1.0 >/dev/null 2>&1
+[ "$(jq -r '[.metadata.component.properties[] | select(.name=="bomlens:lineage:chain") | .value] | first' "$WORK/decl-miss-bom.json")" = "org/missing:unreadable" ] \
+    && pass "an unreadable base model is recorded as unreadable" || fail "unreadable base model"
+# A declared dataset that is a traced source of another declared one is that
+# dataset's source, not a direct dependency of the model.
+[ "$(jq -c '[.dependencies[] | select(.ref == "model:declared/acme@1.0") | .dependsOn[]] | sort' "$WORK/decl.json")" \
+  = '["dataset:huggingface/org/open-ds","dataset:huggingface/org/pii-ds"]' ] \
+    && pass "a declared dataset reached as another's source is not a direct dependency" \
+    || fail "model dependsOn: $(jq -c '[.dependencies[] | select(.ref == "model:declared/acme@1.0") | .dependsOn]' "$WORK/decl.json")"
+# The chain becomes pedigree.ancestors as in a model scan; an ancestor the walk
+# reached is not "another parent" even when it is also declared.
+echo '{"schema":"bomlens-ai-declaration/1","model":{"baseModels":[{"ref":"org/base-instruct"},{"ref":"org/base"}]}}' > "$WORK/decl-chain.json"
+BOMLENS_HF_API_BASE="file://$SRC" python3 -I "$DECL_PY" "$WORK/decl-chain.json" "$WORK/decl-chain-bom.json" acme 1.0 >/dev/null 2>&1
+{ jq -e '[.metadata.component.pedigree.ancestors[].name] == ["org/base-instruct", "org/base"]' "$WORK/decl-chain-bom.json" >/dev/null \
+  && jq -e '[.metadata.component.properties[] | select(.name == "bomlens:lineage:otherParents")] | length == 0' "$WORK/decl-chain-bom.json" >/dev/null; } \
+    && pass "the walked chain is the pedigree, and a declared grandparent is not another parent" \
+    || fail "pedigree/otherParents" "$(jq -c '{p: .metadata.component.pedigree, props: .metadata.component.properties}' "$WORK/decl-chain-bom.json")"
+cp "$WORK/decl-chain-bom.json" "$WORK/cdx/declared-model-pedigree.json"
+# Two declared ids the hub answers as one dataset (a renamed repository).
+src_ds org/renamed odc-by '[]' org/open-ds
+echo '{"schema":"bomlens-ai-declaration/1","datasets":[{"ref":"huggingface:org/open-ds"},{"ref":"huggingface:org/renamed"}]}' > "$WORK/decl-dup.json"
+BOMLENS_HF_API_BASE="file://$SRC" python3 -I "$DECL_PY" "$WORK/decl-dup.json" "$WORK/decl-dup-bom.json" acme 1.0 >/dev/null 2>"$WORK/decl-dup.err"
+{ [ $? -eq 2 ] && grep -q "same hub dataset as another declared one" "$WORK/decl-dup.err"; } \
+    && pass "two declared ids that are one hub dataset are refused, not silently merged" \
+    || fail "renamed-dataset collision" "$(cat "$WORK/decl-dup.err")"
+python3 -I "$DECL_PY" "$ROOT_DIR/tests/fixtures/spdx3/declaration-complete.json" "$WORK/decl-name.json" --offline 1.0 >/dev/null 2>&1
+[ "$(jq -r .metadata.component.name "$WORK/decl-name.json" 2>/dev/null)" = "--offline" ] \
+    && pass "a project named --offline is still a project name" || fail "--offline as a project name"
+for bad in '[]' '{"model":{"baseModels":[{"ref":"../etc"}]}}' '{"datasets":[{"ref":"huggingface:a b"}]}' 'not json' \
+           '{"model":{"baseModels":5}}' '{"datasets":7}'; do
+    printf '%s' "$bad" > "$WORK/decl-bad.json"
+    python3 -I "$DECL_PY" "$WORK/decl-bad.json" "$WORK/decl-bad-bom.json" acme 1.0 --offline >/dev/null 2>&1
+    [ $? -eq 2 ] && pass "refused before writing: $bad" || fail "not refused: $bad"
+done
+
 echo "== what enrichment writes is valid CycloneDX 1.7 =="
 # The new properties, the pedigree built from the lineage chain and the traced
 # dataset sources must not cost the document its schema validity. Runs with the

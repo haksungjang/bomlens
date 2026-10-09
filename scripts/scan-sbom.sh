@@ -283,6 +283,11 @@ Options:
                          does not have is refused and the document stays a
                          draft. The accepted file is kept with the results and
                          applied again on the next scan of the same version.
+                         Given alone (no --model, --model-file or --target), it
+                         describes a model that has no hub repository or file
+                         yet: its base models (model.baseModels) and datasets
+                         (datasets[].ref) are read from the hub by id, and the
+                         rest comes from the declaration (base image).
   --no-spdx3             For an AI model or dataset scan: do not write the
                          SPDX 3.0.1 AI document (<Project>_<Version>_bom.spdx3.json)
                          and its check
@@ -1605,6 +1610,15 @@ elif [ -n "$ANALYZE_SBOM" ]; then
     MODE="ANALYZE"
     # The risk report needs both license and vulnerability data, so enable them.
     GENERATE_NOTICE="true"; GENERATE_SECURITY="true"
+elif [ -n "$AI_DECLARE_FILE" ] && [ -z "$MODEL" ] && [ -z "$MODEL_FILE" ] && [ -z "$TARGET" ]; then
+    # The declaration alone: a model described by its publisher before it has a
+    # hub repository or a file to read. Its base models and datasets are read
+    # from the hub by id; everything else comes from the declaration.
+    MODE="AIDECLARE"
+    case "${USAGE_CONTEXT:-}" in
+        ""|internal|product|redistribute|outputs-only) : ;;
+        *) echo "[ERROR] --usage must be one of: internal, product, redistribute, outputs-only."; exit 1 ;;
+    esac
 elif [ -n "$MODEL" ]; then
     # AI model SBOM via the OWASP AIBOM Generator (opt-in bomlens-aibom image).
     [ -z "$TARGET" ]      || { echo "[ERROR] --model is mutually exclusive with --target."; exit 1; }
@@ -1828,14 +1842,18 @@ elif [ "$FORCE_FIRMWARE" = "true" ]; then
     echo "[ERROR] --firmware requires '--target <firmware-file>'."; exit 1
 fi
 
-if [ -n "${USAGE_CONTEXT:-}" ] && [ "$MODE" != "AIBOM" ] && [ "$MODE" != "MODELFILE" ] && [ "$MODE" != "DATASET" ]; then
+if [ -n "${USAGE_CONTEXT:-}" ] && [ "$MODE" != "AIBOM" ] && [ "$MODE" != "MODELFILE" ] && [ "$MODE" != "DATASET" ] && [ "$MODE" != "AIDECLARE" ]; then
     echo "[ERROR] --usage applies to AI model and dataset scans only (use it with --model or --model-file)."; exit 1
 fi
 
 if { [ -n "$AI_DECLARE_FILE" ] || [ "$GENERATE_SPDX3" = "false" ]; } \
-   && [ "$MODE" != "AIBOM" ] && [ "$MODE" != "MODELFILE" ] && [ "$MODE" != "DATASET" ]; then
+   && [ "$MODE" != "AIBOM" ] && [ "$MODE" != "MODELFILE" ] && [ "$MODE" != "DATASET" ] && [ "$MODE" != "AIDECLARE" ]; then
     _flag="--ai-declare"; [ -n "$AI_DECLARE_FILE" ] || _flag="--no-spdx3"
     echo "[ERROR] $_flag applies to AI model and dataset scans only (use it with --model or --model-file)."; exit 1
+fi
+
+if [ "$MODE" = "AIDECLARE" ] && [ "$GENERATE_SPDX3" = "false" ]; then
+    echo "[ERROR] --no-spdx3 cannot be used when --ai-declare is the input: the declared values are written only to the SPDX 3.0.1 document."; exit 1
 fi
 
 if [ "$VERIFY_WEIGHTS" = "true" ] && [ "$MODE" != "AIBOM" ]; then
@@ -1871,7 +1889,7 @@ fi
 # every mode; the risk report still renders from the notice, as it does in the
 # UI. Announce the skip only when the user actually asked (--security / --all),
 # so an ordinary --model run stays quiet instead of explaining a default.
-if [ "$MODE" = "AIBOM" ] || [ "$MODE" = "MODELFILE" ] || [ "$MODE" = "DATASET" ]; then
+if [ "$MODE" = "AIBOM" ] || [ "$MODE" = "MODELFILE" ] || [ "$MODE" = "DATASET" ] || [ "$MODE" = "AIDECLARE" ]; then
     for fo in "${FAIL_ON[@]:-}"; do
         case "$fo" in
             vulnerability=*)
@@ -1883,7 +1901,7 @@ if [ "$MODE" = "AIBOM" ] || [ "$MODE" = "MODELFILE" ] || [ "$MODE" = "DATASET" ]
         esac
     done
 fi
-if { [ "$MODE" = "AIBOM" ] || [ "$MODE" = "MODELFILE" ] || [ "$MODE" = "DATASET" ]; } && [ "$GENERATE_SECURITY" = "true" ]; then
+if { [ "$MODE" = "AIBOM" ] || [ "$MODE" = "MODELFILE" ] || [ "$MODE" = "DATASET" ] || [ "$MODE" = "AIDECLARE" ]; } && [ "$GENERATE_SECURITY" = "true" ]; then
     [ "$SECURITY_REQUESTED" = "true" ] && \
         echo "[INFO] Skipping the security report: this input has no package dependencies to scan."
     GENERATE_SECURITY="false"
@@ -1906,6 +1924,7 @@ json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 case "$MODE" in
     AIBOM)    META_SOURCE="ai-model";        META_TARGET="$MODEL";  META_LABEL="" ;;
     MODELFILE) META_SOURCE="model-upload";   META_TARGET="";        META_LABEL="$(basename "$MODEL_FILE")" ;;
+    AIDECLARE) META_SOURCE="ai-declare";     META_TARGET="";        META_LABEL="$(basename "$AI_DECLARE_FILE")" ;;
     ANALYZE)
         # Two inputs reach ANALYZE: an SBOM the user handed us, and a Yocto build
         # directory whose SBOM we found. Record which, so the result page says
@@ -2210,6 +2229,9 @@ else
         # stdlib Python script against a public API, so this needs neither the
         # generator image nor an account. A HuggingFace token, when set, is
         # passed by name only (as for AIBOM) so a gated dataset can be read.
+        # The declaration itself is mounted by declare_run, as for any AI scan.
+        AIDECLARE) VOL="-v \"$(hostpath "$OUTPUT_HOST_DIR")\":/host-output"; ENVV=""
+                   [ -n "$HF_TOKEN" ] && ENVV="-e HF_TOKEN" ;;
         DATASET) VOL="-v \"$(hostpath "$OUTPUT_HOST_DIR")\":/host-output"; ENVV="-e DATASET_REF=\"$MODEL\""
                  case "$MODEL" in hf:*) [ -n "$HF_TOKEN" ] && ENVV="$ENVV -e HF_TOKEN" ;; esac ;;
         ANALYZE)
@@ -2320,7 +2342,7 @@ if [ "$GENERATE_ONLY" = "true" ]; then
     if [ "$GENERATE_SPDX" = "true" ]; then
         summary_line "SPDX:" "${P}_bom.spdx.json" || note_missing "SPDX export"
     fi
-    if { [ "$MODE" = "AIBOM" ] || [ "$MODE" = "MODELFILE" ] || [ "$MODE" = "DATASET" ]; } \
+    if { [ "$MODE" = "AIBOM" ] || [ "$MODE" = "MODELFILE" ] || [ "$MODE" = "DATASET" ] || [ "$MODE" = "AIDECLARE" ]; } \
        && [ "$GENERATE_SPDX3" = "true" ]; then
         summary_line "SPDX 3.0.1 AI:" "${P}_bom.spdx3.json" "${P}_spdx3-check.md" \
             || note_missing "SPDX 3.0.1 AI document"
@@ -2346,7 +2368,7 @@ if [ "$GENERATE_ONLY" = "true" ]; then
     # conformance report" and pointed at `docker pull`/a log warning that never
     # existed.
     if { [ "$MODE" = "ANALYZE" ] && ! { [ -n "${YOCTO_BUILD_DIR:-}" ] && [ -z "$ANALYZE_SBOM" ]; }; } \
-        || [ "$MODE" = "AIBOM" ] || [ "$MODE" = "DATASET" ]; then
+        || [ "$MODE" = "AIBOM" ] || [ "$MODE" = "DATASET" ] || [ "$MODE" = "AIDECLARE" ]; then
         summary_line "Conformance:" "${P}_conformance.json" "${P}_conformance.md" "${P}_conformance.html" \
             || note_missing "conformance report"
     fi

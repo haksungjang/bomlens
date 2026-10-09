@@ -63,6 +63,8 @@ AI 입력에는 기본 이미지에서 처리되는 세 번째 경로도 있습�
 
 HuggingFace 데이터셋도 같은 경로로 처리합니다. 앞에 아무것도 붙이지 않은 `owner/name`은 모델 id이므로, 접두어나 주소(`datasets/<owner>/<name>`, `https://huggingface.co/datasets/<owner>/<name>`, `hf:<owner>/<name>`)를 붙여 줍니다. 표준 라이브러리로 작성한 리더가 허브에서 라이선스, 허브 리비전, 파일별 SHA-256 값을 가져오고, 카드의 `source_datasets`에 적힌 데이터셋은 모델 카드가 적은 데이터셋과 같은 방식으로 읽습니다. 접근 제한이 있거나 비공개인 데이터셋은 `HF_TOKEN`이 필요하며, 읽을 수 없는 데이터셋은 빈 SBOM이 아니라 오류로 알립니다.
 
+아직 공개하지 않은 모델은 읽을 대상이 없으므로, 마지막 AI 입력은 모델 공개자의 선언 파일 하나입니다(`--model`, `--model-file`, `--target` 없이 `--ai-declare <파일>`만 주거나, 웹 UI의 "모델 정보 직접 입력" 타일). 기본 이미지의 표준 라이브러리 스크립트가 모델을 SBOM의 주 대상으로 만들어 프로젝트 이름과 버전을 붙이고 `bomlens:origin=declared-input`으로 표시하며, 선언에 적은 기반 모델과 HuggingFace 데이터셋은 모델 스캔과 같은 방식으로 허브에서 id로 읽습니다. 선언한 값 자체는 CycloneDX SBOM이 아니라 SPDX 3.0.1 AI 문서에만 들어갑니다. 이후 후처리는 동일하며, SBOM의 수명 주기 단계는 `design`입니다.
+
 > 모델 카드의 공개 항목(가중치, 아키텍처, 학습 데이터, 학습 과정)과 G7 결과는 웹 UI의 모델·데이터셋과 G7 섹션에 나타납니다. [웹 UI 레퍼런스](../reference/ui.ko.md)를 참고하세요. 단계별 안내는 [AI 모델 가이드](../guides/ai-model.ko.md)에 있습니다.
 
 ---

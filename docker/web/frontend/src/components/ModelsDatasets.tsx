@@ -47,6 +47,7 @@ export function ModelsDatasets({
   results,
   title,
   onResultPatch,
+  declaredScan,
 }: {
   scanId: string | null;
   sbomFile: string;
@@ -59,6 +60,8 @@ export function ModelsDatasets({
   title: string;
   /** A save or a write changed the result (its listing, its SPDX 3 summary). */
   onResultPatch?: (patch: Partial<DoneEvent>) => void;
+  /** The scan was made from a declaration alone (its input is that file). */
+  declaredScan?: boolean;
 }) {
   // While the publisher answers the questions, the flow takes the whole
   // screen; the model cards come back when it closes.
@@ -71,6 +74,7 @@ export function ModelsDatasets({
       results={results}
       onPatch={onResultPatch}
       onFillingChange={setFilling}
+      declaredScan={declaredScan}
     />
   );
   // The panel stays at the same place in the tree either way, so it keeps its

@@ -3472,6 +3472,7 @@ echo "[stub] scanning ${PROJECT_NAME} ${PROJECT_VERSION} (mode=$mode)"
   echo "ANALYZE_SBOM=${ANALYZE_SBOM:-}"
   echo "YOCTO_BUILD_DIR=${YOCTO_BUILD_DIR:-}"
   echo "DATASET_REF=${DATASET_REF:-}"
+  echo "AI_DECLARATION_FILE=${AI_DECLARATION_FILE:-}"
   # Counted here, while the scan is running: an extracted upload tree is removed
   # once the scan finishes, so a later check would always find it empty.
   echo "TARGET_DIR_FILES=$([ -n "${TARGET_DIR:-}" ] && find "$TARGET_DIR" -type f 2>/dev/null | wc -l | tr -d ' ' || echo 0)"; } > "${STUB_ENV_FILE:-/dev/null}"
@@ -4224,6 +4225,75 @@ assert re.fullmatch(r'demo2_1\.0_\d{8}-\d{6}', d['id']), d['id']
 else
     fail "done id is not the timestamped run id" "$events"
 fi
+
+echo "== a model described from its declaration alone (source=ai-declare) =="
+# The declaration is uploaded (kind=declaration), checked against the SBOM it
+# would produce before the scan starts, and handed to the scanner as
+# AI_DECLARATION_FILE with MODE=AIDECLARE. No Docker: this server has none.
+echo ok > "$STUB_MODE_FILE"
+FIX3D="$ROOT_DIR/tests/fixtures/spdx3"
+echo "not a declaration" > "$WORK/decl.txt"
+c=$(curl -s -o /dev/null -w '%{http_code}' -F "kind=declaration" -F "file=@$WORK/decl.txt" "$BASE2/upload?kind=declaration")
+[ "$c" = "415" ] && pass "a declaration upload takes .json only (415)" || fail "declaration upload accepted a non-JSON file ($c)"
+# This server runs without the library: the input is unavailable, not refused.
+dtoken=$(curl -fsS -F "kind=declaration" -F "file=@$FIX3D/declaration-complete.json" "$BASE2/upload?kind=declaration" 2>/dev/null \
+         | python3 -c "import sys,json;print(json.load(sys.stdin).get('token',''))" 2>/dev/null)
+rm -f "$WORK/stub-env"
+sse_events "project=decl&version=1.0&source=ai-declare&token=$dtoken" | grep -q "not available in this image" \
+    && [ ! -f "$WORK/stub-env" ] && pass "without the scripts the declaration input says it is unavailable" \
+    || fail "ai-declare without the library was not reported as unavailable"
+curl -fsS "$BASE2/capabilities" | python3 -c "import json,sys; assert json.load(sys.stdin)['aiDeclare'] is False" 2>/dev/null \
+    && pass "/capabilities reports aiDeclare false without the scripts" || fail "aiDeclare capability"
+# A third server with the library, same stub scanner.
+PORT3=$((PORT + 2)); BASE3="http://127.0.0.1:${PORT3}"; OUT3="$WORK/out3"; mkdir -p "$OUT3"
+SBOM_OUTPUT_DIR="$OUT3" UI_PORT="$PORT3" SBOM_RUN_SCAN="$WORK/bin/run-scan" SBOM_DOCKER_SOCK="$WORK/no-such.sock" \
+    STUB_MODE_FILE="$STUB_MODE_FILE" STUB_HEARTBEAT="$STUB_HEARTBEAT" STUB_ENV_FILE="$WORK/stub-env" \
+    python3 "$SERVER" > "$WORK/server3.log" 2>&1 &
+SRV3_PID=$!
+trap 'kill "$SRV3_PID" 2>/dev/null; cleanup2; cleanup' EXIT
+for _ in $(seq 1 30); do curl -fsS "$BASE3/capabilities" >/dev/null 2>&1 && break; sleep 0.3; done
+sse3() { curl -sN "$BASE3/scan-stream?$1"; }
+up3() { curl -fsS -F "kind=declaration" -F "file=@$1" "$BASE3/upload?kind=declaration" 2>/dev/null \
+        | python3 -c "import sys,json;print(json.load(sys.stdin).get('token',''))" 2>/dev/null; }
+rm -f "$WORK/stub-env"
+sse3 "project=decl&version=1.0&source=ai-declare&token=$(up3 "$FIX3D/declaration-complete.json")" >/dev/null
+if [ "$(sed -n 's/^MODE=//p' "$WORK/stub-env")" = "AIDECLARE" ] \
+   && grep -q '^AI_DECLARATION_FILE=.*declaration-complete\.json$' "$WORK/stub-env"; then
+    pass "source=ai-declare -> MODE=AIDECLARE with the uploaded declaration"
+else
+    fail "ai-declare did not route to AIDECLARE" "$(cat "$WORK/stub-env" 2>/dev/null; tail -3 "$WORK/server3.log")"
+fi
+echo '{"schema":"bomlens-ai-declaration/1","model":{"license":"MIT"}}' > "$WORK/bad-decl.json"
+rm -f "$WORK/stub-env"
+events=$(sse3 "project=decl&version=1.0&source=ai-declare&token=$(up3 "$WORK/bad-decl.json")")
+if echo "$events" | grep -q "The AI declaration was refused" && echo "$events" | grep -q "license" \
+   && [ ! -f "$WORK/stub-env" ]; then
+    pass "a refused declaration is answered with its reasons before any scan"
+else
+    fail "a refused declaration reached the scanner" "$events"
+fi
+curl -fsS "$BASE3/capabilities" | python3 -c "import json,sys; assert json.load(sys.stdin)['aiDeclare'] is True" 2>/dev/null \
+    && pass "/capabilities reports aiDeclare with the scripts" || fail "aiDeclare capability true"
+# The same check, asked while the questions are still open.
+chk() { curl -s -o "$WORK/chk.out" -w '%{http_code}' -X POST -H "Content-Type: application/json" \
+        --data-binary "@$1" "$BASE3/ai-declaration-check?$2"; }
+[ "$(chk "$FIX3D/declaration-complete.json" "project=decl&version=1.0")" = "200" ] \
+    && pass "/ai-declaration-check accepts a declaration that fits" || fail "/ai-declaration-check valid" "$(cat "$WORK/chk.out")"
+[ "$(chk "$WORK/bad-decl.json" "project=decl&version=1.0")" = "422" ] \
+    && python3 -c "import json,sys; r=json.load(open(sys.argv[1]))['reasons']; assert any('license' in x for x in r), r" "$WORK/chk.out" 2>/dev/null \
+    && pass "/ai-declaration-check answers 422 with the reasons" || fail "/ai-declaration-check refused" "$(cat "$WORK/chk.out")"
+echo '{"model":{"baseModels":5}}' > "$WORK/odd-decl.json"
+[ "$(chk "$WORK/odd-decl.json" "project=decl&version=1.0")" = "422" ] \
+    && grep -q "expected a list" "$WORK/chk.out" && ! grep -q "Traceback\|TypeError" "$WORK/chk.out" \
+    && pass "a malformed declaration is refused with a reason, never a traceback" || fail "odd declaration" "$(cat "$WORK/chk.out")"
+[ "$(chk "$FIX3D/declaration-complete.json" "project=&version=1.0")" = "400" ] \
+    && pass "/ai-declaration-check needs a project and version" || fail "/ai-declaration-check without project"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Origin: http://evil.example" -H "Content-Type: application/json" -d '{}' "$BASE3/ai-declaration-check?project=a&version=1")" = "403" ] \
+    && pass "/ai-declaration-check checks the Origin (403)" || fail "/ai-declaration-check cross-site"
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Content-Type: application/json" --data-binary "@$FIX3D/declaration-complete.json" "$BASE2/ai-declaration-check?project=a&version=1")
+[ "$code" = "503" ] && pass "/ai-declaration-check without the scripts is 503" || fail "/ai-declaration-check no lib returned $code"
+kill "$SRV3_PID" 2>/dev/null
+trap 'cleanup2; cleanup' EXIT
 
 echo "== model upload: the file is read where it lies, as MODELFILE =="
 # The one AI input that needs no image and no network: the scan runs in this
