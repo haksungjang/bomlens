@@ -5,7 +5,8 @@
     "context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
     "cardinalitySource": "SPDX 3.0.1 specification pages, class 'All properties' tables, checked 2026-10-09. The published SHACL model and JSON schema do not carry the narrowed 1..1 constraints of ai_AIPackage and dataset_DatasetPackage, so convert-to-spdx3-ai.py enforces these numbers itself.",
     "jsonldKeysChecked": "2026-10-09 against spdx-context.jsonld: locator is an array; extension items may be inline objects; Agent-typed properties take an element reference.",
-    "jsonArrayNote": "A field narrowed to one value on the specification page can still be an array in the JSON schema (dataset originatedBy); jsonArray: true writes it as a one-element array."
+    "profilesNote": "The extension profile is not claimed in profileConformance: in the 3.0.1 JSON-LD context the bare value 'extension' expands to the Core extension property, not ProfileIdentifierType/extension, and the official SHACL validation (spdx3-validate) refuses it. The CdxPropertiesExtension the document uses needs no claim.",
+    "jsonArrayNote":"A field narrowed to one value on the specification page can still be an array in the JSON schema (dataset originatedBy); jsonArray: true writes it as a one-element array."
   },
   "idPrefix": "https://github.com/sktelecom/bomlens/spdxdocs/{prefix}/spdx3/",
   "profiles": [
@@ -14,8 +15,7 @@
     "ai",
     "dataset",
     "simpleLicensing",
-    "expandedLicensing",
-    "extension"
+    "expandedLicensing"
   ],
   "elements": {
     "document": {

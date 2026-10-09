@@ -270,6 +270,10 @@ print("\n".join(problems))
 PY
 )
 [ -z "$schema_out" ] && pass "every mapped property and value exists in SPDX 3.0.1, and required counts match the spec" || fail "mapping and schema disagree" "$schema_out"
+# In the 3.0.1 context the bare value "extension" expands to the Core extension
+# property, so claiming that profile fails the official SHACL validation.
+[ "$(jq '.profiles | index("extension")' "$MAP")" = "null" ] \
+    && pass "the extension profile is not claimed (the context expands it to a property)" || fail "profiles claim extension"
 
 echo "== the complete document validates against the SPDX 3.0.1 JSON schema =="
 # Full JSON-schema validation needs the jsonschema package; without it this is
@@ -296,13 +300,23 @@ import json, sys
 import jsonschema
 schema = json.load(open(sys.argv[1]))
 doc = json.load(open(sys.argv[2]))
-errs = list(jsonschema.Draft202012Validator(schema).iter_errors(doc))
-# A draft is expected to lack createdBy, which CreationInfo (the first graph
-# node) requires; every error must be on that node and nothing else.
-other = [e for e in errs if list(e.path)[:2] != ["@graph", 0]]
-if not errs or "createdBy" in json.dumps([e.instance for e in errs if list(e.path)[:2] == ["@graph", 0]][:1]):
-    other.append(type("E", (), {"path": ["@graph", 0], "message": "expected only the missing createdBy"})())
-print("\n".join(f"{list(e.path)}: {e.message[:200]}" for e in other[:10]))
+v = jsonschema.Draft202012Validator(schema)
+# A draft lacks createdBy, which CreationInfo requires. Where a validator
+# reports that error differs between jsonschema versions (on the node, or on
+# the whole graph through unevaluatedProperties), so: the draft must fail, and
+# adding only an author must make it valid.
+out = []
+if not list(v.iter_errors(doc)):
+    out.append("the draft passed the schema; expected the missing createdBy to fail it")
+ci = next(n for n in doc["@graph"] if n.get("type") == "CreationInfo")
+if "createdBy" in ci:
+    out.append("the draft already has createdBy")
+agent = "https://example.org/spdx/agent-test"
+ci["createdBy"] = [agent]
+doc["@graph"].append({"type": "Organization", "spdxId": agent, "creationInfo": ci["@id"], "name": "Test"})
+errs = sorted(v.iter_errors(doc), key=lambda e: list(e.path))
+out += [f"{list(e.path)}: {e.message[:200]}" for e in errs[:10]]
+print("\n".join(out))
 PY
 )
     [ -z "$verr" ] && pass "a draft fails the schema only for the author it lacks" || fail "draft schema errors" "$verr"

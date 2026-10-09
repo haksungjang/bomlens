@@ -10,6 +10,8 @@
 
 The published schema does not carry the narrowed cardinalities the specification pages give for `ai_AIPackage` and `dataset_DatasetPackage` (for example `releaseTime` 1..1). The converter enforces those itself, and the test keeps them as constants.
 
+The SHACL model is checked separately, by the official validator (`spdx3-validate`) in `tests/test-spdx3-official.sh`. It runs in the nightly workflow with the hash-pinned packages in `tests/spdx3-validate-requirements.txt`, so no PR job installs it.
+
 To regenerate after downloading the schema:
 
 ```bash
