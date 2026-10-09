@@ -158,6 +158,7 @@ refuse "noAssertion on a field with no unknown value" '.model.safetyRiskAssessme
 refuse "noAssertion mixed with values" '.datasets[3].datasetType = ["text", "noAssertion"]'
 refuse "a date not in UTC form" '.model.releaseTime = "2025-04-15"'
 refuse "a date that does not exist" '.model.releaseTime = "2025-02-30T00:00:00Z"'
+refuse "an address with an unclosed IPv6 bracket" '.datasets[3].downloadLocation = "https://[::1"'
 refuse "a dataset the scan does not have" '.datasets[0].ref = "huggingface:org/elsewhere"'
 refuse "a base model the scan did not find" '.model.baseModels[0].ref = "org/unrelated"'
 refuse "a dataset given both ref and local" '.datasets[0].local = "x"'

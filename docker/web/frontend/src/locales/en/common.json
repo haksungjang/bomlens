@@ -230,6 +230,16 @@
       "signature": {
         "title": "SBOM signature",
         "desc": "Cosign signature for verifying the SBOM."
+      },
+      "spdx3": {
+        "title": "SPDX 3.0.1 AI document",
+        "desc": "The model, its datasets and lineage in SPDX 3.0.1 with the AI and Dataset profiles, and a check of which fields are filled. It cannot be uploaded back as an SBOM input.",
+        "draftNote_one": "{{count}} required field is empty, so it does not pass SPDX validation yet.",
+        "draftNote_other": "{{count}} required fields are empty, so it does not pass SPDX validation yet."
+      },
+      "aiDeclaration": {
+        "title": "AI declaration",
+        "desc": "Only the values you entered; nothing the scan filled. Edit it and upload it again here, or pass it to the CLI with --ai-declare."
       }
     },
     "download": "Download",
@@ -380,7 +390,12 @@
     "csvEpss": "EPSS",
     "csvKev": "Known exploited",
     "csvTitle": "Title",
-    "artifactFiles": "({{count}} files)"
+    "artifactFiles": "({{count}} files)",
+    "emptyForm": "Empty form",
+    "spdx3Export": "Write SPDX 3.0.1",
+    "declarationUpload": "Upload declaration",
+    "declarationNotJson": "That file is not JSON.",
+    "declarationRefused": "The declaration was refused: {{reason}}"
   },
   "deps": {
     "loading": "Loading dependencies…",
@@ -1272,5 +1287,358 @@
     "logHint": "Copies the log exactly as shown above. Credential-shaped text is already masked, but read it before you paste it: paths and names are not.",
     "ready": "The diagnostics summary is ready below.",
     "logCopyFailed": "Copying was blocked here. Select the log above and copy it by hand."
+  },
+  "spdx3": {
+    "draft": "Draft",
+    "complete": "Complete",
+    "notAi": "This scan holds no AI model or dataset to describe.",
+    "writeFailed": "The SPDX 3.0.1 document could not be written.",
+    "openFailed": "The questions could not be loaded. Try again.",
+    "savedDraft": "Saved. The document is still a draft: some required fields are open.",
+    "savedComplete": "Saved. Every required field is filled.",
+    "band": {
+      "title": "SPDX 3.0.1 AI document",
+      "none": "This scan has no SPDX 3.0.1 document yet. Write it from the SBOM to see which fields are filled and which are open.",
+      "unavailable": "This scan has no SPDX 3.0.1 document, and this BomLens cannot write one.",
+      "write": "Write the SPDX 3.0.1 document",
+      "fill": "Fill in empty fields",
+      "draftNote_one": "{{count}} required field is still empty, so the document does not pass SPDX validation yet. BomLens does not guess values to fill it.",
+      "draftNote_other": "{{count}} required fields are still empty, so the document does not pass SPDX validation yet. BomLens does not guess values to fill them.",
+      "completeNote": "Every required field is filled. Values come from the scan or from your declaration; none are guessed.",
+      "refused": "The saved declaration no longer fits this scan, so the document was written without it. Fill the fields again or fix the file."
+    },
+    "segment": {
+      "filled": "Filled",
+      "optional": "Optional",
+      "judgment": "Your decision",
+      "missingRequired": "Required, empty"
+    },
+    "status": {
+      "auto": "From the scan",
+      "declared": "Declared",
+      "noAssertion": "Unknown",
+      "missingRequired": "Required, empty",
+      "judgment": "Your decision",
+      "optional": "Optional",
+      "omitted": "Not recorded",
+      "review": "To check"
+    },
+    "table": {
+      "field": "Field",
+      "value": "Value",
+      "status": "Status",
+      "notFilled": "Not filled",
+      "hubPublisher": "(HuggingFace publisher)",
+      "optionalHidden_one": "{{count}} optional field is not filled and not listed.",
+      "optionalHidden_other": "{{count}} optional fields are not filled and not listed.",
+      "cardDatasets": "Datasets named on the model card",
+      "roleOpen": "Training or evaluation not stated",
+      "caption": "In the SPDX 3.0.1 document",
+      "datasetFields_one": "Fields of {{count}} dataset",
+      "datasetFields_other": "Fields of {{count}} datasets",
+      "notLegalAdvice": "This check is guidance, not legal advice."
+    }
+  },
+  "aiDecl": {
+    "stepsLabel": "Steps",
+    "step": {
+      "base": "Base models",
+      "model": "Model",
+      "data": "Training data",
+      "legal": "Decisions",
+      "preview": "Review"
+    },
+    "question": {
+      "base": "Which revision of each base model did you start from?",
+      "model": "Tell us about the model",
+      "data": "What data did you use?",
+      "legal": "Decisions only you can make",
+      "preview": "Review and save"
+    },
+    "questionHint": {
+      "base": "The scan found these base models. A revision makes the lineage reproducible; leave it empty if you do not know it.",
+      "model": "Only the fields the scan could not fill are asked.",
+      "data": "Say how the model used each dataset and add data the hub does not hold.",
+      "legal": "These are judgments, not facts the scan can read. Answer only what you have checked.",
+      "preview": "Saving checks the declaration against this scan and rewrites the SPDX 3.0.1 document."
+    },
+    "remaining_one": "{{count}} required field left",
+    "remaining_other": "{{count}} required fields left",
+    "cancel": "Cancel",
+    "prev": "Back",
+    "save": "Save",
+    "next": "Next: {{step}}",
+    "whyTitle": "Why this is asked",
+    "why": {
+      "base": "SPDX records which model this one was built from. The revision says exactly which version, so someone else can get the same base weights.",
+      "model": "The SPDX AI profile requires who wrote the document and when the model was released. Neither can be read from the hub.",
+      "data": "The AI document records what data the model was made from. Whoever receives it uses this to check sources and terms of use.",
+      "legal": "Whether personal data was used and how risky the model is are judgments. The tool never fills them for you.",
+      "preview": "The file holds only what you entered. Required fields still empty keep the document a draft, which you can finish later."
+    },
+    "side": {
+      "baseTitle": "Base models",
+      "baseNote": "Recorded on the base models only; nothing is copied into this model."
+    },
+    "requiredFailsValidation": "Leaving this empty fails SPDX validation. It has no \"unknown\" value.",
+    "examplePrefix": "e.g. {{example}}",
+    "agentPlaceholder": "Name of the organization or person",
+    "agentType": "Kind",
+    "agent": {
+      "Organization": "Organization",
+      "Person": "Person",
+      "Agent": "Other"
+    },
+    "addAgent": "Add another",
+    "addPair": "Add a setting",
+    "addLine": "Add a line",
+    "removeRow": "Remove {{name}}",
+    "pairKey": "Name",
+    "pairValue": "Value",
+    "problem": {
+      "date": "Pick a real date.",
+      "uri": "Enter a full address such as https://...",
+      "uriScheme": "Use an address that starts with http, https, s3, gs, ftp, sftp, git or hf.",
+      "tooLong": "This is too long (up to 4,000 characters).",
+      "agentName": "Each entry needs a name.",
+      "duplicateKey": "A setting name appears twice.",
+      "emptyKey": "Each setting needs a name.",
+      "revision": "Use a commit hash or a tag (letters, digits, '.', '_' and '-').",
+      "noAssertionMixed": "\"Unknown\" cannot be chosen together with other values.",
+      "localIncomplete": "Give this data a name and an address, or remove it. Without them the declaration cannot be saved."
+    },
+    "base": {
+      "revision": {
+        "label": "Revision (commit or tag, optional)",
+        "example": "a8b602d9dafd3a75d382e62757d83d89fca3be54",
+        "hint": "The commit hash or tag in the model card or your training script. Leave it empty if you do not know it."
+      }
+    },
+    "group": {
+      "use": "Use and scope (optional)",
+      "training": "How it was trained (optional)",
+      "moreData": "More about this data (optional)"
+    },
+    "role": {
+      "label": "How did the model use it?",
+      "hint": "Training means the model learned from it; evaluation means it was only tested on it.",
+      "trainedOn": "Training",
+      "testedOn": "Evaluation",
+      "other": "Other"
+    },
+    "localTitle": "Data the hub does not hold",
+    "addLocal": "Add data the hub does not hold",
+    "removeLocal": "Remove",
+    "autoSupplier": "Published by {{value}}",
+    "preview": {
+      "complete": "Every required field is filled. Saving makes the document complete.",
+      "open_one": "{{count}} item is still open:",
+      "open_other": "{{count}} items are still open:",
+      "openInStep_one": "{{count}} open",
+      "openInStep_other": "{{count}} open",
+      "draftOk": "You can save now and finish later; the document stays a draft until then.",
+      "file": "The declaration file that will be saved",
+      "blocked": "Fix the items marked above before saving; the server would refuse them."
+    },
+    "saveRefused": "The declaration was refused. Nothing was saved.",
+    "saveBusy": "This scan is running again. Save after it finishes.",
+    "saveFailed": "The declaration could not be saved.",
+    "enum": {
+      "yes": "Yes",
+      "no": "No",
+      "noAssertion": "Unknown",
+      "full": "Full weights",
+      "adapter": "Adapter only",
+      "quantized": "Quantized",
+      "merged": "Merged",
+      "low": "Low",
+      "medium": "Medium",
+      "high": "High",
+      "serious": "Serious",
+      "clear": "Clear",
+      "green": "Green",
+      "amber": "Amber",
+      "red": "Red",
+      "audio": "Audio",
+      "categorical": "Categorical",
+      "graph": "Graph",
+      "image": "Image",
+      "numeric": "Numeric",
+      "other": "Other",
+      "sensor": "Sensor",
+      "structured": "Structured",
+      "syntactic": "Syntactic",
+      "text": "Text",
+      "timeseries": "Time series",
+      "timestamp": "Timestamp",
+      "video": "Video"
+    },
+    "document": {
+      "createdBy": {
+        "label": "Who is writing this document",
+        "hint": "The organization or person responsible for this AI document.",
+        "example": "Acme AI Lab"
+      }
+    },
+    "model": {
+      "name": {
+        "label": "Name"
+      },
+      "packageVersion": {
+        "label": "Version",
+        "example": "1.0.0"
+      },
+      "downloadLocation": {
+        "label": "Download address",
+        "example": "https://huggingface.co/acme/model"
+      },
+      "primaryPurpose": {
+        "label": "Kind"
+      },
+      "suppliedBy": {
+        "label": "Supplier",
+        "hint": "Who distributes the model."
+      },
+      "releaseTime": {
+        "label": "Release date",
+        "hint": "If you have not published it, the date it was first put to use."
+      },
+      "builtTime": {
+        "label": "Date it was built"
+      },
+      "originatedBy": {
+        "label": "Who made the model",
+        "hint": "Leave empty if it is the same as the writer of this document."
+      },
+      "packageUrl": {
+        "label": "Package URL"
+      },
+      "homePage": {
+        "label": "Home page"
+      },
+      "description": {
+        "label": "Description"
+      },
+      "typeOfModel": {
+        "label": "Model type"
+      },
+      "limitation": {
+        "label": "Known limitations"
+      },
+      "metric": {
+        "label": "Evaluation metrics"
+      },
+      "domain": {
+        "label": "Domains it is meant for",
+        "example": "customer support"
+      },
+      "informationAboutApplication": {
+        "label": "What it is used for",
+        "example": "Answering customer questions in Korean"
+      },
+      "informationAboutTraining": {
+        "label": "How it was trained",
+        "example": "LoRA supervised fine-tuning on ultrachat_200k and internal support logs, 3 epochs"
+      },
+      "hyperparameter": {
+        "label": "Training settings",
+        "hint": "For example learning_rate 2e-5, epochs 3, lora_rank 16."
+      },
+      "modelDataPreprocessing": {
+        "label": "Data preprocessing",
+        "example": "Personal data masked, then de-duplicated"
+      },
+      "modelExplainability": {
+        "label": "Explainability measures"
+      },
+      "standardCompliance": {
+        "label": "Standards it follows",
+        "example": "ISO/IEC 42001"
+      },
+      "useSensitivePersonalInformation": {
+        "label": "Was sensitive personal information used?",
+        "hint": "Answer \"No\" only if you have checked."
+      },
+      "autonomyType": {
+        "label": "Does it act without a person checking?",
+        "hint": "\"Yes\" if its output is used without human review."
+      },
+      "safetyRiskAssessment": {
+        "label": "Safety risk level",
+        "hint": "Your own assessment, for example under the EU AI Act's categories."
+      },
+      "weightsScope": {
+        "label": "Which weights do you distribute?",
+        "hint": "An adapter needs the base model's weights to run, and this is recorded as a dependency."
+      }
+    },
+    "dataset": {
+      "name": {
+        "label": "Name",
+        "example": "Support logs 2025"
+      },
+      "downloadLocation": {
+        "label": "Address",
+        "hint": "Where the data can be obtained, even an internal address.",
+        "example": "https://data.example.com/support-logs"
+      },
+      "primaryPurpose": {
+        "label": "Kind"
+      },
+      "originatedBy": {
+        "label": "Who made this data",
+        "hint": "HuggingFace only tells the publisher. If the maker is the publisher, enter it as is."
+      },
+      "suppliedBy": {
+        "label": "Supplier"
+      },
+      "builtTime": {
+        "label": "Date it was made"
+      },
+      "releaseTime": {
+        "label": "Date it was first released",
+        "hint": "If it was never published, the date it was first used internally."
+      },
+      "datasetType": {
+        "label": "Kind of data"
+      },
+      "packageVersion": {
+        "label": "Version"
+      },
+      "description": {
+        "label": "Description"
+      },
+      "hasSensitivePersonalInformation": {
+        "label": "Does it contain personal information?",
+        "hint": "\"Yes\" if any information identifies a person, such as names, phone numbers or accounts. Choose \"No\" only if you have checked."
+      },
+      "datasetAvailability": {
+        "label": "How it can be obtained"
+      },
+      "intendedUse": {
+        "label": "What it is meant for"
+      },
+      "knownBias": {
+        "label": "Known bias"
+      },
+      "confidentialityLevel": {
+        "label": "Confidentiality (TLP)"
+      },
+      "dataCollectionProcess": {
+        "label": "How it was collected"
+      },
+      "anonymizationMethodUsed": {
+        "label": "Anonymization methods"
+      },
+      "dataPreprocessing": {
+        "label": "Preprocessing"
+      },
+      "datasetNoise": {
+        "label": "Known noise or errors"
+      },
+      "datasetUpdateMechanism": {
+        "label": "How it is updated"
+      }
+    }
   }
 }

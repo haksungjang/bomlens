@@ -265,7 +265,10 @@ def _check_value(field, v, where, errs):
             return None
         return v
     if t == "anyURI":
-        p = urllib.parse.urlparse(v) if isinstance(v, str) else None
+        try:
+            p = urllib.parse.urlparse(v) if isinstance(v, str) else None
+        except ValueError:  # e.g. an unclosed IPv6 bracket
+            p = None
         if not p or not p.scheme or not p.netloc or any(ch.isspace() for ch in v):
             errs.append(f"{where}: expected an absolute address such as https://...")
             return None

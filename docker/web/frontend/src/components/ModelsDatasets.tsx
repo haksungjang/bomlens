@@ -15,7 +15,7 @@ import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui/state";
-import type { ConformanceSummary } from "@/lib/api";
+import type { ConformanceSummary, DoneEvent, ResultFile, Spdx3Summary } from "@/lib/api";
 import { checkKind, groupG7ByCluster, registryTally, splitChecks } from "@/lib/conformance";
 import {
   type AiModelData,
@@ -30,6 +30,7 @@ import {
 } from "@/lib/models";
 import { loadSbom } from "@/lib/sbomGraph";
 import { CheckGroup } from "./ConformancePanel";
+import { Spdx3Panel } from "./Spdx3Panel";
 import { cn } from "@/lib/utils";
 
 /**
@@ -39,6 +40,50 @@ import { cn } from "@/lib/utils";
  * and the datasets the models reference. Only reachable for AI/ANALYZE scans.
  */
 export function ModelsDatasets({
+  scanId,
+  sbomFile,
+  conformance,
+  spdx3,
+  results,
+  title,
+  onResultPatch,
+}: {
+  scanId: string | null;
+  sbomFile: string;
+  conformance?: ConformanceSummary | null;
+  /** The SPDX 3.0.1 AI document's check summary, when this scan has one. */
+  spdx3?: Spdx3Summary | null;
+  /** The scan's artifacts, to find a declaration saved earlier. */
+  results: ResultFile[];
+  /** Project and version, shown above the question flow's steps. */
+  title: string;
+  /** A save or a write changed the result (its listing, its SPDX 3 summary). */
+  onResultPatch?: (patch: Partial<DoneEvent>) => void;
+}) {
+  // While the publisher answers the questions, the flow takes the whole
+  // screen; the model cards come back when it closes.
+  const [filling, setFilling] = useState(false);
+  const panel = (
+    <Spdx3Panel
+      scanId={scanId}
+      title={title}
+      summary={spdx3}
+      results={results}
+      onPatch={onResultPatch}
+      onFillingChange={setFilling}
+    />
+  );
+  // The panel stays at the same place in the tree either way, so it keeps its
+  // state (the open flow) when the body around it goes away.
+  return (
+    <div className="space-y-6">
+      {panel}
+      {!filling && <ModelsDatasetsBody scanId={scanId} sbomFile={sbomFile} conformance={conformance} />}
+    </div>
+  );
+}
+
+function ModelsDatasetsBody({
   scanId,
   sbomFile,
   conformance,

@@ -1142,17 +1142,23 @@ export function ArtifactsSection({
   result,
   scanId,
   onResultsChange,
+  onResultPatch,
 }: {
   result: DoneEvent;
   scanId: string | null;
   /** Passed through so an on-demand SPDX export updates the owning result. */
   onResultsChange?: (files: ResultFile[]) => void;
+  /** The SPDX 3.0.1 actions also refresh the document's summary. */
+  onResultPatch?: (patch: Partial<DoneEvent>) => void;
 }) {
   return (
     <ResultsList
       results={result.results}
       scanId={scanId}
       onResultsChange={onResultsChange}
+      aiScan={isAiScan(result)}
+      spdx3={result.spdx3}
+      onResultPatch={onResultPatch}
     />
   );
 }

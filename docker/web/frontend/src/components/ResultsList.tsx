@@ -1,8 +1,8 @@
 // Copyright 2026 SK Telecom Co., Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Download, Eye, FileSignature, FileText, Link2, Loader2, Package } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Download, Eye, FileSignature, FileText, Link2, Loader2, Package, Upload } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
@@ -12,9 +12,13 @@ import {
   absoluteFileUrl,
   downloadAllUrl,
   exportSpdx,
+  exportSpdx3,
   fileUrl,
   getCapabilities,
+  saveAiDeclaration,
+  type DoneEvent,
   type ResultFile,
+  type Spdx3Summary,
 } from "@/lib/api";
 import {
   formatLabel,
@@ -22,6 +26,7 @@ import {
   type ArtifactFormat,
   type LogicalArtifact,
 } from "@/lib/artifacts";
+import { IS_STATIC_DEMO } from "@/lib/demo";
 import { useToast } from "@/lib/toast";
 import { formatBytes } from "@/lib/utils";
 
@@ -49,11 +54,12 @@ function DownloadChip({
   scanId: string | null;
   onDownload: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <Button variant="outline" size="sm" asChild>
       <a href={fileUrl(scanId, fmt.name)} download={fmt.name} onClick={onDownload}>
         <Download className="h-3.5 w-3.5" />
-        {formatLabel(fmt.ext)}
+        {fmt.ext === "template" ? t("result.emptyForm") : formatLabel(fmt.ext)}
         <span className="font-normal text-muted-foreground">
           {formatBytes(fmt.size)}
         </span>
@@ -112,12 +118,121 @@ function SpdxExportButton({
   );
 }
 
+function triggerDownload(scanId: string, name: string) {
+  const a = document.createElement("a");
+  a.href = fileUrl(scanId, name);
+  a.download = name;
+  a.click();
+}
+
+/**
+ * Write the SPDX 3.0.1 AI document (or bring it up to date with the saved
+ * declaration) and download it. On a scan from before the document existed
+ * this is how it first gets written.
+ */
+function Spdx3ExportButton({
+  scanId,
+  onPatch,
+}: {
+  scanId: string | null;
+  onPatch?: (patch: Partial<DoneEvent>) => void;
+}) {
+  const { t } = useTranslation();
+  const { toast } = useToast();
+  const [pending, setPending] = useState(false);
+  const run = async () => {
+    if (!scanId || pending) return;
+    setPending(true);
+    const res = await exportSpdx3(scanId);
+    setPending(false);
+    if (!res.ok) {
+      toast(res.status === 409 ? t("spdx3.notAi") : t("spdx3.writeFailed"));
+      return;
+    }
+    onPatch?.({ results: res.results, spdx3: res.spdx3 });
+    triggerDownload(scanId, res.name);
+    toast(t("result.downloadStarted"));
+  };
+  return (
+    <Button variant="outline" size="sm" onClick={run} disabled={pending}>
+      {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+      {t("result.spdx3Export")}
+    </Button>
+  );
+}
+
+/**
+ * Send an edited declaration file back: the server checks it against this
+ * scan and rewrites the SPDX 3.0.1 document with it. A refusal says why.
+ */
+function DeclarationUploadButton({
+  scanId,
+  onPatch,
+}: {
+  scanId: string | null;
+  onPatch?: (patch: Partial<DoneEvent>) => void;
+}) {
+  const { t } = useTranslation();
+  const { toast } = useToast();
+  const input = useRef<HTMLInputElement>(null);
+  const [pending, setPending] = useState(false);
+  const send = async (f: File) => {
+    if (!scanId) return;
+    setPending(true);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await f.text());
+    } catch {
+      setPending(false);
+      toast(t("result.declarationNotJson"));
+      return;
+    }
+    const res = await saveAiDeclaration(scanId, parsed);
+    setPending(false);
+    if (!res.ok) {
+      toast(
+        res.status === 422
+          ? t("result.declarationRefused", { reason: res.reasons?.[0] ?? res.error })
+          : t("aiDecl.saveFailed"),
+      );
+      return;
+    }
+    onPatch?.({ results: res.results, spdx3: res.spdx3 });
+    toast(res.spdx3 && !res.spdx3.draft ? t("spdx3.savedComplete") : t("spdx3.savedDraft"));
+  };
+  return (
+    <>
+      <input
+        ref={input}
+        type="file"
+        accept=".json,application/json"
+        className="sr-only"
+        tabIndex={-1}
+        aria-hidden
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          e.target.value = "";
+          if (f) void send(f);
+        }}
+      />
+      <Button variant="outline" size="sm" onClick={() => input.current?.click()} disabled={pending}>
+        {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+        {t("result.declarationUpload")}
+      </Button>
+    </>
+  );
+}
+
 function ArtifactCard({
   artifact,
   scanId,
   onView,
   spdxAvailable,
   onExported,
+  spdx3Available,
+  spdx3,
+  aiScan,
+  onPatch,
 }: {
   artifact: LogicalArtifact;
   scanId: string | null;
@@ -125,6 +240,11 @@ function ArtifactCard({
   /** This image can convert to SPDX (syft here or a sibling scanner container). */
   spdxAvailable: boolean;
   onExported?: (files: ResultFile[]) => void;
+  /** This server can write the SPDX 3.0.1 AI document and take a declaration. */
+  spdx3Available: boolean;
+  spdx3?: Spdx3Summary | null;
+  aiScan: boolean;
+  onPatch?: (patch: Partial<DoneEvent>) => void;
 }) {
   const { t } = useTranslation();
   const { toast } = useToast();
@@ -167,9 +287,17 @@ function ArtifactCard({
                 {t("result.signed")}
               </Badge>
             )}
+            {artifact.key === "spdx3" && spdx3 && (
+              <Badge tone={spdx3.draft ? "warning" : "success"}>
+                {spdx3.draft ? t("spdx3.draft") : t("spdx3.complete")}
+              </Badge>
+            )}
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">
             {t(artifact.descKey)}
+            {artifact.key === "spdx3" && spdx3?.draft && (
+              <> {t("result.kind.spdx3.draftNote", { count: spdx3.counts.missingRequired ?? 0 })}</>
+            )}
           </p>
           <span className="mt-1 block truncate font-mono text-xs text-muted-foreground">
             {baseName(formats)}
@@ -204,6 +332,14 @@ function ArtifactCard({
         {artifact.spdxExportable && spdxAvailable && (
           <SpdxExportButton scanId={scanId} onExported={onExported} />
         )}
+        {spdx3Available && artifact.key === "spdx3" && <Spdx3ExportButton scanId={scanId} onPatch={onPatch} />}
+        {/* An AI scan from before the document existed: write it from here. */}
+        {spdx3Available && artifact.key === "sbom" && aiScan && !spdx3 && (
+          <Spdx3ExportButton scanId={scanId} onPatch={onPatch} />
+        )}
+        {spdx3Available && artifact.key === "aiDeclaration" && (
+          <DeclarationUploadButton scanId={scanId} onPatch={onPatch} />
+        )}
       </div>
 
       <div className="mt-2 flex items-center justify-end gap-1 border-t pt-2">
@@ -231,6 +367,9 @@ export function ResultsList({
   results,
   scanId,
   onResultsChange,
+  aiScan = false,
+  spdx3,
+  onResultPatch,
 }: {
   results: ResultFile[];
   /** The scan's run_id, scoping artifact URLs to its run folder. */
@@ -239,16 +378,23 @@ export function ResultsList({
    *  holds the result, so routing the new artifact up keeps every count (this
    *  header, the sidebar badge) in agreement. */
   onResultsChange?: (files: ResultFile[]) => void;
+  /** The scan describes an AI model or dataset, so it has an SPDX 3.0.1 document. */
+  aiScan?: boolean;
+  spdx3?: Spdx3Summary | null;
+  /** The SPDX 3.0.1 actions refresh the summary as well as the listing. */
+  onResultPatch?: (patch: Partial<DoneEvent>) => void;
 }) {
   const { t } = useTranslation();
   const { toast } = useToast();
   const [view, setView] = useState<string | null>(null);
   const [spdxAvailable, setSpdxAvailable] = useState(false);
+  const [spdx3Available, setSpdx3Available] = useState(false);
 
   useEffect(() => {
     let alive = true;
     getCapabilities().then((c) => {
       if (alive) setSpdxAvailable(c.spdxExport !== false);
+      if (alive) setSpdx3Available(c.spdx3 === true && !IS_STATIC_DEMO);
     });
     return () => {
       alive = false;
@@ -304,6 +450,10 @@ export function ResultsList({
             onView={setView}
             spdxAvailable={spdxAvailable}
             onExported={onResultsChange}
+            spdx3Available={spdx3Available}
+            spdx3={spdx3}
+            aiScan={aiScan}
+            onPatch={onResultPatch ?? ((p) => p.results && onResultsChange?.(p.results))}
           />
         ))}
       </div>

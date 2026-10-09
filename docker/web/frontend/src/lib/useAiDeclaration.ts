@@ -1,0 +1,92 @@
+// Copyright 2026 SK Telecom Co., Ltd.
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * The state of the declaration flow: which step is open and the answers so
+ * far. The reducer is pure so the edits the screens make are tested without a
+ * browser; the hook only wraps it.
+ */
+import { useReducer } from "react";
+
+import {
+  emptyLocalDataset,
+  slugFor,
+  type Declaration,
+  type FieldIndex,
+  type StepId,
+  type Value,
+} from "./aiDeclaration";
+
+export interface DeclarationState {
+  step: StepId;
+  decl: Declaration;
+}
+
+/** Where an answer goes: the document, the model, one base model or one dataset. */
+export type Target =
+  | { kind: "document" }
+  | { kind: "model" }
+  | { kind: "base"; index: number }
+  | { kind: "dataset"; index: number };
+
+export type DeclarationAction =
+  | { type: "step"; step: StepId }
+  | { type: "set"; target: Target; field: string; value: Value }
+  | { type: "addLocal"; index: FieldIndex }
+  | { type: "removeLocal"; index: number }
+  | { type: "reset"; decl: Declaration; step: StepId };
+
+export function declarationReducer(state: DeclarationState, action: DeclarationAction): DeclarationState {
+  switch (action.type) {
+    case "step":
+      return { ...state, step: action.step };
+    case "reset":
+      return { step: action.step, decl: action.decl };
+    case "set": {
+      const decl: Declaration = { ...state.decl };
+      const t = action.target;
+      if (t.kind === "document") {
+        decl.document = { ...decl.document, [action.field]: action.value };
+      } else if (t.kind === "model") {
+        if (!decl.model) return state;
+        decl.model = { ...decl.model, [action.field]: action.value };
+      } else if (t.kind === "base") {
+        const bases = decl.model?.baseModels;
+        if (!decl.model || !bases?.[t.index] || action.field !== "revision") return state;
+        decl.model = {
+          ...decl.model,
+          baseModels: bases.map((b, i) => (i === t.index ? { ...b, revision: String(action.value ?? "") } : b)),
+        };
+      } else {
+        const d = decl.datasets[t.index];
+        if (!d) return state;
+        const next = { ...d, [action.field]: action.value };
+        // A dataset the hub does not hold is named by its slug; keep the slug
+        // following the name until the declaration is saved.
+        if (d.local !== undefined && action.field === "name") {
+          const taken = decl.datasets.filter((x, i) => i !== t.index && x.local).map((x) => x.local as string);
+          next.local = slugFor(String(action.value ?? ""), taken, t.index + 1);
+        }
+        decl.datasets = decl.datasets.map((x, i) => (i === t.index ? next : x));
+      }
+      return { ...state, decl };
+    }
+    case "addLocal":
+      if (!state.decl.model) return state;
+      return { ...state, decl: { ...state.decl, datasets: [...state.decl.datasets, emptyLocalDataset(action.index)] } };
+    case "removeLocal": {
+      const d = state.decl.datasets[action.index];
+      // Only a dataset the publisher added can be taken away; the scanned ones
+      // are what the scan found.
+      if (!d || d.local === undefined) return state;
+      return {
+        ...state,
+        decl: { ...state.decl, datasets: state.decl.datasets.filter((_, i) => i !== action.index) },
+      };
+    }
+  }
+}
+
+export function useAiDeclaration(decl: Declaration, step: StepId) {
+  return useReducer(declarationReducer, { decl, step });
+}

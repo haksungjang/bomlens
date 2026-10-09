@@ -635,6 +635,8 @@ export function NextApp() {
             onResultsChange={(files) =>
               setResult((r) => (r ? { ...r, results: files } : r))
             }
+            // Saving an AI declaration also refreshes the SPDX 3.0.1 summary.
+            onResultPatch={(patch) => setResult((r) => (r ? { ...r, ...patch } : r))}
           />
 
           {/* The run log is reference material for the run you just watched.
