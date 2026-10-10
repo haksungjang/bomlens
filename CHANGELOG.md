@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v1.13.1] - 2026-10-10
+
 ### Upgrade note
 
 - An AI declaration can now hold a `service` and the model keys `inputModality`, `outputModality`, `trainingComputeFlops`, `trainingComputeBasis` and `adversarialTesting`. BomLens v1.13 and earlier refuse such a file with "unknown key(s)" rather than dropping the values, so read it with this version or remove the keys.
