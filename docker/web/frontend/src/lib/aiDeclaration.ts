@@ -24,7 +24,8 @@ export interface MapField {
   /** The field's vocabulary has its own "unknown" value (PresenceType, DatasetType). */
   noAssertion: boolean;
   enum?: string[];
-  source: { kind: string };
+  /** `fallback`: what the converter writes when nothing filled the field. */
+  source: { kind: string; fallback?: string };
   declarable?: boolean;
   judgment?: boolean;
 }
@@ -55,7 +56,9 @@ export function parseMap(raw: unknown): FieldIndex | null {
         max: f.max === "*" ? "*" : typeof f.max === "number" ? f.max : 1,
         noAssertion: f.noAssertion === true,
         enum: Array.isArray(f.enum) ? f.enum.filter((x): x is string => typeof x === "string") : undefined,
-        source: isObj(f.source) && typeof f.source.kind === "string" ? { kind: f.source.kind } : { kind: "user" },
+        source: isObj(f.source) && typeof f.source.kind === "string"
+          ? { kind: f.source.kind, ...(typeof f.source.fallback === "string" ? { fallback: f.source.fallback } : {}) }
+          : { kind: "user" },
         declarable: f.declarable === true,
         judgment: f.judgment === true,
       };
@@ -573,8 +576,11 @@ export interface Issue {
   problem: Problem | "required";
 }
 
+/** Required and left open when empty. A required field with a fallback (the
+ *  dataset type's NOASSERTION) is written as that instead, so the check does
+ *  not count it as open and neither does this. */
 function required(f: MapField): boolean {
-  return f.min >= 1;
+  return f.min >= 1 && f.source.fallback === undefined;
 }
 
 /**
