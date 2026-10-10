@@ -276,9 +276,12 @@ Options:
                          declaration (JSON) of what a scan cannot read, such as
                          release dates, who made the model and the data, and
                          which datasets trained or tested it. Written into the
-                         SPDX 3.0.1 AI document only; the CycloneDX SBOM is not
-                         changed. Every AI scan writes an empty one to start
-                         from, <Project>_<Version>_ai-declaration.template.json.
+                         SPDX 3.0.1 AI document; the CycloneDX SBOM takes only
+                         the declared service, the model's training compute,
+                         adversarial testing and input/output kinds, marked as
+                         the publisher's declaration. Every AI scan writes an
+                         empty one to start from,
+                         <Project>_<Version>_ai-declaration.template.json.
                          A file that names a field, value or dataset the scan
                          does not have is refused and the document stays a
                          draft. The accepted file is kept with the results and
