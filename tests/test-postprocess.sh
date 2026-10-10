@@ -7545,6 +7545,18 @@ _bp=$(grep -m1 '^NON_SHIPPED_DIRS=' "$PREP"); _sd=$(grep -m1 '^NON_SHIPPED_DIRS=
 [ -n "$_bp" ] && [ "$_bp" = "$_sd" ] \
     && pass "NON_SHIPPED_DIRS is the same in build-prep.sh and source-detect.sh" \
     || fail "NON_SHIPPED_DIRS differs" "build-prep [$_bp] source-detect [$_sd]"
+# Singular and short spellings of the sample/benchmark/demo folders are left out
+# too, not only the plural forms.
+_missing=""
+for _d in sample samples bench benches benchmark benchmarks demo demos; do
+    case " $(printf '%s' "$_sd" | sed 's/^NON_SHIPPED_DIRS="\(.*\)"$/\1/') " in
+        *" $_d "*) ;;
+        *) _missing="$_missing $_d" ;;
+    esac
+done
+[ -z "$_missing" ] \
+    && pass "NON_SHIPPED_DIRS covers sample/bench/benchmark/demo spellings" \
+    || fail "NON_SHIPPED_DIRS is missing:$_missing"
 _bp=$(grep -m1 '^NON_SHIPPED_MANIFEST_RE=' "$PREP"); _sd=$(grep -m1 '^NON_SHIPPED_MANIFEST_RE=' "$DETECT")
 [ -n "$_bp" ] && [ "$_bp" = "$_sd" ] \
     && pass "NON_SHIPPED_MANIFEST_RE is the same in build-prep.sh and source-detect.sh" \
