@@ -18,9 +18,9 @@
 # between two scans of the same tree (the 2026-10-05 build began listing every
 # LICENSE file under node_modules/ as a component). Bump both together.
 # renovate: datasource=docker depName=ghcr.io/cdxgen/cdxgen
-CDXGEN_TAG="${CDXGEN_TAG:-13.3.0}"                               # cdxgen language image tag
+CDXGEN_TAG="${CDXGEN_TAG:-13.2.0}"                               # cdxgen language image tag
 # renovate: datasource=docker depName=ghcr.io/cdxgen/cdxgen
-CDXGEN_ALLINONE="${CDXGEN_ALLINONE:-ghcr.io/cdxgen/cdxgen:13.3.0}"
+CDXGEN_ALLINONE="${CDXGEN_ALLINONE:-ghcr.io/cdxgen/cdxgen:13.2.0}"
 # A local name, not a registry one: the Android SDK is not open source and its
 # terms bar redistributing it, so this image is built on the machine that uses
 # it rather than published. scan-sbom.sh prints the build command when it is
