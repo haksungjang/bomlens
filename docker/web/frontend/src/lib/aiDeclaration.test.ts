@@ -177,9 +177,12 @@ describe("issues and remainingRequired", () => {
   it("counts the required fields still empty, the author included unless the scan named one", () => {
     const d = fresh();
     const all = issues(index, d, false);
-    // author, model release time, and per dataset: originatedBy, builtTime, releaseTime (+ datasetType on upstream)
-    expect(remainingRequired(all)).toBe(1 + 1 + 3 + 4);
-    expect(remainingRequired(issues(index, d, true))).toBe(8);
+    // author, model release time, and per dataset: originatedBy, builtTime, releaseTime
+    expect(remainingRequired(all)).toBe(1 + 1 + 3 + 3);
+    expect(remainingRequired(issues(index, d, true))).toBe(7);
+    // The dataset type is required too, but left empty it is written as
+    // NOASSERTION, so the check does not count it as open and neither does this.
+    expect(all.some((i) => i.field === "datasetType")).toBe(false);
     // Optional fields never count.
     expect(all.some((i) => i.field === "informationAboutTraining" || i.field === "builtTime" && i.where === "model")).toBe(false);
   });
@@ -215,7 +218,7 @@ describe("issues and remainingRequired", () => {
     d.datasets[2] = { ...d.datasets[2], local: "logs", name: "Logs" };
     const got = issues(index, d, true).filter((i) => i.where === "datasets[2]");
     expect(got.filter((i) => i.problem === "required").map((i) => i.field).sort()).toEqual(
-      ["builtTime", "datasetType", "downloadLocation", "originatedBy", "releaseTime"],
+      ["builtTime", "downloadLocation", "originatedBy", "releaseTime"],
     );
     // Without an address the server refuses the whole declaration.
     expect(saveBlockers(got)).toEqual([{ where: "datasets[2]", field: "local", problem: "localIncomplete" }]);
