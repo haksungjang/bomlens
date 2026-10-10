@@ -1158,6 +1158,7 @@ export function ArtifactsSection({
       scanId={scanId}
       onResultsChange={onResultsChange}
       aiScan={isAiScan(result)}
+      uploadedSbom={result.scanConfig?.source === "sbom-upload"}
       spdx3={result.spdx3}
       onResultPatch={onResultPatch}
     />

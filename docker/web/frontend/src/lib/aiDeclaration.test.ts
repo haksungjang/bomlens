@@ -6,8 +6,19 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
+  adapterWithoutBase,
   bandSegments,
   checkValue,
+  COMMON_LICENSES,
+  firstOpenIn,
+  firstOpenStep,
+  formatDay,
+  missingByElement,
+  openByStep,
+  readDisplay,
+  required,
+  rolesNotStated,
+  summaryGroups,
   createTemplate,
   dateToDeclared,
   startCreate,
@@ -471,3 +482,134 @@ describe("sources a publisher declares for a dataset", () => {
   });
 });
 
+
+describe("where the open items are", () => {
+  it("counts them by step, opens at the first step that has one, and finds the first of a step", () => {
+    const d = fresh();
+    const steps = stepsFor(index, d);
+    const list = issues(index, d, false);
+    const open = openByStep(list);
+    // The author and release date on the model, the datasets' dates and makers.
+    expect(open.model).toBe(2);
+    expect(open.data).toBeGreaterThan(0);
+    expect(open.base).toBeUndefined();
+    // The base-model step has nothing open, so the questions start at the model.
+    expect(steps[0]).toBe("base");
+    expect(firstOpenStep(steps, list)).toBe("model");
+    expect(firstOpenIn("model", list)).toEqual({ where: "document", field: "createdBy", problem: "required" });
+    // With the model answered, the data step is the first with something open.
+    d.document.createdBy = [{ type: "Organization", name: "Acme" }];
+    d.model!.releaseTime = "2025-01-01T00:00:00Z";
+    expect(firstOpenStep(steps, issues(index, d, false))).toBe("data");
+    // Nothing open anywhere: the first step.
+    expect(firstOpenStep(steps, [])).toBe("base");
+  });
+
+  it("does not call a required field with a fallback open", () => {
+    // The dataset type is written as NOASSERTION when empty.
+    expect(required(index.dataset_DatasetPackage.datasetType)).toBe(false);
+    expect(required(index.ai_AIPackage.releaseTime)).toBe(true);
+  });
+});
+
+describe("adapterWithoutBase", () => {
+  it("is true only for adapter weights with no base model", () => {
+    const d = createTemplate(index);
+    d.model!.weightsScope = "adapter";
+    expect(adapterWithoutBase(d)).toBe(true);
+    d.model!.baseModels = [{ ref: "org/base", revision: "" }];
+    expect(adapterWithoutBase(d)).toBe(false);
+    d.model!.baseModels = [];
+    d.model!.weightsScope = "quantized";
+    expect(adapterWithoutBase(d)).toBe(false);
+  });
+});
+
+describe("summaryGroups", () => {
+  it("lists every answer by step, each dataset as its own group, and leaves empty answers out", () => {
+    const d = fresh();
+    d.document.createdBy = [{ type: "Organization", name: "Acme" }];
+    d.model!.releaseTime = "2025-04-15T00:00:00Z";
+    d.model!.informationAboutTraining = "LoRA, 3 epochs";
+    d.model!.safetyRiskAssessment = "medium";
+    d.datasets[0].builtTime = "2023-10-01T00:00:00Z";
+    d.datasets[0].role = "trainedOn";
+    const groups = summaryGroups(index, d, stepsFor(index, d));
+    const model = groups.find((g) => g.step === "model")!;
+    expect(model.rows.map((r) => `${r.ns}.${r.field.id}`)).toEqual(["document.createdBy", "model.releaseTime"]);
+    const data = groups.filter((g) => g.step === "data");
+    expect(data.map((g) => g.title)).toEqual(["org/open-ds", "org/upstream", null]);
+    expect(data[0].datasetIndex).toBe(0);
+    expect(data[0].rows.map((r) => r.field.id)).toEqual(["builtTime"]);
+    // How it was trained sits with the data, as the step asks it.
+    expect(data[2].rows.map((r) => r.field.id)).toEqual(["informationAboutTraining"]);
+    expect(groups.find((g) => g.step === "legal")!.rows.map((r) => r.field.id)).toEqual(["safetyRiskAssessment"]);
+  });
+
+  it("names a dataset the hub does not hold by its name, and skips one never filled", () => {
+    const d = fresh();
+    d.datasets.push(emptyLocalDataset(index));
+    d.datasets.push({ ...emptyLocalDataset(index), local: "logs", name: "Logs" });
+    const titles = summaryGroups(index, d, ["data"])
+      .filter((g) => g.datasetIndex !== undefined)
+      .map((g) => g.title);
+    expect(titles).toEqual(["org/open-ds", "org/upstream", "Logs"]);
+  });
+});
+
+describe("how a value in the check reads", () => {
+  it("reads dates, vocabulary words and text apart", () => {
+    expect(readDisplay("releaseTime", "2026-10-01T00:00:00Z")).toEqual({ kind: "date", date: new Date("2026-10-01T00:00:00Z") });
+    expect(readDisplay("weightsScope", "adapter")).toEqual({ kind: "enum", values: ["adapter"] });
+    expect(readDisplay("datasetType", "text, audio")).toEqual({ kind: "enum", values: ["text", "audio"] });
+    expect(readDisplay("primaryPurpose", "model")).toEqual({ kind: "enum", values: ["model"] });
+    expect(readDisplay("name", "adapter")).toEqual({ kind: "text", text: "adapter" });
+    // Not a real date: left as written.
+    expect(readDisplay("releaseTime", "2026-02-30T00:00:00Z")).toEqual({ kind: "text", text: "2026-02-30T00:00:00Z" });
+  });
+
+  it("writes a declared day in the reader's locale, the same day in every time zone", () => {
+    expect(formatDay("2026-10-01T00:00:00Z", "en")).toBe("Oct 1, 2026");
+    expect(formatDay("2026-10-01T00:00:00Z", "ko")).toContain("2026");
+    expect(formatDay("not a date", "en")).toBe("not a date");
+  });
+});
+
+describe("what the band says about the check", () => {
+  const c = parseCheck({
+    draft: true,
+    counts: { missingRequired: 3 },
+    elements: [
+      { spdxId: "urn:doc", type: "CreationInfo", label: "document", fields: [{ id: "createdBy", status: "missingRequired" }] },
+      { spdxId: "urn:m", type: "ai_AIPackage", label: "acme/m", fields: [{ id: "releaseTime", status: "declared" }] },
+      { spdxId: "urn:d", type: "dataset_DatasetPackage", label: "org/ds",
+        fields: [{ id: "builtTime", status: "missingRequired" }, { id: "releaseTime", status: "missingRequired" }] },
+      { spdxId: "urn:l", type: "dataset_DatasetPackage", label: "Logs", fields: [] },
+    ],
+    relationships: [
+      { type: "other", from: "urn:m", to: ["urn:d"], status: "review", note: "card-declared dataset, role not stated" },
+      { type: "other", from: "urn:m", to: ["urn:l"], status: "review", note: "declared dataset, role not stated" },
+    ],
+    messages: [],
+  })!;
+
+  it("names the elements with required fields still empty", () => {
+    expect(missingByElement(c)).toEqual([
+      { type: "CreationInfo", label: "document", count: 1 },
+      { type: "dataset_DatasetPackage", label: "org/ds", count: 2 },
+    ]);
+  });
+
+  it("tells datasets a model card named from those a declaration named", () => {
+    expect(rolesNotStated(c)).toEqual({ card: ["org/ds"], declared: ["Logs"] });
+  });
+});
+
+describe("COMMON_LICENSES", () => {
+  it("offers only licence tags the converter accepts", () => {
+    const knowledge = JSON.parse(
+      readFileSync(new URL("../../../../lib/ai-risk-knowledge.json", import.meta.url), "utf-8"),
+    ) as { hfLicenseTags: string[] };
+    for (const l of COMMON_LICENSES) expect(knowledge.hfLicenseTags).toContain(l);
+  });
+});

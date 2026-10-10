@@ -48,6 +48,8 @@ export function ModelsDatasets({
   title,
   onResultPatch,
   declaredScan,
+  autoFill,
+  onAutoFill,
 }: {
   scanId: string | null;
   sbomFile: string;
@@ -62,6 +64,9 @@ export function ModelsDatasets({
   onResultPatch?: (patch: Partial<DoneEvent>) => void;
   /** The scan was made from a declaration alone (its input is that file). */
   declaredScan?: boolean;
+  /** Open the SPDX 3.0.1 questions on arrival (the Overview's "fill" link). */
+  autoFill?: boolean;
+  onAutoFill?: () => void;
 }) {
   // While the publisher answers the questions, the flow takes the whole
   // screen; the model cards come back when it closes.
@@ -75,6 +80,8 @@ export function ModelsDatasets({
       onPatch={onResultPatch}
       onFillingChange={setFilling}
       declaredScan={declaredScan}
+      autoFill={autoFill}
+      onAutoFill={onAutoFill}
     />
   );
   // The panel stays at the same place in the tree either way, so it keeps its

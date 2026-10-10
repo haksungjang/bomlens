@@ -1063,8 +1063,8 @@ else fail "/ai-declaration valid save returned $code" "$(cat "$WORK/decl-ok.json
 python3 -c "import json,sys; assert json.load(open(sys.argv[1])) == json.load(open(sys.argv[2]))" "$FIX3/declaration-complete.json" "$OUT/aidecl_1.0/aidecl_1.0_ai-declaration.json" 2>/dev/null \
     && pass "the declaration is saved as sent" || fail "the saved declaration differs from the request"
 detail=$(curl -fsS "$BASE/scan?id=aidecl_1.0" 2>/dev/null)
-echo "$detail" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['spdx3']['draft'] is False and d['spdx3']['name']=='aidecl_1.0_bom.spdx3.json', d.get('spdx3')" 2>/dev/null \
-    && pass "/scan carries the SPDX 3.0.1 summary" || fail "/scan spdx3 summary" "$(echo "$detail" | head -c 300)"
+echo "$detail" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['spdx3']['draft'] is False and d['spdx3']['name']=='aidecl_1.0_bom.spdx3.json' and d['spdx3']['upToDate'] is True, d.get('spdx3')" 2>/dev/null \
+    && pass "/scan carries the SPDX 3.0.1 summary, up to date after a save" || fail "/scan spdx3 summary" "$(echo "$detail" | head -c 300)"
 tpl=$(curl -fsS "$BASE/ai-declaration-template?id=aidecl_1.0" 2>/dev/null)
 { echo "$tpl" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['name']=='aidecl_1.0_ai-declaration.template.json'" 2>/dev/null \
   && [ -f "$OUT/aidecl_1.0/aidecl_1.0_ai-declaration.template.json" ]; } && pass "/ai-declaration-template writes the empty declaration" || fail "/ai-declaration-template" "$tpl"
@@ -1126,6 +1126,8 @@ code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/spdx3-export?id=broken_1.0"
 spdx3_state() { curl -fsS "$BASE/spdx3-export?id=aidecl_1.0" 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin)['spdx3']; print(d['draft'], d['declaration']['state'])"; }
 cp "$OUT/aidecl_1.0/aidecl_1.0_ai-declaration.json" "$WORK/kept-decl.json"
 rm -f "$OUT/aidecl_1.0/aidecl_1.0_ai-declaration.json"
+curl -fsS "$BASE/scan?id=aidecl_1.0" 2>/dev/null | python3 -c "import json,sys; assert json.load(sys.stdin)['spdx3']['upToDate'] is False" 2>/dev/null \
+    && pass "/scan says the document is behind a declaration changed outside the screens" || fail "upToDate not false after the declaration changed"
 [ "$(spdx3_state)" = "True none" ] && pass "deleting the declaration rebuilds the document as a draft" || fail "deleted declaration not noticed: $(spdx3_state)"
 cp "$WORK/kept-decl.json" "$OUT/aidecl_1.0/aidecl_1.0_ai-declaration.json"
 touch -t 200001010000 "$OUT/aidecl_1.0/aidecl_1.0_ai-declaration.json"

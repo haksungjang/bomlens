@@ -269,8 +269,18 @@ export function NewScan({
                   autoFocus
                   aria-required
                   aria-invalid={state.errors.project ? true : undefined}
-                  aria-describedby={state.errors.project ? "project-error" : undefined}
+                  aria-describedby={
+                    [state.errors.project && "project-error", state.source === "ai-declare" && "project-hint"]
+                      .filter(Boolean)
+                      .join(" ") || undefined
+                  }
                 />
+                {/* A declared model has no hub name: the project becomes its name. */}
+                {state.source === "ai-declare" && (
+                  <p id="project-hint" className="text-xs text-muted-foreground">
+                    {t("form.projectHintDeclare")}
+                  </p>
+                )}
                 <FieldError id="project-error" msgKey={state.errors.project} />
               </div>
               <div className="space-y-2">

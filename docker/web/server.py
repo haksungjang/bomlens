@@ -1475,6 +1475,13 @@ def spdx3_summary(run_id):
     if not isinstance(check, dict) or not isinstance(check.get("counts"), dict):
         return None
     doc = run_file(run_id, "_bom.spdx3.json")
+    bom = run_file(run_id, "_bom.json")
+    folder = os.path.dirname(path)
+    prefix = os.path.basename(path)[: -len("_spdx3-check.json")]
+    # Whether rebuilding would change anything: a declaration saved or edited
+    # outside the screens, or a newer converter, leaves the document behind.
+    up_to_date = bool(bom and os.path.isfile(bom) and spdx3_up_to_date(
+        bom, os.path.join(folder, prefix + "_ai-declaration.json"), path))
     decl = check.get("declaration") if isinstance(check.get("declaration"), dict) else {}
     state = decl.get("state") if decl.get("state") in ("none", "applied", "refused") else "none"
     reasons = [str(x)[:500] for x in (decl.get("reasons") or []) if isinstance(x, str)][:50] \
@@ -1488,6 +1495,7 @@ def spdx3_summary(run_id):
         # saying so until the declaration is fixed, not only on the call that
         # found it.
         "declaration": {"state": state, "reasons": reasons},
+        "upToDate": up_to_date,
     }
 
 

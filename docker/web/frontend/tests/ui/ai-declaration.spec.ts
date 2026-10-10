@@ -16,7 +16,7 @@ const P = "model_1.0";
 
 const field = (id: string, status: string, display?: string) => ({ id, status, ...(display ? { display } : {}) });
 
-function check(complete: boolean) {
+function check(complete: boolean, declared = false) {
   return {
     schema: "bomlens-spdx3-check/1",
     draft: !complete,
@@ -29,8 +29,11 @@ function check(complete: boolean) {
         fields: [
           field("name", "auto", "acme/model"),
           field("downloadLocation", "auto", "https://huggingface.co/acme/model"),
+          field("primaryPurpose", "auto", "model"),
           { ...field("suppliedBy", "auto", "acme"), meaning: "huggingface-publisher" },
           complete ? field("releaseTime", "declared", "2025-04-15T00:00:00Z") : field("releaseTime", "missingRequired"),
+          field("builtTime", "declared", "2026-10-01T00:00:00Z"),
+          field("weightsScope", "auto", "adapter"),
           field("informationAboutTraining", "optional"),
           field("safetyRiskAssessment", "judgment"),
         ] },
@@ -42,18 +45,19 @@ function check(complete: boolean) {
                  field("releaseTime", complete ? "declared" : "missingRequired")] },
     ],
     relationships: [{ type: "other", from: "urn:m", to: ["urn:d"], status: "review",
-                      note: "card-declared dataset, role not stated" }],
+                      note: declared ? "declared dataset, role not stated" : "card-declared dataset, role not stated" }],
     messages: [],
     declaration: { state: complete ? "applied" : "none" },
   };
 }
 
-const summary = (complete: boolean) => ({
+const summary = (complete: boolean, upToDate = true) => ({
   draft: !complete,
   counts: check(complete).counts,
   name: `${P}_bom.spdx3.json`,
   check: `${P}_spdx3-check.json`,
   declaration: { state: complete ? "applied" : "none", reasons: [] },
+  upToDate,
 });
 
 const TEMPLATE = {
@@ -64,10 +68,11 @@ const TEMPLATE = {
     domain: [], informationAboutApplication: "", informationAboutTraining: "", hyperparameter: [],
     modelDataPreprocessing: [], modelExplainability: [], standardCompliance: [],
     useSensitivePersonalInformation: "", autonomyType: "", safetyRiskAssessment: "",
+    license: "",
     baseModels: [{ ref: "org/base", revision: "" }],
   },
   datasets: [{ ref: "huggingface:org/ds", role: "", originatedBy: null, builtTime: "", releaseTime: "",
-               hasSensitivePersonalInformation: "", intendedUse: "" }],
+               datasetType: [], hasSensitivePersonalInformation: "", intendedUse: "" }],
   relationships: [],
 };
 
@@ -88,7 +93,14 @@ const SBOM = {
 
 async function stub(
   page: Page,
-  opts: { capable?: boolean; withSummary?: boolean; saved?: unknown; refuse?: string[]; declared?: boolean } = {},
+  opts: {
+    capable?: boolean;
+    withSummary?: boolean;
+    saved?: unknown;
+    refuse?: string[];
+    declared?: boolean;
+    upToDate?: boolean;
+  } = {},
 ) {
   const state = { complete: false, saved: null as unknown, exported: 0 };
   const results = opts.saved ? [...RESULTS, { name: `${P}_ai-declaration.json`, size: 50 }] : RESULTS;
@@ -101,7 +113,7 @@ async function stub(
   await page.route("**/results", (r) => r.fulfill({ contentType: "application/json", body: "[]" }));
   const done = {
     ok: true, mode: "AIBOM", id: P, results, security: null, conformance: null,
-    spdx3: opts.withSummary === false ? null : summary(false),
+    spdx3: opts.withSummary === false ? null : summary(false, opts.upToDate !== false),
     scanConfig: opts.declared
       ? { source: "ai-declare", target: "", project: "model", version: "1.0" }
       : { source: "hf-model", target: "acme/model", project: "model", version: "1.0" },
@@ -114,7 +126,7 @@ async function stub(
   await page.route("**/file**", (r) => {
     const name = new URL(r.request().url()).searchParams.get("name") ?? "";
     const body = name.endsWith("_spdx3-check.json")
-      ? check(state.complete)
+      ? check(state.complete, opts.declared)
       : name.endsWith(".template.json")
         ? TEMPLATE
         : name.endsWith("_ai-declaration.json")
@@ -153,15 +165,23 @@ async function stub(
   return state;
 }
 
-async function openModels(page: Page) {
+async function runScan(page: Page) {
   await page.goto("/#/new");
   await page.fill("#project", "model");
   await page.fill("#version", "1.0");
   await page.getByTestId("run-scan").click();
+}
+
+async function openModels(page: Page) {
+  await runScan(page);
   await page.getByRole("navigation").locator('a[href$="/models"]').first().click();
 }
 
-test("the band shows how the fields were filled and the model's open fields", async ({ page }) => {
+/** A step in the list on the left, by its name alone. */
+const stepButton = (flow: ReturnType<Page["getByTestId"]>, name: string) =>
+  flow.getByRole("navigation").getByRole("button", { name, exact: true });
+
+test("the band shows how the fields were filled and where the open ones are", async ({ page }) => {
   await stub(page);
   await openModels(page);
   const band = page.getByTestId("spdx3-band");
@@ -169,10 +189,38 @@ test("the band shows how the fields were filled and the model's open fields", as
   await expect(band.locator('[data-segment="missingRequired"]')).toContainText("5");
   await expect(band.locator('[data-segment="filled"]')).toContainText("8");
   await expect(band).toContainText("5 required fields are still empty");
+  // Someone else's model: filling matters only if they publish the document.
+  await expect(band).toContainText("only if you distribute this document yourself");
+  await expect(page.getByTestId("spdx3-missing-where")).toHaveText(
+    "Required fields still empty: Document (1), acme/model (1), org/ds (3)",
+  );
+  // The field table is folded, so the model card follows the band.
+  await expect(page.getByTestId("spdx3-fields")).toBeHidden();
+  await page.getByText("Show the document's fields").click();
   const release = page.locator('tr[data-field="releaseTime"]').first();
   await expect(release).toContainText("Required, empty");
   await expect(page.locator('tr[data-field="suppliedBy"]').first()).toContainText("HuggingFace publisher");
   await expect(page.getByText("Training or evaluation not stated")).toBeVisible();
+  await expect(page.getByText("Datasets named on the model card")).toBeVisible();
+  // Values read as the questions word them, not as the document writes them.
+  await expect(page.locator('tr[data-field="weightsScope"]').first()).toContainText("Adapter only");
+  await expect(page.locator('tr[data-field="primaryPurpose"]').first()).toContainText("Model");
+  await expect(page.locator('tr[data-field="builtTime"]').first()).toContainText("Oct 1, 2026");
+  // The datasets' fold opens by itself: it holds required fields still empty.
+  await expect(page.getByTestId("spdx3-dataset-fields")).toContainText("3 required, empty");
+  await expect(page.locator('tr[data-field="originatedBy"]').first()).toBeVisible();
+  const axe = await new AxeBuilder({ page }).include('[data-testid="spdx3-band"]').include('[data-testid="spdx3-fields"]')
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+  expect(axe.violations).toEqual([]);
+});
+
+test("a declared model's fields are open from the start, and its datasets are not said to be on a card", async ({ page }) => {
+  await stub(page, { declared: true });
+  await openModels(page);
+  await expect(page.getByTestId("spdx3-fields")).toBeVisible();
+  await expect(page.getByTestId("spdx3-band")).not.toContainText("only if you distribute");
+  await expect(page.getByText("Datasets named in the declaration")).toBeVisible();
+  await expect(page.getByText("Datasets named on the model card")).toHaveCount(0);
 });
 
 test("filling the open fields: only what is open is asked, and saving completes the document", async ({ page }) => {
@@ -182,14 +230,20 @@ test("filling the open fields: only what is open is asked, and saving completes 
   const flow = page.getByTestId("ai-declaration");
   await expect(flow).toBeVisible();
 
-  // Base models: a revision box for each, and leaving it empty is fine.
+  // The questions open at the first step with something open; the base-model
+  // step has nothing required and can be visited from the list.
+  await expect(flow.getByRole("heading", { name: "Tell us about the model" })).toBeVisible();
+  // An empty required field says so quietly until the field or the step is left.
+  await expect(flow.locator('[data-question="model.releaseTime"] [data-missing]')).toHaveAttribute("data-missing", "quiet");
+  await stepButton(flow, "Base models").click();
   await expect(flow.getByLabel("Revision (commit or tag, optional)")).toHaveCount(1);
   await flow.getByRole("button", { name: /^Next/ }).click();
 
-  // Model: the author and release date fail validation while empty; the
-  // weights question has no "Unknown"; the optional group starts folded.
+  // Model: the author and release date fail validation while empty (now
+  // shown as errors: the step was left once); the weights question has no
+  // "Unknown"; the optional group starts folded.
   await expect(flow.locator('[data-question="document.createdBy"]')).toContainText("fails SPDX validation");
-  await expect(flow.locator('[data-question="model.releaseTime"]')).toContainText("fails SPDX validation");
+  await expect(flow.locator('[data-question="model.releaseTime"] [data-missing]')).toHaveAttribute("data-missing", "shown");
   await expect(flow.locator('[data-question="model.weightsScope"]').getByRole("radio")).toHaveCount(4);
   await expect(flow.locator('[data-question="model.weightsScope"]').getByText("Unknown")).toHaveCount(0);
   await expect(flow.locator("details").filter({ hasText: "Use and scope (optional)" })).not.toHaveAttribute("open", "");
@@ -201,9 +255,14 @@ test("filling the open fields: only what is open is asked, and saving completes 
   await flow.getByRole("button", { name: /^Next/ }).click();
 
   // Data: a role for the card's dataset; "Unknown" only on the personal-data
-  // question, which has one; the training group folded and not counted.
+  // question, which has one; the training group folded and not counted. The
+  // dataset type is written as "Unknown" when empty, so it is not required.
   await flow.getByRole("radio", { name: "Training" }).click();
   await expect(flow.locator('[data-question="dataset.hasSensitivePersonalInformation"]').getByText("Unknown")).toHaveCount(1);
+  const type = flow.locator('[data-question="dataset.datasetType"]');
+  await expect(type.getByText("Required", { exact: true })).toHaveCount(0);
+  await expect(type).toContainText('Left empty, it is recorded as "Unknown".');
+  await expect(type.getByRole("button", { name: "Sentence structure" })).toHaveAttribute("title", /parse trees/);
   await expect(flow.locator("details").filter({ hasText: "How it was trained (optional)" })).not.toHaveAttribute("open", "");
   await flow.locator('[data-question="dataset.originatedBy"] input').fill("org");
   await flow.locator('[data-question="dataset.builtTime"] input').fill("2023-10-01");
@@ -211,13 +270,22 @@ test("filling the open fields: only what is open is asked, and saving completes 
   await expect(flow).toContainText("0 required fields left");
   await flow.getByRole("button", { name: /^Next/ }).click();
 
-  // Decisions: "Unknown" exists for personal data, not for the risk level.
+  // Decisions: one name in the list and the heading; "Unknown" exists for
+  // personal data, not for the risk level.
+  await expect(flow.getByRole("heading", { name: "Your decisions" })).toBeVisible();
+  await expect(stepButton(flow, "Your decisions")).toHaveAttribute("aria-current", "step");
   await expect(flow.locator('[data-question="model.useSensitivePersonalInformation"]').getByText("Unknown")).toHaveCount(1);
   await expect(flow.locator('[data-question="model.safetyRiskAssessment"]').getByText("Unknown")).toHaveCount(0);
   await flow.locator('[data-question="model.safetyRiskAssessment"]').getByRole("radio", { name: "Medium" }).click();
   await flow.getByRole("button", { name: /^Next/ }).click();
 
   await expect(flow).toContainText("Every required field is filled");
+  // What will be saved, as words, grouped like the steps.
+  await expect(flow.locator('[data-summary="model"]')).toContainText("Acme AI Lab");
+  await expect(flow.locator('[data-summary="model"]')).toContainText("Apr 15, 2025");
+  await expect(flow.locator('[data-summary="model"]')).toContainText("Adapter only");
+  await expect(flow.locator('[data-summary="data"]')).toContainText("Training");
+  await expect(flow.locator('[data-summary="legal"]')).toContainText("Medium");
   await flow.getByRole("button", { name: "Save" }).click();
 
   await expect(page.getByTestId("spdx3-band")).toContainText("Complete");
@@ -230,6 +298,55 @@ test("filling the open fields: only what is open is asked, and saving completes 
                  builtTime: "2023-10-01T00:00:00Z", releaseTime: "2023-10-24T00:00:00Z" }],
     relationships: [],
   });
+});
+
+test("a step left with required fields open is marked, and its empty fields turn red on return", async ({ page }) => {
+  await stub(page);
+  await openModels(page);
+  const flow = await openFlow(page);
+  // Each step says how many items it still holds.
+  await expect(stepButton(flow, "Training data")).toHaveAccessibleDescription("3 open");
+  await expect(stepButton(flow, "Model")).toHaveAccessibleDescription("2 open");
+  await next(flow);
+  // Left with two open: a warning mark, not a tick.
+  await expect(stepButton(flow, "Model").locator("svg")).toHaveCount(1);
+  await expect(stepButton(flow, "Model")).toHaveAccessibleDescription("2 open");
+  await flow.getByRole("button", { name: "Back" }).click();
+  await expect(flow.locator('[data-question="model.releaseTime"] [data-missing]')).toHaveAttribute("data-missing", "shown");
+});
+
+test("the review jumps to a step's first open field", async ({ page }) => {
+  await stub(page);
+  await openModels(page);
+  const flow = await openFlow(page);
+  await flow.locator('[data-question="document.createdBy"] input').first().fill("Acme AI Lab");
+  await stepButton(flow, "Review").click();
+  await expect(flow.locator('[data-summary="base"]')).toContainText("org/base");
+  await expect(flow.locator('[data-summary="base"]')).toContainText("no revision");
+  await flow.getByRole("button", { name: "Model: 1 open" }).click();
+  await expect(flow.locator('[data-question="model.releaseTime"] input')).toBeFocused();
+  await stepButton(flow, "Review").click();
+  await flow.getByRole("button", { name: "Training data: 3 open" }).click();
+  await expect(flow.locator('[data-question="dataset.originatedBy"] input').first()).toBeFocused();
+});
+
+test("the licence question says what the licence does for this model, and offers common ones", async ({ page }) => {
+  await stub(page);
+  await openModels(page);
+  const flow = await openFlow(page);
+  const lic = flow.locator('[data-question="model.license"]');
+  await expect(lic).toContainText("Recorded in the SPDX 3.0.1 document only");
+  await expect(lic).not.toContainText("next scan");
+  const list = await lic.locator("input").getAttribute("list");
+  expect(list).toBeTruthy();
+  await expect(flow.locator(`datalist[id="${list}"] option[value="apache-2.0"]`)).toHaveCount(1);
+});
+
+test("a declared model's licence takes effect at its next scan", async ({ page }) => {
+  await stub(page, { declared: true });
+  await openModels(page);
+  const flow = await openFlow(page);
+  await expect(flow.locator('[data-question="model.license"]')).toContainText("from this model's next scan");
 });
 
 test("a scan from before the document offers to write it", async ({ page }) => {
@@ -257,7 +374,6 @@ test("list answers take more rows, and an empty row stays while it is typed in",
   const state = await stub(page);
   await openModels(page);
   const flow = await openFlow(page);
-  await next(flow);
   const author = flow.locator('[data-question="document.createdBy"]');
   await author.getByRole("textbox").first().fill("Acme AI Lab");
   await author.getByRole("button", { name: "Add another" }).click();
@@ -266,7 +382,7 @@ test("list answers take more rows, and an empty row stays while it is typed in",
   await author.getByRole("textbox").nth(1).fill("");
   await expect(author.getByRole("textbox")).toHaveCount(2);
   await author.getByRole("textbox").nth(1).fill("Partner Lab");
-  await flow.getByRole("button", { name: "Review" }).click();
+  await stepButton(flow, "Review").click();
   await flow.getByRole("button", { name: "Save" }).click();
   await expect(page.getByTestId("spdx3-band")).toContainText("Complete");
   expect((state.saved as { document: unknown }).document).toEqual({
@@ -281,7 +397,7 @@ test("data the hub does not hold: an untouched one is dropped, a started one nee
   const state = await stub(page);
   await openModels(page);
   const flow = await openFlow(page);
-  await flow.getByRole("button", { name: "Training data" }).click();
+  await stepButton(flow, "Training data").click();
   await flow.getByRole("button", { name: "Add data the hub does not hold" }).click();
   await flow.getByRole("button", { name: "Add data the hub does not hold" }).click();
   const locals = flow.locator('[data-dataset="local"]');
@@ -289,12 +405,12 @@ test("data the hub does not hold: an untouched one is dropped, a started one nee
   await locals.nth(1).getByRole("button", { name: "Remove" }).click();
   await expect(locals).toHaveCount(1);
   await locals.first().getByLabel("Name").fill("Support logs 2025");
-  await flow.getByRole("button", { name: "Review" }).click();
+  await stepButton(flow, "Review").click();
   await expect(flow.getByRole("button", { name: "Save" })).toBeDisabled();
   await expect(flow).toContainText("the server would refuse them");
   await flow.getByRole("button", { name: /Training data: / }).click();
   await locals.first().locator('[data-question="dataset.downloadLocation"] input').fill("https://data.example.com/logs");
-  await flow.getByRole("button", { name: "Review" }).click();
+  await stepButton(flow, "Review").click();
   await expect(flow.getByRole("button", { name: "Save" })).toBeEnabled();
   await flow.getByRole("button", { name: "Save" }).click();
   await expect(page.getByTestId("spdx3-band")).toBeVisible();
@@ -307,7 +423,7 @@ test("a refused save shows the server's reasons and keeps the answers", async ({
   await stub(page, { refuse: ["model.releaseTime: a date must be written YYYY-MM-DDThh:mm:ssZ (UTC)"] });
   await openModels(page);
   const flow = await openFlow(page);
-  await flow.getByRole("button", { name: "Review" }).click();
+  await stepButton(flow, "Review").click();
   await flow.getByRole("button", { name: "Save" }).click();
   await expect(flow.getByRole("alert")).toContainText("The declaration was refused");
   await expect(flow.getByRole("alert")).toContainText("model.releaseTime");
@@ -324,10 +440,10 @@ test("a saved declaration is laid over the open fields when the questions reopen
   });
   await openModels(page);
   const flow = await openFlow(page);
-  await expect(flow.getByLabel("Revision (commit or tag, optional)")).toHaveValue("abc123");
-  await next(flow);
   await expect(flow.locator('[data-question="model.releaseTime"] input')).toHaveValue("2025-04-15");
-  await next(flow);
+  await stepButton(flow, "Base models").click();
+  await expect(flow.getByLabel("Revision (commit or tag, optional)")).toHaveValue("abc123");
+  await stepButton(flow, "Training data").click();
   await expect(flow.getByRole("radio", { name: "Evaluation" })).toHaveAttribute("aria-checked", "true");
 });
 
@@ -335,7 +451,6 @@ test("answers survive leaving the section; cancelling drops them and returns foc
   await stub(page);
   await openModels(page);
   let flow = await openFlow(page);
-  await next(flow);
   await flow.locator('[data-question="model.releaseTime"] input').fill("2025-04-15");
   await page.locator('a[href$="/components"]').first().click();
   await expect(page.getByTestId("ai-declaration")).toHaveCount(0);
@@ -345,7 +460,6 @@ test("answers survive leaving the section; cancelling drops them and returns foc
   await flow.getByRole("button", { name: "Cancel" }).click();
   await expect(page.getByRole("button", { name: "Fill in empty fields" })).toBeFocused();
   flow = await openFlow(page);
-  await next(flow);
   await expect(flow.locator('[data-question="model.releaseTime"] input')).toHaveValue("");
 });
 
@@ -353,7 +467,6 @@ test("single choices work from the keyboard as a radio group", async ({ page }) 
   await stub(page);
   await openModels(page);
   const flow = await openFlow(page);
-  await next(flow);
   const scope = flow.locator('[data-question="model.weightsScope"]');
   await scope.getByRole("radio", { name: "Full weights" }).focus();
   await page.keyboard.press("ArrowRight");
@@ -366,19 +479,24 @@ test("the questions have no accessibility violations", async ({ page }) => {
   await stub(page);
   await openModels(page);
   const flow = await openFlow(page);
-  for (let i = 0; i < 4; i++) {
+  await stepButton(flow, "Base models").click();
+  for (let i = 0; i < 5; i++) {
     const axe = await new AxeBuilder({ page }).include('[data-testid="ai-declaration"]')
       .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
     expect(axe.violations).toEqual([]);
-    await next(flow);
+    if (i < 4) await next(flow);
   }
 });
 
-test("the artifact cards write the document and take a declaration file", async ({ page }) => {
-  const state = await stub(page);
+test("the artifact cards label the check, rebuild only a document that is behind, and take a declaration file", async ({ page }) => {
+  const state = await stub(page, { upToDate: false });
   await openModels(page);
   await page.getByRole("navigation").locator('a[href$="/artifacts"]').first().click();
-  await page.getByRole("button", { name: "Write SPDX 3.0.1" }).click();
+  await expect(page.getByRole("link", { name: /^Check JSON/ })).toBeVisible();
+  await expect(page.getByText("cannot be uploaded back as an SBOM input")).toHaveCount(0);
+  await expect(page.getByText("Fill in empty fields on Models & datasets")).toBeVisible();
+  await expect(page.getByText("rebuild it to bring it up to date")).toBeVisible();
+  await page.getByRole("button", { name: "Rebuild with the saved declaration" }).click();
   await expect.poll(() => state.exported).toBe(1);
   await page.locator('input[type="file"][accept*="json"]').setInputFiles({
     name: "decl.json",
@@ -386,6 +504,25 @@ test("the artifact cards write the document and take a declaration file", async 
     buffer: Buffer.from(JSON.stringify({ schema: "bomlens-ai-declaration/1", model: { releaseTime: "2025-04-15T00:00:00Z" } })),
   });
   await expect.poll(() => state.saved).toEqual({ schema: "bomlens-ai-declaration/1", model: { releaseTime: "2025-04-15T00:00:00Z" } });
+});
+
+test("a document that matches its declaration offers no rebuild", async ({ page }) => {
+  await stub(page);
+  await openModels(page);
+  await page.getByRole("navigation").locator('a[href$="/artifacts"]').first().click();
+  await expect(page.getByRole("link", { name: /^Check JSON/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Rebuild with the saved declaration" })).toHaveCount(0);
+});
+
+test("the Overview says where the document stands and opens the questions", async ({ page }) => {
+  await stub(page);
+  await runScan(page);
+  const line = page.getByTestId("ai-summary-spdx3");
+  await expect(line).toContainText("Draft");
+  await expect(line).toContainText("5 required fields left");
+  await line.getByRole("link", { name: "Fill in empty fields in Models & datasets" }).click();
+  await expect(page.getByTestId("ai-declaration")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Tell us about the model" })).toBeVisible();
 });
 
 test("filling a declared model's fields keeps the base models and datasets its declaration named", async ({ page }) => {
@@ -397,7 +534,7 @@ test("filling a declared model's fields keeps the base models and datasets its d
   const state = await stub(page, { declared: true, saved: original });
   await openModels(page);
   const flow = await openFlow(page);
-  await flow.getByRole("button", { name: "Review" }).click();
+  await stepButton(flow, "Review").click();
   await flow.getByRole("button", { name: "Save" }).click();
   await expect(page.getByTestId("spdx3-band")).toBeVisible();
   const saved = state.saved as { model: { baseModels: unknown[] }; datasets: { ref?: string }[] };
@@ -409,7 +546,7 @@ test("a dataset's sources can be declared: by hub id, or named in words with a l
   const state = await stub(page);
   await openModels(page);
   const flow = await openFlow(page);
-  await flow.getByRole("button", { name: "Training data" }).click();
+  await stepButton(flow, "Training data").click();
   const box = flow.locator('[data-sources="huggingface:org/ds"]');
   await expect(box).toContainText("No source is on record for this data.");
   await box.getByLabel("Source on HuggingFace (id)").fill("allenai/c4");
@@ -422,16 +559,39 @@ test("a dataset's sources can be declared: by hub id, or named in words with a l
   const axe = await new AxeBuilder({ page }).include('[data-testid="ai-declaration"]')
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
   expect(axe.violations).toEqual([]);
-  await flow.getByRole("button", { name: "Review" }).click();
+  await stepButton(flow, "Review").click();
   await expect(flow.getByRole("button", { name: "Save" })).toBeDisabled();
   await flow.getByRole("button", { name: /Training data: / }).click();
   await box.getByLabel("Licence of source 2", { exact: true }).fill("cc-by-4.0");
-  await flow.getByRole("button", { name: "Review" }).click();
+  await stepButton(flow, "Review").click();
   await flow.getByRole("button", { name: "Save" }).click();
   await expect(page.getByTestId("spdx3-band")).toBeVisible();
   const saved = state.saved as { datasets: { ref?: string; sources?: unknown[] }[] };
   expect(saved.datasets.find((d) => d.ref === "huggingface:org/ds")?.sources).toEqual([
     { ref: "huggingface:allenai/c4", relation: "extended" },
     { name: "Old crawl", license: "cc-by-4.0", relation: "other" },
+  ]);
+});
+
+test("a hub source typed and not added is added when the step is left", async ({ page }) => {
+  const state = await stub(page);
+  await openModels(page);
+  const flow = await openFlow(page);
+  await stepButton(flow, "Training data").click();
+  const box = flow.locator('[data-sources="huggingface:org/ds"]');
+  // Not an id: the step is not left, and the box says why.
+  await box.getByLabel("Source on HuggingFace (id)").fill("not an id");
+  await stepButton(flow, "Review").click();
+  await expect(flow.getByRole("heading", { name: "What data did you use?" })).toBeVisible();
+  await expect(box).toContainText("you stayed on this step");
+  await expect(box.getByLabel("Source on HuggingFace (id)")).toBeFocused();
+  await box.getByLabel("Source on HuggingFace (id)").fill("allenai/c4");
+  await stepButton(flow, "Review").click();
+  await expect(flow.locator('[data-summary="data"]')).toContainText("allenai/c4");
+  await flow.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByTestId("spdx3-band")).toBeVisible();
+  const saved = state.saved as { datasets: { ref?: string; sources?: unknown[] }[] };
+  expect(saved.datasets.find((d) => d.ref === "huggingface:org/ds")?.sources).toEqual([
+    { ref: "huggingface:allenai/c4", relation: "extended" },
   ]);
 });

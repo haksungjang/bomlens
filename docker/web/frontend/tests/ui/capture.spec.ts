@@ -635,6 +635,7 @@ async function stubSpdx3(page: Page) {
 }
 
 const FILL: Record<Lang, string> = { en: "Fill in empty fields", ko: "빈 항목 채우기" };
+const FIELDS_TOGGLE: Record<Lang, string> = { en: "Show the document's fields", ko: "문서 항목 보기" };
 
 for (const lang of ["en", "ko"] as Lang[]) {
   test(`@capture SPDX 3.0.1 band - ${lang}`, async ({ page }) => {
@@ -643,6 +644,8 @@ for (const lang of ["en", "ko"] as Lang[]) {
     await runScan(page, "model", "1.0");
     await NAV(page, "models").click();
     await page.getByTestId("spdx3-band").waitFor();
+    // The field table is folded for a scanned model; the image shows it open.
+    await page.getByText(FIELDS_TOGGLE[lang]).click();
     await page.locator('tr[data-field="releaseTime"]').first().waitFor();
     await killAnim(page);
     await settleMain(page);

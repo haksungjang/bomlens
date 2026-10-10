@@ -14,7 +14,8 @@
     "run": "스캔 실행",
     "running": "스캔 중…",
     "demoRunDisabled": "이 데모는 스캔을 실행할 수 없습니다. 뒤에 실행할 컴퓨터가 없는 정적 페이지입니다.",
-    "demoRunDisabledCta": "내 코드에서 실행해 보기"
+    "demoRunDisabledCta": "내 코드에서 실행해 보기",
+    "projectHintDeclare": "모델 정보 직접 입력에서는 프로젝트 이름이 모델 이름이 되고, 버전이 모델 버전이 됩니다."
   },
   "source": {
     "label": "스캔 대상",
@@ -51,7 +52,7 @@
     "dockerPlaceholder": "nginx:latest",
     "aiModel": "AI 모델 또는 데이터셋",
     "aiModelPlaceholder": "google-bert/bert-base-uncased, datasets/allenai/tulu-3-sft-mixture 또는 figshare.com/articles/.../33412285",
-    "aiModelHint": "HuggingFace 모델 ID를 '조직/모델' 형식으로 입력하거나(예: Qwen/Qwen2.5-0.5B), HuggingFace 데이터셋을 'datasets/조직/이름' 형식이나 주소로, 또는 Figshare 항목의 페이지 주소나 DOI, 항목 번호를 입력합니다. 데이터셋은 'datasets/' 접두가 있어야 하며, 없으면 모델 ID로 읽습니다. 네트워크로 정보를 가져와 CycloneDX ML-BOM을 생성합니다.",
+    "aiModelHint": "HuggingFace 모델 ID를 '조직/모델' 형식으로 입력하거나(예: Qwen/Qwen2.5-0.5B), HuggingFace 데이터셋을 'datasets/조직/이름' 형식이나 주소로, 또는 Figshare 항목의 페이지 주소나 DOI, 항목 번호를 입력합니다. 데이터셋은 'datasets/' 접두가 있어야 하며, 없으면 모델 ID로 읽습니다. 네트워크로 정보를 가져와 CycloneDX ML-BOM과 SPDX 3.0.1 AI 문서를 생성합니다.",
     "aiModelUnavailable": "AI 모델 SBOM은 Docker가 실행 중이어야 사용할 수 있습니다(AIBOM 이미지를 sibling 컨테이너로 실행합니다).",
     "modelUpload": "모델 파일",
     "modelUploadHint": "모델 파일의 헤더를 직접 읽습니다. HuggingFace 계정과 네트워크가 필요 없어 공개하지 않은 모델도 스캔할 수 있습니다. 채울 수 있는 정보는 형식마다 다릅니다. GGUF는 이름과 라이선스, 아키텍처를 담고 있지만 safetensors는 대개 텐서 정보만 있습니다. 8GB가 넘는 파일은 파일을 그 자리에서 읽는 CLI(--model-file)를 쓰십시오.",
@@ -235,13 +236,15 @@
       },
       "spdx3": {
         "title": "SPDX 3.0.1 AI 문서",
-        "desc": "모델과 데이터셋, 계보를 SPDX 3.0.1 AI와 Dataset 프로파일로 담은 문서와, 어떤 항목이 채워졌는지 보여 주는 검사 결과입니다. SBOM 업로드 입력으로는 다시 쓸 수 없습니다.",
+        "desc": "모델과 데이터셋, 계보를 SPDX 3.0.1 AI와 Dataset 프로파일로 담은 문서와, 어떤 항목이 채워졌는지 보여 주는 검사 결과입니다.",
         "draftNote_one": "필수 항목 {{count}}개가 비어 있어 아직 SPDX 검증을 통과하지 못합니다.",
-        "draftNote_other": "필수 항목 {{count}}개가 비어 있어 아직 SPDX 검증을 통과하지 못합니다."
+        "draftNote_other": "필수 항목 {{count}}개가 비어 있어 아직 SPDX 검증을 통과하지 못합니다.",
+        "uploadNote": "SBOM 업로드 입력으로는 다시 쓸 수 없습니다.",
+        "behindNote": "문서를 만든 뒤에 저장한 선언이나 BomLens 버전이 바뀌었습니다. 다시 만들면 반영됩니다."
       },
       "aiDeclaration": {
         "title": "AI 문서 선언 파일",
-        "desc": "직접 입력한 값만 담은 파일입니다. 스캔이 채운 값은 들어가지 않습니다. 고쳐서 여기에 다시 올리거나 CLI의 --ai-declare로 넘길 수 있습니다."
+        "desc": "직접 입력한 값만 담은 파일입니다. 스캔이 채운 값은 들어가지 않습니다. 모델과 데이터셋 화면의 \"빈 항목 채우기\"로 화면에서 고칠 수 있고, 파일을 고쳐서 여기에 다시 올리거나 CLI의 --ai-declare로 넘길 수도 있습니다."
       }
     },
     "download": "다운로드",
@@ -394,10 +397,11 @@
     "csvTitle": "제목",
     "artifactFiles": "(파일 {{count}}개)",
     "emptyForm": "빈 양식",
-    "spdx3Export": "SPDX 3.0.1로 내보내기",
     "declarationUpload": "선언 파일 올리기",
     "declarationNotJson": "JSON 파일이 아닙니다.",
-    "declarationRefused": "선언이 거부되었습니다: {{reason}}"
+    "declarationRefused": "선언이 거부되었습니다: {{reason}}",
+    "checkFormat": "검사 결과 {{format}}",
+    "spdx3Rebuild": "저장한 선언을 반영해 다시 만들기"
   },
   "deps": {
     "loading": "의존성을 불러오는 중…",
@@ -797,7 +801,12 @@
     "countLine": "모델 {{models}}개, 데이터셋 {{datasets}}개",
     "viewModels": "모델 상세 보기",
     "viewConformance": "적합성 검사 보기",
-    "disclaimer": "문서화 준비용 안내이며 법적 판단이 아닙니다."
+    "disclaimer": "문서화 준비용 안내이며 법적 판단이 아닙니다.",
+    "spdx3Open_one": "필수 항목 {{count}}개 남음",
+    "spdx3Open_other": "필수 항목 {{count}}개 남음",
+    "spdx3Done": "필수 항목을 모두 채움",
+    "spdx3Fill": "모델과 데이터셋 화면에서 빈 항목 채우기",
+    "spdx3View": "모델과 데이터셋 화면에서 보기"
   },
   "g7": {
     "empty": "기록된 적합성 검사가 없습니다.",
@@ -1310,7 +1319,12 @@
       "draftNote_one": "필수 항목 {{count}}개가 비어 있어 아직 SPDX 검증을 통과하지 못합니다. 도구는 값을 추정해서 채우지 않습니다.",
       "draftNote_other": "필수 항목 {{count}}개가 비어 있어 아직 SPDX 검증을 통과하지 못합니다. 도구는 값을 추정해서 채우지 않습니다.",
       "completeNote": "필수 항목을 모두 채웠습니다. 값은 스캔 결과나 직접 입력한 선언에서 왔고, 추정한 값은 없습니다.",
-      "refused": "저장된 선언이 이 스캔과 맞지 않아 선언 없이 문서를 만들었습니다. 항목을 다시 채우거나 파일을 고치세요."
+      "refused": "저장된 선언이 이 스캔과 맞지 않아 선언 없이 문서를 만들었습니다. 항목을 다시 채우거나 파일을 고치세요.",
+      "consumerNote": "다른 곳에서 공개한 모델이라면, 이 문서를 직접 배포할 때만 빈 항목을 채우면 됩니다.",
+      "missingAt": "비어 있는 필수 항목: {{list}}",
+      "missingItem_one": "{{label}} {{count}}개",
+      "missingItem_other": "{{label}} {{count}}개",
+      "documentLabel": "문서 작성 정보"
     },
     "segment": {
       "filled": "채움",
@@ -1341,7 +1355,11 @@
       "caption": "SPDX 3.0.1 문서 기준",
       "datasetFields_one": "데이터셋 {{count}}개의 항목",
       "datasetFields_other": "데이터셋 {{count}}개의 항목",
-      "notLegalAdvice": "이 판정은 법적 자문이 아닌 안내입니다."
+      "notLegalAdvice": "이 판정은 법적 자문이 아닌 안내입니다.",
+      "toggle": "문서 항목 보기",
+      "declaredDatasets": "선언에 적은 데이터셋",
+      "datasetMissing_one": "필수 누락 {{count}}개",
+      "datasetMissing_other": "필수 누락 {{count}}개"
     }
   },
   "aiDecl": {
@@ -1350,14 +1368,14 @@
       "base": "기반 모델",
       "model": "모델 정보",
       "data": "학습 데이터",
-      "legal": "법무 확인 항목",
+      "legal": "직접 판단할 항목",
       "preview": "미리보기"
     },
     "question": {
       "base": "각 기반 모델의 어느 리비전에서 시작했나요?",
       "model": "모델 정보를 알려 주세요",
       "data": "학습에 사용한 데이터는 무엇인가요?",
-      "legal": "직접 판단해야 하는 항목",
+      "legal": "직접 판단할 항목",
       "preview": "확인하고 저장하기"
     },
     "questionHint": {
@@ -1429,7 +1447,7 @@
       "add": {
         "label": "기반 모델(HuggingFace ID)",
         "button": "추가",
-        "hint": "이 모델을 미세조정하거나 양자화, 병합할 때 출발점이 된 모델입니다. 스캔할 때 허브에서 계보와 라이선스를 읽습니다. 처음부터 학습한 모델이면 비워 두세요."
+        "hint": "이 모델을 미세조정하거나 양자화, 병합할 때 출발점이 된 모델입니다. 스캔할 때 허브에서 계보와 라이선스를 읽습니다."
       }
     },
     "group": {
@@ -1450,13 +1468,19 @@
     "autoSupplier": "게시자 {{value}}",
     "preview": {
       "complete": "필수 항목을 모두 채웠습니다. 저장하면 문서가 완성됩니다.",
-      "open_one": "아직 {{count}}개 항목이 남았습니다:",
-      "open_other": "아직 {{count}}개 항목이 남았습니다:",
+      "open_one": "아직 {{count}}개 항목이 남았습니다.",
+      "open_other": "아직 {{count}}개 항목이 남았습니다.",
       "openInStep_one": "{{count}}개 남음",
       "openInStep_other": "{{count}}개 남음",
       "draftOk": "지금 저장하고 나중에 마저 채울 수 있습니다. 그때까지 문서는 초안으로 남습니다.",
       "file": "저장할 선언 파일",
-      "blocked": "위에 표시한 항목을 고친 뒤 저장하세요. 그대로 두면 서버가 거부합니다."
+      "blocked": "위에 표시한 항목을 고친 뒤 저장하세요. 그대로 두면 서버가 거부합니다.",
+      "stepDone": "남은 항목 없음",
+      "nothing": "입력한 값이 없습니다.",
+      "noBase": "기반 모델 없음",
+      "revision": "리비전 {{revision}}",
+      "noRevision": "리비전 없음",
+      "role": "모델이 쓴 방식"
     },
     "saveRefused": "선언이 거부되어 저장하지 않았습니다.",
     "saveBusy": "이 스캔이 다시 실행 중입니다. 끝난 뒤에 저장하세요.",
@@ -1478,18 +1502,25 @@
       "amber": "주황",
       "red": "적색",
       "audio": "오디오",
-      "categorical": "범주형",
+      "categorical": "범주",
       "graph": "그래프",
       "image": "이미지",
       "numeric": "수치",
       "other": "기타",
-      "sensor": "센서",
+      "sensor": "센서 측정값",
       "structured": "표 형식",
-      "syntactic": "구문",
+      "syntactic": "문장 구조 표시",
       "text": "텍스트",
       "timeseries": "시계열",
-      "timestamp": "시각",
-      "video": "동영상"
+      "timestamp": "날짜와 시각",
+      "video": "동영상",
+      "model": "모델",
+      "data": "데이터",
+      "clickthrough": "약관 동의 후 받기",
+      "directDownload": "바로 내려받기",
+      "query": "질의로 받기",
+      "registration": "가입 후 받기",
+      "scrapingScript": "수집 스크립트로 받기"
     },
     "document": {
       "createdBy": {
@@ -1591,8 +1622,10 @@
       },
       "license": {
         "label": "모델 라이선스",
-        "hint": "모델을 배포할 라이선스를 HuggingFace 라이선스 태그나 SPDX 라이선스 ID로 적습니다. 모델 정보 직접 입력으로 만든 모델은 다음 스캔부터 이 라이선스로 위험을 판정하고, 스캔한 모델에서는 SPDX 3.0.1 문서에만 기록합니다.",
-        "example": "apache-2.0"
+        "hint": "SPDX 3.0.1 문서에만 기록하고, 스캔한 모델의 위험 판정에는 쓰지 않습니다. HuggingFace 라이선스 태그나 SPDX 라이선스 ID로 적거나 목록에서 고르세요.",
+        "example": "apache-2.0",
+        "hintCreate": "이 모델의 위험 판정에 쓰입니다. 비워 두면 라이선스 판정이 \"검토 필요\"로 나옵니다. HuggingFace 라이선스 태그나 SPDX 라이선스 ID로 적거나 목록에서 고르세요.",
+        "hintDeclared": "이 모델을 다시 스캔하면 그때부터 이 라이선스로 위험을 판정합니다. 그 전까지 문서에는 확인할 항목으로 표시됩니다."
       }
     },
     "dataset": {
@@ -1623,7 +1656,8 @@
         "hint": "외부에 공개하지 않았다면 내부에서 처음 쓰기 시작한 날짜를 적으세요."
       },
       "datasetType": {
-        "label": "데이터 종류"
+        "label": "데이터 종류",
+        "hint": "여러 개를 고를 수 있습니다. 선택지 위에 포인터를 올리면 설명이 나옵니다."
       },
       "packageVersion": {
         "label": "버전"
@@ -1672,7 +1706,7 @@
     "readAtScan": "스캔 때 읽음",
     "startScan": "스캔 시작",
     "questionHintCreate": {
-      "base": "이 모델의 출발점이 된 모델이 있으면 추가하세요. 리비전을 적으면 계보를 그대로 재현할 수 있습니다.",
+      "base": "처음부터 학습한 모델인지, 다른 모델을 미세조정하거나 양자화하거나 병합해서 만든 모델인지 고르세요. 기반 모델에서 출발했다면 그 모델의 ID를 추가합니다.",
       "model": "허브에 공개하지 않은 모델이라 허브에서 알 수 없는 항목입니다.",
       "data": "모델을 학습하거나 평가한 데이터를 추가하세요. HuggingFace ID로 추가하거나, 허브에 없는 데이터로 추가할 수 있습니다.",
       "legal": "스캔이 읽을 수 있는 사실이 아니라 판단이 필요한 항목입니다. 확인한 것만 답하세요.",
@@ -1694,6 +1728,35 @@
       "nameN": "문장으로 적는 원천 {{n}}",
       "licenseN": "원천 {{n}}의 라이선스",
       "relationN": "원천 {{n}}의 사용 방식"
+    },
+    "questionCreate": {
+      "base": "이 모델은 다른 모델에서 출발했나요?"
+    },
+    "origin": {
+      "scratch": "처음부터 학습함",
+      "base": "기반 모델에서 출발함",
+      "scratchNote": "기반 모델 없이 기록합니다. 문서에는 이 모델이 어떤 모델에서 만들어졌는지가 남지 않습니다."
+    },
+    "pendingBlocked": "추가하지 않은 ID가 형식에 맞지 않아 이 단계에 머물렀습니다. 고치거나 지운 뒤 다시 넘어가세요.",
+    "fallbackHint": "비워 두면 \"모름\"으로 기록됩니다.",
+    "adapterNoBase": {
+      "create": "어댑터는 기반 모델 가중치가 있어야 실행됩니다. 기반 모델 단계에서 기반 모델을 추가하세요. 추가하지 않으면 문서에 확인할 항목으로 남습니다.",
+      "fill": "어댑터는 기반 모델 가중치가 있어야 실행되는데, 스캔이 기반 모델을 찾지 못했습니다. 문서에 확인할 항목으로 남습니다."
+    },
+    "enumHint": {
+      "audio": "음성이나 음악 같은 소리 녹음",
+      "categorical": "정해진 분류 값(예: 국가, 상품 종류)",
+      "graph": "노드와 그 연결로 이루어진 데이터(예: 지식 그래프)",
+      "image": "사진이나 그림",
+      "numeric": "측정값이나 개수 같은 숫자",
+      "other": "다른 종류에 맞지 않는 데이터",
+      "sensor": "센서가 측정한 값(예: 온도, 가속도)",
+      "structured": "행과 열로 이루어진 표",
+      "syntactic": "품사나 구문 트리처럼 문장 구조를 표시한 텍스트",
+      "text": "문장이나 문서",
+      "timeseries": "시간 순서로 기록한 값",
+      "timestamp": "날짜와 시각 기록",
+      "video": "동영상 녹화"
     }
   }
 }

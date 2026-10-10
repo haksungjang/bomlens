@@ -188,6 +188,25 @@ export interface BandSegment {
   count: number;
 }
 
+/** The elements that still have required fields open, with how many each. */
+export function missingByElement(check: Spdx3Check): { type: string; label: string; count: number }[] {
+  return check.elements
+    .map((e) => ({ type: e.type, label: e.label, count: e.fields.filter((f) => f.status === "missingRequired").length }))
+    .filter((e) => e.count > 0);
+}
+
+/** The datasets the model uses with no role stated, by where they were named:
+ *  on the scanned model's card, or in the publisher's own declaration (a
+ *  model described from a declaration has no card). */
+export function rolesNotStated(check: Spdx3Check): { card: string[]; declared: string[] } {
+  const pick = (note: string) =>
+    check.relationships
+      .filter((r) => r.status === "review" && r.note === note)
+      .map((r) => r.toLabel)
+      .filter((x): x is string => Boolean(x));
+  return { card: pick("card-declared dataset, role not stated"), declared: pick("declared dataset, role not stated") };
+}
+
 export function bandSegments(counts: Partial<Spdx3Counts>): BandSegment[] {
   const n = (k: FieldStatus) => counts[k] ?? 0;
   return [
@@ -269,6 +288,34 @@ export const MODEL_LICENSE_FIELD: MapField = {
   source: { kind: "user" },
   declarable: true,
 };
+
+/** Licence tags a model or dataset on HuggingFace most often carries, offered
+ *  as suggestions where a licence is typed. Each is a hub licence tag the
+ *  converter accepts (docker/lib/ai-risk-knowledge.json). */
+export const COMMON_LICENSES = [
+  "apache-2.0",
+  "mit",
+  "bsd-3-clause",
+  "cc-by-4.0",
+  "cc-by-sa-4.0",
+  "cc-by-nc-4.0",
+  "cc-by-nc-sa-4.0",
+  "cc0-1.0",
+  "openrail",
+  "openrail++",
+  "bigscience-openrail-m",
+  "creativeml-openrail-m",
+  "bigcode-openrail-m",
+  "gpl-3.0",
+  "agpl-3.0",
+  "lgpl-3.0",
+  "mpl-2.0",
+  "llama3.1",
+  "llama3.2",
+  "llama3.3",
+  "llama4",
+  "gemma",
+];
 
 export interface Declaration {
   schema: string;
@@ -579,7 +626,7 @@ export interface Issue {
 /** Required and left open when empty. A required field with a fallback (the
  *  dataset type's NOASSERTION) is written as that instead, so the check does
  *  not count it as open and neither does this. */
-function required(f: MapField): boolean {
+export function required(f: MapField): boolean {
   return f.min >= 1 && f.source.fallback === undefined;
 }
 
@@ -777,4 +824,141 @@ export function stepOf(issue: Issue): StepId {
     issue.field === "safetyRiskAssessment"
     ? "legal"
     : "model";
+}
+
+/** How many open items (required fields left empty, values with a problem)
+ *  each step still holds. */
+export function openByStep(list: Issue[]): Partial<Record<StepId, number>> {
+  const out: Partial<Record<StepId, number>> = {};
+  for (const i of list) {
+    const s = stepOf(i);
+    out[s] = (out[s] ?? 0) + 1;
+  }
+  return out;
+}
+
+/** Where the questions open: the first step that still has something open,
+ *  so a person is not walked through steps with nothing left to answer. */
+export function firstOpenStep(steps: StepId[], list: Issue[]): StepId {
+  const open = openByStep(list);
+  return steps.find((s) => s !== "preview" && (open[s] ?? 0) > 0) ?? steps[0];
+}
+
+/** The first open item of a step, so jumping there can put the cursor on it. */
+export function firstOpenIn(step: StepId, list: Issue[]): Issue | undefined {
+  return list.find((i) => stepOf(i) === step);
+}
+
+/** The model's weights are declared an adapter while no base model is named.
+ *  The converter then cannot record what the adapter runs on and lists it for
+ *  review; quantized and merged weights are not treated so. */
+export function adapterWithoutBase(decl: Declaration): boolean {
+  return decl.model?.weightsScope === "adapter" && !(decl.model.baseModels ?? []).length;
+}
+
+// ---- what the review step shows -------------------------------------------------------
+
+export interface SummaryRow {
+  /** "document", "model" or "datasets[i]": where the value sits. */
+  where: string;
+  ns: "document" | "model" | "dataset";
+  field: MapField;
+  value: Value;
+}
+
+export interface SummaryGroup {
+  step: StepId;
+  /** A dataset's name; null for the step's own rows. */
+  title: string | null;
+  /** The dataset's place in the declaration, for a dataset's group. */
+  datasetIndex?: number;
+  rows: SummaryRow[];
+}
+
+/**
+ * What will be saved, grouped as the steps ask it: every answer given, field
+ * by field, with each dataset as its own group. Empty answers are left out
+ * (the file leaves them out too).
+ */
+export function summaryGroups(index: FieldIndex, decl: Declaration, steps: StepId[]): SummaryGroup[] {
+  const out: SummaryGroup[] = [];
+  const row = (where: string, ns: SummaryRow["ns"], field: MapField | undefined, value: unknown) =>
+    field && !isEmpty(value) && !(Array.isArray(value) && value.every((x) => isEmpty(x)))
+      ? [{ where, ns, field, value: value as Value }]
+      : [];
+  const modelRows = (ids: string[]) =>
+    ids.flatMap((k) => row("model", "model", k === "license" ? MODEL_LICENSE_FIELD : index.ai_AIPackage[k], decl.model?.[k]));
+  for (const s of steps) {
+    if (s === "model") {
+      const ids = decl.model ? Object.keys(decl.model).filter((k) => k !== "baseModels") : [];
+      const main = ids.filter((k) => k === "license" || (index.ai_AIPackage[k] && !index.ai_AIPackage[k].judgment && !TRAINING_FIELDS.includes(k)));
+      out.push({
+        step: s,
+        title: null,
+        rows: [...row("document", "document", index.document.createdBy, decl.document.createdBy), ...modelRows(main)],
+      });
+    } else if (s === "data") {
+      decl.datasets.forEach((d, i) => {
+        if (isBlankLocal(d)) return;
+        const where = `datasets[${i}]`;
+        const rows = Object.keys(d)
+          .filter((k) => k !== "name")
+          .flatMap((k) => row(where, "dataset", index.dataset_DatasetPackage[k], d[k]));
+        out.push({
+          step: s,
+          title: d.ref ? d.ref.replace(/^huggingface:/, "") : String(d.name ?? "") || null,
+          datasetIndex: i,
+          rows,
+        });
+      });
+      const train = decl.model ? TRAINING_FIELDS.filter((k) => k in decl.model!) : [];
+      if (train.length) out.push({ step: s, title: null, rows: modelRows(train) });
+    } else if (s === "legal") {
+      out.push({ step: s, title: null, rows: modelRows(judgmentFields(index, decl)) });
+    }
+  }
+  return out;
+}
+
+// ---- how a value in the check reads ---------------------------------------------------
+
+/** Fields whose written value is a vocabulary word the screens have a label for. */
+const ENUM_FIELDS = new Set([
+  "primaryPurpose",
+  "useSensitivePersonalInformation",
+  "autonomyType",
+  "safetyRiskAssessment",
+  "weightsScope",
+  "datasetType",
+  "hasSensitivePersonalInformation",
+  "datasetAvailability",
+  "confidentialityLevel",
+]);
+
+export type DisplayValue =
+  | { kind: "date"; date: Date }
+  | { kind: "enum"; values: string[] }
+  | { kind: "text"; text: string };
+
+/**
+ * A value as the check writes it ("2026-10-01T00:00:00Z", "adapter",
+ * "text, audio"), read so the screens can show a date in the reader's locale
+ * and a vocabulary word with the label the questions use.
+ */
+export function readDisplay(fieldId: string, display: string): DisplayValue {
+  if (DATE_TIME_RE.test(display) && realDateTime(display)) return { kind: "date", date: new Date(display) };
+  if (ENUM_FIELDS.has(fieldId)) return { kind: "enum", values: display.split(",").map((s) => s.trim()).filter(Boolean) };
+  return { kind: "text", text: display };
+}
+
+/** "2026-10-01T00:00:00Z" as a date in the reader's locale (the day as the
+ *  declaration wrote it, in UTC, so no time zone moves it a day). */
+export function formatDay(v: string, lang: string): string {
+  const d = new Date(v);
+  if (!DATE_TIME_RE.test(v) || Number.isNaN(d.getTime())) return v;
+  try {
+    return new Intl.DateTimeFormat(lang || undefined, { dateStyle: "medium", timeZone: "UTC" }).format(d);
+  } catch {
+    return v.slice(0, 10);
+  }
 }

@@ -1129,6 +1129,10 @@ export interface Spdx3Summary {
    *  the reasons) means it no longer fits the scan and the document was
    *  written without it; this holds until the declaration is fixed. */
   declaration?: { state: "none" | "applied" | "refused"; reasons: string[] };
+  /** The document still matches the SBOM, the saved declaration and this
+   *  converter. False when rebuilding it would change it (a declaration
+   *  edited outside the screens, a newer BomLens). */
+  upToDate?: boolean;
 }
 
 /** Outcome of writing the AI document or saving a declaration. */

@@ -217,6 +217,10 @@ export function ResultSection({
           }
           onResultPatch={onResultPatch}
           declaredScan={result.scanConfig?.source === "ai-declare"}
+          // The Overview's "fill" link carries ?fill=1; dropped once the
+          // questions open, so a reload does not open them again.
+          autoFill={query?.fill === "1"}
+          onAutoFill={() => onQueryChange?.({})}
         />
       ) : null;
     }

@@ -10,7 +10,16 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Disclosure } from "@/components/ui/disclosure";
 import type { Spdx3Summary } from "@/lib/api";
-import { bandSegments, type CheckElement, type FieldStatus, type Spdx3Check } from "@/lib/aiDeclaration";
+import {
+  bandSegments,
+  formatDay,
+  missingByElement,
+  readDisplay,
+  rolesNotStated,
+  type CheckElement,
+  type FieldStatus,
+  type Spdx3Check,
+} from "@/lib/aiDeclaration";
 import { cn } from "@/lib/utils";
 
 const SEGMENT_COLOR: Record<string, string> = {
@@ -33,6 +42,8 @@ export function Spdx3StatusBand({
   onFill,
   onWrite,
   focusFill,
+  check,
+  publisher = false,
 }: {
   summary: Spdx3Summary | null | undefined;
   /** This server can write the document and save a declaration. */
@@ -43,6 +54,12 @@ export function Spdx3StatusBand({
   onWrite: () => void;
   /** The question flow just closed: give focus back to the button that opened it. */
   focusFill?: boolean;
+  /** The per-field detail, to say where the open required fields are. */
+  check?: Spdx3Check | null;
+  /** The person reading is the model's publisher (a model described from a
+   *  declaration). Otherwise they scanned someone else's model, and filling
+   *  the document matters only if they publish it themselves. */
+  publisher?: boolean;
 }) {
   const { t } = useTranslation();
   const fillRef = useRef<HTMLButtonElement>(null);
@@ -75,6 +92,7 @@ export function Spdx3StatusBand({
   const total = segments.reduce((n, s) => n + s.count, 0) || 1;
   const missing = summary.counts.missingRequired ?? 0;
   const refused = summary.declaration?.state === "refused";
+  const where = check && missing > 0 ? missingByElement(check) : [];
 
   return (
     <Card data-testid="spdx3-band">
@@ -117,7 +135,22 @@ export function Spdx3StatusBand({
         </ul>
         <p className="text-xs text-muted-foreground">
           {summary.draft ? t("spdx3.band.draftNote", { count: missing }) : t("spdx3.band.completeNote")}
+          {summary.draft && !publisher && <> {t("spdx3.band.consumerNote")}</>}
         </p>
+        {where.length > 0 && (
+          <p className="text-xs text-foreground" data-testid="spdx3-missing-where">
+            {t("spdx3.band.missingAt", {
+              list: where
+                .map((e) =>
+                  t("spdx3.band.missingItem", {
+                    label: e.type === "CreationInfo" ? t("spdx3.band.documentLabel") : e.label,
+                    count: e.count,
+                  }),
+                )
+                .join(", "),
+            })}
+          </p>
+        )}
         {refused && (
           <div
             role="status"
@@ -206,7 +239,11 @@ export function Spdx3FieldTable({
               <tr key={f.id} className="border-b last:border-0" data-field={f.id}>
                 <td className="px-3 py-2 align-top">{t(`aiDecl.${ns}.${f.id}.label`, { defaultValue: f.id })}</td>
                 <td className="px-3 py-2 align-top break-all">
-                  {f.display ?? <span className="text-muted-foreground">{t("spdx3.table.notFilled")}</span>}
+                  {f.display !== undefined ? (
+                    <DisplayText fieldId={f.id} display={f.display} />
+                  ) : (
+                    <span className="text-muted-foreground">{t("spdx3.table.notFilled")}</span>
+                  )}
                   {f.meaning === "huggingface-publisher" && (
                     <span className="ml-1 text-muted-foreground">{t("spdx3.table.hubPublisher")}</span>
                   )}
@@ -225,6 +262,20 @@ export function Spdx3FieldTable({
   );
 }
 
+/** A value from the check as the questions word it: a date in the reader's
+ *  locale, a choice by its label; anything else as written. */
+function DisplayText({ fieldId, display }: { fieldId: string; display: string }) {
+  const { t, i18n } = useTranslation();
+  const v = readDisplay(fieldId, display);
+  if (v.kind === "date") {
+    return <time dateTime={display}>{formatDay(display, i18n.language)}</time>;
+  }
+  if (v.kind === "enum") {
+    return <>{v.values.map((x) => t(`aiDecl.enum.${x}`, { defaultValue: x })).join(", ")}</>;
+  }
+  return <>{v.text}</>;
+}
+
 function ExtraTableRow({ row }: { row: ExtraRow }) {
   const { t } = useTranslation();
   return (
@@ -241,8 +292,10 @@ function ExtraTableRow({ row }: { row: ExtraRow }) {
 }
 
 /** The SPDX 3.0.1 view of the scan: the model's fields (with the document's
- *  author and the card's datasets), then each dataset's, folded. */
-export function Spdx3Fields({ check }: { check: Spdx3Check }) {
+ *  author and the datasets whose role is open), then each dataset's, folded.
+ *  The whole table folds too: someone who scanned another publisher's model
+ *  reads the model card first; the publisher of a declared model sees it open. */
+export function Spdx3Fields({ check, defaultOpen = false }: { check: Spdx3Check; defaultOpen?: boolean }) {
   const { t } = useTranslation();
   const doc = check.elements.find((e) => e.type === "CreationInfo");
   const model = check.elements.find((e) => e.type === "ai_AIPackage");
@@ -251,56 +304,79 @@ export function Spdx3Fields({ check }: { check: Spdx3Check }) {
   const extra = author
     ? [{ key: "createdBy", label: t("aiDecl.document.createdBy.label"), value: author.display ?? null, status: author.status }]
     : [];
-  // Only the datasets the card names; one the publisher added without a role
-  // carries a different note and is not "named on the card".
-  const roleOpen = check.relationships.filter(
-    (r) => r.status === "review" && r.note === "card-declared dataset, role not stated",
+  // Datasets whose role is open, by where they were named: the scanned
+  // model's card, or the publisher's own declaration.
+  const roles = rolesNotStated(check);
+  const roleRow = (key: string, label: string, names: string[]) => ({
+    key,
+    label,
+    value: names.join(", ") || null,
+    status: "review" as FieldStatus,
+    statusLabel: t("spdx3.table.roleOpen"),
+  });
+  const roleRows = [
+    ...(roles.card.length ? [roleRow("roles", t("spdx3.table.cardDatasets"), roles.card)] : []),
+    ...(roles.declared.length ? [roleRow("declaredRoles", t("spdx3.table.declaredDatasets"), roles.declared)] : []),
+  ];
+  const folded = datasets.slice(model ? 0 : 1);
+  const foldedMissing = folded.reduce(
+    (n, d) => n + d.fields.filter((f) => f.status === "missingRequired").length,
+    0,
   );
-  const roleRows = roleOpen.length
-    ? [
-        {
-          key: "roles",
-          label: t("spdx3.table.cardDatasets"),
-          value: roleOpen.map((r) => r.toLabel).filter(Boolean).join(", ") || null,
-          status: "review" as FieldStatus,
-          statusLabel: t("spdx3.table.roleOpen"),
-        },
-      ]
-    : [];
   return (
-    <div className="space-y-3">
-      {model && (
-        <Card>
-          <CardContent className="space-y-2 p-4">
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <span className="text-sm font-semibold">{model.label}</span>
-              <span className="text-xs text-muted-foreground">{t("spdx3.table.caption")}</span>
-            </div>
-            <Spdx3FieldTable element={model} extraRows={extra} trailingRows={roleRows} />
-          </CardContent>
-        </Card>
-      )}
-      {!model && doc && datasets[0] && (
-        <Card>
-          <CardContent className="space-y-2 p-4">
-            <span className="text-sm font-semibold">{datasets[0].label}</span>
-            <Spdx3FieldTable element={datasets[0]} extraRows={extra} />
-          </CardContent>
-        </Card>
-      )}
-      {datasets.slice(model ? 0 : 1).length > 0 && (
-        <Disclosure summary={<span className="text-sm font-medium">{t("spdx3.table.datasetFields", { count: datasets.length - (model ? 0 : 1) })}</span>}>
-          <div className="mt-2 space-y-3">
-            {datasets.slice(model ? 0 : 1).map((d) => (
-              <div key={d.declarationKey ?? d.label} className="space-y-1">
-                <div className="text-xs font-semibold">{d.label}</div>
-                <Spdx3FieldTable element={d} />
+    <Disclosure
+      defaultOpen={defaultOpen}
+      summary={<span className="text-sm font-medium">{t("spdx3.table.toggle")}</span>}
+      className="rounded-lg border bg-card p-3"
+    >
+      <div className="mt-3 space-y-3" data-testid="spdx3-fields">
+        {model && (
+          <Card>
+            <CardContent className="space-y-2 p-4">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <span className="text-sm font-semibold">{model.label}</span>
+                <span className="text-xs text-muted-foreground">{t("spdx3.table.caption")}</span>
               </div>
-            ))}
-          </div>
-        </Disclosure>
-      )}
-      <p className="text-xs text-muted-foreground">{t("spdx3.table.notLegalAdvice")}</p>
-    </div>
+              <Spdx3FieldTable element={model} extraRows={extra} trailingRows={roleRows} />
+            </CardContent>
+          </Card>
+        )}
+        {!model && doc && datasets[0] && (
+          <Card>
+            <CardContent className="space-y-2 p-4">
+              <span className="text-sm font-semibold">{datasets[0].label}</span>
+              <Spdx3FieldTable element={datasets[0]} extraRows={extra} />
+            </CardContent>
+          </Card>
+        )}
+        {folded.length > 0 && (
+          // Opens by itself when it holds required fields still empty, so they
+          // are not hidden behind a fold.
+          <Disclosure
+            defaultOpen={foldedMissing > 0}
+            summary={
+              <span className="text-sm font-medium" data-testid="spdx3-dataset-fields">
+                {t("spdx3.table.datasetFields", { count: folded.length })}
+                {foldedMissing > 0 && (
+                  <span className="ml-2 font-normal text-risk-critical-fg">
+                    {t("spdx3.table.datasetMissing", { count: foldedMissing })}
+                  </span>
+                )}
+              </span>
+            }
+          >
+            <div className="mt-2 space-y-3">
+              {folded.map((d) => (
+                <div key={d.declarationKey ?? d.label} className="space-y-1">
+                  <div className="text-xs font-semibold">{d.label}</div>
+                  <Spdx3FieldTable element={d} />
+                </div>
+              ))}
+            </div>
+          </Disclosure>
+        )}
+        <p className="text-xs text-muted-foreground">{t("spdx3.table.notLegalAdvice")}</p>
+      </div>
+    </Disclosure>
   );
 }
