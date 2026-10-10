@@ -24,7 +24,7 @@ async function stub(page: Page, opts: { aiDeclare?: boolean; refuse?: string[] }
   await page.route("**/capabilities", (r) =>
     r.fulfill({
       contentType: "application/json",
-      body: JSON.stringify({ firmware: false, scanoss: false, docker: true, spdx3: true, aiDeclare: opts.aiDeclare !== false }),
+      body: JSON.stringify({ firmware: false, scanoss: false, docker: true, aibom: true, spdx3: true, aiDeclare: opts.aiDeclare !== false }),
     }),
   );
   await page.route("**/results", (r) => r.fulfill({ contentType: "application/json", body: "[]" }));
@@ -43,6 +43,10 @@ async function stub(page: Page, opts: { aiDeclare?: boolean; refuse?: string[] }
   return state;
 }
 
+/** A step in the list on the left, by its name alone. */
+const stepButton = (flow: ReturnType<Page["getByTestId"]>, name: string) =>
+  flow.getByRole("navigation").getByRole("button", { name, exact: true });
+
 async function pickTile(page: Page) {
   await page.goto("/#/new");
   await page.getByTestId("source-ai-declare").click();
@@ -54,11 +58,16 @@ test("the tile opens the questions; finishing them uploads the declaration and s
   const state = await stub(page);
   await pickTile(page);
   await expect(page.getByTestId("ai-declare-hint")).toBeVisible();
+  // The project name becomes the model's name.
+  await expect(page.locator("#project-hint")).toContainText("becomes the model's name");
   await page.getByTestId("run-scan").click();
   const flow = page.getByTestId("ai-declaration");
   await expect(flow).toBeVisible();
 
-  // Base models: added by id, checked as one.
+  // Base models: first whether there is one, then added by id, checked as one.
+  await expect(flow.getByRole("heading", { name: "Did this model start from another model?" })).toBeVisible();
+  await expect(flow.getByLabel("Base model (HuggingFace id)")).toHaveCount(0);
+  await flow.getByRole("radio", { name: "Started from a base model" }).click();
   await flow.getByLabel("Base model (HuggingFace id)").fill("not an id");
   await expect(flow.getByRole("button", { name: "Add", exact: true })).toBeDisabled();
   await flow.getByLabel("Base model (HuggingFace id)").fill("Qwen/Qwen2.5-0.5B");
@@ -73,6 +82,7 @@ test("the tile opens the questions; finishing them uploads the declaration and s
   await flow.locator('[data-question="model.downloadLocation"] input').fill("https://models.example.com/acme");
   await flow.locator('[data-question="model.suppliedBy"] input').first().fill("Acme");
   // The model's own licence, which the risk assessment judges it on.
+  await expect(flow.locator('[data-question="model.license"]')).toContainText("Used for this model's risk verdict");
   await flow.locator('[data-question="model.license"] input').fill("apache-2.0");
   await flow.getByRole("button", { name: /^Next/ }).click();
 
@@ -129,7 +139,7 @@ test("a declaration the server refuses is answered in the questions, with the an
   await expect(flow.getByRole("alert")).toContainText("same hub dataset");
   expect(state.uploaded).toBeNull();
   expect(state.scanQuery).toBe("");
-  await flow.getByRole("button", { name: "Model", exact: true }).click();
+  await stepButton(flow, "Model").click();
   await expect(flow.locator('[data-question="model.releaseTime"] input')).toHaveValue("2025-04-15");
 });
 
@@ -138,17 +148,18 @@ test("the create-mode questions have no accessibility violations", async ({ page
   await pickTile(page);
   await page.getByTestId("run-scan").click();
   const flow = page.getByTestId("ai-declaration");
+  await flow.getByRole("radio", { name: "Started from a base model" }).click();
   await flow.getByLabel("Base model (HuggingFace id)").fill("org/base");
   await flow.getByRole("button", { name: "Add", exact: true }).click();
-  await flow.getByRole("button", { name: "Training data" }).click();
+  await stepButton(flow, "Training data").click();
   await flow.getByLabel("Dataset on HuggingFace (id)").fill("org/ds");
   await flow.getByRole("button", { name: "Add", exact: true }).click();
-  await flow.getByRole("button", { name: "Base models" }).click();
-  for (let i = 0; i < 4; i++) {
+  await stepButton(flow, "Base models").click();
+  for (let i = 0; i < 5; i++) {
     const axe = await new AxeBuilder({ page }).include('[data-testid="ai-declaration"]')
       .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
     expect(axe.violations).toEqual([]);
-    await flow.getByRole("button", { name: /^Next/ }).click();
+    if (i < 4) await flow.getByRole("button", { name: /^Next/ }).click();
   }
 });
 
@@ -189,7 +200,7 @@ test("removing an added dataset names it and keeps the keyboard in the step", as
   await pickTile(page);
   await page.getByTestId("run-scan").click();
   const flow = page.getByTestId("ai-declaration");
-  await flow.getByRole("button", { name: "Training data" }).click();
+  await stepButton(flow, "Training data").click();
   await flow.getByLabel("Dataset on HuggingFace (id)").fill("org/ds");
   await flow.getByRole("button", { name: "Add", exact: true }).click();
   await flow.getByLabel("Dataset on HuggingFace (id)").fill("ORG/DS");
@@ -209,4 +220,68 @@ test("leaving for another screen closes the questions", async ({ page }) => {
   await page.goto("/#/new");
   await expect(page.getByTestId("ai-declaration")).toHaveCount(0);
   await expect(page.getByTestId("source-ai-declare")).toBeVisible();
+});
+
+test("an id typed and not added is not lost: leaving the step adds it, and a bad one keeps the step", async ({ page }) => {
+  const state = await stub(page);
+  await pickTile(page);
+  await page.getByTestId("run-scan").click();
+  const flow = page.getByTestId("ai-declaration");
+  await flow.getByRole("radio", { name: "Started from a base model" }).click();
+  await flow.getByLabel("Base model (HuggingFace id)").fill("not an id");
+  await flow.getByRole("button", { name: /^Next/ }).click();
+  await expect(flow.getByRole("heading", { name: "Did this model start from another model?" })).toBeVisible();
+  await expect(flow).toContainText("you stayed on this step");
+  await expect(flow.getByLabel("Base model (HuggingFace id)")).toBeFocused();
+  // Typed, not added with the button: Next adds it.
+  await flow.getByLabel("Base model (HuggingFace id)").fill("Qwen/Qwen2.5-0.5B");
+  await flow.getByRole("button", { name: /^Next/ }).click();
+  await expect(flow.getByRole("heading", { name: "Tell us about the model" })).toBeVisible();
+  await flow.locator('[data-question="model.releaseTime"] input').fill("2025-04-15");
+  await stepButton(flow, "Training data").click();
+  // A hub dataset typed and not added is added on the way to the review.
+  await flow.getByLabel("Dataset on HuggingFace (id)").fill("HuggingFaceH4/ultrachat_200k");
+  await stepButton(flow, "Review").click();
+  await expect(flow.locator('[data-summary="base"]')).toContainText("Qwen/Qwen2.5-0.5B");
+  await expect(flow.locator('[data-summary="data"]')).toContainText("HuggingFaceH4/ultrachat_200k");
+  await flow.getByRole("button", { name: "Start the scan" }).click();
+  await expect.poll(() => state.scanQuery).toContain("source=ai-declare");
+  expect(state.uploaded).toMatchObject({
+    model: { baseModels: [{ ref: "Qwen/Qwen2.5-0.5B", revision: "" }] },
+    datasets: [{ ref: "huggingface:HuggingFaceH4/ultrachat_200k" }],
+  });
+});
+
+test("a model trained from scratch says so, and adapter weights without a base model are warned about", async ({ page }) => {
+  const state = await stub(page);
+  await pickTile(page);
+  await page.getByTestId("run-scan").click();
+  const flow = page.getByTestId("ai-declaration");
+  await flow.getByRole("radio", { name: "Started from a base model" }).click();
+  await flow.getByLabel("Base model (HuggingFace id)").fill("org/base");
+  await flow.getByRole("button", { name: "Add", exact: true }).click();
+  // Choosing "from scratch" drops the base model.
+  await flow.getByRole("radio", { name: "Trained from scratch" }).click();
+  await expect(flow.getByTestId("origin-scratch")).toBeVisible();
+  await expect(flow.locator("[data-base]")).toHaveCount(0);
+  await flow.getByRole("button", { name: /^Next/ }).click();
+  const scope = flow.locator('[data-question="model.weightsScope"]');
+  await scope.getByRole("radio", { name: "Adapter only" }).click();
+  await expect(scope.getByRole("note")).toContainText("An adapter needs its base model's weights to run");
+  await scope.getByRole("radio", { name: "Full weights" }).click();
+  await expect(scope.getByRole("note")).toHaveCount(0);
+  await scope.getByRole("radio", { name: "Adapter only" }).click();
+  await stepButton(flow, "Review").click();
+  await expect(flow.locator('[data-summary="base"]')).toContainText("Trained from scratch");
+  // A warning, not a blocker.
+  await flow.getByRole("button", { name: "Start the scan" }).click();
+  await expect.poll(() => state.scanQuery).toContain("source=ai-declare");
+  expect((state.uploaded as { model: Record<string, unknown> }).model.baseModels).toBeUndefined();
+});
+
+test("the AI model hint names both documents it writes", async ({ page }) => {
+  await stub(page);
+  await page.goto("/#/new");
+  await page.getByTestId("source-ai-model").click();
+  await expect(page.getByText("CycloneDX ML-BOM and an SPDX 3.0.1 AI document")).toBeVisible();
 });

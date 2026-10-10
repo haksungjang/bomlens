@@ -1,8 +1,18 @@
 // Copyright 2026 SK Telecom Co., Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Check, Loader2, Plus, Trash2, X } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Check, Loader2, Plus, Trash2, TriangleAlert, X } from "lucide-react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
@@ -13,12 +23,16 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import type { Spdx3Failure } from "@/lib/api";
 import {
+  adapterWithoutBase,
   AGENT_TYPES,
+  COMMON_LICENSES,
   DATASET_MORE_FIELDS,
   ROLES,
   SOURCE_RELATIONS,
   dateToDeclared,
   declaredToDate,
+  firstOpenIn,
+  formatDay,
   isEmpty,
   isHubId,
   issues as findIssues,
@@ -27,10 +41,13 @@ import {
   MODEL_USE_FIELDS,
   modelMainFields,
   MODEL_LICENSE_FIELD,
+  openByStep,
   remainingRequired,
+  required as isRequired,
   saveBlockers,
   stepOf,
   stepsFor,
+  summaryGroups,
   toFile,
   TRAINING_FIELDS,
   type Agent,
@@ -42,9 +59,16 @@ import {
   type SourceEntry,
   type Spdx3Check,
   type StepId,
+  type SummaryRow,
   type Value,
 } from "@/lib/aiDeclaration";
-import { useAiDeclaration, type Target } from "@/lib/useAiDeclaration";
+import {
+  flushPendingIds,
+  useAiDeclaration,
+  type DeclarationAction,
+  type PendingId,
+  type Target,
+} from "@/lib/useAiDeclaration";
 import { cn } from "@/lib/utils";
 
 type Ns = "document" | "model" | "dataset";
@@ -74,6 +98,7 @@ function Choices({
   multi,
   labelledBy,
   describedBy,
+  hintOf,
 }: {
   options: string[];
   selected: string[];
@@ -82,13 +107,22 @@ function Choices({
   multi?: boolean;
   labelledBy: string;
   describedBy?: string;
+  /** A short explanation of an option, shown when the pointer rests on it. */
+  hintOf?: (value: string) => string | undefined;
 }) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
   if (multi) {
     return (
       <div role="group" aria-labelledby={labelledBy} aria-describedby={describedBy} className="flex flex-wrap gap-2">
         {options.map((o) => (
-          <button key={o} type="button" aria-pressed={selected.includes(o)} onClick={() => onPick(o)} className={chipClass(selected.includes(o))}>
+          <button
+            key={o}
+            type="button"
+            aria-pressed={selected.includes(o)}
+            title={hintOf?.(o)}
+            onClick={() => onPick(o)}
+            className={chipClass(selected.includes(o))}
+          >
             {labelOf(o)}
           </button>
         ))}
@@ -118,6 +152,7 @@ function Choices({
             role="radio"
             aria-checked={on}
             tabIndex={i === (current >= 0 ? current : 0) ? 0 : -1}
+            title={hintOf?.(o)}
             onClick={() => onPick(o)}
             onKeyDown={(e) => onKey(e, i)}
             className={chipClass(on)}
@@ -214,16 +249,24 @@ function ListEditor<T>({
 }
 
 /** One question: the label, its input by the field's type, and what is wrong.
- *  A problem shows once the person has left the field, not while typing. */
+ *  A problem shows once the person has left the field, not while typing. A
+ *  required field left empty says so from the start, but quietly: it turns
+ *  red only once the field was left or the person tried to leave the step. */
 function Field({
   ns,
+  where,
   field,
   value,
   problem,
   onChange,
   showProblems,
+  hintKey,
+  suggestions,
+  warning,
 }: {
   ns: Ns;
+  /** "document", "model" or "datasets[i]", so a jump can find the field. */
+  where: string;
   field: MapField;
   value: Value | undefined;
   problem?: Issue["problem"];
@@ -231,22 +274,34 @@ function Field({
   /** Show the problem even if the field was not left yet (on the review step's
    *  way back here, for instance). */
   showProblems?: boolean;
+  /** The hint to show instead of the field's own one. */
+  hintKey?: string;
+  /** Values to offer while typing (a text field only). */
+  suggestions?: string[];
+  /** Advice that does not stop saving, shown under the field. */
+  warning?: string;
 }) {
   const { t } = useTranslation();
   const id = useId();
   const labelId = `${id}-label`;
   const hintId = `${id}-hint`;
   const errId = `${id}-err`;
+  const listId = `${id}-list`;
   const [touched, setTouched] = useState(false);
   const key = `aiDecl.${ns}.${field.id}`;
   const label = t(`${key}.label`, { defaultValue: field.id });
-  const required = field.min >= 1;
-  const hint = t(`${key}.hint`, { defaultValue: "" });
+  // A required field the converter writes as "unknown" when empty is not open.
+  const required = isRequired(field);
+  const ownHint = t(hintKey ?? `${key}.hint`, { defaultValue: "" });
+  const hint = [ownHint, field.source.fallback === "noAssertion" ? t("aiDecl.fallbackHint") : ""]
+    .filter(Boolean)
+    .join(" ");
   const example = t(`${key}.example`, { defaultValue: "" });
   // Agents, dates and addresses have no "unknown": empty fails validation.
   const noUnknown = ["Agent", "DateTime", "anyURI"].includes(field.type);
   const showMissing = required && noUnknown && isEmpty(value);
-  const showProblem = Boolean(problem && problem !== "required" && (touched || showProblems));
+  const loud = touched || Boolean(showProblems);
+  const showProblem = Boolean(problem && problem !== "required" && loud);
   const describedBy = [hint && hintId, (showMissing || showProblem) && errId].filter(Boolean).join(" ") || undefined;
   const isList = field.max === "*" && !field.enum;
   const rowLabel = (i: number) => `${label} ${i + 1}`;
@@ -266,6 +321,7 @@ function Field({
         labelledBy={labelId}
         describedBy={describedBy}
         labelOf={(o) => t(`aiDecl.enum.${o}`, { defaultValue: o })}
+        hintOf={(o) => t(`aiDecl.enumHint.${o}`, { defaultValue: "" }) || undefined}
         onPick={(o) => {
           if (!many) return onChange(sel.includes(o) ? "" : o);
           if (o === "noAssertion") return onChange(sel.includes(o) ? [] : [o]);
@@ -374,15 +430,19 @@ function Field({
     );
   } else {
     input = (
-      <Input
-        id={id}
-        type={field.type === "anyURI" ? "url" : "text"}
-        aria-describedby={describedBy}
-        aria-required={required || undefined}
-        value={(value as string | undefined) ?? ""}
-        placeholder={example ? t("aiDecl.examplePrefix", { example }) : undefined}
-        onChange={(e) => onChange(e.target.value)}
-      />
+      <>
+        <Input
+          id={id}
+          type={field.type === "anyURI" ? "url" : "text"}
+          aria-describedby={describedBy}
+          aria-required={required || undefined}
+          list={suggestions ? listId : undefined}
+          value={(value as string | undefined) ?? ""}
+          placeholder={example ? t("aiDecl.examplePrefix", { example }) : undefined}
+          onChange={(e) => onChange(e.target.value)}
+        />
+        {suggestions && <Suggestions id={listId} values={suggestions} />}
+      </>
     );
   }
 
@@ -390,6 +450,7 @@ function Field({
     <div
       className="space-y-1.5"
       data-question={`${ns}.${field.id}`}
+      data-where={where}
       onBlur={(e) => {
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setTouched(true);
       }}
@@ -412,14 +473,43 @@ function Field({
           {hint}
         </p>
       )}
+      {warning && <WarningNote>{warning}</WarningNote>}
       <div id={errId} aria-live="polite">
         {showProblem ? (
           <p className="text-xs text-risk-critical-fg">{t(`aiDecl.problem.${problem}`)}</p>
         ) : showMissing ? (
-          <p className="text-xs text-risk-critical-fg">{t("aiDecl.requiredFailsValidation")}</p>
+          <p
+            className={cn("text-xs", loud ? "text-risk-critical-fg" : "text-muted-foreground")}
+            data-missing={loud ? "shown" : "quiet"}
+          >
+            {t("aiDecl.requiredFailsValidation")}
+          </p>
         ) : null}
       </div>
     </div>
+  );
+}
+
+/** Licence ids offered while one is typed; any other id can still be typed. */
+function Suggestions({ id, values }: { id: string; values: string[] }) {
+  return (
+    <datalist id={id}>
+      {values.map((v) => (
+        <option key={v} value={v} />
+      ))}
+    </datalist>
+  );
+}
+
+function WarningNote({ children }: { children: ReactNode }) {
+  return (
+    <p
+      role="note"
+      className="flex items-start gap-1.5 rounded-md border border-warning-border/60 bg-warning-surface px-3 py-2 text-xs text-warning dark:border-warning-border/20 dark:bg-warning-surface/30"
+    >
+      <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+      <span>{children}</span>
+    </p>
   );
 }
 
@@ -437,6 +527,7 @@ function Field({
  */
 function SourcesEditor({
   name,
+  datasetIndex,
   onRecord,
   sources,
   problems,
@@ -445,6 +536,8 @@ function SourcesEditor({
   onChange,
 }: {
   name: string;
+  /** The dataset's place in the declaration, for adding a hub source. */
+  datasetIndex: number;
   onRecord: string[];
   sources: SourceEntry[];
   problems: Issue["problem"][];
@@ -498,6 +591,7 @@ function SourcesEditor({
                 aria-invalid={shown.length > 0 || undefined}
                 aria-describedby={shown.length ? errId : undefined}
                 placeholder={t("aiDecl.sources.licensePlaceholder")}
+                list={`${id}-licenses`}
                 value={src.license ?? ""}
                 onChange={(e) => set(i, { ...src, license: e.target.value })}
               />
@@ -532,13 +626,18 @@ function SourcesEditor({
           label={t("aiDecl.sources.addHub")}
           placeholder={t("aiDecl.examplePrefix", { example: "allenai/c4" })}
           button={t("aiDecl.sources.addButton")}
-          onAdd={(hubId) => {
+          toAction={(hubId) => {
             const ref = `huggingface:${hubId}`;
             const lower = hubId.toLowerCase();
             // Already a declared source, or already on record from the card.
-            if (sources.some((x) => x.ref?.toLowerCase() === ref.toLowerCase())) return;
-            if (onRecord.some((x) => x.toLowerCase() === lower)) return;
-            onChange([...sources, { ref, relation: "extended" }]);
+            if (sources.some((x) => x.ref?.toLowerCase() === ref.toLowerCase())) return null;
+            if (onRecord.some((x) => x.toLowerCase() === lower)) return null;
+            return {
+              type: "set",
+              target: { kind: "dataset", index: datasetIndex },
+              field: "sources",
+              value: [...sources, { ref, relation: "extended" }] as unknown as Value,
+            };
           }}
         />
       )}
@@ -546,6 +645,7 @@ function SourcesEditor({
         <Plus className="h-3.5 w-3.5" />
         {t("aiDecl.sources.addNamed")}
       </Button>
+      <Suggestions id={`${id}-licenses`} values={COMMON_LICENSES} />
       <div id={errId} aria-live="polite">
         {[...new Set(shown)].map((p) => (
           <p key={p} className="text-xs text-risk-critical-fg">
@@ -557,27 +657,62 @@ function SourcesEditor({
   );
 }
 
-/** Adds an id (a base model, a hub dataset) from a text box. */
+/** What a typed but not yet added id needs to be added on the way out of a
+ *  step, or to stop the way out when it is not an id. */
+type PendingEntry = PendingId & { reveal: () => void };
+
+/** The add-by-id boxes on screen register here, so leaving the step can add
+ *  what they still hold (see flushPendingIds). */
+const PendingIds = createContext<{
+  boxes: Map<string, () => PendingEntry>;
+  dispatch: (a: DeclarationAction) => void;
+} | null>(null);
+
+/** Adds an id (a base model, a hub dataset, a hub source) from a text box.
+ *  An id typed and not added is added when the step is left; one that is not
+ *  an id keeps the step open and says why. */
 function AddById({
   label,
   placeholder,
   button,
-  onAdd,
+  toAction,
 }: {
   label: string;
   placeholder: string;
   button: string;
-  onAdd: (id: string) => void;
+  /** What adding the id does; null when it is already there. */
+  toAction: (id: string) => DeclarationAction | null;
 }) {
   const { t } = useTranslation();
+  const ctx = useContext(PendingIds);
   const id = useId();
+  const input = useRef<HTMLInputElement>(null);
   const [value, setValue] = useState("");
+  const [held, setHeld] = useState(false);
   const v = value.trim();
   const bad = v !== "" && !isHubId(v);
+  const latest = useRef<PendingEntry>({ value, toAction, reveal: () => {} });
+  latest.current = {
+    value,
+    toAction,
+    reveal: () => {
+      setHeld(true);
+      input.current?.focus();
+    },
+  };
+  useEffect(() => {
+    const boxes = ctx?.boxes;
+    boxes?.set(id, () => latest.current);
+    return () => {
+      boxes?.delete(id);
+    };
+  }, [ctx, id]);
   const add = () => {
     if (!v || bad) return;
-    onAdd(v);
+    const a = toAction(v);
+    if (a) ctx?.dispatch(a);
     setValue("");
+    setHeld(false);
   };
   return (
     <div className="space-y-1.5">
@@ -586,12 +721,16 @@ function AddById({
       </label>
       <div className="flex gap-2">
         <Input
+          ref={input}
           id={id}
           value={value}
           placeholder={placeholder}
           aria-describedby={`${id}-err`}
           aria-invalid={bad || undefined}
-          onChange={(e) => setValue(e.target.value)}
+          onChange={(e) => {
+            setValue(e.target.value);
+            if (!e.target.value.trim()) setHeld(false);
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               e.preventDefault();
@@ -606,10 +745,15 @@ function AddById({
       </div>
       <div id={`${id}-err`} aria-live="polite">
         {bad && <p className="text-xs text-risk-critical-fg">{t("aiDecl.problem.hubId")}</p>}
+        {bad && held && <p className="text-xs text-risk-critical-fg">{t("aiDecl.pendingBlocked")}</p>}
       </div>
     </div>
   );
 }
+
+/** "Did this model start from another one?" in create mode. */
+type Origin = "scratch" | "base";
+const ORIGINS: Origin[] = ["scratch", "base"];
 
 export function AiDeclarationWizard({
   title,
@@ -622,6 +766,7 @@ export function AiDeclarationWizard({
   onDraft,
   mode = "fill",
   authorFromScan: authorGiven,
+  declaredScan = false,
 }: {
   title: string;
   index: FieldIndex;
@@ -642,8 +787,11 @@ export function AiDeclarationWizard({
   /** The scan names the document's author itself (--sbom-author), so the
    *  question is not asked. Read from the check when not given. */
   authorFromScan?: boolean;
+  /** Filling a model that was itself described from a declaration (its
+   *  licence takes effect at its next scan). */
+  declaredScan?: boolean;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const create = mode === "create";
   const steps = useMemo(() => stepsFor(index, initial, create), [index, initial, create]);
   const [state, dispatch] = useAiDeclaration(
@@ -654,10 +802,24 @@ export function AiDeclarationWizard({
   const [saving, setSaving] = useState(false);
   const [failure, setFailure] = useState<Spdx3Failure | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
+  const headingId = useId();
+  // The add-by-id boxes on screen, read when the step is left.
+  const [pending] = useState(() => ({ boxes: new Map<string, () => PendingEntry>(), dispatch }));
+  // An open item to put the cursor on once its step is shown.
+  const focusTarget = useRef<Issue | null>(null);
+  // Create mode: from scratch or from a base model. Reopening a saved
+  // declaration with base models answers it already.
+  const [origin, setOrigin] = useState<Origin | null>(() =>
+    initial.model?.baseModels?.length ? "base" : create && initialStep === "preview" ? "scratch" : null,
+  );
 
   // Each step (and the flow's opening) moves focus to its question, so a
-  // screen reader announces it and the keyboard starts at the top.
+  // screen reader announces it and the keyboard starts at the top; a jump to
+  // an open item goes to that item instead.
   useEffect(() => {
+    const target = focusTarget.current;
+    focusTarget.current = null;
+    if (target && focusIssue(target)) return;
     heading.current?.focus();
   }, [step]);
 
@@ -672,15 +834,35 @@ export function AiDeclarationWizard({
   const blockers = saveBlockers(all);
   const remaining = remainingRequired(all);
   const totalRequired = Math.max(remaining, remainingRequired(findIssues(index, initial, authorFromScan)));
+  const openIn = openByStep(all);
   const problemAt = (where: string, field: string) => all.find((i) => i.where === where && i.field === field)?.problem;
   const hasIssueIn = (where: string, fields: string[]) => all.some((i) => i.where === where && fields.includes(i.field));
   const set = (target: Target, field: string, value: Value) => dispatch({ type: "set", target, field, value });
   // Back from the review step, show every problem at once.
   const [reviewed, setReviewed] = useState(false);
+  // Steps the person has left: their empty required fields now show as errors.
+  const [left, setLeft] = useState<StepId[]>([]);
+  const loud = reviewed || left.includes(step);
+
+  /** Add what the add-by-id boxes still hold; false (and the box says why)
+   *  when one holds something that is not an id. */
+  const flush = () => {
+    const entries = [...pending.boxes.values()].map((get) => get());
+    const r = flushPendingIds(state, entries);
+    if (r.blocked >= 0) {
+      entries[r.blocked].reveal();
+      return null;
+    }
+    r.actions.forEach(dispatch);
+    return r.state;
+  };
 
   const stepIndex = steps.indexOf(step);
-  const go = (s: StepId) => {
+  const go = (s: StepId, focus?: Issue) => {
+    if (!flush()) return;
     if (step === "preview") setReviewed(true);
+    if (!left.includes(step)) setLeft([...left, step]);
+    focusTarget.current = focus ?? null;
     dispatch({ type: "step", step: s });
   };
 
@@ -690,11 +872,17 @@ export function AiDeclarationWizard({
       <Field
         key={id}
         ns="model"
+        where="model"
         field={f}
         value={decl.model?.[id] as Value | undefined}
         problem={problemAt("model", id)}
-        showProblems={reviewed}
+        showProblems={loud}
         onChange={(v) => set({ kind: "model" }, id, v)}
+        warning={
+          id === "weightsScope" && adapterWithoutBase(decl)
+            ? t(create ? "aiDecl.adapterNoBase.create" : "aiDecl.adapterNoBase.fill")
+            : undefined
+        }
       />
     ) : null;
   };
@@ -703,79 +891,103 @@ export function AiDeclarationWizard({
     check?.elements.find((e) => e.declarationKey === key)?.fields.find((f) => f.id === id && f.display)?.display;
 
   const save = async () => {
+    const flushed = flush();
+    if (!flushed) return;
     setSaving(true);
     setFailure(null);
-    const res = await onSave(toFile(decl, create));
+    const res = await onSave(toFile(flushed.decl, create));
     setSaving(false);
     if (res) setFailure(res);
   };
+
+  const stepName = (s: StepId) => t(`aiDecl.step.${s}`);
 
   let body: ReactNode;
   let why: string;
   if (step === "base") {
     why = create ? "baseCreate" : "base";
+    const showBases = !create || origin === "base";
     body = (
       <div className="space-y-3">
         {create && (
+          <Choices
+            options={ORIGINS}
+            selected={origin ? [origin] : []}
+            labelledBy={headingId}
+            labelOf={(o) => t(`aiDecl.origin.${o}`)}
+            onPick={(o) => {
+              const next = origin === o ? null : (o as Origin);
+              setOrigin(next);
+              if (next === "scratch") dispatch({ type: "clearBases" });
+            }}
+          />
+        )}
+        {create && origin === "scratch" && (
+          <p className="text-sm text-muted-foreground" data-testid="origin-scratch">
+            {t("aiDecl.origin.scratchNote")}
+          </p>
+        )}
+        {create && origin === "base" && (
           <Card>
             <CardContent className="p-4">
               <AddById
                 label={t("aiDecl.base.add.label")}
                 placeholder={t("aiDecl.examplePrefix", { example: "Qwen/Qwen2.5-0.5B" })}
                 button={t("aiDecl.base.add.button")}
-                onAdd={(ref) => dispatch({ type: "addBase", ref })}
+                toAction={(ref) => ({ type: "addBase", ref })}
               />
               <p className="mt-1.5 text-xs text-muted-foreground">{t("aiDecl.base.add.hint")}</p>
             </CardContent>
           </Card>
         )}
-        {(decl.model?.baseModels ?? []).map((b, i) => (
-          <Card key={b.ref} data-base={b.ref}>
-            <CardContent className="space-y-2 p-4">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <span className="font-mono text-sm font-medium">{b.ref}</span>
-                  {create ? (
-                    <Badge tone="info">{t("spdx3.status.declared")}</Badge>
-                  ) : (
-                    <Badge tone="low">{t("spdx3.status.auto")}</Badge>
+        {showBases &&
+          (decl.model?.baseModels ?? []).map((b, i) => (
+            <Card key={b.ref} data-base={b.ref} data-where={`model.baseModels[${i}]`}>
+              <CardContent className="space-y-2 p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-sm font-medium">{b.ref}</span>
+                    {create ? (
+                      <Badge tone="info">{t("spdx3.status.declared")}</Badge>
+                    ) : (
+                      <Badge tone="low">{t("spdx3.status.auto")}</Badge>
+                    )}
+                  </div>
+                  {create && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label={t("aiDecl.removeRow", { name: b.ref })}
+                      onClick={() => {
+                        dispatch({ type: "removeBase", index: i });
+                        heading.current?.focus();
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
                   )}
                 </div>
-                {create && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    aria-label={t("aiDecl.removeRow", { name: b.ref })}
-                    onClick={() => {
-                      dispatch({ type: "removeBase", index: i });
-                      heading.current?.focus();
-                    }}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                )}
-              </div>
-              <label className="block text-sm font-medium" htmlFor={`base-rev-${i}`}>
-                {t("aiDecl.base.revision.label")}
-              </label>
-              <Input
-                id={`base-rev-${i}`}
-                aria-describedby={`base-rev-${i}-hint`}
-                value={b.revision}
-                placeholder={t("aiDecl.base.revision.example")}
-                onChange={(e) => set({ kind: "base", index: i }, "revision", e.target.value)}
-              />
-              <p id={`base-rev-${i}-hint`} className="text-xs text-muted-foreground">
-                {t("aiDecl.base.revision.hint")}
-              </p>
-              <div aria-live="polite">
-                {problemAt(`model.baseModels[${i}]`, "revision") && (
-                  <p className="text-xs text-risk-critical-fg">{t("aiDecl.problem.revision")}</p>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+                <label className="block text-sm font-medium" htmlFor={`base-rev-${i}`}>
+                  {t("aiDecl.base.revision.label")}
+                </label>
+                <Input
+                  id={`base-rev-${i}`}
+                  aria-describedby={`base-rev-${i}-hint`}
+                  value={b.revision}
+                  placeholder={t("aiDecl.base.revision.example")}
+                  onChange={(e) => set({ kind: "base", index: i }, "revision", e.target.value)}
+                />
+                <p id={`base-rev-${i}-hint`} className="text-xs text-muted-foreground">
+                  {t("aiDecl.base.revision.hint")}
+                </p>
+                <div aria-live="polite">
+                  {problemAt(`model.baseModels[${i}]`, "revision") && (
+                    <p className="text-xs text-risk-critical-fg">{t("aiDecl.problem.revision")}</p>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          ))}
       </div>
     );
   } else if (step === "model") {
@@ -787,10 +999,11 @@ export function AiDeclarationWizard({
           {!authorFromScan && (
             <Field
               ns="document"
+              where="document"
               field={index.document.createdBy}
               value={decl.document.createdBy}
               problem={problemAt("document", "createdBy")}
-              showProblems={reviewed}
+              showProblems={loud}
               onChange={(v) => set({ kind: "document" }, "createdBy", v)}
             />
           )}
@@ -798,10 +1011,19 @@ export function AiDeclarationWizard({
           {decl.model && "license" in decl.model && (
             <Field
               ns="model"
+              where="model"
               field={MODEL_LICENSE_FIELD}
               value={decl.model.license}
               problem={problemAt("model", "license")}
-              showProblems={reviewed}
+              showProblems={loud}
+              hintKey={
+                create
+                  ? "aiDecl.model.license.hintCreate"
+                  : declaredScan
+                    ? "aiDecl.model.license.hintDeclared"
+                    : "aiDecl.model.license.hint"
+              }
+              suggestions={COMMON_LICENSES}
               onChange={(v) => set({ kind: "model" }, "license", v)}
             />
           )}
@@ -831,17 +1053,18 @@ export function AiDeclarationWizard({
             <Field
               key={k}
               ns="dataset"
+              where={where}
               field={index.dataset_DatasetPackage[k]}
               value={d[k] as Value | undefined}
               problem={problemAt(where, k)}
-              showProblems={reviewed}
+              showProblems={loud}
               onChange={(v) => set({ kind: "dataset", index: i }, k, v)}
             />
           );
           const supplier = autoOf(d.ref, "suppliedBy");
           const download = autoOf(d.ref, "downloadLocation");
           return (
-            <Card key={d.ref ?? `local-${i}`} data-dataset={d.ref ?? "local"}>
+            <Card key={d.ref ?? `local-${i}`} data-dataset={d.ref ?? "local"} data-where={where}>
               <CardContent className="space-y-4 p-4">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0">
@@ -859,7 +1082,7 @@ export function AiDeclarationWizard({
                     )}
                     {(supplier || download) && (
                       <p className="mt-1 break-all text-xs text-muted-foreground">
-                        {[supplier && t("aiDecl.autoSupplier", { value: supplier }), download].filter(Boolean).join(" · ")}
+                        {[supplier && t("aiDecl.autoSupplier", { value: supplier }), download].filter(Boolean).join(", ")}
                       </p>
                     )}
                   </div>
@@ -917,6 +1140,7 @@ export function AiDeclarationWizard({
                 {main.map(field)}
                 <SourcesEditor
                   name={d.ref ?? `local-${i}`}
+                  datasetIndex={i}
                   onRecord={
                     check?.relationships
                       .filter((r) => r.type === "descendantOf" && r.fromLabel && r.fromLabel === d.ref?.replace(/^huggingface:/, ""))
@@ -926,7 +1150,7 @@ export function AiDeclarationWizard({
                   sources={d.sources ?? []}
                   problems={all.filter((x) => x.where === where && x.field === "sources").map((x) => x.problem)}
                   allowHub={!local}
-                  showProblems={reviewed}
+                  showProblems={loud}
                   onChange={(v) => set({ kind: "dataset", index: i }, "sources", v as unknown as Value)}
                 />
                 {more.length > 0 && (
@@ -951,7 +1175,7 @@ export function AiDeclarationWizard({
                 label={t("aiDecl.hub.add.label")}
                 placeholder={t("aiDecl.examplePrefix", { example: "HuggingFaceH4/ultrachat_200k" })}
                 button={t("aiDecl.hub.add.button")}
-                onAdd={(id) => dispatch({ type: "addHub", index, id })}
+                toAction={(id) => ({ type: "addHub", index, id })}
               />
             </CardContent>
           </Card>
@@ -985,34 +1209,20 @@ export function AiDeclarationWizard({
     );
   } else {
     why = "preview";
-    const open = all;
+    const groups = summaryGroups(index, decl, steps);
+    const valueText = (r: SummaryRow) => formatValue(r, t, i18n.language);
     body = (
       <div className="space-y-3">
         <Card>
-          <CardContent className="space-y-2 p-4 text-sm">
-            {open.length === 0 ? (
+          <CardContent className="space-y-1 p-4 text-sm">
+            {all.length === 0 ? (
               <p className="flex items-center gap-2 text-success">
                 <Check className="h-4 w-4" />
                 {t("aiDecl.preview.complete")}
               </p>
             ) : (
               <>
-                <p>{t("aiDecl.preview.open", { count: open.length })}</p>
-                <ul className="space-y-1">
-                  {steps
-                    .filter((s) => s !== "preview" && open.some((i) => stepOf(i) === s))
-                    .map((s) => (
-                      <li key={s}>
-                        <button
-                          type="button"
-                          className="text-brand-strong underline-offset-2 hover:underline"
-                          onClick={() => go(s)}
-                        >
-                          {t(`aiDecl.step.${s}`)}: {t("aiDecl.preview.openInStep", { count: open.filter((i) => stepOf(i) === s).length })}
-                        </button>
-                      </li>
-                    ))}
-                </ul>
+                <p>{t("aiDecl.preview.open", { count: all.length })}</p>
                 <p className="text-xs text-muted-foreground">
                   {blockers.length ? t("aiDecl.preview.blocked") : t("aiDecl.preview.draftOk")}
                 </p>
@@ -1020,6 +1230,78 @@ export function AiDeclarationWizard({
             )}
           </CardContent>
         </Card>
+        {steps
+          .filter((s) => s !== "preview")
+          .map((s) => {
+            const open = openIn[s] ?? 0;
+            const mine = groups.filter((g) => g.step === s);
+            return (
+              <Card key={s} data-summary={s}>
+                <CardContent className="space-y-2 p-4 text-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="font-semibold">{stepName(s)}</h3>
+                    {open > 0 ? (
+                      <button
+                        type="button"
+                        aria-label={`${stepName(s)}: ${t("aiDecl.preview.openInStep", { count: open })}`}
+                        className="inline-flex items-center gap-1 rounded text-xs font-medium text-brand-strong underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        onClick={() => go(s, firstOpenIn(s, all))}
+                      >
+                        <TriangleAlert className="h-3.5 w-3.5" aria-hidden />
+                        {t("aiDecl.preview.openInStep", { count: open })}
+                      </button>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                        <Check className="h-3.5 w-3.5" aria-hidden />
+                        {t("aiDecl.preview.stepDone")}
+                      </span>
+                    )}
+                  </div>
+                  {s === "base" && (
+                    <BaseSummary
+                      bases={decl.model?.baseModels ?? []}
+                      scratch={create && origin === "scratch"}
+                    />
+                  )}
+                  {mine.map((g, gi) => {
+                    const ds = g.datasetIndex !== undefined ? decl.datasets[g.datasetIndex] : undefined;
+                    const extra: { label: string; value: string }[] = [];
+                    if (ds?.role) extra.push({ label: t("aiDecl.preview.role"), value: t(`aiDecl.role.${ds.role}`) });
+                    const srcs = (ds?.sources ?? []).map((x) => x.ref?.replace(/^huggingface:/, "") || x.name || "").filter(Boolean);
+                    if (srcs.length) extra.push({ label: t("aiDecl.sources.label"), value: srcs.join(", ") });
+                    const empty = g.rows.length === 0 && extra.length === 0;
+                    return (
+                      <div key={gi} className="space-y-1">
+                        {g.title && <div className="font-mono text-xs font-semibold">{g.title}</div>}
+                        {g.datasetIndex === undefined && s === "data" && (
+                          <div className="text-xs font-semibold">{t("aiDecl.group.training")}</div>
+                        )}
+                        {empty ? (
+                          <p className="text-xs text-muted-foreground">{t("aiDecl.preview.nothing")}</p>
+                        ) : (
+                          <dl className="grid grid-cols-[minmax(8rem,14rem)_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
+                            {extra.map((x) => (
+                              <SummaryLine key={x.label} label={x.label} value={x.value} />
+                            ))}
+                            {g.rows.map((r) => (
+                              <SummaryLine
+                                key={`${r.where}.${r.field.id}`}
+                                label={t(`aiDecl.${r.ns}.${r.field.id}.label`, { defaultValue: r.field.id })}
+                                value={valueText(r)}
+                              />
+                            ))}
+                          </dl>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {s !== "base" && mine.length === 0 && (
+                    <p className="text-xs text-muted-foreground">{t("aiDecl.preview.nothing")}</p>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })}
         <Disclosure summary={<span className="text-sm font-medium">{t("aiDecl.preview.file")}</span>}>
           <pre className="mt-2 max-h-80 overflow-auto rounded-md border bg-muted/40 p-3 text-xs">
             {JSON.stringify(toFile(decl, create), null, 2)}
@@ -1051,106 +1333,200 @@ export function AiDeclarationWizard({
   }
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[12rem_minmax(0,1fr)_16rem]" data-testid="ai-declaration">
-      <nav aria-label={t("aiDecl.stepsLabel")} className="space-y-4">
-        <div className="truncate text-xs text-muted-foreground">{title}</div>
-        <ol className="space-y-2">
-          {steps.map((s, i) => {
-            const done = i < stepIndex;
-            return (
-              <li key={s}>
-                <button
-                  type="button"
-                  onClick={() => go(s)}
-                  aria-current={s === step ? "step" : undefined}
-                  className={cn(
-                    "flex w-full items-center gap-2 rounded-md px-1 py-1 text-left text-sm",
-                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                    s === step ? "font-semibold" : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  <span
+    <PendingIds.Provider value={pending}>
+      <div className="grid gap-6 lg:grid-cols-[12rem_minmax(0,1fr)_16rem]" data-testid="ai-declaration">
+        <nav aria-label={t("aiDecl.stepsLabel")} className="space-y-4">
+          <div className="truncate text-xs text-muted-foreground">{title}</div>
+          <ol className="space-y-2">
+            {steps.map((s, i) => {
+              const visited = i < stepIndex || left.includes(s);
+              const open = s === "preview" ? 0 : openIn[s] ?? 0;
+              const done = visited && open === 0 && s !== step;
+              const warn = visited && open > 0 && s !== step;
+              return (
+                <li key={s}>
+                  <button
+                    type="button"
+                    onClick={() => go(s)}
+                    aria-current={s === step ? "step" : undefined}
+                    // The count is a description, so the button keeps the step's name.
+                    aria-label={stepName(s)}
+                    aria-describedby={open > 0 ? `${headingId}-open-${s}` : undefined}
+                    data-step={s}
                     className={cn(
-                      "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[0.7rem]",
-                      done && "border-foreground bg-foreground text-background",
+                      "flex w-full items-center gap-2 rounded-md px-1 py-1 text-left text-sm",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      s === step ? "font-semibold" : "text-muted-foreground hover:text-foreground",
                     )}
                   >
-                    {done ? <Check className="h-3 w-3" /> : i + 1}
-                  </span>
-                  {t(`aiDecl.step.${s}`)}
-                </button>
-              </li>
-            );
-          })}
-        </ol>
-        <div className="space-y-1.5">
-          <div className="text-xs text-muted-foreground" aria-live="polite">
-            {t("aiDecl.remaining", { count: remaining })}
+                    <span
+                      className={cn(
+                        "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[0.7rem]",
+                        done && "border-foreground bg-foreground text-background",
+                        warn && "border-warning-border bg-warning-surface text-warning",
+                      )}
+                      aria-hidden
+                    >
+                      {done ? <Check className="h-3 w-3" /> : warn ? <TriangleAlert className="h-3 w-3" /> : i + 1}
+                    </span>
+                    <span className="min-w-0 flex-1">{stepName(s)}</span>
+                    {open > 0 && (
+                      <span
+                        id={`${headingId}-open-${s}`}
+                        className="shrink-0 text-xs font-normal text-muted-foreground"
+                        data-open={open}
+                      >
+                        {t("aiDecl.preview.openInStep", { count: open })}
+                      </span>
+                    )}
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
+          <div className="space-y-1.5">
+            <div className="text-xs text-muted-foreground" aria-live="polite">
+              {t("aiDecl.remaining", { count: remaining })}
+            </div>
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted" aria-hidden>
+              <div
+                className="h-full bg-foreground"
+                style={{ width: `${totalRequired ? ((totalRequired - remaining) / totalRequired) * 100 : 100}%` }}
+              />
+            </div>
           </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted" aria-hidden>
-            <div
-              className="h-full bg-foreground"
-              style={{ width: `${totalRequired ? ((totalRequired - remaining) / totalRequired) * 100 : 100}%` }}
-            />
-          </div>
-        </div>
-      </nav>
+        </nav>
 
-      <div className="min-w-0 space-y-4">
-        <div>
-          <h2 ref={heading} tabIndex={-1} className="text-xl font-semibold focus:outline-none">
-            {t(`aiDecl.question.${step}`)}
-          </h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {t(create ? `aiDecl.questionHintCreate.${step}` : `aiDecl.questionHint.${step}`)}
-          </p>
-        </div>
-        {body}
-        <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
-          <Button variant="ghost" onClick={onCancel}>
-            {t("aiDecl.cancel")}
-          </Button>
-          <div className="flex gap-2">
-            {stepIndex > 0 && (
-              <Button variant="outline" onClick={() => go(steps[stepIndex - 1])}>
-                {t("aiDecl.prev")}
-              </Button>
-            )}
-            {step === "preview" ? (
-              <Button onClick={save} disabled={saving || blockers.length > 0}>
-                {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-                {create ? t("aiDecl.startScan") : t("aiDecl.save")}
-              </Button>
-            ) : (
-              <Button onClick={() => go(steps[stepIndex + 1])}>
-                {t("aiDecl.next", { step: t(`aiDecl.step.${steps[stepIndex + 1]}`) })}
-              </Button>
-            )}
+        <div className="min-w-0 space-y-4">
+          <div>
+            <h2 ref={heading} id={headingId} tabIndex={-1} className="text-xl font-semibold focus:outline-none">
+              {t(create && step === "base" ? "aiDecl.questionCreate.base" : `aiDecl.question.${step}`)}
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {t(create ? `aiDecl.questionHintCreate.${step}` : `aiDecl.questionHint.${step}`)}
+            </p>
+          </div>
+          {body}
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+            <Button variant="ghost" onClick={onCancel}>
+              {t("aiDecl.cancel")}
+            </Button>
+            <div className="flex gap-2">
+              {stepIndex > 0 && (
+                <Button variant="outline" onClick={() => go(steps[stepIndex - 1])}>
+                  {t("aiDecl.prev")}
+                </Button>
+              )}
+              {step === "preview" ? (
+                <Button onClick={save} disabled={saving || blockers.length > 0}>
+                  {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+                  {create ? t("aiDecl.startScan") : t("aiDecl.save")}
+                </Button>
+              ) : (
+                <Button onClick={() => go(steps[stepIndex + 1])}>
+                  {t("aiDecl.next", { step: stepName(steps[stepIndex + 1]) })}
+                </Button>
+              )}
+            </div>
           </div>
         </div>
-      </div>
 
-      <aside className="space-y-3">
-        {decl.model?.baseModels?.length ? (
+        <aside className="space-y-3">
+          {decl.model?.baseModels?.length ? (
+            <Card>
+              <CardContent className="space-y-1.5 p-4 text-sm">
+                <div className="font-semibold">{t("aiDecl.side.baseTitle")}</div>
+                {decl.model.baseModels.map((b) => (
+                  <div key={b.ref} className="font-mono text-xs">
+                    {b.ref}
+                  </div>
+                ))}
+                <p className="text-xs text-muted-foreground">{t("aiDecl.side.baseNote")}</p>
+              </CardContent>
+            </Card>
+          ) : null}
           <Card>
             <CardContent className="space-y-1.5 p-4 text-sm">
-              <div className="font-semibold">{t("aiDecl.side.baseTitle")}</div>
-              {decl.model.baseModels.map((b) => (
-                <div key={b.ref} className="font-mono text-xs">
-                  {b.ref}
-                </div>
-              ))}
-              <p className="text-xs text-muted-foreground">{t("aiDecl.side.baseNote")}</p>
+              <div className="font-semibold">{t("aiDecl.whyTitle")}</div>
+              <p className="text-xs text-muted-foreground">{t(`aiDecl.why.${why}`)}</p>
             </CardContent>
           </Card>
-        ) : null}
-        <Card>
-          <CardContent className="space-y-1.5 p-4 text-sm">
-            <div className="font-semibold">{t("aiDecl.whyTitle")}</div>
-            <p className="text-xs text-muted-foreground">{t(`aiDecl.why.${why}`)}</p>
-          </CardContent>
-        </Card>
-      </aside>
-    </div>
+        </aside>
+      </div>
+    </PendingIds.Provider>
   );
 }
+
+/** Put the cursor on an open item of the step now shown: its field, or the
+ *  card it belongs to. True when something took focus. */
+function focusIssue(issue: Issue): boolean {
+  const root = document.querySelector('[data-testid="ai-declaration"]');
+  if (!root) return false;
+  const esc = (s: string) => s.replace(/["\\]/g, "\\$&");
+  const box =
+    root.querySelector(`[data-where="${esc(issue.where)}"][data-question$=".${esc(issue.field)}"]`) ??
+    root.querySelector(`[data-where="${esc(issue.where)}"]`);
+  const el = box?.querySelector<HTMLElement>(
+    'input:not([type="hidden"]), textarea, select, [role="radio"][tabindex="0"], button[aria-pressed]',
+  );
+  if (!el) return false;
+  el.focus();
+  el.scrollIntoView?.({ block: "center" });
+  return true;
+}
+
+function SummaryLine({ label, value }: { label: string; value: string }) {
+  return (
+    <>
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 whitespace-pre-line break-words">{value}</dd>
+    </>
+  );
+}
+
+function BaseSummary({ bases, scratch }: { bases: { ref: string; revision: string }[]; scratch: boolean }) {
+  const { t } = useTranslation();
+  if (!bases.length) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        {scratch ? t("aiDecl.origin.scratch") : t("aiDecl.preview.noBase")}
+      </p>
+    );
+  }
+  return (
+    <ul className="space-y-0.5 text-xs">
+      {bases.map((b) => (
+        <li key={b.ref}>
+          <span className="font-mono">{b.ref}</span>
+          <span className="text-muted-foreground">
+            {", "}
+            {b.revision.trim()
+              ? t("aiDecl.preview.revision", { revision: b.revision.trim() })
+              : t("aiDecl.preview.noRevision")}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** One saved answer as words: names for people and organizations, dates in
+ *  the reader's locale, the labels the questions use for a choice. */
+function formatValue(r: SummaryRow, t: (k: string, o?: Record<string, unknown>) => string, lang: string): string {
+  const v = r.value;
+  const one = (x: unknown): string => {
+    if (x === null || x === undefined) return "";
+    if (typeof x === "object" && "name" in (x as Agent)) return (x as Agent).name;
+    if (typeof x === "object" && "key" in (x as DictEntry)) {
+      const e = x as DictEntry;
+      return e.value ? `${e.key} = ${e.value}` : e.key;
+    }
+    const s = String(x);
+    if (r.field.enum) return t(`aiDecl.enum.${s}`, { defaultValue: s });
+    if (r.field.type === "DateTime") return formatDay(s, lang);
+    return s;
+  };
+  const list = Array.isArray(v) ? (v as unknown[]).filter((x) => !isEmpty(x)) : [v];
+  return list.map(one).join(", ");
+}
+

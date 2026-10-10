@@ -490,6 +490,42 @@ python3 -I "$CONV" convert --bom "$WORK/declared-bom.json" --out-dir "$OUT" --pr
 python3 -I "$CONV" template --bom "$WORK/declared-bom.json" --out-dir "$OUT" --prefix decl 2>/dev/null
 [ "$(jq -r '.model | has("license")' "$OUT/decl_ai-declaration.template.json")" = "false" ] \
     && pass "the template does not ask a declared model for its licence again" || fail "template asks a declared model"
+# A declared model has no card: a dataset without a role is one the
+# declaration named, and the check says so.
+rm -f "$OUT"/*
+python3 -I "$CONV" convert --bom "$WORK/declared-bom.json" --out-dir "$OUT" --prefix "$P" --stable 2>/dev/null
+{ [ "$(jq '[.relationships[] | select(.note == "declared dataset, role not stated")] | length' "$CHK")" -eq 2 ] \
+  && [ "$(jq '[.relationships[] | select(.note == "card-declared dataset, role not stated")] | length' "$CHK")" -eq 0 ] \
+  && ! grep -q "declared in the model card" "$DOC"; } \
+    && pass "a declared model's datasets are not said to come from a model card" \
+    || fail "declared-input dataset notes: $(jq -c '[.relationships[] | .note // empty]' "$CHK")"
+# The declaration's authors, which a declared model's SBOM records in
+# metadata.authors (marked as from the declaration), stay the declaration's:
+# declared status and the declared kind of agent, not a scan's --sbom-author.
+jq '.metadata.authors = [{"name": "Acme AI Lab"}]
+    | .metadata.properties = ((.metadata.properties // []) + [{"name": "bomlens:sbom-author-source", "value": "declaration"}])' \
+   "$WORK/declared-bom.json" > "$WORK/declared-authors-bom.json"
+rm -f "$OUT"/*
+python3 -I "$CONV" convert --bom "$WORK/declared-authors-bom.json" --out-dir "$OUT" --prefix "$P" \
+    --declaration "$FIX/declaration-complete.json" --stable 2>/dev/null
+{ [ "$(status_of document createdBy)" = "declared" ] \
+  && [ "$(jq -r '[.["@graph"][] | select(.type=="CreationInfo") | .createdBy[0]] | first | split("/") | last' "$DOC")" = "Organization%3AAcme%20AI%20Lab" ] \
+  && ! grep -q -- "--sbom-author" "$DOC" \
+  && [ "$(jq -r '[.elements[] | select(.label=="document") | .fields[0].source // "none"] | first' "$CHK")" = "none" ]; } \
+    && pass "authors the SBOM took from the declaration count as declared, with their declared kind" \
+    || fail "declaration-sourced authors: status=$(status_of document createdBy)"
+rm -f "$OUT"/*
+python3 -I "$CONV" convert --bom "$WORK/declared-authors-bom.json" --out-dir "$OUT" --prefix "$P" --stable 2>/dev/null
+[ "$(status_of document createdBy)" = "declared" ] \
+    && pass "without the declaration file, the recorded names still stand as declared" \
+    || fail "declaration-sourced authors without a declaration: $(status_of document createdBy)"
+# A scan's own --sbom-author (no marker) is still the scan's.
+jq '.metadata.authors = [{"name": "Scan Runner"}]' "$WORK/declared-bom.json" > "$WORK/scan-author-bom.json"
+rm -f "$OUT"/*
+python3 -I "$CONV" convert --bom "$WORK/scan-author-bom.json" --out-dir "$OUT" --prefix "$P" \
+    --declaration "$FIX/declaration-complete.json" --stable 2>/dev/null
+[ "$(status_of document createdBy)" = "auto" ] && grep -q -- "--sbom-author" "$DOC" \
+    && pass "an author the scan was given is still the scan's" || fail "scan author status=$(status_of document createdBy)"
 
 echo "== bad input is reported, not written =="
 echo '{"bomFormat":"CycloneDX","specVersion":"1.7","components":[{"type":"library","name":"x"}]}' > "$WORK/lib.json"

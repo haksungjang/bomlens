@@ -23,6 +23,7 @@ import {
 import {
   formatLabel,
   groupArtifacts,
+  isSpdx3Check,
   type ArtifactFormat,
   type LogicalArtifact,
 } from "@/lib/artifacts";
@@ -59,7 +60,11 @@ function DownloadChip({
     <Button variant="outline" size="sm" asChild>
       <a href={fileUrl(scanId, fmt.name)} download={fmt.name} onClick={onDownload}>
         <Download className="h-3.5 w-3.5" />
-        {fmt.ext === "template" ? t("result.emptyForm") : formatLabel(fmt.ext)}
+        {fmt.ext === "template"
+          ? t("result.emptyForm")
+          : isSpdx3Check(fmt.name)
+            ? t("result.checkFormat", { format: formatLabel(fmt.ext) })
+            : formatLabel(fmt.ext)}
         <span className="font-normal text-muted-foreground">
           {formatBytes(fmt.size)}
         </span>
@@ -126,16 +131,19 @@ function triggerDownload(scanId: string, name: string) {
 }
 
 /**
- * Write the SPDX 3.0.1 AI document (or bring it up to date with the saved
- * declaration) and download it. On a scan from before the document existed
- * this is how it first gets written.
+ * Write the SPDX 3.0.1 AI document and download it: on a scan from before the
+ * document existed this is how it first gets written ("write"), and on one
+ * whose document is behind its saved declaration or this BomLens it rebuilds
+ * the document ("rebuild").
  */
 function Spdx3ExportButton({
   scanId,
   onPatch,
+  label,
 }: {
   scanId: string | null;
   onPatch?: (patch: Partial<DoneEvent>) => void;
+  label: string;
 }) {
   const { t } = useTranslation();
   const { toast } = useToast();
@@ -156,7 +164,7 @@ function Spdx3ExportButton({
   return (
     <Button variant="outline" size="sm" onClick={run} disabled={pending}>
       {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-      {t("result.spdx3Export")}
+      {label}
     </Button>
   );
 }
@@ -232,6 +240,7 @@ function ArtifactCard({
   spdx3Available,
   spdx3,
   aiScan,
+  uploadedSbom,
   onPatch,
 }: {
   artifact: LogicalArtifact;
@@ -244,11 +253,16 @@ function ArtifactCard({
   spdx3Available: boolean;
   spdx3?: Spdx3Summary | null;
   aiScan: boolean;
+  /** The scan reviewed an SBOM someone uploaded. */
+  uploadedSbom: boolean;
   onPatch?: (patch: Partial<DoneEvent>) => void;
 }) {
   const { t } = useTranslation();
   const { toast } = useToast();
   const { Icon, primary, formats, signature } = artifact;
+  // Rebuilding changes the document only when it is behind the saved
+  // declaration or this BomLens; otherwise the button would do nothing new.
+  const behind = artifact.key === "spdx3" && spdx3?.upToDate === false;
   const view = preferredView(formats);
 
   const copyLink = async () => {
@@ -298,6 +312,8 @@ function ArtifactCard({
             {artifact.key === "spdx3" && spdx3?.draft && (
               <> {t("result.kind.spdx3.draftNote", { count: spdx3.counts.missingRequired ?? 0 })}</>
             )}
+            {artifact.key === "spdx3" && uploadedSbom && <> {t("result.kind.spdx3.uploadNote")}</>}
+            {behind && <> {t("result.kind.spdx3.behindNote")}</>}
           </p>
           <span className="mt-1 block truncate font-mono text-xs text-muted-foreground">
             {baseName(formats)}
@@ -332,10 +348,12 @@ function ArtifactCard({
         {artifact.spdxExportable && spdxAvailable && (
           <SpdxExportButton scanId={scanId} onExported={onExported} />
         )}
-        {spdx3Available && artifact.key === "spdx3" && <Spdx3ExportButton scanId={scanId} onPatch={onPatch} />}
+        {spdx3Available && behind && (
+          <Spdx3ExportButton scanId={scanId} onPatch={onPatch} label={t("result.spdx3Rebuild")} />
+        )}
         {/* An AI scan from before the document existed: write it from here. */}
         {spdx3Available && artifact.key === "sbom" && aiScan && !spdx3 && (
-          <Spdx3ExportButton scanId={scanId} onPatch={onPatch} />
+          <Spdx3ExportButton scanId={scanId} onPatch={onPatch} label={t("spdx3.band.write")} />
         )}
         {spdx3Available && artifact.key === "aiDeclaration" && (
           <DeclarationUploadButton scanId={scanId} onPatch={onPatch} />
@@ -368,6 +386,7 @@ export function ResultsList({
   scanId,
   onResultsChange,
   aiScan = false,
+  uploadedSbom = false,
   spdx3,
   onResultPatch,
 }: {
@@ -380,6 +399,8 @@ export function ResultsList({
   onResultsChange?: (files: ResultFile[]) => void;
   /** The scan describes an AI model or dataset, so it has an SPDX 3.0.1 document. */
   aiScan?: boolean;
+  /** The scan reviewed an uploaded SBOM. */
+  uploadedSbom?: boolean;
   spdx3?: Spdx3Summary | null;
   /** The SPDX 3.0.1 actions refresh the summary as well as the listing. */
   onResultPatch?: (patch: Partial<DoneEvent>) => void;
@@ -453,6 +474,7 @@ export function ResultsList({
             spdx3Available={spdx3Available}
             spdx3={spdx3}
             aiScan={aiScan}
+            uploadedSbom={uploadedSbom}
             onPatch={onResultPatch ?? ((p) => p.results && onResultsChange?.(p.results))}
           />
         ))}

@@ -2179,6 +2179,40 @@ python3 -I "$LIB/convert-to-spdx3-ai.py" check --bom "$WORK/decl.json" \
 [ "$(jq -c '[.elements[] | .label as $l | .fields[] | select(.status == "missingRequired") | "\($l):\(.id)"]' "$WORK/decl-check.json")" = '["acme:downloadLocation","acme:suppliedBy"]' ] \
     && pass "the declaration fits the SBOM built from it; only the model's address and supplier stay open" \
     || fail "declaration against its own SBOM" "$(head -c 400 "$WORK/decl-check.json")"
+# Who writes the document: in AIDECLARE the declaration's document.createdBy
+# already names it, so with no SBOM_AUTHOR it becomes the SBOM author (marked as
+# coming from the declaration). An explicit SBOM_AUTHOR wins, and a scanned
+# model (AIBOM with --ai-declare) gets no author from the declaration.
+DECL_FIX="$ROOT_DIR/tests/fixtures/spdx3/declaration-complete.json"
+cp "$WORK/decl.json" "$WORK/decl-author.json"
+env -u SBOM_AUTHOR AI_DECLARATION_FILE="$DECL_FIX" bash "$LIB/stamp-document-metadata.sh" "$WORK/decl-author.json" AIDECLARE > "$WORK/decl-author.log" 2>&1
+{ jq -e '.metadata.authors == [{"name": "Acme AI Lab"}]
+         and ([.metadata.properties[] | select(.name == "bomlens:sbom-author-source") | .value] == ["declaration"])' \
+      "$WORK/decl-author.json" >/dev/null \
+  && grep -q "SBOM author taken from the declaration's document.createdBy: Acme AI Lab" "$WORK/decl-author.log" \
+  && ! grep -q "no SBOM author declared" "$WORK/decl-author.log"; } \
+    && pass "AIDECLARE: the declaration's createdBy is the SBOM author, and the log says so" \
+    || fail "AIDECLARE author from the declaration" "$(cat "$WORK/decl-author.log"; jq -c '.metadata | {authors, properties}' "$WORK/decl-author.json")"
+SBOM_AUTHOR="Example Corp" AI_DECLARATION_FILE="$DECL_FIX" bash "$LIB/stamp-document-metadata.sh" "$WORK/decl-author.json" AIDECLARE >/dev/null 2>&1
+jq -e '.metadata.authors == [{"name": "Example Corp"}]
+       and ([.metadata.properties[] | select(.name == "bomlens:sbom-author-source")] | length == 0)' "$WORK/decl-author.json" >/dev/null \
+    && pass "AIDECLARE: an explicit SBOM_AUTHOR wins over the declaration" \
+    || fail "SBOM_AUTHOR did not win in AIDECLARE" "$(jq -c '.metadata | {authors, properties}' "$WORK/decl-author.json")"
+jq '.document.createdBy = [{"type": "Organization", "name": "Acme AI Lab"}, {"type": "Person", "name": "  Jane Doe "},
+                           {"type": "Person", "name": "   "}, {"type": "Person", "name": "Acme AI Lab"}]' \
+    "$DECL_FIX" > "$WORK/decl-two-authors.json"
+cp "$WORK/decl.json" "$WORK/decl-author2.json"
+env -u SBOM_AUTHOR AI_DECLARATION_FILE="$WORK/decl-two-authors.json" bash "$LIB/stamp-document-metadata.sh" "$WORK/decl-author2.json" AIDECLARE >/dev/null 2>&1
+jq -e '.metadata.authors == [{"name": "Acme AI Lab"}, {"name": "Jane Doe"}]' "$WORK/decl-author2.json" >/dev/null \
+    && pass "AIDECLARE: every declared author is kept once, trimmed, and a blank name is skipped" \
+    || fail "several declared authors" "$(jq -c '.metadata.authors' "$WORK/decl-author2.json")"
+cp "$WORK/decl.json" "$WORK/decl-author3.json"
+env -u SBOM_AUTHOR AI_DECLARATION_FILE="$DECL_FIX" bash "$LIB/stamp-document-metadata.sh" "$WORK/decl-author3.json" AIBOM > "$WORK/decl-author3.log" 2>&1
+{ jq -e '(.metadata | has("authors") | not)
+         and ([.metadata.properties[] | select(.name == "bomlens:sbom-author-source")] | length == 0)' "$WORK/decl-author3.json" >/dev/null \
+  && grep -q "no SBOM author declared" "$WORK/decl-author3.log"; } \
+    && pass "a scanned model (AIBOM with --ai-declare) takes no author from the declaration" \
+    || fail "AIBOM took the declaration's author" "$(jq -c '.metadata.authors' "$WORK/decl-author3.json")"
 AI_USAGE_CONTEXT=product bash "$LIB/assess-ai-risk.sh" "$WORK/decl.json" >/dev/null 2>&1
 [ "$(jq -r '[.metadata.component.properties[] | select(.name=="bomlens:assessment:datasets") | .value] | first // ""' "$WORK/decl.json")" = "caution" ] \
     && pass "the declared model's datasets are judged, sources included" || fail "declared model datasets axis"

@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ResultFile } from "./api";
-import { formatLabel, groupArtifacts } from "./artifacts";
+import { formatLabel, groupArtifacts, isSpdx3Check } from "./artifacts";
 
 const file = (name: string, size = 100): ResultFile => ({ name, size });
 
@@ -203,5 +203,13 @@ describe("formatLabel", () => {
     expect(formatLabel("spdx")).toBe("SPDX");
     expect(formatLabel("spdx3")).toBe("SPDX 3.0.1");
     expect(formatLabel("")).toBe("");
+  });
+});
+
+describe("isSpdx3Check", () => {
+  it("tells the check files from the SPDX 3.0.1 document itself", () => {
+    expect(isSpdx3Check("m_1.0_spdx3-check.json")).toBe(true);
+    expect(isSpdx3Check("m_1.0_spdx3-check.md")).toBe(true);
+    expect(isSpdx3Check("m_1.0_bom.spdx3.json")).toBe(false);
   });
 });

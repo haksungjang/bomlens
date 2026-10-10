@@ -82,6 +82,29 @@ esac
 # answer.
 SBOM_AUTHOR="${SBOM_AUTHOR:-}"
 
+# AIDECLARE is the one mode where the person running it has already said who
+# writes the document: the declaration's document.createdBy. With no
+# SBOM_AUTHOR, those names become the SBOM author, and
+# bomlens:sbom-author-source=declaration records where they came from so a
+# reader (and the SPDX 3.0.1 conversion) can tell them from a --sbom-author
+# value. An explicit SBOM_AUTHOR still wins. A scanned model given a
+# declaration (AIBOM with --ai-declare) is not covered: its CycloneDX file keeps
+# to what the scan read.
+AUTHORS_JSON="[]"
+AUTHOR_SOURCE=""
+if [ -n "$SBOM_AUTHOR" ]; then
+    AUTHORS_JSON=$(jq -cn --arg a "$SBOM_AUTHOR" '[{name: $a}]')
+elif [ "$MODE" = "AIDECLARE" ] && [ -n "${AI_DECLARATION_FILE:-}" ] && [ -f "$AI_DECLARATION_FILE" ]; then
+    _declared=$(jq -c '[(.document.createdBy // [])[]? | objects | .name | strings
+                        | gsub("^\\s+|\\s+$"; "") | select(length > 0) | {name: .}]
+                       | reduce .[] as $a ([]; if any(.[]; .name == $a.name) then . else . + [$a] end)' \
+                   "$AI_DECLARATION_FILE" 2>/dev/null || true)
+    if [ -n "$_declared" ] && [ "$_declared" != "[]" ]; then
+        AUTHORS_JSON="$_declared"
+        AUTHOR_SOURCE="declaration"
+    fi
+fi
+
 # SBOM Tool Version. BOMLENS_VERSION is baked in at image build time; a local
 # build without it reports the version as unknown, which is what the minimum
 # elements ask for when no version identifier is available.
@@ -126,7 +149,8 @@ fi
 
 TMP="$(mktemp)"
 if jq --arg lifecycle "$LIFECYCLE" \
-      --arg author "$SBOM_AUTHOR" \
+      --argjson authors "$AUTHORS_JSON" \
+      --arg authorsource "$AUTHOR_SOURCE" \
       --arg toolver "$TOOL_VERSION" \
       --arg undeclared "$UNDECLARED_POLICY" \
       --arg artifactsha "$ARTIFACT_SHA256" '
@@ -157,8 +181,8 @@ if jq --arg lifecycle "$LIFECYCLE" \
     # which single tool gets the credit.
     | add_bomlens({type: "application", publisher: "SK Telecom", name: "BomLens", version: $toolver})
     | (if $lifecycle != "" then .metadata.lifecycles = [{phase: $lifecycle}] else . end)
-    | (if $author != ""
-       then .metadata.authors = [{name: $author}]
+    | (if ($authors | length) > 0
+       then .metadata.authors = $authors
        else (.metadata) |= del(.authors) end)
     # An existing hash is left alone: a scanner that already recorded one was
     # looking at the same artifact and may have used a different algorithm.
@@ -166,8 +190,10 @@ if jq --arg lifecycle "$LIFECYCLE" \
        then .metadata.component.hashes = [{alg: "SHA-256", content: $artifactsha}]
        else . end)
     | (.metadata.properties) = (((.metadata.properties // [])
-        | map(select((.name // "") != "bomlens:undeclared-fields")))
-        + [{name: "bomlens:undeclared-fields", value: $undeclared}])
+        | map(select((.name // "") != "bomlens:undeclared-fields"
+                     and (.name // "") != "bomlens:sbom-author-source")))
+        + [{name: "bomlens:undeclared-fields", value: $undeclared}]
+        + (if $authorsource != "" then [{name: "bomlens:sbom-author-source", value: $authorsource}] else [] end))
     ' "$SBOM" > "$TMP" 2>/dev/null; then
     mv "$TMP" "$SBOM"
 else
@@ -177,4 +203,8 @@ else
 fi
 
 echo "[docmeta] tool=BomLens@${TOOL_VERSION}${LIFECYCLE:+, lifecycle=$LIFECYCLE}${SBOM_AUTHOR:+, author=$SBOM_AUTHOR}${ARTIFACT_SHA256:+, sha256=${ARTIFACT_SHA256%"${ARTIFACT_SHA256#????????}"}…}: $SBOM"
-[ -n "$SBOM_AUTHOR" ] || echo "[docmeta] no SBOM author declared (set SBOM_AUTHOR or pass --sbom-author to name the entity that generated this SBOM)"
+if [ "$AUTHOR_SOURCE" = "declaration" ]; then
+    echo "[docmeta] SBOM author taken from the declaration's document.createdBy: $(printf '%s' "$AUTHORS_JSON" | jq -r 'map(.name) | join(", ")') (set SBOM_AUTHOR or pass --sbom-author to name someone else)"
+elif [ -z "$SBOM_AUTHOR" ]; then
+    echo "[docmeta] no SBOM author declared (set SBOM_AUTHOR or pass --sbom-author to name the entity that generated this SBOM)"
+fi

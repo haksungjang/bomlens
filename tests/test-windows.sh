@@ -496,12 +496,12 @@ scan_in "$d" --project Pdotnetsub --version 1.0.0 --generate-only
 # Unknown (no manifest) and mixed (two manifests) both fall back to all-in-one.
 d="$(new_proj unknown)"; printf 'hello\n' > "$d/README"
 scan_in "$d" --project Punknown --version 1.0.0 --generate-only
-{ in_out "Language: unknown" && in_out "No package manifest" && in_log "cdxgen/cdxgen:v13"; } \
+{ in_out "Language: unknown" && in_out "No package manifest" && in_log "ghcr.io/cdxgen/cdxgen:"; } \
   && pass "no manifest → unknown → all-in-one image + warning" || { fail "no manifest → all-in-one"; show; }
 
 d="$(new_proj mixed)"; printf '{}' > "$d/package.json"; printf 'module x\ngo 1.21\n' > "$d/go.mod"
 scan_in "$d" --project Pmixed --version 1.0.0 --generate-only
-{ in_out "Language: mixed" && in_log "cdxgen/cdxgen:v13"; } \
+{ in_out "Language: mixed" && in_log "ghcr.io/cdxgen/cdxgen:"; } \
   && pass "two manifests → mixed → all-in-one image" || { fail "mixed → all-in-one"; show; }
 
 # A completed source scan must print success and leave the SBOM on the host,

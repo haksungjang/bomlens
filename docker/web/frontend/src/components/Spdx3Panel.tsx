@@ -1,7 +1,7 @@
 // Copyright 2026 SK Telecom Co., Ltd.
 // SPDX-License-Identifier: Apache-2.0
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -16,10 +16,13 @@ import {
   type Spdx3Summary,
 } from "@/lib/api";
 import {
+  firstOpenStep,
+  issues as findIssues,
   keepDeclaredIds,
   parseCheck,
   parseMap,
   startDeclaration,
+  stepsFor,
   type Declaration,
   type FieldIndex,
   type Spdx3Check,
@@ -68,6 +71,8 @@ export function Spdx3Panel({
   onPatch,
   onFillingChange,
   declaredScan = false,
+  autoFill = false,
+  onAutoFill,
 }: {
   scanId: string | null;
   /** Shown above the steps: the project and version. */
@@ -80,6 +85,10 @@ export function Spdx3Panel({
   /** The scan was made from a declaration (AIDECLARE): its saved file is the
    *  scan's input, so the ids it names are kept when it is saved again. */
   declaredScan?: boolean;
+  /** Open the questions straight away (the Overview's "fill" link). */
+  autoFill?: boolean;
+  /** The questions were opened for autoFill; the request can be dropped. */
+  onAutoFill?: () => void;
 }) {
   const { t } = useTranslation();
   const { toast } = useToast();
@@ -150,7 +159,11 @@ export function Spdx3Panel({
     const template = tpl ? await readJson(scanId, tpl.name) : null;
     // Whether the scan named the author decides a question, so the check has
     // to be there before the questions open.
-    if (!check && summary?.check) setCheck(parseCheck(await readJson(scanId, summary.check)));
+    let current = check;
+    if (!current && summary?.check) {
+      current = parseCheck(await readJson(scanId, summary.check));
+      setCheck(current);
+    }
     setBusy(false);
     const initial = template ? startDeclaration(template, saved) : null;
     if (!index || !initial) {
@@ -159,8 +172,23 @@ export function Spdx3Panel({
     }
     if (tpl) onPatch?.({ results: tpl.results });
     setClosed(false);
-    setFill({ index, initial, current: initial, step: "base", original: saved });
+    // Open where something is still open, not at a step with nothing to ask.
+    const authorFromScan =
+      current?.elements.find((e) => e.type === "CreationInfo")?.fields.find((f) => f.id === "createdBy")?.status === "auto";
+    const step = firstOpenStep(stepsFor(index, initial), findIssues(index, initial, authorFromScan));
+    setFill({ index, initial, current: initial, step, original: saved });
   };
+
+  // The Overview's "fill" link: open the questions once the server can take them.
+  const autoOpened = useRef(false);
+  useEffect(() => {
+    if (!autoFill || autoOpened.current || !available || !summary || fill) return;
+    autoOpened.current = true;
+    onAutoFill?.();
+    void open();
+    // open() reads the current props; it is not a dependency to react to.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoFill, available, summary, fill]);
 
   const close = () => {
     if (scanId) drafts.delete(scanId);
@@ -198,6 +226,7 @@ export function Spdx3Panel({
         onCancel={close}
         onSave={save}
         onDraft={keepDraft}
+        declaredScan={declaredScan}
       />
     );
   }
@@ -210,8 +239,10 @@ export function Spdx3Panel({
         onFill={open}
         onWrite={write}
         focusFill={closed}
+        check={check}
+        publisher={declaredScan}
       />
-      {check && <Spdx3Fields check={check} />}
+      {check && <Spdx3Fields check={check} defaultOpen={declaredScan} />}
     </div>
   );
 }

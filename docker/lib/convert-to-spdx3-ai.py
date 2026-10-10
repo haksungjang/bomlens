@@ -853,6 +853,15 @@ def build(bom, mapping, prefix, declaration, stable):
     b.ids.add(doc_id)
     scanned_authors = extract(bom, "documentAuthors", bom)
     declared_authors = decl["document"].get("createdBy")
+    # A model described from its declaration alone (no --sbom-author) carries
+    # the declaration's authors in metadata.authors, marked as such. They are
+    # the publisher's declaration, not a scan setting: the declared createdBy
+    # (with its Organization/Person type) is used, and only without one do the
+    # recorded names stand in for it.
+    meta_props = _props((bom.get("metadata") or {}))
+    if "declaration" in meta_props.get("bomlens:sbom-author-source", []):
+        declared_authors = declared_authors or scanned_authors
+        scanned_authors = None
     if scanned_authors and declared_authors:
         b.annotate(doc_id, "The scan named its author (--sbom-author); the declaration's createdBy was not used.")
     elif declared_authors:
@@ -894,10 +903,17 @@ def build(bom, mapping, prefix, declaration, stable):
         model_ref = root.get("bom-ref")
         card = [x for d in (bom.get("dependencies") or []) if isinstance(d, dict) and d.get("ref") == model_ref
                 for x in (d.get("dependsOn") or [])]
+        # A model described from its declaration alone has no card: the
+        # datasets it uses are the ones the publisher named.
+        from_declaration = _one(_props(root), "bomlens:origin") == "declared-input"
         for dref in [x for x in card if x in ds_ids]:
             role = (decl["datasets"].get(dref) or {}).get("role")
             if role:
                 b.relationship(root_id, role, ds_ids[dref], status="declared")
+            elif from_declaration:
+                b.relationship(root_id, "other", ds_ids[dref],
+                               comment="named in the publisher's declaration; role not stated", status="review",
+                               note="declared dataset, role not stated")
             else:
                 b.relationship(root_id, "other", ds_ids[dref],
                                comment="declared in the model card; role not stated", status="review",

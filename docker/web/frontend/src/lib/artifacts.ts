@@ -235,6 +235,12 @@ export function groupArtifacts(results: ResultFile[]): LogicalArtifact[] {
   return out.sort((a, b) => a.rank - b.rank);
 }
 
+/** The check of an SPDX 3.0.1 AI document (which fields are filled), as
+ *  opposed to the document itself: its chips are labelled as check results. */
+export function isSpdx3Check(name: string): boolean {
+  return name.endsWith("_spdx3-check.json") || name.endsWith("_spdx3-check.md");
+}
+
 /** Format label shown on a download chip (e.g. "HTML", "JSON"). */
 export function formatLabel(ext: string): string {
   if (ext === "spdx3") return "SPDX 3.0.1";

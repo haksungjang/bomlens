@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { createTemplate, parseMap, startDeclaration, type Declaration, type FieldIndex } from "./aiDeclaration";
-import { declarationReducer, type DeclarationState } from "./useAiDeclaration";
+import { declarationReducer, flushPendingIds, type DeclarationState } from "./useAiDeclaration";
 
 const index = parseMap(
   JSON.parse(readFileSync(new URL("../../../../lib/spdx3-ai-map.json", import.meta.url), "utf-8")),
@@ -88,5 +88,45 @@ describe("declarationReducer", () => {
     s = declarationReducer(s, { type: "removeBase", index: 0 });
     expect(s.decl.datasets).toEqual([]);
     expect(s.decl.model!.baseModels).toEqual([]);
+  });
+});
+
+describe("clearBases", () => {
+  it("drops every base model for a model trained from scratch", () => {
+    const s1 = declarationReducer(start(), { type: "clearBases" });
+    expect(s1.decl.model!.baseModels).toEqual([]);
+    // Nothing to clear: the same state.
+    expect(declarationReducer(s1, { type: "clearBases" })).toBe(s1);
+  });
+});
+
+describe("flushPendingIds", () => {
+  const create = (): DeclarationState => ({ step: "base", decl: createTemplate(index) });
+
+  it("adds a valid id typed and not added, as its button would", () => {
+    const r = flushPendingIds(create(), [
+      { value: "  Qwen/Qwen2.5-0.5B ", toAction: (ref) => ({ type: "addBase", ref }) },
+      { value: "", toAction: (id) => ({ type: "addHub", index, id }) },
+    ]);
+    expect(r.blocked).toBe(-1);
+    expect(r.actions).toEqual([{ type: "addBase", ref: "Qwen/Qwen2.5-0.5B" }]);
+    expect(r.state.decl.model!.baseModels).toEqual([{ ref: "Qwen/Qwen2.5-0.5B", revision: "" }]);
+  });
+
+  it("stops at an id that is not one, and adds nothing", () => {
+    const s0 = create();
+    const r = flushPendingIds(s0, [
+      { value: "org/ok", toAction: (ref) => ({ type: "addBase", ref }) },
+      { value: "not an id", toAction: (id) => ({ type: "addHub", index, id }) },
+    ]);
+    expect(r.blocked).toBe(1);
+    expect(r.actions).toEqual([]);
+    expect(r.state).toBe(s0);
+  });
+
+  it("skips an id already there", () => {
+    const r = flushPendingIds(create(), [{ value: "org/ds", toAction: () => null }]);
+    expect(r.actions).toEqual([]);
+    expect(r.blocked).toBe(-1);
   });
 });

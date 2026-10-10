@@ -11,6 +11,7 @@ import { useReducer } from "react";
 import {
   emptyLocalDataset,
   hubDatasetEntry,
+  isHubId,
   slugFor,
   type Declaration,
   type FieldIndex,
@@ -39,6 +40,8 @@ export type DeclarationAction =
    *  datasets; a scan's are what the scan found and cannot be added to. */
   | { type: "addBase"; ref: string }
   | { type: "removeBase"; index: number }
+  /** "Trained from scratch": no base model at all. */
+  | { type: "clearBases" }
   | { type: "addHub"; index: FieldIndex; id: string }
   | { type: "removeHub"; index: number }
   | { type: "reset"; decl: Declaration; step: StepId };
@@ -111,6 +114,9 @@ export function declarationReducer(state: DeclarationState, action: DeclarationA
         },
       };
     }
+    case "clearBases":
+      if (!state.decl.model?.baseModels?.length) return state;
+      return { ...state, decl: { ...state.decl, model: { ...state.decl.model, baseModels: [] } } };
     case "addHub": {
       const id = action.id.trim();
       const ref = `huggingface:${id}`;
@@ -130,6 +136,38 @@ export function declarationReducer(state: DeclarationState, action: DeclarationA
       };
     }
   }
+}
+
+/** An id typed into an add-by-id box (a base model, a hub dataset, a hub
+ *  source) and not yet added with its button or Enter. */
+export interface PendingId {
+  value: string;
+  /** What adding it does; null when it is already there. */
+  toAction: (id: string) => DeclarationAction | null;
+}
+
+/**
+ * Leaving a step with ids still typed in their boxes: a valid one is added as
+ * if its button had been pressed, so it is not lost; an invalid one stops the
+ * step from being left (`blocked` is its position), and nothing is added.
+ */
+export function flushPendingIds(
+  state: DeclarationState,
+  pending: PendingId[],
+): { state: DeclarationState; actions: DeclarationAction[]; blocked: number } {
+  const typed = pending.map((p) => ({ ...p, value: p.value.trim() }));
+  const blocked = typed.findIndex((p) => p.value !== "" && !isHubId(p.value));
+  if (blocked >= 0) return { state, actions: [], blocked };
+  const actions: DeclarationAction[] = [];
+  let next = state;
+  for (const p of typed) {
+    if (!p.value) continue;
+    const a = p.toAction(p.value);
+    if (!a) continue;
+    actions.push(a);
+    next = declarationReducer(next, a);
+  }
+  return { state: next, actions, blocked: -1 };
 }
 
 export function useAiDeclaration(decl: Declaration, step: StepId) {
