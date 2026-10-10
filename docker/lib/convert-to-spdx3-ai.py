@@ -24,7 +24,9 @@ A declaration can also name the service the model runs in (its top-level
 that depends on the model at runtime, with the AI models it calls through an
 API identified as software_Package elements. The model stays the document's
 root element. The check reports whether the CycloneDX SBOM carries the same
-declared service (service.state: none, applied, pendingScan).
+declared service and the model's declared input and output kinds, training
+compute and adversarial testing, which apply-declared-service.py writes there
+(service.state: none, applied, pendingScan).
 
 Subcommands
   convert   --bom F --out-dir D --prefix=P [--declaration F [--declaration-fallback]]
@@ -83,13 +85,22 @@ MAX_LABEL = 200
 # (the CycloneDX serviceData keys the declaration takes).
 SERVICE_KEYS_EXTRA = ("externalModels",)
 EXTERNAL_MODEL_KEYS_EXTRA = ("key",)
-DATA_FLOW_KEYS = ("flow", "classification", "description", "source", "destination")
+DATA_FLOW_KEYS = ("flow", "classification", "name", "description", "source", "destination")
 # How the CycloneDX SBOM marks a service written from the declaration
 # (docker/lib/apply-declared-service.py). The digest is the one this check
 # reports, so the SBOM can be compared with the current declaration.
 DECLARED_ORIGIN = "declared-input"
 SERVICE_KIND_PROP = "bomlens:service:kind"
 SERVICE_DIGEST_PROP = "bomlens:service:declarationDigest"
+# The model's declared values that the same step writes on the model component
+# (input and output kinds, training compute and its basis, adversarial
+# testing), and the digest it records there when no service is declared.
+MODEL_CDX_FIELDS = ("inputModality", "outputModality", "trainingComputeFlops", "trainingComputeBasis",
+                    "adversarialTesting")
+MODEL_DIGEST_PROP = "bomlens:model:declarationDigest"
+# Lists whose order carries no meaning: reordering one is not a change.
+UNORDERED_KEYS = ("domain", "standardCompliance", "inputModality", "outputModality", "source", "destination",
+                  "dataFlows", "externalModels")
 
 
 class Refused(Exception):
@@ -508,6 +519,13 @@ def _check_data_flows(field, v, where, errs):
             errs.append(f"{w}.classification: limited to {MAX_LABEL} characters")
             continue
         entry = {"flow": d["flow"], "classification": cls.strip()}
+        name = d.get("name")
+        if not _empty(name):
+            if not isinstance(name, str) or len(name) > MAX_LABEL:
+                errs.append(f"{w}.name: expected text up to {MAX_LABEL} characters")
+                continue
+            if name.strip():
+                entry["name"] = name.strip()
         desc = d.get("description")
         if not _empty(desc):
             if not isinstance(desc, str) or len(desc) > MAX_TEXT:
@@ -616,11 +634,33 @@ def _check_service(raw, mapping, model_root, errs):
     return out
 
 
-def service_digest(service):
-    """SHA-256 over the normalized declared service. The check reports it and
-    the CycloneDX step records it on the service it writes, so the two can be
-    compared without re-reading every field."""
-    text = json.dumps(service, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+def declared_model_values(decl):
+    """The model's declared values the CycloneDX step writes on the model
+    component, from a normalized declaration."""
+    model = (decl or {}).get("model") or {}
+    return {k: model[k] for k in MODEL_CDX_FIELDS if not _empty(model.get(k))}
+
+
+def _canonical(v, key=None):
+    """A value with the order of meaningless lists removed: sorted by their
+    canonical JSON, so reordering domains or data flows reads as no change."""
+    if isinstance(v, dict):
+        return {k: _canonical(x, k) for k, x in v.items()}
+    if isinstance(v, list):
+        items = [_canonical(x) for x in v]
+        if key in UNORDERED_KEYS:
+            items.sort(key=lambda x: json.dumps(x, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
+        return items
+    return v
+
+
+def service_digest(service, model_values=None):
+    """SHA-256 over the normalized declared service and the model's declared
+    values the CycloneDX step writes. The check reports it and that step
+    records it on what it writes, so the two can be compared without re-reading
+    every field. Lists whose order means nothing are compared as sets."""
+    payload = {"service": _canonical(service or None), "model": _canonical(model_values or None)}
+    text = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
@@ -1169,7 +1209,7 @@ def build(bom, mapping, prefix, declaration, stable):
     # document without one keeps its element and relationship numbering.
     service = decl.get("service")
     service_id = _build_service(b, bom, root_id, service) if service else None
-    service_state = _service_state(b, bom, service, service_id or root_id)
+    service_state = _service_state(b, bom, root, service, declared_model_values(decl), service_id or root_id)
 
     b.relationship(doc_id, "describes", root_id, status=None)
     doc["rootElement"] = [root_id]
@@ -1229,24 +1269,54 @@ def _build_external_model(b, bom, em):
     return el["spdxId"]
 
 
-def _service_state(b, bom, service, element):
-    """Whether the CycloneDX SBOM carries the declared service: none (no service
-    on either side), applied (the SBOM's declared service has this declaration's
-    digest), pendingScan (the two differ; a new scan writes the SBOM again)."""
+def _service_state(b, bom, root, service, model_values, element):
+    """Whether the CycloneDX SBOM carries what the declaration puts there (the
+    service, and the model's input and output kinds, training compute and
+    adversarial testing): none (nothing on either side), applied (the SBOM
+    records this declaration's digest, on the declared service, or on the model
+    when no service is declared), pendingScan (the two differ; a new scan
+    writes the SBOM again)."""
     declared = [s for s in bom.get("services") or [] if isinstance(s, dict)
                 and _one(_props(s), "bomlens:origin") == DECLARED_ORIGIN]
-    if not service:
-        if not declared:
+    model_digest = _one(_props(root), MODEL_DIGEST_PROP) if isinstance(root, dict) else None
+    if not service and not model_values:
+        if not declared and not model_digest:
             return {"state": "none"}
-        b.messages.append({"level": "review", "element": element,
-                           "text": "the CycloneDX SBOM records a declared service the declaration does not have; "
-                                   "scan again to remove it"})
+        if declared:
+            b.messages.append({"level": "review", "element": element,
+                               "text": "the CycloneDX SBOM records a declared service the declaration does not "
+                                       "have; scan again to remove it"})
+        if model_digest:
+            b.messages.append({"level": "review", "element": element,
+                               "text": "the CycloneDX SBOM records declared model values the declaration does not "
+                                       "have; scan again to remove them"})
         return {"state": "pendingScan"}
-    digest = service_digest(service)
+    digest = service_digest(service, model_values)
+    if not service:
+        if not declared and model_digest == digest:
+            return {"state": "applied", "digest": digest}
+        if declared:
+            text = ("the CycloneDX SBOM records a declared service the declaration does not have; scan again to "
+                    "remove it")
+        elif model_digest:
+            text = ("the model's declared input and output kinds, training compute or adversarial testing differ "
+                    "from those in the CycloneDX SBOM; scan again so the SBOM includes them")
+        else:
+            text = ("the model's declared input and output kinds, training compute or adversarial testing are not "
+                    "in the CycloneDX SBOM yet; scan again so the SBOM includes them")
+        b.messages.append({"level": "review", "element": element, "text": text})
+        return {"state": "pendingScan", "digest": digest}
     recorded = [_one(_props(s), SERVICE_DIGEST_PROP) for s in declared
                 if _one(_props(s), SERVICE_KIND_PROP) == "application"]
     if recorded == [digest]:
         return {"state": "applied", "digest": digest}
+    if not service.get("name"):
+        # CycloneDX requires a service name, so the step cannot write one
+        # without it; scanning again does not help until the name is given.
+        b.messages.append({"level": "review", "element": element,
+                           "text": "the declared service has no name, so the CycloneDX SBOM cannot carry it; "
+                                   "give its name and scan again"})
+        return {"state": "pendingScan", "digest": digest}
     if declared:
         text = ("the declared service differs from the one in the CycloneDX SBOM; scan again so the SBOM and "
                 "the G7 checks include it")
@@ -1644,7 +1714,15 @@ def check_markdown(check, prefix):
             lines.append(f"- {m['text']}")
         lines.append("")
     state = (check.get("service") or {}).get("state")
-    if state == "applied":
+    has_service = any(e.get("type") == "service" for e in check.get("elements") or [])
+    if state in ("applied", "pendingScan") and not has_service:
+        lines += ["## Declared model values in the CycloneDX SBOM",
+                  ("The model's declared input and output kinds, training compute and adversarial testing are in "
+                   "the CycloneDX SBOM, marked as the publisher's declaration; the tool did not verify them."
+                   if state == "applied" else
+                   "The CycloneDX SBOM does not match the declaration yet. Scan again so it follows the "
+                   "declaration."), ""]
+    elif state == "applied":
         lines += ["## Service",
                   "The declared service is in this document and in the CycloneDX SBOM, as the publisher's "
                   "declaration; the tool did not verify it.", ""]

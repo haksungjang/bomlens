@@ -887,7 +887,7 @@
           "source": {
             "kind": "user"
           },
-          "_note": "Each flow is {flow, classification, source[], destination[], description}, written as one CdxPropertyEntry holding the CycloneDX serviceData object as compact JSON text. 'flowEnum' lists the values of 'flow' (CycloneDX dataFlowDirection)."
+          "_note": "Each flow is {flow, classification, name, description, source[], destination[]}, written as one CdxPropertyEntry holding the CycloneDX serviceData object as compact JSON text. 'flowEnum' lists the values of 'flow' (CycloneDX dataFlowDirection)."
         },
         {
           "id": "standardCompliance",

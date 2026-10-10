@@ -617,6 +617,53 @@ python3 -I "$CONV" check --bom "$WORK/svc-bom.json" --declaration "$FIX/declarat
     && pass "a service removed from the declaration is pendingScan until the next scan" || fail "removed: $(jq -c .service "$WORK/svc-check.json")"
 python3 -I "$CONV" check --bom "$FIX/bom-ai-sample.json" --declaration "$FIX/declaration-complete.json" > "$WORK/svc-check.json" 2>/dev/null
 [ "$(jq -c .service "$WORK/svc-check.json")" = '{"state":"none"}' ] && pass "no service on either side is none" || fail "none: $(jq -c .service "$WORK/svc-check.json")"
+# A data flow can be named, as CycloneDX serviceData is.
+jq '.service.dataFlows[0].name = "  Chat questions "' "$SVC" > "$WORK/svc-named.json"
+convert "$WORK/svc-named.json"
+named=$(el ai_AIPackage "Acme Support Assistant" | jq -r '[.extension[].extension_cdxProperty[] | select(.extension_cdxPropName=="bomlens:service:dataFlow") | .extension_cdxPropValue | fromjson | .name // empty] | join("|")')
+[ "$named" = "Chat questions" ] && pass "a data flow's name is accepted, trimmed and written with the flow" || fail "data flow name: $named"
+# Reordering a list whose order means nothing is not a change; a new value is.
+digest_of() { python3 -I "$CONV" check --bom "$FIX/bom-ai-sample.json" --declaration "$1" 2>/dev/null | jq -r .service.digest; }
+jq '.service.domain = ["support", "customer support"] | .service.standardCompliance = ["ISO/IEC 42001:2023", "ISO/IEC 23894:2023"]
+    | .service.dataFlows[0].source = ["https://a.example/1", "https://a.example/2"]' "$SVC" > "$WORK/order-a.json"
+jq '.service.domain |= reverse | .service.standardCompliance |= reverse | .service.dataFlows |= reverse
+    | .service.dataFlows[1].source |= reverse | .service.inputModality = ["text"] | .model.outputModality = ["text"]' \
+    "$WORK/order-a.json" > "$WORK/order-b.json"
+jq '.service.domain += ["health"]' "$WORK/order-a.json" > "$WORK/order-c.json"
+da=$(digest_of "$WORK/order-a.json"); db=$(digest_of "$WORK/order-b.json"); dc=$(digest_of "$WORK/order-c.json")
+{ [ "${#da}" = "64" ] && [ "$da" = "$db" ] && [ "$da" != "$dc" ]; } \
+    && pass "reordering domains, standards, data flows and addresses keeps the digest; a new domain changes it" \
+    || fail "order-insensitive digest: a=$da b=$db c=$dc"
+jq '.service.externalModels += [{"key": "ocr", "name": "Example OCR"}]' "$SVC" > "$WORK/order-d.json"
+jq '.service.externalModels |= reverse' "$WORK/order-d.json" > "$WORK/order-e.json"
+[ "$(digest_of "$WORK/order-d.json")" = "$(digest_of "$WORK/order-e.json")" ] \
+    && pass "reordering the external models keeps the digest" || fail "external models order changed the digest"
+# The model's declared values count without a service: the CycloneDX step
+# records the digest on the model component then.
+jq '.model.inputModality = ["text"] | .model.adversarialTesting = "no"' "$FIX/declaration-complete.json" > "$WORK/mv.json"
+python3 -I "$CONV" check --bom "$FIX/bom-ai-sample.json" --declaration "$WORK/mv.json" > "$WORK/mv-check.json" 2>/dev/null
+mvd=$(jq -r .service.digest "$WORK/mv-check.json")
+{ [ "$(jq -r .service.state "$WORK/mv-check.json")" = "pendingScan" ] && [ "${#mvd}" = "64" ] \
+  && grep -q "are not in the CycloneDX SBOM yet" "$WORK/mv-check.json"; } \
+    && pass "declared model values the SBOM does not carry yet are pendingScan" || fail "model values pending: $(jq -c .service "$WORK/mv-check.json")"
+jq --arg d "$mvd" '.metadata.component.properties += [{"name": "bomlens:model:declarationDigest", "value": $d}]' \
+    "$FIX/bom-ai-sample.json" > "$WORK/mv-bom.json"
+python3 -I "$CONV" check --bom "$WORK/mv-bom.json" --declaration "$WORK/mv.json" > "$WORK/mv-check.json" 2>/dev/null
+[ "$(jq -r .service.state "$WORK/mv-check.json")" = "applied" ] \
+    && pass "the model's digest on the model component makes them applied" || fail "model values applied: $(jq -c .service "$WORK/mv-check.json")"
+python3 -I "$CONV" check --bom "$WORK/mv-bom.json" --declaration "$FIX/declaration-complete.json" > "$WORK/mv-check.json" 2>/dev/null
+{ [ "$(jq -r .service.state "$WORK/mv-check.json")" = "pendingScan" ] \
+  && grep -q "records declared model values the declaration does not have" "$WORK/mv-check.json"; } \
+    && pass "model values removed from the declaration are pendingScan until the next scan" || fail "model values removed: $(jq -c .service "$WORK/mv-check.json")"
+rm -f "$OUT"/*
+python3 -I "$CONV" convert --bom "$WORK/mv-bom.json" --out-dir "$OUT" --prefix "$P" --declaration "$WORK/mv.json" --stable 2>/dev/null
+{ grep -q "^## Declared model values in the CycloneDX SBOM" "$OUT/${P}_spdx3-check.md" && ! grep -q "^## Service" "$OUT/${P}_spdx3-check.md"; } \
+    && pass "the readable check names the model values, not a service, when no service is declared" || fail "model-only check text"
+jq '.service.name = ""' "$SVC" > "$WORK/svc-noname.json"
+python3 -I "$CONV" check --bom "$FIX/bom-ai-sample.json" --declaration "$WORK/svc-noname.json" > "$WORK/svc-check.json" 2>/dev/null
+{ [ "$(jq -r .service.state "$WORK/svc-check.json")" = "pendingScan" ] \
+  && grep -q "has no name, so the CycloneDX SBOM cannot carry it" "$WORK/svc-check.json"; } \
+    && pass "a service with no name says the SBOM cannot carry it until it is named" || fail "unnamed service: $(jq -c .service "$WORK/svc-check.json")"
 jq 'del(.service.releaseTime, .service.autonomyType)' "$SVC" > "$WORK/svc-draft.json"
 convert "$WORK/svc-draft.json"
 { [ $? -eq 0 ] && [ "$(jq -r .draft "$CHK")" = "true" ] \
@@ -653,7 +700,9 @@ refuse_s "a data flow direction outside CycloneDX's list" '.service.dataFlows[0]
 refuse_s "a data flow with no classification" '.service.dataFlows[0].classification = " "'
 refuse_s "a data flow source that is not an address" '.service.dataFlows[0].source = ["chat window"]'
 refuse_s "a data flow destination with a javascript scheme" '.service.dataFlows[1].destination = ["javascript:alert(1)"]'
-refuse_s "an unknown key in a data flow" '.service.dataFlows[0].name = "x"'
+refuse_s "an unknown key in a data flow" '.service.dataFlows[0].governance = "x"'
+refuse_s "a data flow name that is not text" '.service.dataFlows[0].name = 5'
+refuse_s "a data flow name longer than the limit" '.service.dataFlows[0].name = ("a" * 300)'
 refuse_s "a data flow description longer than the limit" '.service.dataFlows[0].description = ("a" * 5000)'
 refuse_s "an external model key twice" '.service.externalModels += [{"key": "translate", "name": "Other"}]'
 refuse_s "an external model key with capitals" '.service.externalModels[0].key = "Translate"'

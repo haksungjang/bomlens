@@ -1853,7 +1853,7 @@ if { [ -n "$AI_DECLARE_FILE" ] || [ "$GENERATE_SPDX3" = "false" ]; } \
 fi
 
 if [ "$MODE" = "AIDECLARE" ] && [ "$GENERATE_SPDX3" = "false" ]; then
-    echo "[ERROR] --no-spdx3 cannot be used when --ai-declare is the input: the declared values are written only to the SPDX 3.0.1 document."; exit 1
+    echo "[ERROR] --no-spdx3 cannot be used when --ai-declare is the input: most declared values are written only to the SPDX 3.0.1 document."; exit 1
 fi
 
 if [ "$VERIFY_WEIGHTS" = "true" ] && [ "$MODE" != "AIBOM" ]; then
