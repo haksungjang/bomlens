@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v1.13.0] - 2026-10-10
+
 ### Upgrade note
 
 - An AI model scan now reads the datasets a dataset's card names as its sources (`source_datasets`) and judges them with it, so a model whose training data contains a source under stricter terms can grade lower than before (for example `caution` where it was `ok`). Compare with an earlier result using `--diff`. `AIBOM_DATASET_DEPTH=0` restores the previous behaviour.
