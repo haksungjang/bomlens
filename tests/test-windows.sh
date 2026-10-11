@@ -69,7 +69,15 @@ case "${1:-}" in
     # value cannot be read would.
     [ -z "${DOCKER_STUB_MEMTOTAL:-}" ] || echo "$DOCKER_STUB_MEMTOTAL"
     exit 0 ;;
-  version|pull|image|stop|rm) exit 0 ;;
+  version|pull|stop|rm) exit 0 ;;
+  image)
+    # `docker image inspect -f '{{index .Config.Labels "com.sktelecom.sbom.engine-contract"}}'`:
+    # the stub models an image as new as this CLI. DOCKER_STUB_OLD_IMAGE=1
+    # models one from before the engine contract (no label).
+    case "$*" in
+      *engine-contract*) [ "${DOCKER_STUB_OLD_IMAGE:-0}" = "1" ] || echo "1.0.0" ;;
+    esac
+    exit 0 ;;
   ps)
     # `docker ps -aq --filter label=bomlens.scan=cli --filter status=exited`:
     # the startup sweep for a scan container an earlier, killed run left

@@ -882,14 +882,22 @@ EOF
         if [ -n "${BOMLENS_STAGE1_EXIT:-}" ] && { [ "$BOMLENS_STAGE1_EXIT" != "0" ] || [ ! -s "$OUTPUT_FILE" ]; }; then
             _s1_log="${BOMLENS_STAGE1_LOG:-}"
             case "$_s1_log" in ''|*/*|.*) _s1_log="" ;; esac
-            _s1_reason="$(stage1_fail_reason "${BOMLENS_STAGE1_OOM:-}" "${_s1_log:+$HOST_OUTPUT_DIR/$_s1_log}")"
-            echo "[WARN] stage 1 (cdxgen) did not produce an SBOM (exit ${BOMLENS_STAGE1_EXIT}, ${_s1_reason}); falling back to a manifest-only scan (direct dependencies only)."
+            # A caller that already classified the failure (the CLI does, with
+            # the same stage1_fail_reason) passes the reason itself.
+            case "${BOMLENS_STAGE1_REASON:-}" in
+                oom|disk-space|network|cdxgen-crash) _s1_reason="$BOMLENS_STAGE1_REASON" ;;
+                *) _s1_reason="$(stage1_fail_reason "${BOMLENS_STAGE1_OOM:-}" "${_s1_log:+$HOST_OUTPUT_DIR/$_s1_log}")" ;;
+            esac
+            # The CLI prints its own guidance for this, before and after.
+            [ -n "${_BOMLENS_CLI_FALLBACK:-}" ] || \
+                echo "[WARN] stage 1 (cdxgen) did not produce an SBOM (exit ${BOMLENS_STAGE1_EXIT}, ${_s1_reason}); falling back to a manifest-only scan (direct dependencies only)."
             rm -f "$OUTPUT_FILE"
             read -ra _s1_exclude <<< "$(non_shipped_syft_args)"
             if ! syft "dir:${SOURCE_ROOT:-/src}" "${_s1_exclude[@]}" -o "cyclonedx-json@$CDX_SPEC_VERSION" > "$OUTPUT_FILE" 2>/dev/null \
                || ! apply_node_fallback_quality_gate "$OUTPUT_FILE" "${SOURCE_ROOT:-/src}" 2; then
                 rm -f "$OUTPUT_FILE"
-                echo "[ERROR] SBOM generation failed (stage 1), and the manifest-only fallback also failed or was discarded."
+                [ -n "${_BOMLENS_CLI_FALLBACK:-}" ] || \
+                    echo "[ERROR] SBOM generation failed (stage 1), and the manifest-only fallback also failed or was discarded."
                 exit 1
             fi
             mark_sbom_degraded "$OUTPUT_FILE" "$_s1_reason"

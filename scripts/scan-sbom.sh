@@ -58,12 +58,10 @@ case "$(uname -s 2>/dev/null)" in
         # A POSIX path this shell can mkdir/read directly; hostpath() (above)
         # still does the cygpath -m conversion when this needs to reach a
         # docker -v flag, same as every other mount in this script.
-        GUARD_STATE_DIR="$(cygpath -u "${LOCALAPPDATA:-$HOME/AppData/Local}" 2>/dev/null)/bomlens/guard"
-        SCRATCH_DIR="$(cygpath -u "${LOCALAPPDATA:-$HOME/AppData/Local}" 2>/dev/null)/bomlens/tmp" ;;
+        GUARD_STATE_DIR="$(cygpath -u "${LOCALAPPDATA:-$HOME/AppData/Local}" 2>/dev/null)/bomlens/guard" ;;
     *)
         hostpath() { printf '%s' "$1"; }
-        GUARD_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/bomlens/guard"
-        SCRATCH_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/bomlens/tmp" ;;
+        GUARD_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/bomlens/guard" ;;
 esac
 
 POSTPROCESS_IMAGE="${SBOM_SCANNER_IMAGE:-ghcr.io/sktelecom/bomlens:latest}"           # legacy aliases: sbom-generator, sbom-scanner
@@ -872,21 +870,9 @@ cleanup() {
         # not leave it behind. A no-op if stage 1 already removed it itself.
         "${DOCKER_ENV[@]}" docker rm -f "$RUNNING_CONTAINER_NAME" >/dev/null 2>&1 || true
     fi
-    # The syft-fallback helper script (stage 1's cdxgen-crash path): a no-op
-    # once stage 1 has already removed it, so this only matters when a
-    # cancel lands while the fallback container is running. `if`, not a bare
-    # `&&`: this is the last statement cleanup() runs, and since the script
-    # itself never calls a final `exit N` (bash returns the last command's own
-    # status when it falls off the end), a false `[ -n ... ]` here would leak
-    # its own exit 1 out as the whole script's exit code on every ordinary
-    # run -- an `if` with no `else` returns 0 on a false condition instead.
-    if [ -n "$STAGE1_FALLBACK_SCRIPT" ]; then
-        rm -f "$STAGE1_FALLBACK_SCRIPT"
-    fi
 }
 trap cleanup EXIT INT TERM
 RUNNING_CONTAINER_NAME=""
-STAGE1_FALLBACK_SCRIPT=""
 
 # Host-persistent guard state: when a scan is interrupted hard
 # enough that build-prep.sh's own trap never runs (SIGKILL, OOM, a host
@@ -2150,58 +2136,32 @@ if [ "$MODE" = "SOURCE" ]; then
     wait "$STAGE1_PID" || true
     RUNNING_CONTAINER_NAME=""
     STAGE1_RC=$("${DOCKER_ENV[@]}" docker wait "$STAGE1_CONTAINER" 2>/dev/null || echo 1)
-    if [ "$STAGE1_RC" -ne 0 ] || [ ! -f "$OUTPUT_HOST_DIR/$OUTPUT_FILE" ]; then
-        if [ "$("${DOCKER_ENV[@]}" docker inspect -f '{{.State.OOMKilled}}' "$STAGE1_CONTAINER" 2>/dev/null)" = "true" ]; then
-            STAGE1_FAIL_REASON="oom"
-            echo "[WARN] cdxgen was killed for running out of memory (rc=$STAGE1_RC). Give the Docker engine more memory and re-scan for full transitive dependencies. Full cdxgen log: $STAGE1_LOG"
-        elif grep -qi "no space left on device" "$STAGE1_LOG"; then
-            STAGE1_FAIL_REASON="disk-space"
-            echo "[WARN] cdxgen failed: Docker is out of disk space (rc=$STAGE1_RC). Free space (e.g. 'docker system prune'). Full cdxgen log: $STAGE1_LOG"
-        elif grep -qEi "temporary failure in name resolution|could not resolve host|network is unreachable|connection timed out|connect timed out|no route to host|ENOTFOUND|ETIMEDOUT" "$STAGE1_LOG"; then
-            STAGE1_FAIL_REASON="network"
-            echo "[WARN] cdxgen couldn't reach the network while resolving dependencies (rc=$STAGE1_RC). Check proxy/firewall access to the package registries. Full cdxgen log: $STAGE1_LOG"
-        else
-            STAGE1_FAIL_REASON="cdxgen-crash"
-            echo "[WARN] cdxgen failed processing the dependency data (rc=$STAGE1_RC); see $STAGE1_LOG for the full log. Falling back to a manifest-only scan (direct dependencies only)."
-        fi
+    # When stage 1 left no SBOM, stage 2 takes its place with the manifest-only
+    # syft scan: the same fallback a caller running the execution plan gets
+    # (entrypoint.sh, POSTPROCESS), so the CLI and that path cannot drift
+    # apart. The reason is classified here, with the same rules
+    # (stage1_fail_reason), so the guidance below can name it, and handed on.
+    # The exit code goes to stage 2 either way, as the plan's callers pass it,
+    # so both decide "no SBOM" the same way (an empty file counts as none).
+    STAGE1_FALLBACK_ENV=" -e BOMLENS_STAGE1_EXIT=$STAGE1_RC -e _BOMLENS_CLI_FALLBACK=1"
+    STAGE1_FAILED=""
+    if [ "$STAGE1_RC" -ne 0 ] || [ ! -s "$OUTPUT_HOST_DIR/$OUTPUT_FILE" ]; then
+        STAGE1_FAILED=1
+        STAGE1_OOM="$("${DOCKER_ENV[@]}" docker inspect -f '{{.State.OOMKilled}}' "$STAGE1_CONTAINER" 2>/dev/null || true)"
+        STAGE1_FAIL_REASON="$(stage1_fail_reason "$STAGE1_OOM" "$STAGE1_LOG")"
+        case "$STAGE1_FAIL_REASON" in
+            oom)
+                echo "[WARN] cdxgen was killed for running out of memory (rc=$STAGE1_RC). Give the Docker engine more memory and re-scan for full transitive dependencies. Full cdxgen log: $STAGE1_LOG" ;;
+            disk-space)
+                echo "[WARN] cdxgen failed: Docker is out of disk space (rc=$STAGE1_RC). Free space (e.g. 'docker system prune'). Full cdxgen log: $STAGE1_LOG" ;;
+            network)
+                echo "[WARN] cdxgen couldn't reach the network while resolving dependencies (rc=$STAGE1_RC). Check proxy/firewall access to the package registries. Full cdxgen log: $STAGE1_LOG" ;;
+            *)
+                echo "[WARN] cdxgen failed processing the dependency data (rc=$STAGE1_RC); see $STAGE1_LOG for the full log. Falling back to a manifest-only scan (direct dependencies only)." ;;
+        esac
         "${DOCKER_ENV[@]}" docker rm -f "$STAGE1_CONTAINER" >/dev/null 2>&1
         rm -f "$OUTPUT_HOST_DIR/$OUTPUT_FILE"
-        ensure_image_fresh "$POSTPROCESS_IMAGE"
-        # A bind-mounted script file (matching build-prep.sh's own pattern),
-        # not a `-c` string built by host-side interpolation: the same
-        # MSYS_NO_PATHCONV mount-path rewriting that protects every other
-        # docker call in this script would otherwise also mangle a `-c`
-        # argument that happens to contain "/"-separated words on Windows
-        # Git Bash. Written under SCRATCH_DIR, not OUTPUT_HOST_DIR: that is
-        # the user's own output folder, and a script left behind there (a
-        # crash between writing it and the rm below) would linger among the
-        # scan's real artifacts. Not the system tmpdir either: a Linux VM
-        # Docker backend (Colima, some Docker Desktop setups) mounts only
-        # specific host paths into itself, and silently substitutes an empty
-        # directory for a source it cannot see.
-        mkdir -p "$SCRATCH_DIR" 2>/dev/null
-        STAGE1_FALLBACK_SCRIPT="$SCRATCH_DIR/.fallback-$$-$RANDOM.sh"
-        cat > "$STAGE1_FALLBACK_SCRIPT" <<'FALLBACK_SH'
-set -e
-. /usr/local/lib/sbom/source-detect.sh
-read -ra SYFT_EXCLUDE <<< "$(non_shipped_syft_args)"
-syft "dir:/src" "${SYFT_EXCLUDE[@]}" -o "cyclonedx-json@$1" > "/out/$2" 2>/dev/null
-apply_node_fallback_quality_gate "/out/$2" /src 2 || { echo "[ERROR] fallback SBOM discarded (see above)." >&2; exit 1; }
-mark_sbom_degraded "/out/$2" "$3"
-mark_sbom_excluded "/out/$2" /src
-FALLBACK_SH
-        if ! eval "$DOCKER_MSYS"docker run --rm --label bomlens.scan=cli --entrypoint bash \
-            -v "\"$(hostpath "$SCAN_INPUT_DIR")\"":/src:ro \
-            -v "\"$(hostpath "$OUTPUT_HOST_DIR")\"":/out \
-            -v "\"$(hostpath "$STAGE1_FALLBACK_SCRIPT")\"":/tmp/fallback.sh:ro \
-            "\"$POSTPROCESS_IMAGE\"" \
-            /tmp/fallback.sh "$CDX_SPEC_VERSION" "$OUTPUT_FILE" "$STAGE1_FAIL_REASON"; then
-            rm -f "$STAGE1_FALLBACK_SCRIPT"; STAGE1_FALLBACK_SCRIPT=""
-            echo "[ERROR] SBOM generation failed (stage 1), and the manifest-only fallback also failed or was discarded (see the guidance above, if any). Full cdxgen log: $STAGE1_LOG"
-            exit 1
-        fi
-        rm -f "$STAGE1_FALLBACK_SCRIPT"; STAGE1_FALLBACK_SCRIPT=""
-        echo "[WARN] Manifest-only fallback used (direct dependencies only, no transitive resolution). Full cdxgen log: $STAGE1_LOG"
+        STAGE1_FALLBACK_ENV="$STAGE1_FALLBACK_ENV -e BOMLENS_STAGE1_REASON=$STAGE1_FAIL_REASON"
     else
         "${DOCKER_ENV[@]}" docker rm -f "$STAGE1_CONTAINER" >/dev/null 2>&1
         rm -f "$STAGE1_LOG"
@@ -2230,14 +2190,32 @@ FALLBACK_SH
         fi
     fi
     ensure_image_fresh "$PP_IMAGE"
+    # The fallback runs inside this image, which takes the hand-off only from
+    # the engine contract on (an image older than this CLI ignores it and
+    # stops with "SBOM not found"). Checked only when it is needed.
+    if [ -n "$STAGE1_FAILED" ] \
+       && [ -z "$("${DOCKER_ENV[@]}" docker image inspect -f '{{index .Config.Labels "com.sktelecom.sbom.engine-contract"}}' "$PP_IMAGE" 2>/dev/null | grep -v '<no value>')" ]; then
+        echo "[ERROR] cdxgen produced no SBOM, and the post-processing image $PP_IMAGE is older than this CLI: it cannot run the manifest-only fallback."
+        echo "        Use the image of the same BomLens version as this CLI (docker pull $PP_IMAGE, or set SBOM_SCANNER_IMAGE to it). Full cdxgen log: $STAGE1_LOG"
+        exit 1
+    fi
     export_scan_secrets
     # shellcheck disable=SC2046
     eval "$DOCKER_MSYS"docker run --rm \
         -v "\"$(hostpath "$SCAN_INPUT_DIR")\"":/src -v "\"$(hostpath "$OUTPUT_HOST_DIR")\"":/host-output \
         -w /host-output \
         --add-host=host.docker.internal:host-gateway \
-        -e MODE=POSTPROCESS -e BOMLENS_RUN_INPUT="$OUTPUT_FILE" -e NESTED_ROOTFS_HINT="\"$NESTED_ROOTFS_HINT\"" -e BOMLENS_DEEP_LICENSE_FALLBACK="\"${DEEP_LICENSE_FALLBACK_FROM:-}\"" $(pp_env)$(cosign_run)$(vex_run)$(declare_run)$(gate_run) \
-        "\"$PP_IMAGE\""
+        -e MODE=POSTPROCESS -e BOMLENS_RUN_INPUT="$OUTPUT_FILE" -e NESTED_ROOTFS_HINT="\"$NESTED_ROOTFS_HINT\"" -e BOMLENS_DEEP_LICENSE_FALLBACK="\"${DEEP_LICENSE_FALLBACK_FROM:-}\"" -e BOMLENS_INCLUDE_NON_SHIPPED${STAGE1_FALLBACK_ENV} $(pp_env)$(cosign_run)$(vex_run)$(declare_run)$(gate_run) \
+        "\"$PP_IMAGE\"" || {
+        _pp_rc=$?
+        if [ -n "$STAGE1_FAILED" ] && [ ! -s "$OUTPUT_HOST_DIR/$OUTPUT_FILE" ]; then
+            echo "[ERROR] SBOM generation failed (stage 1), and the manifest-only fallback also failed or was discarded (see the guidance above, if any). Full cdxgen log: $STAGE1_LOG"
+        fi
+        exit "$_pp_rc"
+    }
+    if [ -n "$STAGE1_FAILED" ]; then
+        echo "[WARN] Manifest-only fallback used (direct dependencies only, no transitive resolution). Full cdxgen log: $STAGE1_LOG"
+    fi
 else
     # image / binary / rootfs / firmware / aibom / analyze / merge: scanner image
     # runs the generation step + common pipeline in one shot. Firmware and aibom
