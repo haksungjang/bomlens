@@ -14,9 +14,10 @@ description: BomLens 스캐너 Docker 이미지를 docker run으로 직접 호�
 | `ghcr.io/sktelecom/sbom-generator`, `ghcr.io/sktelecom/sbom-scanner` | 같은 이미지의 별칭 (이전 이름, 같은 다이제스트) |
 | `ghcr.io/sktelecom/bomlens-firmware` | 펌웨어 분석용 (GPL 도구 포함, opt-in) (legacy alias: sbom-scanner-firmware) |
 | `ghcr.io/sktelecom/bomlens-deep-cve` | 심층 CVE 매칭용 grype 포함 (opt-in). CLI의 `--deep-cve`와 웹 UI의 심층 CVE 매칭 토글이 쓰며, 둘 다 지금 실행 중인 이미지가 이 이미지가 아니면 곁들임 컨테이너로 자동으로 내려받습니다 |
+| `ghcr.io/sktelecom/bomlens-deep-license` | 프로젝트 자체 파일의 라이선스 탐지용 scancode 포함 (opt-in). 소스 스캔에서 CLI의 `--deep-license`가 쓰며, 자동으로 내려받습니다. LGPL 구성요소(linux/amd64의 7-Zip, intbitset, chardet)가 들어 있습니다. 7-Zip과 intbitset의 소스는 이미지 안 `/usr/share/bomlens/sources/`에 있고, chardet은 파이썬 소스 형태로 들어 있습니다 |
 | `ghcr.io/sktelecom/bomlens-aibom` | AI 모델 ML-BOM 생성용 (opt-in, legacy alias: sbom-scanner-aibom). `--model`/`--model-file`과 웹 UI의 AI 모델 타일이 쓰며, 곁들임 컨테이너로 자동으로 내려받습니다 |
 
-`latest`와 버전 태그를 제공합니다. 발행되는 모든 이미지(`ghcr.io/sktelecom/bomlens`, `bomlens-firmware`, `bomlens-deep-cve`, `bomlens-aibom` 및 별칭)가 `linux/amd64`와 `linux/arm64`를 모두 지원하므로, `arm64` 호스트(Apple Silicon 맥, Arm 서버)에서도 그대로 pull해 쓸 수 있습니다. 이미지는 cosign으로 서명되어 발행됩니다.
+`latest`와 버전 태그를 제공합니다. 발행되는 모든 이미지(`ghcr.io/sktelecom/bomlens`, `bomlens-firmware`, `bomlens-deep-cve`, `bomlens-deep-license`, `bomlens-aibom` 및 별칭)가 `linux/amd64`와 `linux/arm64`를 모두 지원하므로, `arm64` 호스트(Apple Silicon 맥, Arm 서버)에서도 그대로 pull해 쓸 수 있습니다. 이미지는 cosign으로 서명되어 발행됩니다.
 
 ```bash
 docker pull ghcr.io/sktelecom/bomlens:latest

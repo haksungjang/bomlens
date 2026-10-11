@@ -1502,8 +1502,14 @@ if [ "$SOURCE_SCAN" = "true" ] && [ "${DEEP_LICENSE:-false}" = "true" ] && [ -d 
             ARTIFACTS+=("${OUT_PREFIX}_scancode.json")
             er_record deep-license degraded failed "scancode reported errors on some files" "$_dl_started" ;;
         3)
-            echo "[WARN] --deep-license requested but scancode not in image (rebuild with --build-arg SBOM_DEEP_LICENSE=true)."
-            er_record deep-license skipped not_installed "scancode is not in this image" "$_dl_started" ;;
+            echo "[WARN] --deep-license requested but scancode not in image (use the bomlens-deep-license image, or rebuild with --build-arg SBOM_DEEP_LICENSE=true)."
+            # The CLI ran this step here because the scancode image could not
+            # be pulled; say so, rather than that this image lacks a tool.
+            if [ -n "${BOMLENS_DEEP_LICENSE_FALLBACK:-}" ]; then
+                er_record deep-license skipped fallback "the scancode image was not available: ${BOMLENS_DEEP_LICENSE_FALLBACK}" "$_dl_started"
+            else
+                er_record deep-license skipped not_installed "scancode is not in this image" "$_dl_started"
+            fi ;;
         4)
             er_record deep-license skipped too_large "more than ${DEEP_LICENSE_MAX_FILES:-20000} source files" "$_dl_started" ;;
         5)

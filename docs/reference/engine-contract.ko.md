@@ -30,8 +30,8 @@ BomLens 이미지를 스캔 엔진으로 쓰는 프로그램은 모든 스캔이
 
 | `run.status` | 조건 |
 |---|---|
-| `succeeded` | 종료 코드 0이고, 기록된 모든 단계가 `ok`, `skipped`, `disabled` 중 하나 |
-| `succeeded_degraded` | 종료 코드 0이고, `failed`나 `degraded`인 단계가 하나 이상 있음. SBOM은 유효하며, 실패한 단계가 중요한지는 `steps[]`를 보고 판단합니다 |
+| `succeeded` | 종료 코드 0이고, 기록된 모든 단계가 `ok`, `disabled`, 또는 읽을 것이 없어 건너뛴 `skipped`(`no_input`) 중 하나 |
+| `succeeded_degraded` | 종료 코드 0이고, `failed`나 `degraded`인 단계, 또는 다른 사유로 `skipped`된 단계(요청했지만 실행할 수 없었던 단계: 도구 미설치, 입력 한도 초과, 이미지 사용 불가)가 하나 이상 있음. SBOM은 유효하며, 실패한 단계가 중요한지는 `steps[]`를 보고 판단합니다 |
 | `failed` | 0이 아닌 종료 코드로 끝남(`reason`은 `exit_code`) |
 | `cancelled` | 시그널로 중단됨(종료 코드 130 또는 143) |
 
@@ -56,7 +56,7 @@ BomLens 이미지를 스캔 엔진으로 쓰는 프로그램은 모든 스캔이
 | `timeout` | 시간 제한을 넘김 |
 | `not_installed` | 필요한 도구가 이 이미지에 없음 |
 | `too_large` | 입력이 단계의 크기 제한을 넘음 |
-| `fallback` | 더 단순한 방법으로 대신함(매니페스트만 읽는 대체 경로로 SBOM을 만들어 직접 의존성만 있음) |
+| `fallback` | 더 단순한 방법으로 대신함(매니페스트만 읽는 대체 경로로 SBOM을 만들어 직접 의존성만 있음), 또는 필요한 이미지 없이 진행함(scancode 이미지를 내려받지 못한 `--deep-license`) |
 | `unavailable` | 단계가 읽는 데이터를 쓸 수 없었음 |
 | `budget_exhausted` | 작업량 제한에서 멈춤 |
 | `no_input` | 단계가 읽을 것이 없었음(소스 트리 없음, 서명 키 없음) |
