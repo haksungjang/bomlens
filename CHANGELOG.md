@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade note
+
+- A source scan now also leaves out manifests under `sample`, `bench`, `benchmark`, `demo` and `demos` folders. A project with dependencies declared only there shows fewer components than before; set `BOMLENS_INCLUDE_NON_SHIPPED=1` to keep them.
+
+### Changed
+
+- The non-shipped folder list gains the singular and short spellings `sample`, `bench`, `benchmark`, `demo` and `demos`, next to the plural forms it already had.
+
 ## [v1.13.1] - 2026-10-10
 
 ### Upgrade note

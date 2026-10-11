@@ -381,7 +381,7 @@ trap 'stop_supervised; guard_restore; exit 143' TERM
 # ahead of every ecosystem block below, because the lock-evidence check each
 # one may run (mark_prep_applied / _lock_evidence_found) needs it too, not
 # just the cdxgen --exclude flags built from it further down.
-NON_SHIPPED_DIRS="test tests spec fixtures testdata __tests__ e2e example examples benches benchmarks playground samples"
+NON_SHIPPED_DIRS="test tests spec fixtures testdata __tests__ e2e example examples sample samples bench benches benchmark benchmarks demo demos playground"
 NON_SHIPPED_MANIFEST_RE='(^|/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|uv\.lock|Pipfile|Pipfile\.lock|setup\.py|setup\.cfg|environment\.ya?ml|pom\.xml|build\.gradle(\.kts)?|settings\.gradle(\.kts)?|gradle\.lockfile|go\.mod|go\.sum|Cargo\.toml|Cargo\.lock|Gemfile|Gemfile\.lock|[^/]+\.gemspec|composer\.json|composer\.lock|[^/]+\.(cs|fs|vb)proj|packages\.config|packages\.lock\.json|Directory\.Packages\.props|Package\.swift|Package\.resolved|Podfile|Podfile\.lock|conanfile\.txt|conanfile\.py|vcpkg\.json|METADATA|PKG-INFO)$'
 EXCLUDE_NON_SHIPPED=1
 if opted_out "${BOMLENS_INCLUDE_NON_SHIPPED:-}"; then
