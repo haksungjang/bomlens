@@ -153,11 +153,15 @@ source_manifests() {
     printf '%s' "${out#, }"
 }
 
-# stage1_fail_reason <oom> [log]: why stage 1 (cdxgen) gave no SBOM, in the
-# words bomlens:sbom-tool-degraded uses: oom (the container was killed for
-# memory), disk-space, network, or cdxgen-crash. Same rules as the CLI's.
+# stage1_fail_reason <oom> [log] [exit code]: why stage 1 (cdxgen) gave no
+# SBOM, in the words bomlens:sbom-tool-degraded uses: oom (the container was
+# killed for memory), cdxgen-unavailable (exit 127, the shell's "command not
+# found": stage 1 never started, or a caller of an unsupported plan says it
+# did not run), disk-space, network, or cdxgen-crash. The CLI and the
+# post-processing step both classify with this.
 stage1_fail_reason() {
     if [ "${1:-}" = "true" ]; then echo oom; return; fi
+    if [ "${3:-}" = "127" ]; then echo cdxgen-unavailable; return; fi
     local log="${2:-}"
     if [ -n "$log" ] && [ -f "$log" ]; then
         if grep -qi "no space left on device" "$log"; then echo disk-space; return; fi

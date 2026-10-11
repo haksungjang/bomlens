@@ -41,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The result manifest now records `generate` as `degraded` (`fallback`) when a lock-less Poetry project's pins could not be resolved further (`poetry-graph` failed, for one with no network), so the run reads `succeeded_degraded`; before, only the SBOM said so.
+- A stage 2 told that stage 1 never ran (exit code 127, as for an `unsupported` plan, or `BOMLENS_STAGE1_REASON=cdxgen-unavailable`) records the fallback reason as `cdxgen-unavailable` instead of `cdxgen-crash`; the CLI reads exit code 127 the same way. A supplier SBOM under `--analyze` that carries these Poetry marks no longer degrades the analysis run.
 - The CLI's manifest-only fallback, used when cdxgen fails, now runs inside the post-processing step, the same code a caller of the execution plan gets. It now honours `BOMLENS_INCLUDE_NON_SHIPPED=1` (it used to leave test and sample manifests out regardless). The "Manifest-only fallback used" warning now appears after post-processing, once the fallback has succeeded.
 - When cdxgen exited without error but left an empty SBOM, the CLI stopped with "SBOM not found"; it now takes the manifest-only fallback, as the execution plan path does.
 - When cdxgen fails and the post-processing image is older than the CLI (it cannot run the fallback), the CLI now says so and names the image to pull, instead of stopping on a missing SBOM.

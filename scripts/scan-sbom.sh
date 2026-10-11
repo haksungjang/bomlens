@@ -2153,7 +2153,7 @@ if [ "$MODE" = "SOURCE" ]; then
     if [ "$STAGE1_RC" -ne 0 ] || [ ! -s "$OUTPUT_HOST_DIR/$OUTPUT_FILE" ]; then
         STAGE1_FAILED=1
         STAGE1_OOM="$("${DOCKER_ENV[@]}" docker inspect -f '{{.State.OOMKilled}}' "$STAGE1_CONTAINER" 2>/dev/null || true)"
-        STAGE1_FAIL_REASON="$(stage1_fail_reason "$STAGE1_OOM" "$STAGE1_LOG")"
+        STAGE1_FAIL_REASON="$(stage1_fail_reason "$STAGE1_OOM" "$STAGE1_LOG" "$STAGE1_RC")"
         case "$STAGE1_FAIL_REASON" in
             oom)
                 echo "[WARN] cdxgen was killed for running out of memory (rc=$STAGE1_RC). Give the Docker engine more memory and re-scan for full transitive dependencies. Full cdxgen log: $STAGE1_LOG" ;;
@@ -2161,6 +2161,8 @@ if [ "$MODE" = "SOURCE" ]; then
                 echo "[WARN] cdxgen failed: Docker is out of disk space (rc=$STAGE1_RC). Free space (e.g. 'docker system prune'). Full cdxgen log: $STAGE1_LOG" ;;
             network)
                 echo "[WARN] cdxgen couldn't reach the network while resolving dependencies (rc=$STAGE1_RC). Check proxy/firewall access to the package registries. Full cdxgen log: $STAGE1_LOG" ;;
+            cdxgen-unavailable)
+                echo "[WARN] cdxgen could not be started in its image (rc=$STAGE1_RC, command not found); see $STAGE1_LOG. Falling back to a manifest-only scan (direct dependencies only)." ;;
             *)
                 echo "[WARN] cdxgen failed processing the dependency data (rc=$STAGE1_RC); see $STAGE1_LOG for the full log. Falling back to a manifest-only scan (direct dependencies only)." ;;
         esac
