@@ -65,7 +65,7 @@ Every step that applies to the scan's mode is recorded, also when it did not run
 
 No step reports `budget_exhausted` yet; it is reserved for a work limit a later release records.
 
-Each step also has `stage` (1 for the SBOM a language image generated before this container started, 2 otherwise), `started_at`, `ended_at`, an optional `detail` of up to 500 characters, and for some steps `counts` (`generate` records `components`).
+Each step also has `stage` (1 for the SBOM a language image generated before this container started, 2 otherwise), `started_at`, `ended_at`, an optional `detail` of up to 500 characters, and for some steps `counts` (`generate` records `components`, and `unresolved` when it left out packages the generator saw but could not name, which `detail` then says).
 
 <!-- steps:begin -->
 | Step | What it does |

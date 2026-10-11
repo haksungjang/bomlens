@@ -1190,6 +1190,55 @@ POETRY_GRAPH_JS
     _pg_dir=""
 fi
 
+# cdxgen's pyproject.toml route reads its own virtual environment when it
+# cannot install the project, and writes a package it could not name there
+# as pkg:pypi/unknown@latest, linked from the root. It is no package of the
+# project: a real one has a version. Dropped with every link to it, after the
+# Poetry graph above so that cannot bring it back, and the count kept on the
+# SBOM (bomlens:unnamed-packages-dropped) so the result manifest says that
+# something cdxgen saw could not be named.
+if [ "${rc:-1}" -eq 0 ] && [ -f "$OUT" ] && command -v node >/dev/null 2>&1 \
+   && grep -q '"pkg:pypi/unknown@latest"' "$OUT" 2>/dev/null; then
+    node - "$OUT" <<'PYPI_UNKNOWN_JS' || log "python: could not drop pkg:pypi/unknown@latest (non-fatal)"
+const fs = require("fs");
+const p = process.argv[2];
+const bom = JSON.parse(fs.readFileSync(p, "utf8"));
+const ref = "pkg:pypi/unknown@latest";
+const root = (bom.metadata && bom.metadata.component) || {};
+// A project cdxgen itself could only call that is left alone.
+if (root.purl === ref || root["bom-ref"] === ref) process.exit(0);
+const gone = new Set([ref]);
+let dropped = 0;
+const keep = list => (list || []).filter(c => {
+  if (c.purl === ref || c["bom-ref"] === ref) {
+    if (c["bom-ref"]) gone.add(c["bom-ref"]);
+    dropped++;
+    return false;
+  }
+  if (c.components) c.components = keep(c.components);
+  return true;
+});
+bom.components = keep(bom.components);
+let links = 0;
+bom.dependencies = (bom.dependencies || []).filter(d => !gone.has(d.ref) || (links++, false))
+  .map(d => {
+    const on = (d.dependsOn || []).filter(x => !gone.has(x));
+    links += (d.dependsOn || []).length - on.length;
+    return { ...d, dependsOn: on };
+  });
+if (dropped === 0 && links === 0) process.exit(0);
+if (dropped > 0) {
+  bom.metadata = bom.metadata || {};
+  bom.metadata.properties = (bom.metadata.properties || []).filter(x => x.name !== "bomlens:unnamed-packages-dropped");
+  bom.metadata.properties.push({ name: "bomlens:unnamed-packages-dropped", value: String(dropped) });
+}
+fs.writeFileSync(p + ".unknown.tmp", JSON.stringify(bom, null, 2));
+fs.renameSync(p + ".unknown.tmp", p);
+process.stderr.write("[build-prep] python: dropped pkg:pypi/unknown@latest (" + dropped + " component(s), " + links + " link(s)), a package cdxgen could not name in its own environment\n");
+PYPI_UNKNOWN_JS
+    rm -f "$OUT.unknown.tmp"
+fi
+
 # Rust licenses. cdxgen reads only Cargo.lock for a Rust project, and a lock file
 # carries no license, so nearly every crate came through without one. `cargo
 # metadata` downloads the crates and reports each one's declared license, so the

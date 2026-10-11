@@ -1089,6 +1089,22 @@ D="$WORK/osl-off"; mkdir -p "$D"; osl_run "$D" BOMLENS_OS_LICENSES=false
     && pass "BOMLENS_OS_LICENSES=false: no Trivy, the hashes are still dropped, the step is disabled" \
     || fail "off: trivy run $([ -e "$D/trivy-argv" ] && echo yes || echo no), libc6 $(lic "$D" libc6)" "$(osl_step "$D")"
 
+echo "== a package cdxgen could not name is said in generate's detail =="
+for case in ok poetry; do
+    D="$(new_run "unnamed-$case")"
+    if [ "$case" = ok ]; then prop='[{"name":"bomlens:unnamed-packages-dropped","value":"1"}]'
+    else prop='[{"name":"bomlens:unnamed-packages-dropped","value":"1"},{"name":"bomlens:prep-step-applied","value":"poetry-requirements-partial"}]'; fi
+    jq --argjson p "$prop" '.metadata.properties = ((.metadata.properties // []) + $p)' "$D/demo_1.0_bom.json" > "$D/x" && mv "$D/x" "$D/demo_1.0_bom.json"
+    run_engine "$D" "$ROOT_DIR/docker/lib"
+    got="$(jq -c '[.steps[] | select(.id=="generate")][0] | [.status, .counts.unresolved, (.detail // "" | test("1 package\\(s\\) cdxgen could not name were left out"))]' "$D/bomlens-result.json")"
+    case "$case:$got" in
+        'ok:["ok",1,true]'|'poetry:["degraded",1,true]') pass "unresolved packages are counted and said in the detail ($case)" ;;
+        *) fail "unnamed $case: $got" ;;
+    esac
+done
+err="$(schema_errors "$D/bomlens-result.json")"
+[ -z "$err" ] && pass "a manifest with unresolved packages validates" || fail "schema errors" "$err"
+
 echo "== every step label in entrypoint.sh is documented =="
 missing=""
 for id in $(grep -v '^[[:space:]]*#' "$ENTRY" | grep -oE '(run_optional_step|er_record|er_phase) [a-z][a-z0-9-]+' | awk '{print $2}' | sort -u); do

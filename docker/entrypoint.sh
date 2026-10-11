@@ -1062,15 +1062,22 @@ _gen_poetry_partial="$(jq -r 'any(.metadata.properties[]?; .name == "bomlens:pre
 # (poetry-graph); when it failed (no network, for one) they are missing too.
 _gen_poetry_graph_failed="$(jq -r 'any(.metadata.properties[]?; .name == "bomlens:pipeline-step-failed" and .value == "poetry-graph")' "$OUTPUT_FILE" 2>/dev/null)"
 ;; esac
+# A package cdxgen saw but could not name (build-prep.sh drops it): said in
+# generate's detail and counted as unresolved, whatever the status.
+_gen_unnamed="$(jq -r '[.metadata.properties[]? | select(.name == "bomlens:unnamed-packages-dropped") | .value] | first // empty' "$OUTPUT_FILE" 2>/dev/null)"
+case "$_gen_unnamed" in ''|*[!0-9]*) _gen_unnamed="" ;; esac
+_gen_counts="{\"components\":${_gen_count:-0}${_gen_unnamed:+,\"unresolved\":$_gen_unnamed}}"
+_gen_unnamed_detail="${_gen_unnamed:+$_gen_unnamed package(s) cdxgen could not name were left out (pkg:pypi/unknown@latest)}"
 if [ -n "$_gen_degraded" ]; then
-    er_record generate degraded fallback "$_gen_degraded" "$ER_PHASE_STARTED" "" "{\"components\":${_gen_count:-0}}"
+    er_record generate degraded fallback "$_gen_degraded" "$ER_PHASE_STARTED" "" "$_gen_counts"
 elif [ "$_gen_poetry_partial" = "true" ] || [ "$_gen_poetry_graph_failed" = "true" ]; then
     _gen_poetry_detail="Poetry project with no poetry.lock:"
     [ "$_gen_poetry_partial" = "true" ] && _gen_poetry_detail="$_gen_poetry_detail only exact pins resolved, ranged and table dependencies are missing;"
     [ "$_gen_poetry_graph_failed" = "true" ] && _gen_poetry_detail="$_gen_poetry_detail the dependencies of the pins could not be resolved (poetry-graph failed);"
-    er_record generate degraded fallback "${_gen_poetry_detail%;}" "$ER_PHASE_STARTED" "" "{\"components\":${_gen_count:-0}}"
+    _gen_poetry_detail="${_gen_poetry_detail%;}"
+    er_record generate degraded fallback "$_gen_poetry_detail${_gen_unnamed_detail:+; $_gen_unnamed_detail}" "$ER_PHASE_STARTED" "" "$_gen_counts"
 else
-    er_record generate ok "" "" "$ER_PHASE_STARTED" "" "{\"components\":${_gen_count:-0}}"
+    er_record generate ok "" "${_gen_unnamed_detail}" "$ER_PHASE_STARTED" "" "$_gen_counts"
 fi
 er_phase_end
 
