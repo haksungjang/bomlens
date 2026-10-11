@@ -38,6 +38,24 @@ SCAN_MODE="${MODE:-POSTPROCESS}"
 # BOMLENS_LIBDIR lets tests/test-engine-contract.sh run this script from a
 # checkout against the repository's docker/lib, without building the image.
 LIBDIR="${BOMLENS_LIBDIR:-/usr/local/lib/sbom}"
+# Any user (a Kubernetes job's runAsUser) with a read-only root: such a user
+# has no home of its own, so HOME is / or a folder it cannot write, while the
+# tools keep their caches under it (scancode; Trivy's database when no
+# trivy-db mount holds one). A home it cannot write becomes a fresh folder in
+# the temporary directory, unless something is mounted under it (a cache the
+# caller provides, such as ~/.cache/trivy): then HOME stays, and only
+# scancode's cache folder, which must be creatable, moves.
+if ! { [ -n "${HOME:-}" ] && [ -d "$HOME" ] && [ -w "$HOME" ]; }; then
+    if _bomlens_tmp="$(mktemp -d "${TMPDIR:-/tmp}/bomlens-home.XXXXXX" 2>/dev/null)"; then
+        if [ -n "${HOME:-}" ] && [ "$HOME" != "/" ] && grep -q " ${HOME%/}/" /proc/mounts 2>/dev/null; then
+            export SCANCODE_CACHE="${SCANCODE_CACHE:-$_bomlens_tmp}"
+        else
+            export HOME="$_bomlens_tmp"
+        fi
+    else
+        echo "[WARN] no writable home folder and no writable ${TMPDIR:-/tmp}: tools that keep a cache (scancode, Trivy) may fail. Mount a writable ${TMPDIR:-/tmp}." >&2
+    fi
+fi
 
 # --- UI mode: hand off to the web server, no project metadata needed ---
 if [ "$SCAN_MODE" = "UI" ]; then
