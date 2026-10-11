@@ -841,6 +841,9 @@ rm -f "$SUMMARY_RESULT_FILE"
 # is told that file's name (BOMLENS_RUN_INPUT, below) so it skips it rather
 # than mistaking it for a stale one.
 rm -f "${OUTPUT_HOST_DIR}/${OUTPUT_FILE}"
+# The conda sidecar stage 1 may write beside it is kept by stage 2's cleanup
+# for the same reason, so an old one is cleared here too.
+rm -f "${OUTPUT_HOST_DIR}/${OUTPUT_FILE%_bom.json}_conda.cdx.json"
 
 # Temp dirs (git clone / archive extract) are cleaned on any exit. A container
 # build step (e.g. npm install during a source scan) can leave root-owned files
@@ -2421,7 +2424,7 @@ fi
 # measurement (validate-sbom.sh), not from a count made here. Absent (an older
 # image, an AI SBOM) it prints nothing.
 if [ -f "$SUMMARY_RESULT_FILE" ]; then
-    sum_components=""; sum_licensed=""; sum_license_pct=""; sum_purl_pct=""; sum_reduced=""; sum_failed=""
+    sum_components=""; sum_licensed=""; sum_license_pct=""; sum_purl_pct=""; sum_reduced=""; sum_failed=""; sum_empty_manifests=""
     while IFS=$'\t' read -r sum_key sum_val; do
         case "$sum_key" in
             components)     sum_components="$sum_val" ;;
@@ -2429,6 +2432,7 @@ if [ -f "$SUMMARY_RESULT_FILE" ]; then
             licensePercent) sum_license_pct="$sum_val" ;;
             purlPercent)    sum_purl_pct="$sum_val" ;;
             reduced)        sum_reduced="$sum_val" ;;
+            emptyManifests) sum_empty_manifests="$sum_val" ;;
             failedSteps)    sum_failed="$sum_val" ;;
         esac
     done < "$SUMMARY_RESULT_FILE"
@@ -2461,6 +2465,7 @@ if [ -f "$SUMMARY_RESULT_FILE" ]; then
                     esac
                     echo "[WARN] Reduced analysis: ${sum_why}, so only direct dependencies were identified."
                 fi
+                [ -z "$sum_empty_manifests" ] || [ "${sum_components:-}" != "0" ] || echo "[WARN] No components were found, though these declare dependencies: ${sum_empty_manifests}. Commit a lock file, or check the log above for why resolution failed."
                 [ -z "$sum_failed" ] || echo "[WARN] Steps that failed: ${sum_failed} (details in the log above)"
             fi
             ;;

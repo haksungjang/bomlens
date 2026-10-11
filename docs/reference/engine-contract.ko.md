@@ -60,6 +60,7 @@ BomLens 이미지를 스캔 엔진으로 쓰는 프로그램은 모든 스캔이
 | `unavailable` | 단계가 읽는 데이터를 쓸 수 없었음 |
 | `budget_exhausted` | 작업량 제한에서 멈춤 |
 | `no_input` | 단계가 읽을 것이 없었음(소스 트리 없음, 서명 키 없음) |
+| `no_components` | 소스가 의존성을 선언했는데(매니페스트나 lock 파일에 의존성이 있음) SBOM에 컴포넌트가 없음. `detail`에 해당 매니페스트를 적음. `generate` 단계에 기록 |
 <!-- reasons:end -->
 
 `budget_exhausted`는 아직 어느 단계도 내지 않습니다. 이후 릴리스에서 기록할 작업량 제한 사유로 예약해 둔 값입니다.

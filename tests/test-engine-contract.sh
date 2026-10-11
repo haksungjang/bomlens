@@ -460,6 +460,47 @@ _t1=$(date +%s)
 [ "$(lic "$D" lodash)" = "-" ] && pass "what did not answer in time is left as it was" || fail "lodash is '$(lic "$D" lodash)'"
 echo "  (license-registry with a 1 s budget and 6 s answers took $((_t1 - _t0)) s for the whole run)"
 
+echo "== a source that declares dependencies but yields no component =="
+DECL="$WORK/declares"; mkdir -p "$DECL"
+printf '[tool.poetry.dependencies]\npython = "^3.11"\nrequests = "2.31.0"\n' > "$DECL/pyproject.toml"
+NODECL="$WORK/declares-nothing"; mkdir -p "$NODECL"
+printf '[tool.poetry.dependencies]\npython = "^3.11"\n' > "$NODECL/pyproject.toml"
+empty_bom() { echo '{"bomFormat":"CycloneDX","specVersion":"1.6","metadata":{"component":{"type":"application","name":"x","version":"1"}},"components":[]}' > "$1/demo_1.0_bom.json"; }
+gen_of() { jq -r '[.steps[] | select(.id=="generate")][0] | "\(.status) \(.reason)"' "$1/bomlens-result.json" 2>/dev/null; }
+D="$(new_run empty-declared empty)"; empty_bom "$D"; run_engine "$D" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$DECL"
+[ "$(gen_of "$D") $(jq -r .run.status "$D/bomlens-result.json")" = "degraded no_components succeeded_degraded" ] \
+    && pass "generate is degraded (no_components) and the run succeeded_degraded" \
+    || fail "generate is $(gen_of "$D"), run $(jq -r .run.status "$D/bomlens-result.json")"
+jq -r '.metadata.properties[]? | select(.name=="bomlens:sbom-empty-with-manifests") | .value' "$D/demo_1.0_bom.json" | grep -qx 'pyproject.toml' \
+    && pass "the SBOM names the manifest in bomlens:sbom-empty-with-manifests" \
+    || fail "SBOM properties: $(jq -c '.metadata.properties' "$D/demo_1.0_bom.json")"
+err="$(schema_errors "$D/bomlens-result.json")"
+[ -z "$err" ] && pass "the no_components manifest validates against the schema" || fail "schema errors" "$err"
+# A later step that fills the SBOM (here the conda sidecar build-prep leaves
+# for the merge) means the scan did find the dependencies: no flag.
+D="$(new_run empty-then-filled empty)"; empty_bom "$D"
+printf 'dependencies:\n  - numpy=1.26.4\n' > "$DECL/environment.yml"
+echo '{"bomFormat":"CycloneDX","specVersion":"1.6","components":[{"type":"library","name":"numpy","version":"1.26.4","purl":"pkg:conda/numpy@1.26.4","properties":[{"name":"bomlens:layer","value":"conda"}]}]}' > "$D/demo_1.0_conda.cdx.json"
+run_engine "$D" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$DECL"
+rm -f "$DECL/environment.yml"
+[ "$(gen_of "$D") $(jq -r .run.status "$D/bomlens-result.json")" = "ok null succeeded" ] \
+    && ! jq -e 'any(.metadata.properties[]?; .name=="bomlens:sbom-empty-with-manifests")' "$D/demo_1.0_bom.json" >/dev/null \
+    && pass "a component added by a later step (conda merge) leaves no empty-manifest flag" \
+    || fail "generate is $(gen_of "$D"), run $(jq -r .run.status "$D/bomlens-result.json"), components $(jq '.components | length' "$D/demo_1.0_bom.json")"
+D="$(new_run empty-undeclared empty)"; empty_bom "$D"; run_engine "$D" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$NODECL"
+[ "$(gen_of "$D") $(jq -r .run.status "$D/bomlens-result.json")" = "ok null succeeded" ] \
+    && pass "a manifest with nothing declared and no component is a plain success" \
+    || fail "generate is $(gen_of "$D"), run $(jq -r .run.status "$D/bomlens-result.json")"
+# Against a copy whose manifest finder finds nothing, the declared case must
+# read succeeded: that is the "no detection, still a pass" the check catches.
+MUT3="$WORK/lib-mutant-manifests"
+cp -R "$ROOT_DIR/docker/lib" "$MUT3"
+printf '\nsource_manifests() { printf ""; }\n' >> "$MUT3/source-detect.sh"
+D="$(new_run empty-declared-mutant empty)"; empty_bom "$D"; run_engine "$D" "$MUT3" SOURCE_ROOT="$DECL"
+[ "$(jq -r .run.status "$D/bomlens-result.json" 2>/dev/null)" = "succeeded" ] \
+    && pass "without the manifest check the same run reads succeeded, so the check above can fail" \
+    || fail "the mutant run is $(jq -r .run.status "$D/bomlens-result.json" 2>/dev/null)"
+
 echo "== every step label in entrypoint.sh is documented =="
 missing=""
 for id in $(grep -v '^[[:space:]]*#' "$ENTRY" | grep -oE '(run_optional_step|er_record|er_phase) [a-z][a-z0-9-]+' | awk '{print $2}' | sort -u); do

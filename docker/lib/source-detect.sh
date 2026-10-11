@@ -63,6 +63,96 @@ non_shipped_enabled() {
     return 0
 }
 
+# _declares_deps <file>: true when a manifest or lock file lists at least one
+# dependency. A file whose format this does not know counts as declaring.
+# Development-only dependencies do not count for package.json: a source scan
+# leaves them out, so an empty result is then correct.
+_declares_deps() {
+    local f="$1"
+    case "$f" in
+        */package.json|package.json)
+            jq -e '[.dependencies, .optionalDependencies, .peerDependencies]
+                   | map(select(type == "object") | length) | add // 0 | . > 0' "$f" >/dev/null 2>&1 ;;
+        */package-lock.json|package-lock.json|*/npm-shrinkwrap.json|npm-shrinkwrap.json)
+            jq -e '(.packages // {} | keys | map(select(. != "")) | length) + (.dependencies // {} | length) > 0' "$f" >/dev/null 2>&1 ;;
+        */yarn.lock|yarn.lock|*/pnpm-lock.yaml|pnpm-lock.yaml)
+            grep -Eq '^[^#[:space:]][^:]*:[[:space:]]*$|^  [^ #][^:]*:[[:space:]]*$' "$f" 2>/dev/null \
+                && grep -Eq 'version|resolution' "$f" 2>/dev/null ;;
+        */pyproject.toml|pyproject.toml)
+            awk '
+                /^\[project\][[:space:]]*$/ { sec="project"; next }
+                /^\[tool\.poetry\.(group\.[^]]+\.)?dependencies\][[:space:]]*$/ { sec="poetry"; next }
+                /^\[/ { sec=""; inarr=0; next }
+                sec=="project" && /^[[:space:]]*dependencies[[:space:]]*=[[:space:]]*\[/ {
+                    line=$0; sub(/^[^[]*\[/, "", line)
+                    if (line ~ /["'"'"']/) found=1; else inarr=1; next }
+                inarr && /["'"'"']/ { found=1 }
+                inarr && /\]/ { inarr=0 }
+                sec=="poetry" && /^[[:space:]]*[A-Za-z0-9_.-]+[[:space:]]*=/ {
+                    k=$0; sub(/[[:space:]]*=.*/, "", k); gsub(/[[:space:]]/, "", k)
+                    if (tolower(k) != "python") found=1 }
+                END { exit !found }' "$f" ;;
+        */Cargo.toml|Cargo.toml)
+            awk '/^\[(.*\.)?(dev-|build-)?dependencies\][[:space:]]*$/{t=1; next} /^\[(.*\.)?(dev-|build-)?dependencies\.[^]]+\]/{found=1} /^\[/{t=0} t && /^[A-Za-z0-9_-]+[[:space:]]*=/{found=1} END{exit !found}' "$f" ;;
+        */Cargo.lock|Cargo.lock)
+            [ "$(grep -c '^\[\[package\]\]' "$f" 2>/dev/null)" -gt 1 ] ;;
+        */go.mod|go.mod)
+            grep -Eq '^[[:space:]]*require[[:space:]]' "$f" 2>/dev/null ;;
+        */go.sum|go.sum)
+            [ -s "$f" ] ;;
+        */requirements*.txt|requirements*.txt)
+            grep -Eq '^[[:space:]]*[A-Za-z0-9]' "$f" 2>/dev/null ;;
+        */Pipfile|Pipfile)
+            awk '/^\[packages\]/{t=1; next} /^\[/{t=0} t && /^[A-Za-z0-9_.-]+[[:space:]]*=/{found=1} END{exit !found}' "$f" ;;
+        */pom.xml|pom.xml)
+            grep -q '<dependency>' "$f" 2>/dev/null ;;
+        */build.gradle|build.gradle|*/build.gradle.kts|build.gradle.kts)
+            grep -Eq '^[[:space:]]*(implementation|api|compile|runtimeOnly|compileOnly)[[:space:](]' "$f" 2>/dev/null ;;
+        */settings.gradle|settings.gradle|*/settings.gradle.kts|settings.gradle.kts)
+            return 1 ;;
+        */Gemfile|Gemfile)
+            grep -Eq '^[[:space:]]*gem[[:space:]]' "$f" 2>/dev/null ;;
+        */Gemfile.lock|Gemfile.lock)
+            grep -Eq '^    [A-Za-z0-9]' "$f" 2>/dev/null ;;
+        *.csproj|*.fsproj|*.vbproj)
+            grep -q 'PackageReference' "$f" 2>/dev/null ;;
+        */packages.config|packages.config)
+            grep -q '<package ' "$f" 2>/dev/null ;;
+        */composer.json|composer.json)
+            jq -e '(.require // {}) | keys | map(select(. != "php" and (startswith("ext-") | not))) | length > 0' "$f" >/dev/null 2>&1 ;;
+        */Package.swift|Package.swift)
+            grep -q '\.package(' "$f" 2>/dev/null ;;
+        */Podfile|Podfile)
+            grep -Eq '^[[:space:]]*pod[[:space:]]' "$f" 2>/dev/null ;;
+        *) return 0 ;;
+    esac
+}
+
+# source_manifests <dir> [max]: the dependency manifests and lock files in a
+# source tree that declare at least one dependency (_declares_deps), as paths
+# relative to <dir> joined with ", " (at most [max], default 5). Dependency,
+# VCS and non-shipped folders are skipped; an installed package's own
+# METADATA/PKG-INFO is not a manifest. The tree is listed once and filtered by
+# name in one grep, so a large source tree costs a single walk.
+source_manifests() {
+    local dir="$1" max="${2:-5}" f rel out="" n=0
+    local -a prune=(-name .git -o -name node_modules -o -name vendor -o -name .venv -o -name site-packages)
+    if non_shipped_enabled; then
+        for f in $NON_SHIPPED_DIRS; do prune+=(-o -name "$f"); done
+    fi
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        rel="${f#"$dir"/}"
+        case "$rel" in */METADATA|METADATA|*/PKG-INFO|PKG-INFO) continue ;; esac
+        _declares_deps "$f" || continue
+        out="$out, $rel"
+        n=$((n + 1))
+        [ "$n" -ge "$max" ] && break
+    done < <(find "$dir" \( -type d \( "${prune[@]}" \) -prune \) -o -type f -print 2>/dev/null \
+             | grep -E "$NON_SHIPPED_MANIFEST_RE" | LC_ALL=C sort)
+    printf '%s' "${out#, }"
+}
+
 # The glob patterns applied, relative to the scan root, joined with ", ".
 non_shipped_globs() {
     local d out=""

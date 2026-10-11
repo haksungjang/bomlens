@@ -65,14 +65,20 @@ GUARD_DIR=""
 # node_modules are pruned because nothing we run resolves inside them.
 # The name set grows over time: 1 = original, 2 adds vendor/obj/bin directories,
 # 3 adds composer.json (rewritten during the PHP resolve), 4 adds *.egg-info
-# directories (left by a Python source install). guard_paths takes the
+# directories (left by a Python source install), 5 adds requirements.txt
+# (written for a Poetry project with no lock). guard_paths takes the
 # version to list, so a snapshot is always compared with the names it was written
 # under.
-GUARD_NAMES_VERSION=4
+GUARD_NAMES_VERSION=5
 guard_paths() {  # guard_paths f|d [version]
     _gv="${2:-$GUARD_NAMES_VERSION}"
     if [ "$1" = "f" ]; then
-        if [ "$_gv" -ge 3 ]; then
+        if [ "$_gv" -ge 5 ]; then
+            find . -maxdepth 4 \( -name .git -o -name node_modules -o -name vendor \) -prune -o -type f \
+                \( -name go.mod -o -name go.sum -o -name Cargo.lock -o -name Gemfile.lock \
+                   -o -name Package.resolved -o -name package-lock.json \
+                   -o -name composer.lock -o -name composer.json -o -name requirements.txt \) -print 2>/dev/null | LC_ALL=C sort
+        elif [ "$_gv" -ge 3 ]; then
             find . -maxdepth 4 \( -name .git -o -name node_modules -o -name vendor \) -prune -o -type f \
                 \( -name go.mod -o -name go.sum -o -name Cargo.lock -o -name Gemfile.lock \
                    -o -name Package.resolved -o -name package-lock.json \
@@ -710,6 +716,65 @@ if ! pip_try -r requirements.txt; then
 fi
 exit 0
 PIPSCRIPT
+
+# Poetry with no lock file. cdxgen reads [tool.poetry.dependencies] only by
+# running `poetry`, which the image does not have, so a Poetry project without
+# poetry.lock came back with no components at all. The exact pins in that
+# table (`requests = "2.31.0"` or "==2.31.0") are written to a requirements.txt
+# that the step below and cdxgen both read; ranges, table forms (git, path,
+# extras) and the python constraint are left out rather than guessed. Only when
+# there is no poetry.lock and no requirements.txt; the source-tree guard removes
+# the file again after the scan.
+if [ -f pyproject.toml ] && [ ! -f poetry.lock ] && [ ! -f requirements.txt ] \
+   && command -v python3 >/dev/null 2>&1; then
+    _poetry_n=$(python3 - <<'PYEOF' 2>/dev/null
+import re, sys
+try:
+    import tomllib
+except ImportError:
+    print("notoml")
+    sys.exit(0)
+try:
+    with open("pyproject.toml", "rb") as fh:
+        data = tomllib.load(fh)
+except (OSError, ValueError):
+    sys.exit(0)
+tool = data.get("tool") if isinstance(data.get("tool"), dict) else {}
+poetry = tool.get("poetry") if isinstance(tool.get("poetry"), dict) else {}
+deps = poetry.get("dependencies") if isinstance(poetry.get("dependencies"), dict) else {}
+lines, skipped = [], 0
+for name, spec in deps.items():
+    if name.lower() == "python":
+        continue
+    version = spec.strip() if isinstance(spec, str) else ""
+    if version.startswith("=="):
+        version = version[2:].strip()
+    elif version.startswith("="):
+        version = version[1:].strip()
+    if re.fullmatch(r"[0-9][0-9A-Za-z.\-+!]*", version):
+        lines.append(f"{name}=={version}")
+    else:
+        skipped += 1
+if lines:
+    with open("requirements.txt", "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+print(f"{len(lines)} {skipped}")
+PYEOF
+)
+    case "$_poetry_n" in
+        notoml)
+            log "poetry: no poetry.lock, and this image's python3 cannot read pyproject.toml (no tomllib); dependencies not resolved" ;;
+        [0-9]*)
+            _poetry_pins="${_poetry_n% *}"; _poetry_skip="${_poetry_n#* }"
+            if [ "$_poetry_pins" -gt 0 ] 2>/dev/null; then
+                log "poetry: no poetry.lock; $_poetry_pins exact pin(s) from [tool.poetry.dependencies] written to requirements.txt, $_poetry_skip range or table dependenc(ies) not resolved"
+                mark_prep_applied poetry-requirements
+                [ "$_poetry_skip" -gt 0 ] 2>/dev/null && mark_prep_applied poetry-requirements-partial
+            elif [ "$_poetry_skip" -gt 0 ] 2>/dev/null; then
+                log "poetry: no poetry.lock and no exact pins; $_poetry_skip range or table dependenc(ies) not resolved"
+            fi ;;
+    esac
+fi
 
 if [ -f requirements.txt ] && command -v pip3 >/dev/null 2>&1; then
     log "pip install requirements"

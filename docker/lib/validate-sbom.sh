@@ -1298,6 +1298,9 @@ if [ "${IS_AI:-false}" != true ] && printf '%s' "$SIGNAL" | jq -e 'has("software
         # reach a terminal.
         jq -r '((.metadata.properties // [])[]? | select(.name == "bomlens:sbom-tool-degraded") | .value)
                | select(type == "string") | gsub("\\p{Cc}"; " ") | .[0:100] | "reduced\t\(.)"' "$SBOM" 2>/dev/null | head -n 1
+        # Manifests that declare dependencies, in a scan that found none.
+        jq -r '((.metadata.properties // [])[]? | select(.name == "bomlens:sbom-empty-with-manifests") | .value)
+               | select(type == "string") | gsub("\\p{Cc}"; " ") | .[0:200] | "emptyManifests\t\(.)"' "$SBOM" 2>/dev/null | head -n 1
         printf '%s' "$PIPELINE_STEPS_FAILED" | jq -r --argjson more "${PIPELINE_STEPS_FAILED_MORE:-0}" '
             if length > 0 then "failedSteps\t\(map(gsub("\\p{Cc}"; " ") | .[0:100]) | join(", "))\(if $more > 0 then " (and \($more) more)" else "" end)" else empty end' 2>/dev/null
     } > "${OUT_PREFIX}_summary.result" 2>/dev/null
