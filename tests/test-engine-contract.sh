@@ -823,6 +823,49 @@ cver="$(sed -n 's/^ENGINE_CONTRACT_VERSION="\(.*\)"$/\1/p' "$ROOT_DIR/docker/lib
     && pass "the image's engine-contract label matches ENGINE_CONTRACT_VERSION ($cver)" \
     || fail "Dockerfile label '$dlabel', ENGINE_CONTRACT_VERSION '$cver'"
 
+echo "== IMAGE mode without the Docker socket =="
+# syft reads the image from the registry when no daemon is there (a
+# Kubernetes job). A stub stands in for it: it records its arguments and
+# writes an SBOM, or fails like an image it cannot reach.
+IMG="$WORK/image-mode"; mkdir -p "$IMG/bin" "$IMG/ok" "$IMG/bad"
+cat > "$IMG/bin/syft" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$@" > "$SYFT_ARGV_LOG"
+[ "$1" = "registry.example/denied:1" ] && { echo "GET https://registry.example/v2/denied/manifests/1: UNAUTHORIZED" >&2; exit 1; }
+printf '{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"metadata":{"component":{"type":"container","name":"x"}},"components":[{"type":"library","name":"busybox","version":"1.36.1","purl":"pkg:apk/alpine/busybox@1.36.1"}]}\n'
+STUB
+chmod +x "$IMG/bin/syft"
+# No real daemon for the later steps either (the file view asks docker).
+printf '#!/bin/sh\nexit 1\n' > "$IMG/bin/docker"; chmod +x "$IMG/bin/docker"
+# A copy of entrypoint.sh that looks for the socket where none is, so the
+# no-socket path runs whether or not this host has Docker.
+NOSOCK_ENTRY="$IMG/entrypoint-nosock.sh"
+sed "s#/var/run/docker.sock#$IMG/no-docker.sock#g" "$ENTRY" > "$NOSOCK_ENTRY"
+image_run() {  # image_run <dir> <image>
+    ( cd "$1" && env PATH="$IMG/bin:$WORK/bin:$PATH" MODE=IMAGE TARGET_IMAGE="$2" SYFT_ARGV_LOG="$1/argv" \
+        PROJECT_NAME=demo PROJECT_VERSION=1.0 HOST_OUTPUT_DIR="$1" BOMLENS_LIBDIR="$ROOT_DIR/docker/lib" \
+        UPLOAD_ENABLED=false GENERATE_SECURITY=false SECURITY_ENRICH=false ENRICH_EOL=false ENRICH_MALICIOUS=false \
+        bash "$NOSOCK_ENTRY" ) > "$1.log" 2>&1
+}
+if ! grep -q "$IMG/no-docker.sock" "$NOSOCK_ENTRY"; then
+    fail "entrypoint.sh no longer names /var/run/docker.sock; update this test's socket substitution"
+else
+    image_run "$IMG/ok" registry.example/app:1
+    rc=$?
+    [ "$rc" = 0 ] && [ "$(head -1 "$IMG/ok/argv" 2>/dev/null)" = "registry.example/app:1" ] \
+        && grep -q 'no Docker socket: read from the registry' "$IMG/ok.log" \
+        && [ "$(jq -r '.components[0].name' "$IMG/ok/demo_1.0_bom.json" 2>/dev/null)" = "busybox" ] \
+        && pass "with no socket the image is read by syft from the registry" \
+        || fail "no-socket image scan: rc $rc" "$(tail -6 "$IMG/ok.log")"
+    image_run "$IMG/bad" registry.example/denied:1
+    rc=$?
+    [ "$rc" = 1 ] && grep -q 'registry needs credentials (SYFT_REGISTRY_AUTH_USERNAME' "$IMG/bad.log" \
+        && grep -q 'UNAUTHORIZED' "$IMG/bad.log" \
+        && [ "$(jq -r '.run.status' "$IMG/bad/bomlens-result.json" 2>/dev/null)" = "failed" ] \
+        && pass "an unreachable image fails with the credentials hint, syft's own error and a failed run" \
+        || fail "unreachable image: rc $rc, $(jq -c .run "$IMG/bad/bomlens-result.json" 2>&1)" "$(tail -6 "$IMG/bad.log")"
+fi
+
 echo "== every step label in entrypoint.sh is documented =="
 missing=""
 for id in $(grep -v '^[[:space:]]*#' "$ENTRY" | grep -oE '(run_optional_step|er_record|er_phase) [a-z][a-z0-9-]+' | awk '{print $2}' | sort -u); do

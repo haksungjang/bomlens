@@ -104,6 +104,7 @@ Environment variables adjust the behavior.
 | `SECURITY_ENRICH` | `true` | Enrich the security report with EPSS and CISA KEV signals. Set `false` on air-gapped networks to skip the external lookups |
 | `SECURITY_NVD_VERIFY` | `false` | With `--deep-cve`: verify each grype `nvd:cpe` finding against the live NVD version range and drop out-of-range false positives (needs `NVD_API_KEY` and network access; adds minutes). Off by default — findings are kept and flagged version-unverified |
 | `NVD_API_KEY` | — | NVD API key for `SECURITY_NVD_VERIFY`. Passed to the container by name only, never inlined into the command |
+| `SYFT_REGISTRY_AUTH_USERNAME`, `SYFT_REGISTRY_AUTH_PASSWORD`, `SYFT_REGISTRY_AUTH_TOKEN`, `SYFT_REGISTRY_AUTH_AUTHORITY` | — | An image scan of an image the local Docker daemon does not have: credentials for its private registry (an image you can `docker pull` needs none). `SYFT_REGISTRY_INSECURE_SKIP_TLS_VERIFY`, `SYFT_REGISTRY_INSECURE_USE_HTTP` and `SYFT_PLATFORM` are passed on too. Passed by name only |
 | `API_URL` | — | Upload server URL (a DT server, or the TRUSCA base) |
 | `API_KEY` | — | Upload credential. Used as `X-Api-Key` for DT, as a Bearer token for TRUSCA |
 | `UPLOAD_TARGET` | `dependency-track` | Upload destination: `dependency-track` or `trusca` |

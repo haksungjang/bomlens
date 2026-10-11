@@ -777,6 +777,16 @@ DOCKER_STUB_ARGV_DUMP=1 \
 in_log "<GENERATE_SPDX3=true>" && pass "AI scans write the SPDX 3.0.1 document by default" \
   || { fail "GENERATE_SPDX3 default not forwarded"; show; cat "$LOG"; }
 
+# An image archive given as the target is mounted read-only and named by its
+# path in the container; registry credentials go by name only.
+d="$(new_proj image_archive)"; : > "$d/img.tar"
+DOCKER_STUB_ARGV_DUMP=1 SYFT_REGISTRY_AUTH_PASSWORD=reg_secret_value \
+  scan_in "$d" --project IA --version 1 --target "docker-archive:$d/img.tar" --generate-only
+{ in_out "Mode: IMAGE" && in_log "<TARGET_IMAGE=docker-archive:/target/img.tar>" && in_log ":/target:ro>" \
+  && in_log "<SYFT_REGISTRY_AUTH_PASSWORD>" && ! in_log "reg_secret_value"; } \
+  && pass "an image archive target is mounted read-only and named in the container; credentials by name only" \
+  || { fail "image archive target not mounted"; show; cat "$LOG"; }
+
 d="$(new_proj hf_dataset)"
 DOCKER_STUB_ARGV_DUMP=1 HF_TOKEN=hf_secret_value \
   scan_in "$d" --project D --version 1 --model "https://huggingface.co/datasets/allenai/tulu-3-sft-mixture/tree/main" --generate-only

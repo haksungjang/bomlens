@@ -516,6 +516,11 @@ Environment:
   SECURITY_NVD_VERIFY    With --deep-cve: true drops loose-version false positives
                          via live NVD lookups (needs NVD_API_KEY, network/minutes)
   NVD_API_KEY            NVD API key for SECURITY_NVD_VERIFY (passed by name only)
+  SYFT_REGISTRY_AUTH_USERNAME
+                         Image scan: private-registry credentials for an image
+                         the Docker daemon does not have, with
+                         SYFT_REGISTRY_AUTH_PASSWORD (or _TOKEN, _AUTHORITY);
+                         passed by name only
   SCANOSS_API_URL        Vendored-OSS endpoint for --identify-vendored
                          (default: the free OSSKB API; set to a self-hosted
                          SCANOSS endpoint for air-gapped or high-volume use)
@@ -2222,7 +2227,25 @@ else
     # need their heavier opt-in images; others use the base image.
     VOL=""; ENVV=""; RUN_IMAGE="$POSTPROCESS_IMAGE"
     case "$MODE" in
-        IMAGE)  VOL="-v \"$(hostpath "$OUTPUT_HOST_DIR")\":/host-output -v /var/run/docker.sock:/var/run/docker.sock"; ENVV="-e TARGET_IMAGE=\"$TARGET\"" ;;
+        IMAGE)  VOL="-v \"$(hostpath "$OUTPUT_HOST_DIR")\":/host-output -v /var/run/docker.sock:/var/run/docker.sock"; ENVV="-e TARGET_IMAGE=\"$TARGET\""
+                # Registry access for an image the daemon does not have. Names
+                # only: docker reads the values from this environment, so a
+                # password does not show in `ps`.
+                # An archive (docker-archive:/oci-archive:/oci-dir:<host path>)
+                # is mounted read-only and named by its path in the container.
+                case "$TARGET" in
+                    docker-archive:*|oci-archive:*|oci-dir:*)
+                        _ar_path="${TARGET#*:}"
+                        if [ -e "$_ar_path" ]; then
+                            _ar_dir="$(cd "$(dirname "$_ar_path")" && pwd)"
+                            VOL="$VOL -v \"$(hostpath "$_ar_dir")\":/target:ro"
+                            ENVV="-e TARGET_IMAGE=\"${TARGET%%:*}:/target/$(basename "$_ar_path")\""
+                        fi ;;
+                esac
+                for _rv in SYFT_REGISTRY_AUTH_AUTHORITY SYFT_REGISTRY_AUTH_USERNAME SYFT_REGISTRY_AUTH_PASSWORD \
+                           SYFT_REGISTRY_AUTH_TOKEN SYFT_REGISTRY_INSECURE_SKIP_TLS_VERIFY SYFT_REGISTRY_INSECURE_USE_HTTP SYFT_PLATFORM; do
+                    [ -n "${!_rv:-}" ] && ENVV="$ENVV -e $_rv"
+                done ;;
         BINARY) FD="$(cd "$(dirname "$TARGET")" && pwd)"; FN="$(basename "$TARGET")"; VOL="-v \"$(hostpath "$FD")\":/target -v \"$(hostpath "$OUTPUT_HOST_DIR")\":/host-output"; ENVV="-e TARGET_FILE=\"/target/$FN\"" ;;
         ROOTFS) TD="$(cd "$TARGET" && pwd)"; VOL="-v \"$(hostpath "$TD")\":/target -v \"$(hostpath "$OUTPUT_HOST_DIR")\":/host-output"; ENVV="-e TARGET_DIR=/target" ;;
         FIRMWARE) FD="$(cd "$(dirname "$TARGET")" && pwd)"; FN="$(basename "$TARGET")"; VOL="-v \"$(hostpath "$FD")\":/target -v \"$(hostpath "$OUTPUT_HOST_DIR")\":/host-output"; ENVV="-e TARGET_FILE=\"/target/$FN\""; RUN_IMAGE="$FIRMWARE_IMAGE" ;;

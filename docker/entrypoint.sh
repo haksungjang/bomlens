@@ -701,13 +701,29 @@ case "$SCAN_MODE" in
 
     IMAGE)
         if [ -z "$TARGET_IMAGE" ]; then echo "[ERROR] TARGET_IMAGE required for IMAGE mode."; exit 1; fi
-        if [ ! -S /var/run/docker.sock ]; then
-            echo "[ERROR] Docker socket not mounted: -v /var/run/docker.sock:/var/run/docker.sock"; exit 1
+        # With the Docker socket mounted syft reads the image from the daemon;
+        # without it, straight from the registry (no daemon needed, as in a
+        # Kubernetes job), or from an archive named with its scheme
+        # (docker-archive:, oci-archive:, oci-dir:). A private registry takes
+        # SYFT_REGISTRY_AUTH_* or a docker config file (DOCKER_CONFIG).
+        if [ -S /var/run/docker.sock ]; then
+            echo "[1/2] syft: Docker image $TARGET_IMAGE"
+        else
+            echo "[1/2] syft: image $TARGET_IMAGE (no Docker socket: read from the registry or the archive)"
         fi
-        echo "[1/2] syft: Docker image $TARGET_IMAGE"
-        if ! syft "$TARGET_IMAGE" -o "cyclonedx-json@$CDX_SPEC_VERSION" > "$OUTPUT_FILE" 2>/dev/null; then
-            echo "[ERROR] syft failed (image missing or inaccessible)."; exit 1
+        IMAGE_SYFT_LOG=$(mktemp)
+        if ! syft "$TARGET_IMAGE" -o "cyclonedx-json@$CDX_SPEC_VERSION" > "$OUTPUT_FILE" 2>"$IMAGE_SYFT_LOG"; then
+            case "$TARGET_IMAGE" in
+                docker-archive:*|oci-archive:*|oci-dir:*)
+                    echo "[ERROR] syft could not read the image archive $TARGET_IMAGE: check that the path is mounted into the container and holds an image in that format." ;;
+                *)
+                    echo "[ERROR] syft could not read the image $TARGET_IMAGE: it does not exist, or the registry needs credentials (SYFT_REGISTRY_AUTH_USERNAME and SYFT_REGISTRY_AUTH_PASSWORD, or a docker config file in DOCKER_CONFIG). With the CLI, pulling it first (docker pull) also works." ;;
+            esac
+            [ -s "$IMAGE_SYFT_LOG" ] && tail -5 "$IMAGE_SYFT_LOG" >&2
+            rm -f "$IMAGE_SYFT_LOG"
+            exit 1
         fi
+        rm -f "$IMAGE_SYFT_LOG"
         ;;
 
     BINARY)
