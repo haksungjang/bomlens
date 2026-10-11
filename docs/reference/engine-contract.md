@@ -6,7 +6,7 @@ description: The result manifest (bomlens-result.json) every scan writes, for a 
 
 A program that runs the BomLens image as its scan engine reads `bomlens-result.json`, written to the output folder by every scan. It says how the run ended, which steps ran, were turned off, could not run or failed, and which file in the folder plays which role, so the program does not parse the log or guess file names.
 
-The format is checked against [`schemas/engine-result-1.json`](https://github.com/sktelecom/bomlens/blob/main/schemas/engine-result-1.json) by `tests/test-engine-contract.sh` in CI. This page describes contract version `1.1.0`.
+The format is checked against [`schemas/engine-result-1.json`](https://github.com/sktelecom/bomlens/blob/main/schemas/engine-result-1.json) by `tests/test-engine-contract.sh` in CI. This page describes contract version `1.2.0`.
 
 ## The file
 
@@ -72,6 +72,7 @@ Each step also has `stage` (1 for the SBOM a language image generated before thi
 |---|---|
 | `plan` | write the execution plan (`MODE=PLAN`, below) |
 | `generate` | produce the SBOM (stage 1 for a source scan, where the language image ran first) |
+| `os-licenses` | an image or root filesystem scan: the licenses of Debian packages from Trivy, which reads the license names, common-licenses references and license text in the copyright files syft leaves as a hash; `counts` gives `replaced` and `hashes_dropped`, `degraded` (`unavailable`) when Trivy could not read the target or gave no Debian package a license, `skipped` (`not_installed`) without Trivy, `disabled` with `BOMLENS_OS_LICENSES=false` |
 | `vendored` | identify open source copied into the sources (`--identify-vendored`) |
 | `suggest-vendored` | suggest that identification when a C/C++ project scanned near-empty |
 | `cocoapods` | add CocoaPods dependencies from `Podfile.lock` |

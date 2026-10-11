@@ -1016,6 +1016,79 @@ D="$(new_run own-home)"; mkdir -p "$WORK/own-home"; run_engine "$D" "$ROOT_DIR/d
 [ "$(head -1 "$D/home" 2>/dev/null)" = "$WORK/own-home" ] \
     && pass "a writable home is left as it is" || fail "own home replaced: $(head -1 "$D/home" 2>&1)"
 
+echo "== Debian package licenses from Trivy (os-licenses) =="
+OSL="$WORK/os-licenses"; mkdir -p "$OSL/bin" "$OSL/rootfs"
+cat > "$OSL/bin/syft" <<'STUB'
+#!/bin/bash
+cat <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"metadata":{"component":{"type":"container","name":"x"}},"components":[
+ {"type":"library","name":"libc6","version":"2.36-9","purl":"pkg:deb/debian/libc6@2.36-9?arch=arm64","licenses":[{"license":{"name":"sha256:40c7e1f2118531f038ca22999bd976901254e1bc5cd1b0f0211bdd064c599987"}}]},
+ {"type":"library","name":"libgcc-s1","version":"12.2.0","purl":"pkg:deb/debian/libgcc-s1@12.2.0?arch=arm64","licenses":[{"license":{"name":"sha256:da8191658b3452ce9caf31638ba61dab31a38c619fa39df119812e050f592fd3"}},{"license":{"id":"GPL-3.0-only"}}]},
+ {"type":"library","name":"ca-certificates","version":"20240705","purl":"pkg:apk/alpine/ca-certificates@20240705","licenses":[{"expression":"MPL-2.0 OR MIT"}]},
+ {"type":"library","name":"lodash","version":"4.17.21","purl":"pkg:npm/lodash@4.17.21","licenses":[{"license":{"id":"MIT"}}]}]}
+JSON
+STUB
+cat > "$OSL/bin/trivy" <<'STUB'
+#!/bin/bash
+[ "${1:-}" = version ] && { echo '{"Version":"0.0.0-stub"}'; exit 0; }
+out=""; prev=""; for a in "$@"; do [ "$prev" = "--output" ] && out="$a"; prev="$a"; done
+printf '%s\n' "$@" > "$OSL_TRIVY_ARGV"
+env | grep '^TRIVY_' | sort > "$OSL_TRIVY_ARGV.env"
+[ -n "${OSL_TRIVY_FAIL:-}" ] && { echo "FATAL unable to inspect the image" >&2; exit 1; }
+[ -n "${OSL_TRIVY_EMPTY:-}" ] && { echo '{"components":[{"name":"libc6","purl":"pkg:deb/debian/libc6@2.36-9"}]}' > "$out"; exit 0; }
+cat > "$out" <<'JSON'
+{"components":[{"name":"libc6","purl":"pkg:deb/debian/libc6@2.36-9?arch=amd64","licenses":[{"license":{"id":"LGPL-2.1-only"}},{"license":{"id":"GPL-2.0-only"}}]},
+ {"name":"libgcc-s1","purl":"pkg:deb/debian/libgcc-s1@12.2.0?arch=amd64"},
+ {"name":"ca-certificates","purl":"pkg:apk/alpine/ca-certificates@20240705","licenses":[{"license":{"id":"MPL-2.0"}},{"license":{"id":"MIT"}}]}]}
+JSON
+STUB
+# No real daemon for the file view either.
+printf '#!/bin/sh\nexit 1\n' > "$OSL/bin/docker"
+chmod +x "$OSL/bin/syft" "$OSL/bin/trivy" "$OSL/bin/docker"
+osl_run() {  # osl_run <dir> [VAR=value ...]
+    local d="$1"; shift
+    ( cd "$d" && env PATH="$OSL/bin:$WORK/bin:$PATH" MODE=IMAGE TARGET_IMAGE=debian:bookworm-slim OSL_TRIVY_ARGV="$d/trivy-argv" \
+        PROJECT_NAME=demo PROJECT_VERSION=1.0 HOST_OUTPUT_DIR="$d" BOMLENS_LIBDIR="$ROOT_DIR/docker/lib" \
+        UPLOAD_ENABLED=false GENERATE_SECURITY=false SECURITY_ENRICH=false ENRICH_EOL=false ENRICH_MALICIOUS=false \
+        "$@" bash "$ENTRY" ) > "$d.log" 2>&1
+}
+lic() { jq -c --arg n "$2" '[.components[] | select(.name == $n) | .licenses[]? | (.license.id // .license.name // .expression)]' "$1/demo_1.0_bom.json"; }
+osl_step() { jq -c '[.steps[] | select(.id=="os-licenses")][0] | [.status, .reason, .counts]' "$1/bomlens-result.json"; }
+D="$WORK/osl-ok"; mkdir -p "$D"; osl_run "$D" SYFT_REGISTRY_AUTH_USERNAME=u SYFT_REGISTRY_AUTH_PASSWORD=p TRIVY_USERNAME=dbmirror SYFT_REGISTRY_INSECURE_USE_HTTP=true
+[ "$(lic "$D" libc6)" = '["LGPL-2.1-only","GPL-2.0-only"]' ] && [ "$(lic "$D" libgcc-s1)" = '["GPL-3.0-only"]' ] \
+    && [ "$(lic "$D" ca-certificates)" = '["MPL-2.0 OR MIT"]' ] && [ "$(lic "$D" lodash)" = '["MIT"]' ] \
+    && [ "$(osl_step "$D")" = '["ok",null,{"replaced":1,"hashes_dropped":1}]' ] \
+    && pass "deb packages take Trivy's licenses, a hash Trivy cannot replace is dropped, apk keeps its OR expression" \
+    || fail "os-licenses: libc6 $(lic "$D" libc6), libgcc-s1 $(lic "$D" libgcc-s1), apk $(lic "$D" ca-certificates)" "$(osl_step "$D")"
+grep -qx -- '--pkg-types' "$D/trivy-argv" && grep -qx 'os' "$D/trivy-argv" && grep -qx 'image' "$D/trivy-argv" \
+    && grep -qx -- '--license-full' "$D/trivy-argv" \
+    && grep -qx 'TRIVY_USERNAME=u' "$D/trivy-argv.env" && grep -qx 'TRIVY_PASSWORD=p' "$D/trivy-argv.env" && grep -qx 'TRIVY_INSECURE=true' "$D/trivy-argv.env" \
+    && [ "$(jq -r '[.steps[].id] | (index("generate") < index("os-licenses"))' "$D/bomlens-result.json")" = true ] \
+    && [ "$(jq -r '.tools.trivy' "$D/bomlens-result.json")" = 0.0.0-stub ] \
+    && pass "Trivy reads OS packages only (with license text), using syft's registry credentials and options; recorded after generate" \
+    || fail "trivy call: $(tr '\n' ' ' < "$D/trivy-argv") env: $(tr '\n' ' ' < "$D/trivy-argv.env")"
+D="$WORK/osl-registry"; mkdir -p "$D"; osl_run "$D" TARGET_IMAGE=registry:debian:12
+[ "$(tail -1 "$D/trivy-argv")" = "debian:12" ] && grep -qx 'remote' "$D/trivy-argv" \
+    && pass "syft's registry: scheme becomes Trivy's --image-src remote" || fail "registry scheme: $(tr '\n' ' ' < "$D/trivy-argv")"
+D="$WORK/osl-rootfs"; mkdir -p "$D"; osl_run "$D" MODE=ROOTFS TARGET_DIR="$OSL/rootfs"
+grep -qx 'rootfs' "$D/trivy-argv" && grep -qx "$OSL/rootfs/proc" "$D/trivy-argv" && grep -qx "$OSL/rootfs/run" "$D/trivy-argv" \
+    && [ "$(tail -1 "$D/trivy-argv")" = "$OSL/rootfs" ] \
+    && pass "a root filesystem is read with its pseudo filesystems left out, by their paths under it" \
+    || fail "rootfs call: $(tr '\n' ' ' < "$D/trivy-argv")"
+D="$WORK/osl-fail"; mkdir -p "$D"; osl_run "$D" OSL_TRIVY_FAIL=1
+[ "$(lic "$D" libc6)" = '[]' ] && [ "$(osl_step "$D" | jq -c '.[0:2]')" = '["degraded","unavailable"]' ] \
+    && [ "$(jq -r .run.status "$D/bomlens-result.json")" = succeeded_degraded ] \
+    && pass "when Trivy cannot read the target, hashes are still dropped and the step is degraded" \
+    || fail "os-licenses failure: libc6 $(lic "$D" libc6)" "$(osl_step "$D")"
+D="$WORK/osl-empty"; mkdir -p "$D"; osl_run "$D" OSL_TRIVY_EMPTY=1
+[ "$(osl_step "$D" | jq -c '.[0:2]')" = '["degraded","unavailable"]' ] && [ "$(lic "$D" libc6)" = '[]' ] \
+    && pass "Trivy reading the target but licensing no Debian package is degraded, not ok" \
+    || fail "os-licenses empty: $(osl_step "$D")"
+D="$WORK/osl-off"; mkdir -p "$D"; osl_run "$D" BOMLENS_OS_LICENSES=false
+[ ! -e "$D/trivy-argv" ] && [ "$(lic "$D" libc6)" = '[]' ] && [ "$(osl_step "$D" | jq -c '.[0]')" = '"disabled"' ] \
+    && pass "BOMLENS_OS_LICENSES=false: no Trivy, the hashes are still dropped, the step is disabled" \
+    || fail "off: trivy run $([ -e "$D/trivy-argv" ] && echo yes || echo no), libc6 $(lic "$D" libc6)" "$(osl_step "$D")"
+
 echo "== every step label in entrypoint.sh is documented =="
 missing=""
 for id in $(grep -v '^[[:space:]]*#' "$ENTRY" | grep -oE '(run_optional_step|er_record|er_phase) [a-z][a-z0-9-]+' | awk '{print $2}' | sort -u); do

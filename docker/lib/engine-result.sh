@@ -18,7 +18,7 @@
 # disabled (a setting turned it off). A step that does not apply to the mode at
 # all (CPE enrichment of an AI model) is not recorded.
 
-ENGINE_CONTRACT_VERSION="1.1.0"
+ENGINE_CONTRACT_VERSION="1.2.0"
 ENGINE_RESULT_NAME="bomlens-result.json"
 
 er_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -228,12 +228,14 @@ er_finish() {
         | objects | select(.name and .version and .name != "BomLens") | {key:.name, value:(.version|tostring)}] | from_entries' "$bom" 2>/dev/null)"
     [ -n "$tools" ] || tools="{}"
     [ -n "${BOMLENS_SYFT_VERSION:-}" ] && tools="$(jq -c --arg v "${BOMLENS_SYFT_VERSION#v}" '. + {syft:$v}' <<<"$tools")"
-    local trivy_db="null"
-    if [ "$sec_present" = true ] && command -v trivy >/dev/null 2>&1; then
+    local trivy_db="null" trivy_used="$sec_present"
+    # Trivy also read the licenses of Debian packages (os-licenses).
+    grep -qE '"id":"os-licenses","status":"(ok|degraded)"' "$ER_STEPS" 2>/dev/null && trivy_used=true
+    if [ "$trivy_used" = true ] && command -v trivy >/dev/null 2>&1; then
         local tv; tv="$(trivy version --format json 2>/dev/null)"
         if [ -n "$tv" ]; then
             tools="$(jq -c --argjson t "$tv" '. + (if $t.Version then {trivy:$t.Version} else {} end)' <<<"$tools" 2>/dev/null || echo "$tools")"
-            trivy_db="$(jq -c '.VulnerabilityDB // null | if . then {schema_version:.Version, updated_at:.UpdatedAt, downloaded_at:.DownloadedAt} else null end' <<<"$tv" 2>/dev/null || echo null)"
+            [ "$sec_present" = true ] && trivy_db="$(jq -c '.VulnerabilityDB // null | if . then {schema_version:.Version, updated_at:.UpdatedAt, downloaded_at:.DownloadedAt} else null end' <<<"$tv" 2>/dev/null || echo null)"
         fi
     fi
 

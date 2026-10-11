@@ -714,7 +714,7 @@ if [ "$UI_MODE" = "true" ]; then
     # itself; a host-side default here would never be seen there).
     CANCEL_ENV_FLAGS=(-e BOMLENS_CANCEL_GRACE)
     # The web UI's source scans pull the cdxgen images from the same mirror.
-    CDXGEN_ENV_FLAGS=(-e CDXGEN_IMAGE_PREFIX)
+    CDXGEN_ENV_FLAGS=(-e CDXGEN_IMAGE_PREFIX -e BOMLENS_OS_LICENSES)
     # /bomlens-state: the same host-persistent guard-state directory
     # the CLI path uses, so a directory scan launched through --ui can also
     # recover a source tree a prior, too-hard-killed scan left dirty. entrypoint.sh
@@ -1025,6 +1025,8 @@ pp_env() {
         "${PURL_MIN_PCT:-}" "${LICENSE_MIN_PCT:-}" "${HASH_MIN_PCT:-}" "${FIELD_MIN_PCT:-}" "$CONFORMANCE_PROFILE" "${PURL_RESOLVE:-false}" "${LICENSE_REGISTRY:-false}"
     # Proxy, Trivy database and EPSS/KEV settings, by name.
     printf ' %s' "$(stage2_network_env_args)"
+    # Debian package licenses from Trivy (image/rootfs scans), on unless set false.
+    printf ' -e BOMLENS_OS_LICENSES'
     # SBOM_TRIVY_CACHE: a host folder kept as Trivy's cache, so its database
     # is downloaded once rather than on every scan (or put there for an
     # offline host, with TRIVY_SKIP_DB_UPDATE=true).

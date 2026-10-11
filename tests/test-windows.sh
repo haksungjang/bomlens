@@ -337,8 +337,8 @@ in_log "-e BOMLENS_CANCEL_GRACE" \
 
 d="$(new_proj ui_mirror)"
 CDXGEN_IMAGE_PREFIX=registry.example/mirror/cdxgen/ scan_in "$d" --ui --output-dir "$d"
-in_log "-e CDXGEN_IMAGE_PREFIX" \
-  && pass "CDXGEN_IMAGE_PREFIX passed to the web UI container" \
+in_log "-e CDXGEN_IMAGE_PREFIX" && in_log "-e BOMLENS_OS_LICENSES" \
+  && pass "CDXGEN_IMAGE_PREFIX and BOMLENS_OS_LICENSES passed to the web UI container" \
   || { fail "CDXGEN_IMAGE_PREFIX passed to the web UI container" "rc=$RC"; show; }
 
 # The UI's security scans keep Trivy's database in SBOM_TRIVY_CACHE too, and a

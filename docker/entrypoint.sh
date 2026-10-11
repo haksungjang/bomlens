@@ -1074,6 +1074,41 @@ else
 fi
 er_phase_end
 
+# Debian packages of an image or a root filesystem take their licenses from
+# Trivy, which reads the copyright files syft leaves as a hash
+# (os-licenses.sh). Recorded as its own step, after generate. BOMLENS_OS_LICENSES=false turns it off (the second read
+# of the image costs time); any hash is then still dropped. When Trivy cannot
+# read the target, the hashes are dropped and the step is degraded.
+case "$SCAN_MODE" in
+    IMAGE|ROOTFS)
+        _osl_target="${TARGET_IMAGE:-}"; [ "$SCAN_MODE" = ROOTFS ] && _osl_target="$TARGET_DIR"
+        _osl_started="$(er_now)"; _osl_rc=0
+        if [ "${BOMLENS_OS_LICENSES:-true}" = "false" ]; then
+            bash "$LIBDIR/os-licenses.sh" "$OUTPUT_FILE" "$SCAN_MODE" "$_osl_target" >/dev/null || true
+            er_record os-licenses disabled
+        else
+            _osl_out="$(bash "$LIBDIR/os-licenses.sh" "$OUTPUT_FILE" "$SCAN_MODE" "$_osl_target")" || _osl_rc=$?
+            _osl_counts="$(printf '%s' "$_osl_out" | awk 'NF==2 {printf "{\"replaced\":%d,\"hashes_dropped\":%d}", $1, $2}')"
+            case "$_osl_rc" in
+                0)
+                    [ -n "$_osl_counts" ] && echo "[os-licenses] $(printf '%s' "$_osl_out" | awk '{print $1" Debian package(s) from Trivy, "$2" with a file hash cleaned"}')"
+                    er_record os-licenses ok "" "" "$_osl_started" "" "$_osl_counts" ;;
+                1)
+                    echo "[WARN] Debian package licenses: Trivy could not read the target; syft's licenses are kept, less any file hash." >&2
+                    er_record os-licenses degraded unavailable "Trivy's license scan could not read the target" "$_osl_started" "" "$_osl_counts" ;;
+                3)
+                    echo "[WARN] Debian package licenses: Trivy is not installed; syft's licenses are kept, less any file hash." >&2
+                    er_record os-licenses skipped not_installed "" "$_osl_started" "" "$_osl_counts" ;;
+                4)
+                    echo "[WARN] Debian package licenses: Trivy read the target but gave no Debian package a license; syft's are kept, less any file hash." >&2
+                    er_record os-licenses degraded unavailable "Trivy gave no Debian package a license" "$_osl_started" "" "$_osl_counts" ;;
+                *)
+                    echo "[WARN] Debian package licenses: the step failed; the SBOM is left as syft wrote it." >&2
+                    er_record os-licenses failed failed "" "$_osl_started" ;;
+            esac
+        fi ;;
+esac
+
 # Warn (don't fail) when the SBOM has no components. A genuine no-dependency
 # project can legitimately be empty, but more often this means the scan saw
 # nothing — a missing lockfile or an empty/unshared source mount.
