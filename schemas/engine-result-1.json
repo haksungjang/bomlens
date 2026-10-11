@@ -87,7 +87,7 @@
         "type": "object",
         "required": ["role", "path", "sha256", "bytes"],
         "properties": {
-          "role": { "enum": ["sbom.cyclonedx", "sbom.spdx", "sbom.spdx3", "vulnerabilities.trivy", "vulnerabilities.all", "vulnerabilities.other", "license-scan.scancode", "vendored.cyclonedx", "conformance", "input-description", "other"] },
+          "role": { "enum": ["sbom.cyclonedx", "sbom.spdx", "sbom.spdx3", "vulnerabilities.trivy", "vulnerabilities.all", "vulnerabilities.other", "license-scan.scancode", "vendored.cyclonedx", "conformance", "input-description", "plan", "other"] },
           "path": { "type": "string", "pattern": "^[^/]+$" },
           "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
           "bytes": { "type": "integer", "minimum": 0 }

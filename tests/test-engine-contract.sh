@@ -501,6 +501,138 @@ D="$(new_run empty-declared-mutant empty)"; empty_bom "$D"; run_engine "$D" "$MU
     && pass "without the manifest check the same run reads succeeded, so the check above can fail" \
     || fail "the mutant run is $(jq -r .run.status "$D/bomlens-result.json" 2>/dev/null)"
 
+echo "== MODE=PLAN: the execution plan of a source scan =="
+PLAN_SCHEMA="$ROOT_DIR/schemas/engine-plan-1.json"
+plan_schema_errors() {
+    if [ -z "$JSPY" ]; then
+        # Locally a missing jsonschema skips the check; in CI it must run.
+        [ -n "${CI:-}" ] && echo "jsonschema is not installed, so the plan was not validated"
+        return 0
+    fi
+    "$JSPY" - "$PLAN_SCHEMA" "$1" <<'PY'
+import json, sys
+import jsonschema
+v = jsonschema.Draft202012Validator(json.load(open(sys.argv[1])))
+print("\n".join(f"{list(e.path)}: {e.message[:200]}" for e in v.iter_errors(json.load(open(sys.argv[2])))))
+PY
+}
+plan_run() {  # plan_run <case> <source-dir> [VAR=value ...]
+    local d="$WORK/plan-$1" src="$2"; shift 2; mkdir -p "$d"
+    ( cd "$d" && env MODE=PLAN PROJECT_NAME=demo PROJECT_VERSION=1.0 SOURCE_ROOT="$src" HOST_OUTPUT_DIR="$d" \
+        BOMLENS_LIBDIR="$ROOT_DIR/docker/lib" BOMLENS_IMAGE_REF=ghcr.io/example/bomlens:1 \
+        BOMLENS_IMAGE_DIGEST=sha256:0000000000000000000000000000000000000000000000000000000000000000 \
+        "$@" bash "$ENTRY" ) > "$d.log" 2>&1
+    echo $? > "$d.rc"
+    printf '%s' "$d"
+}
+PSRC="$WORK/plan-src-node"; mkdir -p "$PSRC"; echo '{"name":"x","dependencies":{"lodash":"^4"}}' > "$PSRC/package.json"
+P="$(plan_run node "$PSRC")"
+[ -f "$P/bomlens-plan.json" ] && pass "MODE=PLAN writes bomlens-plan.json" || fail "no plan" "$(tail -5 "$P.log")"
+err="$(plan_schema_errors "$P/bomlens-plan.json")"
+[ -z "$err" ] && pass "the plan validates against schemas/engine-plan-1.json" || fail "plan schema errors" "$err"
+[ "$(jq -r '.status + " " + .input.detected_ecosystem + " " + .stages[0].image' "$P/bomlens-plan.json")" = "ok node ghcr.io/cdxgen/cdxgen-alpine-node24:13.2.0" ] \
+    && pass "a Node.js source plans the cdxgen Node.js image" || fail "plan: $(jq -c '[.status, .input, .stages[0].image]' "$P/bomlens-plan.json")"
+[ "$(jq -r '.stages[0].image_digest' "$P/bomlens-plan.json")" = "$(jq -r '.digests["ghcr.io/cdxgen/cdxgen-alpine-node24"]' "$ROOT_DIR/docker/lib/cdxgen-images.json")" ] \
+    && pass "stage 1 is pinned by digest" || fail "stage 1 digest is $(jq -r '.stages[0].image_digest' "$P/bomlens-plan.json")"
+[ "$(jq -r '.stages[0].args | join(" ")' "$P/bomlens-plan.json")" = "/tmp/build-prep.sh /app /out/demo_1.0_bom.json 1.6" ] \
+    && pass "stage 1 runs build-prep.sh with the CLI's arguments" || fail "stage 1 args: $(jq -c '.stages[0].args' "$P/bomlens-plan.json")"
+cmp -s "$P/bomlens-plan/build-prep.sh" "$ROOT_DIR/docker/lib/build-prep.sh" && [ -f "$P/bomlens-plan/identify-conda.py" ] \
+    && pass "the files stage 1 mounts are copied next to the plan" || fail "bomlens-plan/ holds: $(ls "$P/bomlens-plan" 2>&1)"
+[ "$(jq -r '.stages[1] | .image + " " + .env.MODE + " " + .env.BOMLENS_RUN_INPUT' "$P/bomlens-plan.json")" = "ghcr.io/example/bomlens:1 POSTPROCESS demo_1.0_bom.json" ] \
+    && pass "stage 2 is this image in POSTPROCESS mode on stage 1's SBOM" || fail "stage 2: $(jq -c '.stages[1] | [.image, .env]' "$P/bomlens-plan.json")"
+[ "$(jq -r '[.stages[0].mounts[] | select(.role=="source") | .mode] | first' "$P/bomlens-plan.json") $(jq -r '[.stages[1].mounts[] | select(.role=="source") | .mode] | first' "$P/bomlens-plan.json")" = "rw ro" ] \
+    && pass "the source is writable in stage 1 only" || fail "source mounts: $(jq -c '[.stages[].mounts[] | select(.role=="source")]' "$P/bomlens-plan.json")"
+PSRC2="$WORK/plan-src-android"; mkdir -p "$PSRC2/app"
+printf 'plugins { id "com.android.application" }\nandroid { compileSdk 34 }\n' > "$PSRC2/app/build.gradle"; : > "$PSRC2/settings.gradle"
+printf 'plugins { id "com.android.application" }\n' > "$PSRC2/build.gradle"
+P="$(plan_run android "$PSRC2")"
+[ "$(jq -r '.status + " " + .reason + " " + (.stages | length | tostring)' "$P/bomlens-plan.json")" = "unsupported android-sdk-image 0" ] \
+    && pass "an Android source is unsupported (the SDK image is not published), with no stages" \
+    || fail "android plan: $(jq -c '[.status, .reason, .detail]' "$P/bomlens-plan.json")"
+[ "$(cat "$P.rc") $(jq -r '[.steps[] | select(.id=="plan")][0] | "\(.status) \(.reason)"' "$P/bomlens-result.json") $(jq -r .run.status "$P/bomlens-result.json")" = "0 skipped not_installed succeeded_degraded" ] \
+    && pass "an unsupported plan exits 0 and the manifest says plan skipped (not_installed), run succeeded_degraded" \
+    || fail "rc $(cat "$P.rc"), manifest $(jq -c '[.run.status, .steps]' "$P/bomlens-result.json")"
+
+P="$(plan_run node-opts "$PSRC" BYTE_STABLE=true GOTOOLCHAIN=local HOST_UID=501 HOST_GID=20)"
+[ "$(jq -r '.stages[0].env | "\(.FETCH_LICENSE) \(.HOST_GOTOOLCHAIN)"' "$P/bomlens-plan.json")" = "false local" ] \
+    && pass "BYTE_STABLE turns stage 1's license lookup off; GOTOOLCHAIN reaches it as HOST_GOTOOLCHAIN" \
+    || fail "stage 1 env: $(jq -c '.stages[0].env' "$P/bomlens-plan.json")"
+P="$(plan_run node-badtc "$PSRC" GOTOOLCHAIN='local;rm -rf /')"
+[ "$(jq -r '.stages[0].env.HOST_GOTOOLCHAIN // "absent"' "$P/bomlens-plan.json")" = "absent" ] \
+    && pass "a GOTOOLCHAIN that is not a toolchain name is not passed on" || fail "HOST_GOTOOLCHAIN: $(jq -r '.stages[0].env.HOST_GOTOOLCHAIN' "$P/bomlens-plan.json")"
+[ "$(jq -r '[.stages[0].mounts[] | select(.role=="guard-state") | .target] | first' "$P/bomlens-plan.json") $(jq -r '.stages[0].env_from_caller | has("BOMLENS_GUARD_ID")' "$P/bomlens-plan.json")" = "/bomlens-state true" ] \
+    && pass "stage 1 offers the guard-state mount and BOMLENS_GUARD_ID, so a killed stage 1 can be undone" \
+    || fail "guard state: $(jq -c '[.stages[0].mounts, .stages[0].env_from_caller]' "$P/bomlens-plan.json")"
+jq -e '(.stages[0].env_passthrough | index("HOST_UID")) and (.stages[1].env_passthrough | index("HOST_UID")) and (.stages[1].env_passthrough | index("BOMLENS_INCLUDE_NON_SHIPPED"))' "$P/bomlens-plan.json" >/dev/null \
+    && pass "HOST_UID/HOST_GID pass to both stages, BOMLENS_INCLUDE_NON_SHIPPED to stage 2 (its fallback reads it)" \
+    || fail "passthrough: $(jq -c '[.stages[].env_passthrough]' "$P/bomlens-plan.json")"
+[ "$(jq -r '[.outputs[] | select(.role=="plan") | .path] | first' "$P/bomlens-result.json")" = "bomlens-plan.json" ] \
+    && pass "the result manifest lists bomlens-plan.json as the plan output" || fail "outputs: $(jq -c '.outputs' "$P/bomlens-result.json")"
+
+# A re-plan in the same folder removes the earlier run's stage 1 outputs.
+P="$WORK/plan-stale"; mkdir -p "$P"
+echo stale > "$P/demo_1.0_bom.json"; echo stale > "$P/demo_1.0_conda.cdx.json"; echo stale > "$P/bomlens-plan.json"
+P="$(plan_run stale "$PSRC")"
+[ ! -e "$P/demo_1.0_bom.json" ] && [ ! -e "$P/demo_1.0_conda.cdx.json" ] && [ "$(jq -r .status "$P/bomlens-plan.json" 2>/dev/null)" = "ok" ] \
+    && pass "PLAN removes an earlier run's SBOM and conda sidecar, and replaces the plan" \
+    || fail "left: $(ls "$P")"
+
+EMPTYSRC="$WORK/plan-src-empty"; mkdir -p "$EMPTYSRC"
+P="$(plan_run empty "$EMPTYSRC")"
+[ "$(cat "$P.rc") $(jq -r '.run.status + " " + ([.steps[] | select(.id=="plan")][0].status)' "$P/bomlens-result.json")" != "0 succeeded ok" ] \
+    && [ ! -f "$P/bomlens-plan.json" ] && [ "$(jq -r '[.steps[] | select(.id=="plan")][0].status' "$P/bomlens-result.json")" = "failed" ] \
+    && pass "an empty source is refused: no plan, plan step failed" \
+    || fail "empty source: rc $(cat "$P.rc"), $(jq -c '[.run.status, .steps]' "$P/bomlens-result.json")"
+missing=""
+for lang in rust go ruby java python node php dotnet swift unknown; do
+    img="$(bash -c ". '$ROOT_DIR/docker/lib/source-detect.sh' >/dev/null 2>&1; img_for_lang $lang")"
+    jq -e --arg i "${img%:*}" --arg t "${img##*:}" '.tag == $t and (.digests[$i] // "" | startswith("sha256:"))' \
+        "$ROOT_DIR/docker/lib/cdxgen-images.json" >/dev/null || missing="$missing $img"
+done
+[ -z "$missing" ] && pass "cdxgen-images.json pins every image img_for_lang returns, at CDXGEN_TAG" \
+    || fail "no pinned digest for:$missing (run scripts/update-cdxgen-digests.sh)"
+
+echo "== POSTPROCESS takes over the manifest-only fallback when told stage 1 failed =="
+if ! command -v syft >/dev/null 2>&1 && [ -n "${CI:-}" ]; then
+    fail "syft is not installed on this CI runner, so the stage 2 fallback is not tested"
+elif command -v syft >/dev/null 2>&1; then
+    FB="$WORK/fb-src"; mkdir -p "$FB"; printf 'requests==2.31.0\n' > "$FB/requirements.txt"
+    D="$(new_run fallback empty)"
+    printf 'npm ERR! getaddrinfo ENOTFOUND registry.npmjs.org\n' > "$D/bomlens-stage1.log"
+    run_engine "$D" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$FB" BOMLENS_STAGE1_EXIT=1 BOMLENS_STAGE1_LOG=bomlens-stage1.log
+    [ "$(jq -r '[.components[] | select(.type=="library") | .name] | join(",")' "$D/demo_1.0_bom.json" 2>/dev/null)" = "requests" ] \
+        && pass "a failed stage 1 is replaced by the syft scan of the source" \
+        || fail "fallback SBOM: $(jq -c '[.components[]?.name]' "$D/demo_1.0_bom.json" 2>&1)" "$(tail -8 "$D.log")"
+    [ "$(jq -r '[.metadata.properties[]? | select(.name=="bomlens:sbom-tool-degraded") | .value] | first' "$D/demo_1.0_bom.json" 2>/dev/null)" = "network" ] \
+        && pass "the reason is read from the stage 1 log (network)" \
+        || fail "sbom-tool-degraded is $(jq -c '[.metadata.properties[]? | select(.name=="bomlens:sbom-tool-degraded")]' "$D/demo_1.0_bom.json" 2>&1)"
+    [ "$(jq -r '[.steps[] | select(.id=="generate")][0] | "\(.status) \(.reason) \(.stage)"' "$D/bomlens-result.json")" = "degraded fallback 1" ] \
+        && pass "generate is recorded as degraded (fallback)" \
+        || fail "generate is $(jq -c '[.steps[] | select(.id=="generate")]' "$D/bomlens-result.json")"
+    D="$(new_run fallback-oom empty)"
+    run_engine "$D" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$FB" BOMLENS_STAGE1_EXIT=137 BOMLENS_STAGE1_OOM=true
+    [ "$(jq -r '[.metadata.properties[]? | select(.name=="bomlens:sbom-tool-degraded") | .value] | first' "$D/demo_1.0_bom.json" 2>/dev/null)" = "oom" ] \
+        && pass "a stage 1 killed for memory is recorded as oom" || fail "oom case: $(tail -5 "$D.log")"
+    D="$(new_run fallback-traversal empty)"
+    printf 'getaddrinfo ENOTFOUND\n' > "$WORK/outside.log"
+    run_engine "$D" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$FB" BOMLENS_STAGE1_EXIT=1 BOMLENS_STAGE1_LOG=../outside.log
+    [ "$(jq -r '[.metadata.properties[]? | select(.name=="bomlens:sbom-tool-degraded") | .value] | first' "$D/demo_1.0_bom.json" 2>/dev/null)" = "cdxgen-crash" ] \
+        && pass "a stage 1 log path outside the output folder is not read" || fail "traversal case: $(jq -c '[.metadata.properties[]?]' "$D/demo_1.0_bom.json" 2>&1)"
+    D="$(new_run fallback-fails empty)"
+    run_engine "$D" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$WORK/no-such-source" BOMLENS_STAGE1_EXIT=1
+    rc=$?
+    [ "$rc" = 1 ] && [ "$(jq -r '[.steps[] | select(.id=="generate")][0].status' "$D/bomlens-result.json")" = "failed" ] \
+        && pass "when the fallback fails too, the run exits 1 with generate failed" \
+        || fail "rc $rc, generate $(jq -c '[.steps[] | select(.id=="generate")]' "$D/bomlens-result.json")"
+    D="$(new_run stage1-ok)"
+    run_engine "$D" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$FB" BOMLENS_STAGE1_EXIT=0
+    [ "$(jq -r '[.steps[] | select(.id=="generate")][0].status' "$D/bomlens-result.json")" = "ok" ] \
+        && [ "$(jq -r '[.components[] | .name] | sort | join(",")' "$D/demo_1.0_bom.json")" != "requests" ] \
+        && pass "a stage 1 that succeeded is post-processed as it is (no fallback)" || fail "stage1-ok: $(tail -5 "$D.log")"
+else
+    echo "  SKIP: syft is not installed on this host"
+fi
+
 echo "== every step label in entrypoint.sh is documented =="
 missing=""
 for id in $(grep -v '^[[:space:]]*#' "$ENTRY" | grep -oE '(run_optional_step|er_record|er_phase) [a-z][a-z0-9-]+' | awk '{print $2}' | sort -u); do

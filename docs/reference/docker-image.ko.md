@@ -128,7 +128,7 @@ MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
 
 | 환경 변수 | 필수 | 기본값 | 설명 |
 |-----------|------|--------|------|
-| `MODE` | X | `POSTPROCESS` | 분석 모드: `SOURCE`, `IMAGE`, `BINARY`, `ROOTFS`, `FIRMWARE`, `ANALYZE`. 지정하지 않으면 출력 디렉터리에 이미 있는 SBOM을 후처리만 한다 — 실제로 무언가를 스캔하려면 명시적으로 지정해야 한다. |
+| `MODE` | X | `POSTPROCESS` | 분석 모드: `SOURCE`, `IMAGE`, `BINARY`, `ROOTFS`, `FIRMWARE`, `ANALYZE`, 또는 `PLAN`(소스 스캔의 실행 계획 작성, [엔진 계약](engine-contract.ko.md#실행-계획) 참조). 지정하지 않으면 출력 디렉터리에 이미 있는 SBOM을 후처리만 한다 — 실제로 무언가를 스캔하려면 명시적으로 지정해야 한다. |
 | `PROJECT_NAME` | O | — | 프로젝트 이름 |
 | `PROJECT_VERSION` | O | — | 프로젝트 버전 |
 | `TARGET_IMAGE` | 모드별 | — | `IMAGE` 모드의 이미지명 (docker.sock 마운트 필요) |
@@ -136,6 +136,7 @@ MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
 | `TARGET_DIR` | 모드별 | — | `ROOTFS` 모드의 디렉터리 경로 |
 | `UPLOAD_ENABLED` | — | `true` | `false`면 업로드 없이 로컬 저장만 (CLI `--generate-only`와 동일) |
 | `HOST_OUTPUT_DIR` | — | — | 산출물을 복사할 마운트 경로 |
+| `BOMLENS_STAGE1_EXIT`, `BOMLENS_STAGE1_OOM`, `BOMLENS_STAGE1_LOG` | — | — | 1단계를 직접 실행한 뒤의 `POSTPROCESS`: 그 종료 코드, 메모리 부족으로 종료됐으면 `true`, 출력 폴더에 둔 로그 파일 이름. 1단계가 SBOM을 남기지 않았으면 2단계가 syft 스캔으로 대신함([엔진 계약](engine-contract.ko.md#실행-계획) 참조) |
 | `BOMLENS_IMAGE_REF`, `BOMLENS_IMAGE_DIGEST` | — | — | 호출자가 실행한 이미지 참조와 다이제스트. `bomlens-result.json`에 그대로 적습니다([엔진 계약](engine-contract.ko.md) 참고) |
 | `GENERATE_NOTICE` | — | `false` | 오픈소스 고지문 생성 (CLI `--notice`) |
 | `GENERATE_SECURITY` | — | `false` | Trivy 보안 보고서 생성 (CLI `--security`) |
