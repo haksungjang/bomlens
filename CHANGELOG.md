@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A Rust project's committed `Cargo.lock` is used as it is. Before, `cargo generate-lockfile` ran on every scan and moved crates to the newest compatible release, so the SBOM could list versions the project does not build with (a committed `syn 3.0.6` came out as `3.0.7`). The documentation already said the lock is resolved only when none is committed.
 - `--deep-license` runs only in a source scan, on the scanned tree. Before, it scanned whatever was mounted at `/src` in any mode, which in the web UI could be the server's own folder for an SBOM analysis.
 - `--resolve-purl` now stops waiting at `PURL_RESOLVE_BUDGET`. Before, the budget only limited when lookups were started, so a slow repository could hold the scan far longer; identifiers that have not answered are reported as unchecked.
 - The non-shipped folder list gains the singular and short spellings `sample`, `bench`, `benchmark`, `demo` and `demos`, next to the plural forms it already had.

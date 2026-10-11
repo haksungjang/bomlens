@@ -6214,6 +6214,32 @@ else
     fail "a nested packages.lock.json was not recorded" "$(jq -c '.metadata.properties' "$CA2_ROOT/dotnet-monorepo/out/bom.json" 2>&1)"
 fi
 
+echo "== cargo: a committed Cargo.lock is used as it is, not re-resolved =="
+# generate-lockfile re-resolves to the newest compatible crates, so a committed
+# lock (syn 3.0.6) came out as syn 3.0.7 in the SBOM. With a lock present,
+# cargo must not be run at all.
+CL_ROOT="$WORK/cargo-lock"
+mkdir -p "$CL_ROOT/bin" "$CL_ROOT/src" "$CL_ROOT/out"
+printf '[package]\nname = "x"\nversion = "0.1.0"\n' > "$CL_ROOT/src/Cargo.toml"
+printf '# committed\nversion = 3\n' > "$CL_ROOT/src/Cargo.lock"
+cp "$PREP_FAIL_ROOT/bin/cdxgen" "$CL_ROOT/bin/cdxgen"
+cat > "$CL_ROOT/bin/cargo" <<STUB
+#!/bin/sh
+echo "\$*" >> "$CL_ROOT/cargo-calls"
+printf '# regenerated\n' > Cargo.lock
+STUB
+chmod +x "$CL_ROOT/bin/cargo"
+PATH="$CL_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$CL_ROOT/src" "$CL_ROOT/out/bom.json" > "$CL_ROOT/log" 2>&1
+grep -q 'generate-lockfile' "$CL_ROOT/cargo-calls" 2>/dev/null \
+    && fail "cargo generate-lockfile ran over a committed Cargo.lock" "$(cat "$CL_ROOT/cargo-calls")" \
+    || pass "cargo generate-lockfile is not run when Cargo.lock is committed"
+[ "$(head -1 "$CL_ROOT/src/Cargo.lock")" = "# committed" ] \
+    && pass "the committed Cargo.lock is left as it was" || fail "Cargo.lock changed: $(head -1 "$CL_ROOT/src/Cargo.lock")"
+jq -e '[.metadata.properties[]? | select(.name=="bomlens:prep-step-applied" and .value=="cargo-lock-committed")] | length == 1' \
+    "$CL_ROOT/out/bom.json" >/dev/null 2>&1 \
+    && pass "the committed lock is recorded as lock evidence (cargo-lock-committed)" \
+    || fail "no cargo-lock-committed evidence" "$(jq -c '.metadata.properties' "$CL_ROOT/out/bom.json" 2>&1)"
+
 echo "== prep_step: every resolution step runs through it (no bare invocation left) =="
 # The pre-prep_step patterns (silently discarded stderr, no time limit) must
 # not reappear alongside prep_step for the same command.

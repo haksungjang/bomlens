@@ -408,10 +408,18 @@ _lock_evidence_found() {
     find . \( "$@" \) -prune -o -type f -name "$_lef_name" -print 2>/dev/null | grep -q .
 }
 
-# Rust — cdxgen does NOT auto-run cargo; lockfile is essential for transitive deps
-if [ -f Cargo.toml ] && command -v cargo >/dev/null 2>&1; then
-    log "cargo generate-lockfile"
-    prep_step cargo-lockfile "$PREP_TIMEOUT_DEFAULT" cargo generate-lockfile
+# Rust — cdxgen does NOT auto-run cargo; lockfile is essential for transitive deps.
+# A committed Cargo.lock is used as it is: `cargo generate-lockfile` resolves
+# afresh and moves every crate to the newest compatible release, so the SBOM
+# would list versions the project does not build with. Like a committed
+# Gemfile.lock, it is recorded as lock evidence without being re-resolved.
+if [ -f Cargo.toml ]; then
+    if [ -f Cargo.lock ]; then
+        mark_prep_applied cargo-lock-committed
+    elif command -v cargo >/dev/null 2>&1; then
+        log "cargo generate-lockfile (no committed Cargo.lock)"
+        prep_step cargo-lockfile "$PREP_TIMEOUT_DEFAULT" cargo generate-lockfile
+    fi
 fi
 
 # Go — complete go.sum so cdxgen's default-readonly `go list -deps` resolves the
