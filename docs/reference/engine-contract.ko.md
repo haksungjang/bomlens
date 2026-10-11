@@ -10,7 +10,7 @@ BomLens 이미지를 스캔 엔진으로 쓰는 프로그램은 모든 스캔이
 
 ## 파일
 
-`bomlens-result.json`은 이름이 고정되어 있으므로 스캔마다 출력 폴더를 따로 두세요. 이전 실행이 남긴 매니페스트는 실행을 시작할 때 지우고, 새 매니페스트는 실행이 끝날 때 씁니다. 오류로 중간에 멈춘 경우에도 씁니다. 실행 뒤에 매니페스트가 없다면 엔진이 매니페스트를 쓰기 전에 강제 종료된 것입니다.
+`bomlens-result.json`은 이름이 고정되어 있으므로 스캔마다 출력 폴더를 따로 두세요. 이전 실행이 남긴 매니페스트는 실행을 시작하자마자 다른 확인보다 먼저 지우고, 새 매니페스트는 실행이 끝날 때 씁니다. 오류로 중간에 멈춘 경우에도 씁니다. 실행 뒤에 매니페스트가 없다면 엔진이 매니페스트를 쓰기 전에 강제 종료된 것입니다.
 
 계약 때문에 스캔의 종료 코드가 바뀌지는 않습니다. SBOM을 만든 실행은 도중에 어떤 단계가 실패해도 0으로 끝나며, 그 실패는 매니페스트로 알립니다.
 
@@ -20,7 +20,7 @@ BomLens 이미지를 스캔 엔진으로 쓰는 프로그램은 모든 스캔이
 | `engine` | `version`은 이미지에 들어 있는 BomLens 버전입니다. `image`와 `image_digest`는 호출자가 `BOMLENS_IMAGE_REF`와 `BOMLENS_IMAGE_DIGEST`를 넘기면 그 값을 그대로 적습니다. 이미지는 자기 참조를 알 수 없기 때문입니다 |
 | `input` | `kind`(`source`, `image`, `sbom`, `binary`, `rootfs`, `firmware`, `ai-model`, `dataset`), 실행한 `MODE`, `target`(이미지 스캔의 이미지 참조, 경로는 적지 않음) |
 | `run` | `status`, `reason`, `started_at`, `ended_at`(UTC), `exit_code` |
-| `steps[]` | 단계마다 하나씩, 실행된 순서대로(아래 표) |
+| `steps[]` | 단계마다 하나씩, 기록된 순서대로. 단계는 끝날 때 기록됨(아래 표) |
 | `tools` | 도구 이름과 버전입니다. SBOM에 적힌 생성 도구, syft, 취약점 스캔이 돌았다면 Trivy가 들어갑니다 |
 | `engines` | 이번 실행에서 결과를 낸 취약점 엔진(`trivy`, `grype`, `cve-bin-tool`, `yocto`) |
 | `data_sources.trivy_db` | 취약점 스캔이 돌았을 때 Trivy 데이터베이스의 스키마 버전, `updated_at`, `downloaded_at` |
@@ -45,7 +45,7 @@ BomLens 이미지를 스캔 엔진으로 쓰는 프로그램은 모든 스캔이
 |---|---|
 | `ok` | 실행되어 끝까지 완료됨 |
 | `degraded` | 실행됐지만 필요한 것이 일부 없었음(예: 오프라인 지원 종료 데이터가 없음) |
-| `failed` | 실행됐지만 실패함. SBOM은 그대로 쓰고, SBOM의 `bomlens:pipeline-step-failed` 속성에도 단계 이름이 남음 |
+| `failed` | 실행됐지만 실패함. SBOM은 그대로 씀. 대부분의 후처리 단계는 SBOM의 `bomlens:pipeline-step-failed` 속성에도 이름을 남기지만, 빠짐없는 기록은 매니페스트임 |
 | `skipped` | 실행할 수 없었음. 도구가 이미지에 없거나 입력이 없음 |
 | `disabled` | 설정으로 꺼짐 |
 
@@ -61,6 +61,8 @@ BomLens 이미지를 스캔 엔진으로 쓰는 프로그램은 모든 스캔이
 | `budget_exhausted` | 작업량 제한에서 멈춤 |
 | `no_input` | 단계가 읽을 것이 없었음(소스 트리 없음, 서명 키 없음) |
 <!-- reasons:end -->
+
+`timeout`, `too_large`, `budget_exhausted`는 아직 어느 단계도 내지 않습니다. 이후 릴리스에서 기록할 제한 사유로 예약해 둔 값입니다.
 
 각 단계에는 `stage`(이 컨테이너가 시작되기 전에 언어 이미지가 만든 SBOM이면 1, 나머지는 2), `started_at`, `ended_at`, 500자 이하의 선택 항목 `detail`이 있고, 일부 단계에는 `counts`가 있습니다(`generate`는 `components`를 기록).
 

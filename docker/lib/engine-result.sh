@@ -90,9 +90,22 @@ _er_input_kind() {
     esac
 }
 
+# The EXIT trap: write the manifest, then exit again with the run's own code,
+# so nothing er_finish does can change it.
+er_exit_trap() {
+    local rc=$?
+    set +e
+    er_finish "$rc"
+    exit "$rc"
+}
+
 # Write the manifest. Called from the EXIT trap with the script's exit code.
 # Never fails and never changes the exit code.
 er_finish() {
+    # Errexit off for this function only: a failing jq here must not end the
+    # script with its own status instead of the run's.
+    local -
+    set +e
     local rc="${1:-0}"
     [ -n "${ER_STEPS:-}" ] && [ -f "$ER_STEPS" ] || return 0
     command -v jq >/dev/null 2>&1 || return 0
@@ -106,8 +119,11 @@ er_finish() {
     local props=""
     [ -n "$bom" ] && [ -f "$bom" ] && props="$(jq -c '[.metadata.properties[]? | .name]' "$bom" 2>/dev/null)"
     [ -n "$props" ] || props="[]"
-    local scan_error="" sec_present=false
-    if [ -f "$sec" ]; then
+    # A security report counts only when scan-security ran in this run: a file
+    # left in the folder by an earlier run says nothing about this one.
+    local scan_error="" sec_present=false sec_ran=false
+    grep -q '"id":"scan-security","status":"ok"' "$ER_STEPS" 2>/dev/null && sec_ran=true
+    if [ "$sec_ran" = true ] && [ -f "$sec" ]; then
         sec_present=true
         scan_error="$(jq -r '.ScanError.Message // empty' "$sec" 2>/dev/null)"
     fi
@@ -123,7 +139,8 @@ er_finish() {
             [ -n "$f" ] && extra+=("${OUT_PREFIX:-}$f")
         done
     fi
-    for f in "${ARTIFACTS[@]:-}" "${OUT_PREFIX:-}_security_trivy.json" "${extra[@]:-}"; do
+    [ "$sec_ran" = true ] && extra+=("${OUT_PREFIX:-}_security_trivy.json")
+    for f in "${ARTIFACTS[@]:-}" "${extra[@]:-}"; do
         [ -n "$f" ] || continue
         base="$(basename "$f")"
         case " ${seen[*]:-} " in *" $base "*) continue ;; esac
@@ -145,7 +162,7 @@ er_finish() {
     if [ "$sec_present" = true ]; then
         engines='["trivy"]'
         for e in grype cvebintool yocto; do
-            if [ -f "$outdir/${OUT_PREFIX}_security_${e}.json" ]; then
+            if [ -f "$outdir/${OUT_PREFIX}_security_${e}.json" ] || [ -f "${OUT_PREFIX}_security_${e}.json" ]; then
                 [ "$e" = cvebintool ] && e="cve-bin-tool"
                 engines="$(jq -c --arg e "$e" '. + [$e]' <<<"$engines")"
             fi
@@ -154,7 +171,7 @@ er_finish() {
 
     # Tool versions: the generator recorded in the SBOM, then the bundled tools.
     local tools="{}"
-    [ -n "$bom" ] && [ -f "$bom" ] && tools="$(jq -c '[.metadata.tools.components[]?, .metadata.tools[]?
+    [ -n "$bom" ] && [ -f "$bom" ] && tools="$(jq -c '[(.metadata.tools // [] | if type == "object" then .components[]? else .[]? end)
         | objects | select(.name and .version and .name != "BomLens") | {key:.name, value:(.version|tostring)}] | from_entries' "$bom" 2>/dev/null)"
     [ -n "$tools" ] || tools="{}"
     [ -n "${BOMLENS_SYFT_VERSION:-}" ] && tools="$(jq -c --arg v "${BOMLENS_SYFT_VERSION#v}" '. + {syft:$v}' <<<"$tools")"

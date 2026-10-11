@@ -45,6 +45,20 @@ if [ "$SCAN_MODE" = "UI" ]; then
     exec python3 /usr/local/lib/sbom-web/server.py
 fi
 
+# Result manifest (bomlens-result.json) for a program that runs this image as
+# its scan engine: each step is recorded as it runs, and the manifest is written
+# on exit, also when the run stops early (a missing PROJECT_NAME included).
+# The trap keeps the exit code: er_finish runs with errexit off, and the code
+# is passed to exit again. INT and TERM exit with their own codes so the EXIT
+# trap sees 130/143 and records the run as cancelled; generate_sbom_cdxgen
+# replaces these two while its sibling container runs, then restores them.
+# shellcheck source=docker/lib/engine-result.sh
+. "$LIBDIR/engine-result.sh"
+er_init
+trap er_exit_trap EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 # --- DIFF mode: compare two already-generated SBOMs, no project metadata or
 # common pipeline needed — it reads two files and writes one report. Kept out
 # of the shared PROJECT_NAME/VERSION pipeline below entirely: unlike MERGE (a
@@ -161,13 +175,6 @@ fi
 case "${REPORT_LANG:-en}" in ko) REPORT_LANG="ko" ;; *) REPORT_LANG="en" ;; esac
 export REPORT_LANG
 
-# Result manifest (bomlens-result.json) for a program that runs this image as
-# its scan engine: each step is recorded as it runs, and the manifest is written
-# on exit, also when the run stops early. See engine-result.sh.
-# shellcheck source=docker/lib/engine-result.sh
-. "$LIBDIR/engine-result.sh"
-er_init
-trap 'er_finish "$?"' EXIT
 er_phase generate
 
 # Shared language detection + cdxgen image selection (also used by the CLI).
@@ -441,7 +448,8 @@ generate_sbom_cdxgen() {
     trap 'stop_sibling; exit 130' INT
     trap 'stop_sibling; exit 143' TERM
     wait "$pipe_pid" || true
-    trap - INT TERM
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     rc=$(cat "$rcf" 2>/dev/null || echo 1)
     rm -f "$rcf"
     SIBLING_CID=""

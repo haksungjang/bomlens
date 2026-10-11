@@ -10,7 +10,7 @@ The format is checked against [`schemas/engine-result-1.json`](https://github.co
 
 ## The file
 
-`bomlens-result.json` has a fixed name, so give each scan its own output folder. A manifest left in the folder by an earlier run is removed when the run starts, and the new one is written when the run ends, also when it stops early on an error. A folder with no manifest after the run means the engine was killed before it could write one.
+`bomlens-result.json` has a fixed name, so give each scan its own output folder. A manifest left in the folder by an earlier run is removed when the run starts, before anything else is checked, and the new one is written when the run ends, also when it stops early on an error. A folder with no manifest after the run means the engine was killed before it could write one.
 
 The scan's exit code is unchanged by the contract. A run that produced its SBOM exits 0 even when a step failed along the way; the manifest is where that failure is reported.
 
@@ -20,7 +20,7 @@ The scan's exit code is unchanged by the contract. A run that produced its SBOM 
 | `engine` | `version` is the BomLens version built into the image. `image` and `image_digest` repeat `BOMLENS_IMAGE_REF` and `BOMLENS_IMAGE_DIGEST` when the caller passes them; the image cannot see its own reference |
 | `input` | `kind` (`source`, `image`, `sbom`, `binary`, `rootfs`, `firmware`, `ai-model`, `dataset`), the `MODE` it ran in, and `target` (the image reference for an image scan; paths are not recorded) |
 | `run` | `status`, `reason`, `started_at`, `ended_at` (UTC), `exit_code` |
-| `steps[]` | one entry per step, in the order they ran (below) |
+| `steps[]` | one entry per step, in the order they were recorded; a step is recorded when it ends (below) |
 | `tools` | tool name and version: the generator recorded in the SBOM, syft, and Trivy when the vulnerability scan ran |
 | `engines` | the vulnerability engines whose results this run produced (`trivy`, `grype`, `cve-bin-tool`, `yocto`) |
 | `data_sources.trivy_db` | the Trivy database's schema version, `updated_at` and `downloaded_at`, when the vulnerability scan ran |
@@ -45,7 +45,7 @@ Every step that applies to the scan's mode is recorded, also when it did not run
 |---|---|
 | `ok` | ran and completed |
 | `degraded` | ran, but with less than it needed (for example, the offline end-of-life data was missing) |
-| `failed` | ran and failed; the SBOM is still written, and the step is also named in the SBOM's `bomlens:pipeline-step-failed` property |
+| `failed` | ran and failed; the SBOM is still written. Most post-process steps also add their name to the SBOM's `bomlens:pipeline-step-failed` property; the manifest is the complete record |
 | `skipped` | could not run: its tool is not in the image, or its input is missing |
 | `disabled` | a setting turned it off |
 
@@ -61,6 +61,8 @@ Every step that applies to the scan's mode is recorded, also when it did not run
 | `budget_exhausted` | the step stopped at its work limit |
 | `no_input` | there was nothing for the step to read (no source tree, no signing key) |
 <!-- reasons:end -->
+
+No step reports `timeout`, `too_large` or `budget_exhausted` yet; they are reserved for the limits later releases record.
 
 Each step also has `stage` (1 for the SBOM a language image generated before this container started, 2 otherwise), `started_at`, `ended_at`, an optional `detail` of up to 500 characters, and for some steps `counts` (`generate` records `components`).
 

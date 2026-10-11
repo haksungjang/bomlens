@@ -52,6 +52,10 @@ out=""
 while [ $# -gt 0 ]; do
     case "$1" in --output) out="$2"; shift 2 ;; *) shift ;; esac
 done
+if [ "${TRIVY_STUB:-ok}" = "sleep" ]; then
+    : > "$TRIVY_STUB_STARTED"
+    sleep 3
+fi
 if [ "${TRIVY_STUB:-ok}" = "fail" ]; then
     echo "FATAL	failed to download vulnerability DB: stub error" >&2
     exit 1
@@ -192,7 +196,9 @@ else
     MR="$(new_run mutant)"
     run_engine "$MR" "$MUT" TRIVY_STUB=fail
     v="$(trivy_failure_violation "$MR/bomlens-result.json")"
-    [ -n "$v" ] && pass "without the rule the check reports the hidden failure ($v)" \
+    # Exactly this violation: a missing or unreadable manifest would also be
+    # non-empty, and would not show that the rule is what the check tests.
+    [ "$v" = "scan-security is ok, not failed" ] && pass "without the rule the check reports the hidden failure ($v)" \
         || fail "the check still passes without the ScanError rule; it does not test it"
 fi
 
@@ -211,6 +217,42 @@ M="$EA/bomlens-result.json"
     || fail "generate is $(jq -c '[.steps[] | select(.id=="generate")]' "$M" 2>/dev/null)"
 err="$(schema_errors "$M")"
 [ -z "$err" ] && pass "the early-failure manifest validates against the schema" || fail "schema errors" "$err"
+
+echo "== a run that stops before the project is known replaces the old manifest =="
+NP="$(new_run no-project)"
+cp "$OK/bomlens-result.json" "$NP/bomlens-result.json"
+run_engine "$NP" "$ROOT_DIR/docker/lib" PROJECT_VERSION=
+rc=$?
+[ "$rc" != 0 ] && [ "$(jq -r '.run.status' "$NP/bomlens-result.json" 2>/dev/null)" = "failed" ] \
+    && pass "a missing PROJECT_VERSION leaves a failed manifest, not the previous run's success" \
+    || fail "rc=$rc, manifest run.status is $(jq -r '.run.status' "$NP/bomlens-result.json" 2>/dev/null)"
+
+echo "== metadata.tools in the CycloneDX 1.4 array form =="
+TA="$(new_run tools-array)"
+jq '.metadata.tools = [{"vendor":"x","name":"cdxgen","version":"9.0.0"}]' "$FIX/good-cyclonedx.json" > "$TA/demo_1.0_bom.json"
+run_engine "$TA" "$ROOT_DIR/docker/lib"
+rc=$?
+[ "$rc" = 0 ] && pass "the run still exits 0" || fail "the run exited $rc"
+[ "$(jq -r '.tools.cdxgen' "$TA/bomlens-result.json" 2>/dev/null)" = "9.0.0" ] \
+    && pass "the manifest is written and reads the generator from the array form" \
+    || fail "tools is $(jq -c .tools "$TA/bomlens-result.json" 2>/dev/null)"
+
+echo "== a run stopped by TERM is recorded as cancelled =="
+CN="$(new_run cancel)"
+( cd "$CN" && exec env PATH="$WORK/bin:$PATH" MODE=POSTPROCESS PROJECT_NAME=demo PROJECT_VERSION=1.0 \
+    HOST_OUTPUT_DIR="$CN" BOMLENS_LIBDIR="$ROOT_DIR/docker/lib" BOMLENS_RUN_INPUT=demo_1.0_bom.json \
+    UPLOAD_ENABLED=false GENERATE_SECURITY=true DEEP_CVE=false SECURITY_ENRICH=false \
+    ENRICH_EOL=false ENRICH_MALICIOUS=false TRIVY_STUB=sleep TRIVY_STUB_STARTED="$WORK/stub-started" \
+    bash "$ENTRY" ) > "$CN.log" 2>&1 &
+pid=$!
+for _ in $(seq 1 100); do [ -f "$WORK/stub-started" ] && break; sleep 0.1; done
+kill -TERM "$pid" 2>/dev/null
+wait "$pid"
+rc=$?
+[ "$rc" = 143 ] && pass "the run exits 143" || fail "the run exited $rc"
+[ "$(jq -r '.run.status + " " + (.run.exit_code|tostring)' "$CN/bomlens-result.json" 2>/dev/null)" = "cancelled 143" ] \
+    && pass "run.status is cancelled with exit code 143" \
+    || fail "manifest run is $(jq -c .run "$CN/bomlens-result.json" 2>/dev/null)"
 
 echo "== every step label in entrypoint.sh is documented =="
 missing=""
