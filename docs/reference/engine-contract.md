@@ -6,7 +6,7 @@ description: The result manifest (bomlens-result.json) every scan writes, for a 
 
 A program that runs the BomLens image as its scan engine reads `bomlens-result.json`, written to the output folder by every scan. It says how the run ended, which steps ran, were turned off, could not run or failed, and which file in the folder plays which role, so the program does not parse the log or guess file names.
 
-The format is checked against [`schemas/engine-result-1.json`](https://github.com/sktelecom/bomlens/blob/main/schemas/engine-result-1.json) by `tests/test-engine-contract.sh` in CI. This page describes contract version `1.0.0`.
+The format is checked against [`schemas/engine-result-1.json`](https://github.com/sktelecom/bomlens/blob/main/schemas/engine-result-1.json) by `tests/test-engine-contract.sh` in CI. This page describes contract version `1.1.0`.
 
 ## The file
 
@@ -151,11 +151,29 @@ docker run --rm -v "$PWD/src:/src:ro" -v "$PWD/out:/host-output" \
 | `output_file` | the SBOM file name stage 1 writes and stage 2 reads |
 | `stages[]` | `generate` (stage 1) and `postprocess` (stage 2), in order |
 
-Each stage gives `image` and `image_digest` (stage 1 is always pinned by digest; stage 2 repeats `BOMLENS_IMAGE_REF` and `BOMLENS_IMAGE_DIGEST`), `user`, `entrypoint`, `args`, `workdir`, `env` (names and values to set), `env_passthrough` (names to pass from your own environment when set), `network` (whether it needs to reach the package registries) and `mounts`. A mount has a `role` (`source`, `output`, `plan-file` with a `source` path inside the output folder, the optional `guard-state`, or an optional cache), a `target` and a `mode`. The source is writable in stage 1 only: the resolvers write lock files there, and stage 1 puts the tree back as it was when it finishes. A stage 1 that is killed (out of memory, a timeout) cannot; mount a folder of your own as `guard-state` and set `BOMLENS_GUARD_ID` to a unique id per scan, and after a kill run the same stage 1 again with `BOMLENS_GUARD_RESTORE_ONLY=1` to restore the source. Pass `HOST_UID` and `HOST_GID` to both stages so the files they write belong to your user rather than root.
+Each stage gives `image` and `image_digest` (stage 1 is always pinned by digest; stage 2 repeats `BOMLENS_IMAGE_REF` and `BOMLENS_IMAGE_DIGEST`), `user`, `entrypoint`, `args`, `workdir`, `env` (names and values to set), `env_passthrough` (names to pass from your own environment when set), `network` (whether it needs to reach the package registries) and `mounts`. A mount has a `role` (`source`, `output`, `plan-file` with a `source` path inside the output folder, the optional `guard-state`, an optional cache, or the optional `trivy-db`), a `target` and a `mode`. Mount a Trivy cache folder that holds a database (`db/trivy.db`) as `trivy-db`, read-only: with `GENERATE_SECURITY=true` (stage 2's report options are yours to set, as in the image reference), stage 2 then reads that database as it is, with no download, no update and no write, so it runs with no network and a read-only root. A `trivy-db` mount with no database fails `scan-security` with that reason; a database older than `BOMLENS_TRIVY_DB_MAX_AGE_DAYS` days (7, counted from `UpdatedAt` in `db/metadata.json`, when the database was built) records it as `degraded` (`unavailable`). Pass a value that fits how often you refresh the database. The source is writable in stage 1 only: the resolvers write lock files there, and stage 1 puts the tree back as it was when it finishes. A stage 1 that is killed (out of memory, a timeout) cannot; mount a folder of your own as `guard-state` and set `BOMLENS_GUARD_ID` to a unique id per scan, and after a kill run the same stage 1 again with `BOMLENS_GUARD_RESTORE_ONLY=1` to restore the source. Pass `HOST_UID` and `HOST_GID` to both stages so the files they write belong to your user rather than root.
 
 `MODE=PLAN` exits 0 when it wrote a plan, `ok` or `unsupported`; an `unsupported` plan records the `plan` step as `skipped` in the result manifest, so the run reads `succeeded_degraded`. It refuses an empty source (usually a mount that did not reach the container) with a non-zero exit. Before writing, it removes an earlier plan and an earlier run's stage 1 outputs from the output folder, since stage 2 cannot tell a fresh SBOM from a leftover one. Stage 1 images are pinned for the cdxgen tag this BomLens release was tested with; overriding `CDXGEN_TAG` makes the language images `unsupported` (`no-pinned-digest`).
 
 Run stage 2 whatever stage 1's exit code, and pass that code as `BOMLENS_STAGE1_EXIT`, `true` in `BOMLENS_STAGE1_OOM` when the stage 1 container was killed for memory, and the stage 1 log saved in the output folder as `BOMLENS_STAGE1_LOG` (a file name). When stage 1 failed or left no SBOM, stage 2 scans the source with syft instead (direct dependencies only), records the reason in `bomlens:sbom-tool-degraded` (`oom`, `disk-space`, `network`, `cdxgen-crash`, `cdxgen-unavailable`), and the result manifest records `generate` as `degraded` (`fallback`), the same as the CLI. For an `unsupported` plan, where no stage 1 ran, pass `BOMLENS_STAGE1_EXIT=127` (or `BOMLENS_STAGE1_REASON=cdxgen-unavailable`) with no SBOM: the reason is then `cdxgen-unavailable`.
+
+## Restricted networks
+
+What a scan reaches over the network, and the setting for each. The execution plan lists these names in `env_passthrough`, so a caller passes on the ones it has set.
+
+| What | Stage | Setting |
+|------|-------|---------|
+| Proxy | 1, 2 | `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` (and the lower-case forms) |
+| Package registries (pip, npm, Maven and so on) | 1 | through the proxy; each package manager's own mirror settings work as usual |
+| Licences looked up by cdxgen | 1 | `FETCH_LICENSE=false` turns it off |
+| Trivy vulnerability database | 2 | the `trivy-db` mount (no network at all); or `TRIVY_DB_REPOSITORY` and `TRIVY_JAVA_DB_REPOSITORY` for a mirror. Trivy reads any other `TRIVY_*` variable set in the container (the CLI passes on all it has) |
+| EPSS and CISA KEV | 2 | off in the plan (its stage 2 `env` sets `SECURITY_ENRICH=false`); the CLI and the image alone have them on. `EPSS_API` and `KEV_URL` point at a mirror |
+| deps.dev (licence registry, version age) | 2 | off unless asked for (`LICENSE_REGISTRY`, `STALENESS_ENRICH`); `LICENSE_REGISTRY_API` points at a mirror |
+| PURL repository check | 2 | off unless asked for (`PURL_RESOLVE`) |
+| SCANOSS (vendored code identification) | 2 | off unless asked for (`IDENTIFY_VENDORED`); `SCANOSS_API_URL` points at a self-hosted endpoint |
+| NVD (checking deep CVE matches) | 2 | off unless asked for (`SECURITY_NVD_VERIFY` with `DEEP_CVE`) |
+
+End-of-life and malicious-package data are bundled in the image and need no network.
 
 ## Progress events
 

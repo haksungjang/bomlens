@@ -100,6 +100,10 @@ BomLens의 전체 옵션과 분석 모드, CI/CD 통합 방법, 트러블슈팅�
 | `PROJECT_LICENSE` | — | `--license`와 같다. 프로젝트의 배포 라이선스를 SPDX 식별자로 지정한다. `bomlens:licenseConflict` 판정과 위험 보고서의 충돌 절을 만든다 |
 | `SBOM_AUTHOR` | — | `--sbom-author`와 같다. SBOM을 생성한 주체를 `metadata.authors`에 기록한다 |
 | `SECURITY_ENRICH` | `true` | 보안 보고서에 EPSS와 CISA KEV 신호를 보강. 폐쇄망에서는 `false`로 외부 조회 생략 |
+| `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` | — | 스캔 컨테이너에 이름으로 전달(소문자 이름도). 이 컴퓨터의 루프백 주소(`127.0.0.1`, `localhost`)에 있는 프록시는 넘기지 않는다. 컨테이너 안에서는 그 주소가 컨테이너 자신이기 때문이다. 이때는 Docker의 프록시 설정이 적용된다 |
+| `TRIVY_*` | — | Trivy 설정을 이름으로 그대로 전달. 예: 데이터베이스 미러 `TRIVY_DB_REPOSITORY`, 오프라인 `TRIVY_SKIP_DB_UPDATE=true`. `TRIVY_CACHE_DIR`은 호스트 경로라 전달하지 않으므로 `SBOM_TRIVY_CACHE`를 쓴다 |
+| `SBOM_TRIVY_CACHE` | — | Trivy 캐시로 쓸 호스트 폴더. 취약점 데이터베이스를 스캔마다 받지 않고 한 번만 받는다(웹 UI의 스캔도). 오프라인 호스트에서는 데이터베이스를 여기에 넣고 `TRIVY_SKIP_DB_UPDATE=true`로 둔다. Linux에서는 안의 파일이 root 소유가 된다 |
+| `EPSS_API`, `KEV_URL` | 공개 엔드포인트 | EPSS와 CISA KEV 조회용 미러 |
 | `SECURITY_NVD_VERIFY` | `false` | `--deep-cve`와 함께: grype의 `nvd:cpe` 결과를 NVD 실시간 버전 범위와 대조해 범위 밖 오탐을 걸러낸다 (`NVD_API_KEY`와 네트워크 필요, 수 분 추가). 기본은 꺼짐 — 결과를 버리지 않고 버전 미검증으로 표시한다 |
 | `NVD_API_KEY` | — | `SECURITY_NVD_VERIFY`에 쓰는 NVD API 키. 컨테이너에 이름으로만 전달하며 명령줄에 노출하지 않는다 |
 | `SYFT_REGISTRY_AUTH_USERNAME`, `SYFT_REGISTRY_AUTH_PASSWORD`, `SYFT_REGISTRY_AUTH_TOKEN`, `SYFT_REGISTRY_AUTH_AUTHORITY` | — | 로컬 Docker 데몬에 없는 이미지를 스캔할 때 쓰는 비공개 레지스트리 자격 증명(`docker pull`로 받을 수 있는 이미지에는 필요 없다). `SYFT_REGISTRY_INSECURE_SKIP_TLS_VERIFY`, `SYFT_REGISTRY_INSECURE_USE_HTTP`, `SYFT_PLATFORM`도 함께 전달한다. 이름으로만 전달한다 |

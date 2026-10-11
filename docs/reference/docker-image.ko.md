@@ -152,6 +152,7 @@ MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
 | `ENRICH_INTERPRETER_CPE` | — | `true` | 소수의 손검증된 인터프리터 컴포넌트(예: conda나 NuGet 패키지로 배포된 Python)에 NVD 매칭용 `cpe:2.3`을 부여해 CPE 기반 엔진이 NVD 전용 CVE를 찾게 함. 큐레이션 목록에 없으면 CPE를 붙이지 않음 (AI SBOM은 건너뜀) |
 | `SECURITY_NVD_VERIFY` | — | `false` | `--deep-cve` 사용 시: grype `nvd:cpe` 결과를 실시간 NVD 버전 범위로 검증해 범위 밖 오탐을 제거 (`NVD_API_KEY`·네트워크 필요, 수 분 추가). 기본 off — 결과는 유지하되 버전 미검증으로 표시 |
 | `NVD_API_KEY` | `SECURITY_NVD_VERIFY`에 필요 | — | deep-cve 버전 필터가 쓰는 NVD API 키. 컨테이너에 이름으로만 전달(값은 인라인하지 않음) |
+| `BOMLENS_TRIVY_DB_MAX_AGE_DAYS` | — | `7` | `/trivy-db`에 Trivy 데이터베이스를 마운트했을 때(갱신 없이 오프라인으로 읽음), 보안 단계를 열화로 기록하는 경과 일수 |
 | `ENRICH_EOL` | — | `true` | 번들된 오프라인 스냅샷으로 upstream end-of-life가 지난 컴포넌트를 표시 (AI SBOM은 건너뜀) |
 | `ENRICH_MALICIOUS` | — | `true` | 번들된 오프라인 OSV 스냅샷으로 악성 패키지(오타 도용, 계정 탈취 배포본)를 표시. 취약점과 별개 신호이며, 대응도 업그레이드가 아니라 제거와 자격 증명 교체다 |
 | `ENRICH_OS_CONTEXT` | — | `true` | 배포판 패키지 PURL(rpm·deb·apk)에서 `operating-system` 컴포넌트를 합성. Trivy가 이 컴포넌트를 보고 배포판 취약점 피드를 고르므로, 없으면 공급사 SBOM이나 rootfs 스캔의 OS 패키지는 OS CVE 매칭이 전혀 안 됨. 인식 가능한 배포판 패키지가 없으면 아무 동작도 하지 않음. Trivy가 피드를 제공하지 않는 배포판(예: OpenWRT)도 대상에서 제외 (AI SBOM은 건너뜀) |

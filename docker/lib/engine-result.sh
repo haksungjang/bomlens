@@ -18,7 +18,7 @@
 # disabled (a setting turned it off). A step that does not apply to the mode at
 # all (CPE enrichment of an AI model) is not recorded.
 
-ENGINE_CONTRACT_VERSION="1.0.0"
+ENGINE_CONTRACT_VERSION="1.1.0"
 ENGINE_RESULT_NAME="bomlens-result.json"
 
 er_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }

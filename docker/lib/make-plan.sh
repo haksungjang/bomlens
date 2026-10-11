@@ -87,7 +87,7 @@ jq -n \
     --arg outfile "$OUTFILE" --arg spec "$CDX_SPEC_VERSION" \
     --arg fetch "$fetch" --arg gotc "$gotoolchain" \
     --arg pname "${PROJECT_NAME:-}" --arg pver "${PROJECT_VERSION:-}" \
-    --arg prepenv "$BUILD_PREP_ENV_NAMES" '
+    --arg prepenv "$BUILD_PREP_ENV_NAMES $PROXY_ENV_NAMES" --arg netenv "$STAGE2_NETWORK_ENV_NAMES" '
     def nn: if . == "" then null else . end;
     {
       contract: {name: "bomlens-engine-plan", version: $cv},
@@ -143,23 +143,25 @@ jq -n \
           workdir: "/host-output",
           mounts: [
             {role: "source", target: "/src", mode: "ro"},
-            {role: "output", target: "/host-output", mode: "rw"}
+            {role: "output", target: "/host-output", mode: "rw"},
+            {role: "trivy-db", target: "/trivy-db", mode: "ro", optional: true}
           ],
           env: {
             MODE: "POSTPROCESS",
+            SECURITY_ENRICH: "false",
             BOMLENS_RUN_INPUT: $outfile,
             HOST_OUTPUT_DIR: "/host-output",
             PROJECT_NAME: $pname,
             PROJECT_VERSION: $pver,
             UPLOAD_ENABLED: "false"
           },
-          env_passthrough: ["HOST_UID", "HOST_GID", "BOMLENS_INCLUDE_NON_SHIPPED", "SRC_TREE_EXCLUDE"],
+          env_passthrough: (["HOST_UID", "HOST_GID", "BOMLENS_INCLUDE_NON_SHIPPED", "SRC_TREE_EXCLUDE"] + ($netenv | split(" ") | map(select(. != "")))),
           env_from_stage1: {
             BOMLENS_STAGE1_EXIT: "the stage 1 exit code",
             BOMLENS_STAGE1_OOM: "true when the stage 1 container was killed for memory",
             BOMLENS_STAGE1_LOG: "bomlens-stage1.log (stage 1 output, saved in the output folder)"
           },
-          network: {required: false, purpose: "only for options that look things up online (--license-registry, --resolve-purl, EPSS/KEV, staleness)"}
+          network: {required: false, purpose: "the Trivy database download when no trivy-db mount holds one, and options that look things up online (--license-registry, --resolve-purl, EPSS/KEV, staleness)"}
         }
       ] end)
     }' > "$OUTDIR/bomlens-plan.json"

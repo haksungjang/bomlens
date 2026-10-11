@@ -474,6 +474,9 @@ Environment:
                          (default: true; set false to skip and run faster)
   SECURITY_ENRICH        Enrich the security report with EPSS + CISA KEV
                          signals (default: true; set false for air-gapped)
+  SBOM_TRIVY_CACHE       Host folder kept as Trivy's cache (database downloaded
+                         once); HTTP(S)_PROXY, NO_PROXY, TRIVY_*, EPSS_API and
+                         KEV_URL are passed on to the containers by name
   ENRICH_EOL             Flag components past their end-of-life from a bundled
                          endoflife.date snapshot (default: true; runs OFFLINE,
                          so it is air-gap safe; set false to skip)
@@ -698,7 +701,11 @@ if [ "$UI_MODE" = "true" ]; then
     GO_ENV_FLAGS=(-e GOTOOLCHAIN -e GOPROXY -e GOSUMDB)
     # Source-scan options for build-prep.sh; the UI container's entrypoint passes
     # them on to the cdxgen container.
-    read -ra PREP_ENV_FLAGS <<< "$(build_prep_env_args)"
+    read -ra PREP_ENV_FLAGS <<< "$(build_prep_env_args) $(stage2_network_env_args)"
+    # The Trivy cache folder (SBOM_TRIVY_CACHE) for the UI's security scans too.
+    TRIVY_CACHE_FLAGS=()
+    mapfile -t TRIVY_CACHE_FLAGS < <(trivy_cache_args)
+    [ "${#TRIVY_CACHE_FLAGS[@]}" -eq 4 ] && TRIVY_CACHE_FLAGS[1]="$(hostpath "${TRIVY_CACHE_FLAGS[1]%:/trivy-cache}"):/trivy-cache"
     # Name-only, same reason: a host override of the scan-cancel grace period
     # must reach server.py inside the UI container (it reads the env var
     # itself; a host-side default here would never be seen there).
@@ -713,7 +720,7 @@ if [ "$UI_MODE" = "true" ]; then
     ensure_image_fresh "$POSTPROCESS_IMAGE"
     exec "${DOCKER_ENV[@]}" docker run --rm "${TTY_FLAGS[@]}" -p "${UI_BIND_ADDRESS}:${UI_PORT}:8080" \
         -v "$(hostpath "$UI_BASE")":/src -v "$(hostpath "$UI_BASE")":/host-output \
-        "${MOUNT_FLAGS[@]}" "${HF_FLAGS[@]}" "${GO_ENV_FLAGS[@]}" "${PREP_ENV_FLAGS[@]}" "${CANCEL_ENV_FLAGS[@]}" \
+        "${MOUNT_FLAGS[@]}" "${HF_FLAGS[@]}" "${GO_ENV_FLAGS[@]}" "${PREP_ENV_FLAGS[@]}" "${CANCEL_ENV_FLAGS[@]}" "${TRIVY_CACHE_FLAGS[@]}" \
         "${UI_GUARD_FLAGS[@]}" \
         -v /var/run/docker.sock:/var/run/docker.sock \
         -e MODE=UI -e UI_PORT=8080 -e SBOM_UI_HOST_DIR="$(hostpath "$UI_BASE")" \
@@ -1011,6 +1018,14 @@ pp_env() {
         "${FW_KERNEL_MAX_FILES:-}" "${FW_KERNEL_MAX_BYTES:-}" "${FW_KERNEL_MAX_VERSIONS:-}" \
         "${FW_EXTRA_ROOTS:-}" "${FW_MAX_EXTRA_ROOTS:-}" "${FW_CONTAINER_MEMBERSHIP:-}" \
         "${PURL_MIN_PCT:-}" "${LICENSE_MIN_PCT:-}" "${HASH_MIN_PCT:-}" "${FIELD_MIN_PCT:-}" "$CONFORMANCE_PROFILE" "${PURL_RESOLVE:-false}" "${LICENSE_REGISTRY:-false}"
+    # Proxy, Trivy database and EPSS/KEV settings, by name.
+    printf ' %s' "$(stage2_network_env_args)"
+    # SBOM_TRIVY_CACHE: a host folder kept as Trivy's cache, so its database
+    # is downloaded once rather than on every scan (or put there for an
+    # offline host, with TRIVY_SKIP_DB_UPDATE=true).
+    local _tc=()
+    mapfile -t _tc < <(trivy_cache_args)
+    [ "${#_tc[@]}" -eq 4 ] && printf ' -v %q -e TRIVY_CACHE_DIR=/trivy-cache' "$(hostpath "${_tc[1]%:/trivy-cache}"):/trivy-cache"
 }
 
 # The docker CLI forwards a name-only `-e VAR` from its own environment, so the

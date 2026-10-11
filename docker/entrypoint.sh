@@ -1760,8 +1760,34 @@ fi
 if [ "${GENERATE_SECURITY:-false}" != "true" ]; then
     er_record scan-security disabled
 fi
-if [ "${GENERATE_SECURITY:-false}" = "true" ]; then
+# A Trivy database mounted at /trivy-db (the plan's trivy-db mount, read-only):
+# Trivy reads it as it is, with no update, no download and no write, so the
+# scan runs with no network and a read-only root. A mount with no database in
+# it fails the step with that reason rather than a download error, and a
+# database older than BOMLENS_TRIVY_DB_MAX_AGE_DAYS (7) days degrades it.
+TRIVY_DB_MOUNT="/trivy-db"
+_trivy_db_ready=true; _trivy_db_age=""
+if [ "${GENERATE_SECURITY:-false}" = "true" ] && [ -d "$TRIVY_DB_MOUNT" ]; then
+    if [ -f "$TRIVY_DB_MOUNT/db/trivy.db" ]; then
+        export TRIVY_CACHE_DIR="$TRIVY_DB_MOUNT" TRIVY_SKIP_DB_UPDATE=true TRIVY_SKIP_JAVA_DB_UPDATE=true TRIVY_OFFLINE_SCAN=true
+        _trivy_db_age="$(jq -r '(.UpdatedAt // empty) | sub("\\.[0-9]+"; "") | ((now - fromdateiso8601) / 86400 | floor)' "$TRIVY_DB_MOUNT/db/metadata.json" 2>/dev/null || true)"
+        echo "[security] Trivy database: $TRIVY_DB_MOUNT (read as it is, no update${_trivy_db_age:+; $_trivy_db_age day(s) old})"
+    else
+        _trivy_db_ready=false
+        echo "[WARN] security scan skipped: $TRIVY_DB_MOUNT is mounted but holds no Trivy database (db/trivy.db)." >&2
+        mark_pipeline_warning "$OUTPUT_FILE" scan-security
+        er_record scan-security failed failed "no Trivy database in the trivy-db mount ($TRIVY_DB_MOUNT/db/trivy.db)"
+    fi
+fi
+if [ "${GENERATE_SECURITY:-false}" = "true" ] && [ "$_trivy_db_ready" = true ]; then
     run_optional_step scan-security bash "$LIBDIR/scan-security.sh" "$OUTPUT_FILE" "$OUT_PREFIX" "$PROJECT_NAME"
+    _trivy_db_max="${BOMLENS_TRIVY_DB_MAX_AGE_DAYS:-7}"
+    case "$_trivy_db_max" in ''|*[!0-9]*) _trivy_db_max=7 ;; esac
+    if [[ "$_trivy_db_age" =~ ^[0-9]+$ ]] && [ "$_trivy_db_age" -gt "$_trivy_db_max" ] \
+       && jq -e 'has("Results") and (.ScanError | not)' "${OUT_PREFIX}_security.json" >/dev/null 2>&1; then
+        echo "[WARN] the Trivy database in $TRIVY_DB_MOUNT is $_trivy_db_age days old; vulnerabilities published since are not reported." >&2
+        er_record scan-security degraded unavailable "the Trivy database is $_trivy_db_age days old (over $_trivy_db_max)"
+    fi
     [ -f "${OUT_PREFIX}_security.json" ] && ARTIFACTS+=("${OUT_PREFIX}_security.json")
     [ -f "${OUT_PREFIX}_security_trivy.json" ] && ARTIFACTS+=("${OUT_PREFIX}_security_trivy.json")
     [ -f "${OUT_PREFIX}_security.md" ] && ARTIFACTS+=("${OUT_PREFIX}_security.md")

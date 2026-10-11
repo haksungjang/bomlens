@@ -52,6 +52,7 @@ out=""
 while [ $# -gt 0 ]; do
     case "$1" in --output) out="$2"; shift 2 ;; *) shift ;; esac
 done
+[ -n "${TRIVY_ENV_LOG:-}" ] && { env | grep '^TRIVY_' | grep -v '^TRIVY_ENV_LOG=' | sort > "$TRIVY_ENV_LOG"; }
 if [ "${TRIVY_STUB:-ok}" = "sleep" ]; then
     : > "$TRIVY_STUB_STARTED"
     sleep 3
@@ -733,6 +734,16 @@ D="$(new_run events-off)"; run_engine "$D" "$ROOT_DIR/docker/lib"
 [ ! -e "$D/bomlens-events.jsonl" ] && ! jq -e 'any(.outputs[]; .role=="events")' "$D/bomlens-result.json" >/dev/null \
     && pass "without BOMLENS_EVENTS nothing is written" || fail "events written without being asked"
 
+echo "== the plan passes on the network settings =="
+P="$(plan_run netenv "$PSRC")"
+jq -e '(.stages[0].env_passthrough | index("HTTPS_PROXY") != null)
+       and (.stages[1].env_passthrough as $p | ["HTTPS_PROXY", "NO_PROXY", "TRIVY_DB_REPOSITORY", "TRIVY_SKIP_DB_UPDATE", "KEV_URL", "EPSS_API"] | all(. as $n | $p | index($n) != null))
+       and (.stages[1].env_passthrough | index("TRIVY_CACHE_DIR") == null)
+       and (.stages[1].env.SECURITY_ENRICH == "false")
+       and ([.stages[1].mounts[] | select(.role == "trivy-db")] == [{role: "trivy-db", target: "/trivy-db", mode: "ro", optional: true}])' "$P/bomlens-plan.json" >/dev/null \
+    && pass "stage 1 passes on the proxy, stage 2 the proxy, Trivy and EPSS/KEV settings; EPSS/KEV off, trivy-db mount read-only" \
+    || fail "plan passthrough" "$(jq -c '[.stages[].env_passthrough]' "$P/bomlens-plan.json" 2>&1)"
+
 echo "== the CLI's stage 1 is the one the execution plan describes =="
 # scripts/scan-sbom.sh and make-plan.sh both build stage 1; this keeps them the
 # same. A docker stub records the arguments the CLI really passes to its stage
@@ -905,6 +916,55 @@ for case in graph-failed partial both; do
         *) fail "Poetry $case: $got" ;;
     esac
 done
+
+echo "== a Trivy database mounted read-only (the plan's trivy-db mount) =="
+# entrypoint.sh looks for it at /trivy-db; a copy looks in this test's folder.
+TDB="$WORK/trivy-db-case"; mkdir -p "$TDB"
+TDB_ENTRY="$TDB/entrypoint.sh"
+sed "s#\"/trivy-db\"#\"$TDB/mount\"#" "$ENTRY" > "$TDB_ENTRY"
+tdb_run() {  # tdb_run <dir>: POSTPROCESS with the copied entrypoint
+    ( cd "$1" && env PATH="$WORK/bin:$PATH" MODE=POSTPROCESS PROJECT_NAME=demo PROJECT_VERSION=1.0 \
+        HOST_OUTPUT_DIR="$1" BOMLENS_LIBDIR="$ROOT_DIR/docker/lib" BOMLENS_RUN_INPUT=demo_1.0_bom.json \
+        UPLOAD_ENABLED=false GENERATE_SECURITY=true DEEP_CVE=false SECURITY_ENRICH=false \
+        ENRICH_EOL=false ENRICH_MALICIOUS=false TRIVY_ENV_LOG="$1/trivy-env" bash "$TDB_ENTRY" ) > "$1.log" 2>&1
+}
+tdb_db() {  # tdb_db <days old>: a database in the mount
+    rm -rf "$TDB/mount"; mkdir -p "$TDB/mount/db"; : > "$TDB/mount/db/trivy.db"
+    # Trivy writes UpdatedAt with nanoseconds.
+    jq -n --argjson d "$1" '{Version: 2, UpdatedAt: ((now - $d * 86400) | todateiso8601 | sub("Z$"; ".103977313Z"))}' > "$TDB/mount/db/metadata.json"
+}
+sec_step() { jq -r '[.steps[] | select(.id=="scan-security")][0] | "\(.status) \(.reason) \(.detail)"' "$1/bomlens-result.json"; }
+if ! grep -q "$TDB/mount" "$TDB_ENTRY"; then
+    fail "entrypoint.sh no longer names \"/trivy-db\"; update this test's substitution"
+else
+    tdb_db 2; D="$(new_run trivy-db-fresh)"; tdb_run "$D"
+    [ "$(grep -c 'TRIVY_CACHE_DIR='"$TDB"'/mount\|TRIVY_SKIP_DB_UPDATE=true\|TRIVY_SKIP_JAVA_DB_UPDATE=true\|TRIVY_OFFLINE_SCAN=true' "$D/trivy-env" 2>/dev/null)" = 4 ] \
+        && [ "$(sec_step "$D")" = "ok null null" ] \
+        && pass "a mounted database is read as it is: cache dir, no update, offline; the step is ok" \
+        || fail "fresh database: $(sec_step "$D"), env $(tr '\n' ' ' < "$D/trivy-env" 2>&1)" "$(tail -4 "$D.log")"
+    tdb_db 30; D="$(new_run trivy-db-old)"; tdb_run "$D"
+    [ "$(sec_step "$D")" = "degraded unavailable the Trivy database is 30 days old (over 7)" ] \
+        && [ "$(jq -r .run.status "$D/bomlens-result.json")" = "succeeded_degraded" ] \
+        && pass "a database 30 days old degrades the step (unavailable), the run is succeeded_degraded" \
+        || fail "old database: $(sec_step "$D")" "$(tail -4 "$D.log")"
+    rm -f "$TDB/mount/db/metadata.json"; D="$(new_run trivy-db-no-metadata)"; tdb_run "$D"
+    [ "$(sec_step "$D")" = "ok null null" ] \
+        && pass "with no metadata.json the age is unknown and the step stays ok" \
+        || fail "no metadata: $(sec_step "$D")"
+    tdb_db 30; D="$(new_run trivy-db-old-fail)"; ( export TRIVY_STUB=fail; tdb_run "$D" )
+    [ "$(sec_step "$D" | cut -d' ' -f1-2)" = "failed failed" ] \
+        && pass "an old database with a failed scan stays failed, not degraded" \
+        || fail "old database + scan error: $(sec_step "$D")"
+    rm -rf "$TDB/mount"; mkdir -p "$TDB/mount"; D="$(new_run trivy-db-empty)"; tdb_run "$D"
+    [ "$(sec_step "$D")" = "failed failed no Trivy database in the trivy-db mount ($TDB/mount/db/trivy.db)" ] \
+        && [ ! -e "$D/trivy-env" ] && [ "$(jq -r .run.status "$D/bomlens-result.json")" = "succeeded_degraded" ] \
+        && pass "a mount with no database fails the step with that reason, without running Trivy" \
+        || fail "empty mount: $(sec_step "$D"), run $(jq -r .run.status "$D/bomlens-result.json")" "$(tail -4 "$D.log")"
+    rm -rf "$TDB/mount"; D="$(new_run trivy-db-none)"; tdb_run "$D"
+    ! grep -q 'TRIVY_SKIP_DB_UPDATE\|TRIVY_OFFLINE_SCAN' "$D/trivy-env" 2>/dev/null && [ -e "$D/trivy-env" ] \
+        && pass "with no mount Trivy is left to its own settings" \
+        || fail "no mount: env $(tr '\n' ' ' < "$D/trivy-env" 2>&1)"
+fi
 
 echo "== every step label in entrypoint.sh is documented =="
 missing=""
