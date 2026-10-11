@@ -4616,6 +4616,23 @@ JSON
         jq -e '.dependencies[] | select(.ref=="root") | .dependsOn | index("express@4.18.2")' "$WORK/node-bom.json" >/dev/null 2>&1 \
             && pass "kept production edge (root -> express) preserved" \
             || fail "production edge wrongly dropped"
+        # A yarn/pnpm project has no package-lock.json: the set is written by
+        # name, since npm's own versions differ from the project's lock (the
+        # measured regression: lodash 4.17.20 in yarn.lock, 4.17.21 from npm,
+        # every production package dropped).
+        cat > "$WORK/node-bom-yarn.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6","metadata":{"component":{"name":"app","version":"1.0.0","bom-ref":"root"}},
+ "components":[
+   {"name":"lodash","version":"4.17.20","purl":"pkg:npm/lodash@4.17.20","bom-ref":"lodash"},
+   {"group":"@scope","name":"pkg","version":"1.0.0","purl":"pkg:npm/%40scope/pkg@1.0.0","bom-ref":"scoped"},
+   {"name":"jest","version":"29.7.0","purl":"pkg:npm/jest@29.7.0","bom-ref":"jest"}]}
+JSON
+        printf 'lodash\n@scope/pkg\n' > "$WORK/node-prod-names.set"
+        node "$NFLT" "$WORK/node-bom-yarn.json" "$WORK/node-prod-names.set" 2>/dev/null
+        names=$(jq -r '[.components[] | (if .group then .group + "/" else "" end) + .name + "@" + .version] | sort | join(",")' "$WORK/node-bom-yarn.json")
+        [ "$names" = "@scope/pkg@1.0.0,lodash@4.17.20" ] \
+            && pass "a by-name set keeps the lock's own versions (lodash 4.17.20, a scoped package) and drops the dev tree" \
+            || fail "by-name filter left: $names"
     else
         fail "could not extract NFILTER_JS from build-prep.sh"
     fi
@@ -6333,6 +6350,62 @@ jq -e '[.metadata.properties[]? | select(.name=="bomlens:prep-step-applied" and 
     "$CL_ROOT/out/bom.json" >/dev/null 2>&1 \
     && pass "the committed lock is recorded as lock evidence (cargo-lock-committed)" \
     || fail "no cargo-lock-committed evidence" "$(jq -c '.metadata.properties' "$CL_ROOT/out/bom.json" 2>&1)"
+echo "== node-scope: build-prep writes the production set the filter reads (stub npm and cdxgen, real node) =="
+# The set writer runs inside build-prep; this drives it end to end. The stub
+# npm writes the resolved lock a real npm would; the stub cdxgen reports what a
+# project's own lock pins.
+if command -v node >/dev/null 2>&1; then
+    NS_ROOT="$WORK/node-set"
+    mkdir -p "$NS_ROOT/bin"
+    cat > "$NS_ROOT/bin/npm" <<'STUB'
+#!/bin/sh
+case "$*" in *--package-lock-only*)
+cat > package-lock.json <<'JSON'
+{"lockfileVersion":3,"packages":{"":{"name":"app"},
+ "node_modules/lodash":{"version":"4.17.21"},
+ "node_modules/@scope/pkg":{"version":"1.0.1"},
+ "node_modules/lodash/node_modules/inner":{"version":"2.0.0"},
+ "node_modules/jest":{"version":"29.7.0","dev":true}}}
+JSON
+;; esac
+exit 0
+STUB
+    cat > "$NS_ROOT/bin/cdxgen" <<'STUB'
+#!/bin/sh
+out=""; prev=""
+for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+cat > "$out" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6","metadata":{"component":{"name":"app","version":"1","bom-ref":"root"}},
+ "components":[
+  {"name":"lodash","version":"4.17.20","purl":"pkg:npm/lodash@4.17.20","bom-ref":"l"},
+  {"group":"@scope","name":"pkg","version":"1.0.0","purl":"pkg:npm/%40scope/pkg@1.0.0","bom-ref":"s"},
+  {"name":"inner","version":"2.0.0","purl":"pkg:npm/inner@2.0.0","bom-ref":"i"},
+  {"name":"jest","version":"29.7.0","purl":"pkg:npm/jest@29.7.0","bom-ref":"j"}]}
+JSON
+STUB
+    chmod +x "$NS_ROOT/bin/npm" "$NS_ROOT/bin/cdxgen"
+    ns_run() {  # ns_run <case> -> kept component names, sorted
+        PATH="$NS_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$NS_ROOT/$1" "$NS_ROOT/$1.bom.json" > "$NS_ROOT/$1.log" 2>&1
+        jq -r '[.components[] | (if .group then .group + "/" else "" end) + .name] | sort | join(",")' "$NS_ROOT/$1.bom.json"
+    }
+    mkdir -p "$NS_ROOT/yarn" "$NS_ROOT/plock" "$NS_ROOT/ws"
+    echo '{"name":"app","dependencies":{"lodash":"^4.17.0","@scope/pkg":"^1.0.0"}}' > "$NS_ROOT/yarn/package.json"
+    printf '# yarn lockfile v1\n' > "$NS_ROOT/yarn/yarn.lock"
+    [ "$(ns_run yarn)" = "@scope/pkg,inner,lodash" ] \
+        && pass "no package-lock.json: production packages kept at the project's own versions, dev dropped" \
+        || fail "yarn case kept: $(ns_run yarn)" "$(grep 'node:' "$NS_ROOT/yarn.log")"
+    cp "$NS_ROOT/yarn/package.json" "$NS_ROOT/plock/"
+    echo '{"lockfileVersion":3,"packages":{}}' > "$NS_ROOT/plock/package-lock.json"
+    [ "$(ns_run plock)" = "inner" ] \
+        && pass "with package-lock.json the exact-version match still applies (4.17.20 vs the resolved 4.17.21 is dropped)" \
+        || fail "package-lock case kept: $(ns_run plock)" "$(grep 'node:' "$NS_ROOT/plock.log")"
+    echo '{"name":"root","private":true,"workspaces":["packages/*"]}' > "$NS_ROOT/ws/package.json"
+    [ "$(ns_run ws)" = "@scope/pkg,inner,jest,lodash" ] \
+        && pass "a workspace root with no package-lock.json keeps the full graph" \
+        || fail "workspace case kept: $(ns_run ws)" "$(grep 'node:' "$NS_ROOT/ws.log")"
+else
+    echo "  SKIP: node unavailable"
+fi
 
 echo "== prep_step: every resolution step runs through it (no bare invocation left) =="
 # The pre-prep_step patterns (silently discarded stderr, no time limit) must
