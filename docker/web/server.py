@@ -3673,7 +3673,7 @@ def run_sibling_scan(image, mode, out_dir, on_log, *, upload_file=None, model_id
             args += ["-e", _k]
     # Where the cdxgen images come from (a registry mirror) and the network
     # settings: proxy, Trivy's database, EPSS/KEV endpoints. By name, when set.
-    for _k in ("CDXGEN_IMAGE_PREFIX", "CDXGEN_TAG", "CDXGEN_ALLINONE",
+    for _k in ("CDXGEN_IMAGE_PREFIX", "CDXGEN_TAG", "CDXGEN_ALLINONE", "BOMLENS_OS_LICENSES",
                "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
                "TRIVY_DB_REPOSITORY", "TRIVY_JAVA_DB_REPOSITORY", "TRIVY_SKIP_DB_UPDATE",
                "TRIVY_SKIP_JAVA_DB_UPDATE", "TRIVY_OFFLINE_SCAN", "TRIVY_USERNAME", "TRIVY_PASSWORD",

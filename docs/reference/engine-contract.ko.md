@@ -6,7 +6,7 @@ description: BomLens 이미지를 스캔 엔진으로 쓰는 프로그램을 위
 
 BomLens 이미지를 스캔 엔진으로 쓰는 프로그램은 모든 스캔이 출력 폴더에 남기는 `bomlens-result.json`을 읽습니다. 이 파일에는 실행이 어떻게 끝났는지, 각 단계가 실행됐는지, 설정으로 꺼졌는지, 실행할 수 없었는지, 실패했는지, 그리고 폴더의 어떤 파일이 어떤 역할인지가 들어 있습니다. 그래서 호출하는 프로그램이 로그를 해석하거나 파일 이름을 추측하지 않아도 됩니다.
 
-형식은 CI의 `tests/test-engine-contract.sh`가 [`schemas/engine-result-1.json`](https://github.com/sktelecom/bomlens/blob/main/schemas/engine-result-1.json)으로 검사합니다. 이 문서는 계약 버전 `1.1.0`을 설명합니다.
+형식은 CI의 `tests/test-engine-contract.sh`가 [`schemas/engine-result-1.json`](https://github.com/sktelecom/bomlens/blob/main/schemas/engine-result-1.json)으로 검사합니다. 이 문서는 계약 버전 `1.2.0`을 설명합니다.
 
 ## 파일
 
@@ -72,6 +72,7 @@ BomLens 이미지를 스캔 엔진으로 쓰는 프로그램은 모든 스캔이
 |---|---|
 | `plan` | 실행 계획 작성(`MODE=PLAN`, 아래 참조) |
 | `generate` | SBOM 생성(소스 스캔은 언어 이미지가 먼저 돌므로 1단계) |
+| `os-licenses` | 이미지·루트 파일시스템 스캔에서 Debian 패키지의 라이선스를 Trivy로 채움. syft가 해시로 남기는 copyright 파일에서 Trivy가 라이선스 이름, common-licenses 참조, 라이선스 본문을 읽음. `counts`에 `replaced`, `hashes_dropped`를 기록하고, Trivy가 대상을 읽지 못하거나 어떤 Debian 패키지에도 라이선스를 주지 못하면 `degraded`(`unavailable`), Trivy가 없으면 `skipped`(`not_installed`), `BOMLENS_OS_LICENSES=false`이면 `disabled` |
 | `vendored` | 소스에 복사해 넣은 오픈소스 식별(`--identify-vendored`) |
 | `suggest-vendored` | C/C++ 프로젝트 스캔 결과가 거의 비었을 때 위 식별을 권함 |
 | `cocoapods` | `Podfile.lock`의 CocoaPods 의존성 추가 |
