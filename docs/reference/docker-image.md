@@ -138,6 +138,10 @@ MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
 | `BOMLENS_IMAGE_REF`, `BOMLENS_IMAGE_DIGEST` | — | — | The image reference and digest the caller ran, repeated in `bomlens-result.json` (see [Engine contract](engine-contract.md)) |
 | `GENERATE_NOTICE` | — | `false` | Generate the open-source notice (CLI `--notice`) |
 | `GENERATE_SECURITY` | — | `false` | Generate the Trivy security report (CLI `--security`) |
+| `DEEP_LICENSE` | — | `false` | Detect licences in the project's own files with scancode (CLI `--deep-license`; needs scancode in the image) |
+| `DEEP_LICENSE_MAX_FILES` | — | `20000` | `DEEP_LICENSE`: a tree with more of the project's own files than this is not scanned |
+| `DEEP_LICENSE_TIMEOUT` | — | `600` | `DEEP_LICENSE`: seconds before scancode is stopped |
+| `BOMLENS_DEEP_LICENSE_ALL` | — | — | `DEEP_LICENSE`: set `1` to scan dependency, build and tool folders too (left out by default) |
 | `GENERATE_REPORT` | — | `false` | Generate the open-source risk analysis report (off in direct runs, unlike the CLI default) |
 | `ENRICH_MAVEN_CPE` | — | `true` | Attach an NVD-matchable `cpe:2.3` to maven components (derived from the groupId) so a CPE-aware engine can reach their NVD-only CVEs; unmapped groups get no CPE (skipped for AI SBOMs) |
 | `ENRICH_GITHUB_CPE` | — | `true` | Attach an NVD-matchable `cpe:2.3` to a small, hand-verified set of `pkg:github/` components (source-repository-only coordinates, typical for large C/C++ projects with no package-manager ecosystem) so a CPE-aware engine can reach their NVD-only CVEs; anything not in the curated list gets no CPE (skipped for AI SBOMs) |
