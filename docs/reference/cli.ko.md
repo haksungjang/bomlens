@@ -102,6 +102,7 @@ BomLens의 전체 옵션과 분석 모드, CI/CD 통합 방법, 트러블슈팅�
 | `SECURITY_ENRICH` | `true` | 보안 보고서에 EPSS와 CISA KEV 신호를 보강. 폐쇄망에서는 `false`로 외부 조회 생략 |
 | `SECURITY_NVD_VERIFY` | `false` | `--deep-cve`와 함께: grype의 `nvd:cpe` 결과를 NVD 실시간 버전 범위와 대조해 범위 밖 오탐을 걸러낸다 (`NVD_API_KEY`와 네트워크 필요, 수 분 추가). 기본은 꺼짐 — 결과를 버리지 않고 버전 미검증으로 표시한다 |
 | `NVD_API_KEY` | — | `SECURITY_NVD_VERIFY`에 쓰는 NVD API 키. 컨테이너에 이름으로만 전달하며 명령줄에 노출하지 않는다 |
+| `SYFT_REGISTRY_AUTH_USERNAME`, `SYFT_REGISTRY_AUTH_PASSWORD`, `SYFT_REGISTRY_AUTH_TOKEN`, `SYFT_REGISTRY_AUTH_AUTHORITY` | — | 로컬 Docker 데몬에 없는 이미지를 스캔할 때 쓰는 비공개 레지스트리 자격 증명(`docker pull`로 받을 수 있는 이미지에는 필요 없다). `SYFT_REGISTRY_INSECURE_SKIP_TLS_VERIFY`, `SYFT_REGISTRY_INSECURE_USE_HTTP`, `SYFT_PLATFORM`도 함께 전달한다. 이름으로만 전달한다 |
 | `API_URL` | — | 업로드 서버 주소(DT 서버 또는 TRUSCA base) |
 | `API_KEY` | — | 업로드 자격. DT는 `X-Api-Key`, TRUSCA는 Bearer 토큰으로 쓰임 |
 | `UPLOAD_TARGET` | `dependency-track` | 업로드 대상: `dependency-track` 또는 `trusca` |

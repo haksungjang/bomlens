@@ -131,7 +131,8 @@ MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
 | `MODE` | No | `POSTPROCESS` | Analysis mode: `SOURCE`, `IMAGE`, `BINARY`, `ROOTFS`, `FIRMWARE`, `ANALYZE`, or `PLAN` (write the execution plan of a source scan, see [Engine contract](engine-contract.md#execution-plan)). Left unset, the container only post-processes an SBOM already sitting in the output directory — set it explicitly to actually scan something. |
 | `PROJECT_NAME` | Yes | — | Project name |
 | `PROJECT_VERSION` | Yes | — | Project version |
-| `TARGET_IMAGE` | Per mode | — | Image name for `IMAGE` mode (requires the docker.sock mount) |
+| `TARGET_IMAGE` | Per mode | — | Image for `IMAGE` mode. With the docker.sock mount it is read from the Docker daemon; without it, from the registry, or from an archive named with its scheme (`docker-archive:`, `oci-archive:`, `oci-dir:`) at a path mounted into the container |
+| `SYFT_REGISTRY_AUTH_USERNAME`, `SYFT_REGISTRY_AUTH_PASSWORD`, `SYFT_REGISTRY_AUTH_TOKEN`, `SYFT_REGISTRY_AUTH_AUTHORITY` | — | — | `IMAGE` mode: credentials for a private registry. A docker config file mounted and named in `DOCKER_CONFIG` works too. `SYFT_REGISTRY_INSECURE_SKIP_TLS_VERIFY` and `SYFT_REGISTRY_INSECURE_USE_HTTP` reach a registry with a self-signed certificate or plain HTTP. `SYFT_PLATFORM` picks the platform of a multi-platform image |
 | `TARGET_FILE` | Per mode | — | File path for `BINARY`/`FIRMWARE` mode (path inside the container) |
 | `TARGET_DIR` | Per mode | — | Directory path for `ROOTFS` mode |
 | `UPLOAD_ENABLED` | — | `true` | If `false`, save locally without uploading (same as CLI `--generate-only`) |

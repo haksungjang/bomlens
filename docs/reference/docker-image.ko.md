@@ -131,7 +131,8 @@ MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
 | `MODE` | X | `POSTPROCESS` | 분석 모드: `SOURCE`, `IMAGE`, `BINARY`, `ROOTFS`, `FIRMWARE`, `ANALYZE`, 또는 `PLAN`(소스 스캔의 실행 계획 작성, [엔진 계약](engine-contract.ko.md#실행-계획) 참조). 지정하지 않으면 출력 디렉터리에 이미 있는 SBOM을 후처리만 한다 — 실제로 무언가를 스캔하려면 명시적으로 지정해야 한다. |
 | `PROJECT_NAME` | O | — | 프로젝트 이름 |
 | `PROJECT_VERSION` | O | — | 프로젝트 버전 |
-| `TARGET_IMAGE` | 모드별 | — | `IMAGE` 모드의 이미지명 (docker.sock 마운트 필요) |
+| `TARGET_IMAGE` | 모드별 | — | `IMAGE` 모드의 이미지. docker.sock을 마운트하면 Docker 데몬에서 읽고, 마운트하지 않으면 레지스트리에서 읽거나 형식 접두사가 붙은 아카이브(`docker-archive:`, `oci-archive:`, `oci-dir:`, 컨테이너에 마운트한 경로)에서 읽음 |
+| `SYFT_REGISTRY_AUTH_USERNAME`, `SYFT_REGISTRY_AUTH_PASSWORD`, `SYFT_REGISTRY_AUTH_TOKEN`, `SYFT_REGISTRY_AUTH_AUTHORITY` | — | — | `IMAGE` 모드: 비공개 레지스트리의 자격 증명. docker 설정 파일을 마운트하고 `DOCKER_CONFIG`로 지정해도 됨. `SYFT_REGISTRY_INSECURE_SKIP_TLS_VERIFY`와 `SYFT_REGISTRY_INSECURE_USE_HTTP`는 자체 서명 인증서나 HTTP 레지스트리에 접속할 때 씀. `SYFT_PLATFORM`은 여러 플랫폼 이미지에서 플랫폼을 고름 |
 | `TARGET_FILE` | 모드별 | — | `BINARY`/`FIRMWARE` 모드의 파일 경로 (컨테이너 내부 경로) |
 | `TARGET_DIR` | 모드별 | — | `ROOTFS` 모드의 디렉터리 경로 |
 | `UPLOAD_ENABLED` | — | `true` | `false`면 업로드 없이 로컬 저장만 (CLI `--generate-only`와 동일) |
