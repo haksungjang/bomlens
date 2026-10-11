@@ -38,14 +38,64 @@ FETCH_LICENSE="${FETCH_LICENSE:-true}"
 # container, so every path that starts it (scan-sbom.sh stage 1, the web UI
 # container, generate_sbom_cdxgen in entrypoint.sh) passes these on by name.
 # docker skips a name-only -e whose variable is unset.
+# The proxy variables reach the package managers cdxgen runs; passed on with
+# the options above.
+PROXY_ENV_NAMES="HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy"
 BUILD_PREP_ENV_NAMES="BOMLENS_KEEP_BUILD_OUTPUT BOMLENS_MAVEN_FULL_GRAPH BOMLENS_ANDROID_FULL_GRAPH BOMLENS_NODE_FULL_GRAPH BOMLENS_PHP_FULL_GRAPH BOMLENS_INCLUDE_NON_SHIPPED BOMLENS_NO_COPYRIGHT BOMLENS_NO_CARGO_LICENSE BOMLENS_PREP_TIMEOUT"
+
+# Settings for the network the post-processing container reaches: the proxy,
+# where Trivy gets its vulnerability database (a mirror, or a cache with the
+# update skipped) and the EPSS and KEV lookups (off, or a mirror). Passed on
+# by name, so a value is never on a command line.
+STAGE2_NETWORK_ENV_NAMES="$PROXY_ENV_NAMES TRIVY_DB_REPOSITORY TRIVY_JAVA_DB_REPOSITORY TRIVY_SKIP_DB_UPDATE TRIVY_SKIP_JAVA_DB_UPDATE TRIVY_OFFLINE_SCAN TRIVY_USERNAME TRIVY_PASSWORD TRIVY_REGISTRY_TOKEN TRIVY_INSECURE BOMLENS_TRIVY_DB_MAX_AGE_DAYS KEV_URL EPSS_API"
+
+# Prints "-e NAME" for the names above and for any other TRIVY_* variable set
+# here, except TRIVY_CACHE_DIR: a path on this host means nothing in the
+# container (the CLI mounts a cache folder with SBOM_TRIVY_CACHE instead).
+# Names only, safe inside the eval'd docker command.
+stage2_network_env_args() {
+    local n out=""
+    for n in $(_passable_names $STAGE2_NETWORK_ENV_NAMES) $(compgen -e | grep '^TRIVY_' | grep -vx 'TRIVY_CACHE_DIR' || true); do
+        case " $out " in *" -e $n "*) ;; *) out="$out -e $n" ;; esac
+    done
+    printf '%s' "${out# }"
+}
+
+# The names given, less a proxy set to this machine's own loopback address
+# (a local authenticating proxy at 127.0.0.1 or localhost): inside a container
+# that address is the container itself, so the proxy Docker sets up for its
+# containers is left to apply instead.
+_passable_names() {
+    local n v
+    for n in "$@"; do
+        case "$n" in
+            HTTP_PROXY|HTTPS_PROXY|http_proxy|https_proxy)
+                v="${!n:-}"
+                case "$v" in
+                    *://127.*|127.*|*://localhost|*://localhost[:/]*|localhost|localhost[:/]*|*://\[::1\]*|\[::1\]*) continue ;;
+                esac ;;
+        esac
+        printf '%s\n' "$n"
+    done
+}
 
 # Prints "-e NAME" for each name above. Names only, never values, so the output
 # is safe to splice into the eval'd docker command in scan-sbom.sh.
 build_prep_env_args() {
     local n out=""
-    for n in $BUILD_PREP_ENV_NAMES; do out="$out -e $n"; done
+    for n in $BUILD_PREP_ENV_NAMES $(_passable_names $PROXY_ENV_NAMES); do out="$out -e $n"; done
     printf '%s' "${out# }"
+}
+
+# The SBOM_TRIVY_CACHE folder as "-v <host path>:/trivy-cache -e TRIVY_CACHE_DIR"
+# arguments, one per line, or nothing when it is unset or cannot be made.
+trivy_cache_args() {
+    [ -n "${SBOM_TRIVY_CACHE:-}" ] || return 0
+    if ! mkdir -p "$SBOM_TRIVY_CACHE" 2>/dev/null || [ ! -d "$SBOM_TRIVY_CACHE" ]; then
+        echo "[WARN] SBOM_TRIVY_CACHE=$SBOM_TRIVY_CACHE is not a folder that can be created; Trivy keeps its database in the container." >&2
+        return 0
+    fi
+    printf '%s\n' -v "$(cd "$SBOM_TRIVY_CACHE" && pwd):/trivy-cache" -e TRIVY_CACHE_DIR=/trivy-cache
 }
 
 # Folders whose manifests a source scan leaves out by default: test suites and

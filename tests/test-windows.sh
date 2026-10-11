@@ -333,6 +333,16 @@ in_log "-e BOMLENS_CANCEL_GRACE" \
   && pass "BOMLENS_CANCEL_GRACE passed to the web UI container" \
   || { fail "BOMLENS_CANCEL_GRACE passed to the web UI container" "rc=$RC"; show; }
 
+# The UI's security scans keep Trivy's database in SBOM_TRIVY_CACHE too, and a
+# proxy at the host's loopback address is not passed into the container.
+d="$(new_proj ui_trivy_cache)"
+DOCKER_STUB_ARGV_DUMP=1 SBOM_TRIVY_CACHE="$WORK/ui trivy cache" HTTPS_PROXY=http://127.0.0.1:3128 HTTP_PROXY=http://proxy.example:8080 \
+  scan_in "$d" --ui --output-dir "$d"
+{ in_log "ui trivy cache:/trivy-cache>" && in_log "<TRIVY_CACHE_DIR=/trivy-cache>" \
+  && in_log "<HTTP_PROXY>" && ! in_log "<HTTPS_PROXY>"; } \
+  && pass "--ui mounts SBOM_TRIVY_CACHE; a loopback proxy is left out, another proxy is passed" \
+  || { fail "--ui trivy cache / proxy"; show; cat "$LOG"; }
+
 # --------------------------------------------------------
 section "Startup sweep for a killed scan's leftover container"
 # --------------------------------------------------------
@@ -786,6 +796,19 @@ DOCKER_STUB_ARGV_DUMP=1 SYFT_REGISTRY_AUTH_PASSWORD=reg_secret_value \
   && in_log "<SYFT_REGISTRY_AUTH_PASSWORD>" && ! in_log "reg_secret_value"; } \
   && pass "an image archive target is mounted read-only and named in the container; credentials by name only" \
   || { fail "image archive target not mounted"; show; cat "$LOG"; }
+# Network settings reach the post-processing container by name: the proxy, the
+# Trivy database settings (any TRIVY_* set), EPSS/KEV mirrors; a host path in
+# TRIVY_CACHE_DIR does not, SBOM_TRIVY_CACHE is mounted instead.
+d="$(new_proj netenv)"; printf '{"name":"a","dependencies":{"x":"1"}}' > "$d/package.json"
+DOCKER_STUB_ARGV_DUMP=1 HTTPS_PROXY=http://proxy.example:3128 TRIVY_DB_REPOSITORY=mirror.example/trivy-db \
+  TRIVY_SOMETHING_NEW=1 TRIVY_CACHE_DIR=/host/only/path KEV_URL=https://mirror.example/kev.json \
+  SBOM_TRIVY_CACHE="$WORK/trivy cache" \
+  scan_in "$d" --project NE --version 1
+{ in_log "<HTTPS_PROXY>" && in_log "<TRIVY_DB_REPOSITORY>" && in_log "<TRIVY_SOMETHING_NEW>" && in_log "<KEV_URL>" \
+  && ! in_log "proxy.example" && ! in_log "mirror.example" && ! in_log "<TRIVY_CACHE_DIR>" \
+  && in_log "trivy cache:/trivy-cache>" && in_log "<TRIVY_CACHE_DIR=/trivy-cache>" && [ -d "$WORK/trivy cache" ]; } \
+  && pass "network settings go by name, a host TRIVY_CACHE_DIR does not, SBOM_TRIVY_CACHE is mounted (space in path)" \
+  || { fail "network settings not passed as expected"; show; cat "$LOG"; }
 
 d="$(new_proj hf_dataset)"
 DOCKER_STUB_ARGV_DUMP=1 HF_TOKEN=hf_secret_value \

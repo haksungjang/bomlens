@@ -6,7 +6,7 @@ description: BomLens 이미지를 스캔 엔진으로 쓰는 프로그램을 위
 
 BomLens 이미지를 스캔 엔진으로 쓰는 프로그램은 모든 스캔이 출력 폴더에 남기는 `bomlens-result.json`을 읽습니다. 이 파일에는 실행이 어떻게 끝났는지, 각 단계가 실행됐는지, 설정으로 꺼졌는지, 실행할 수 없었는지, 실패했는지, 그리고 폴더의 어떤 파일이 어떤 역할인지가 들어 있습니다. 그래서 호출하는 프로그램이 로그를 해석하거나 파일 이름을 추측하지 않아도 됩니다.
 
-형식은 CI의 `tests/test-engine-contract.sh`가 [`schemas/engine-result-1.json`](https://github.com/sktelecom/bomlens/blob/main/schemas/engine-result-1.json)으로 검사합니다. 이 문서는 계약 버전 `1.0.0`을 설명합니다.
+형식은 CI의 `tests/test-engine-contract.sh`가 [`schemas/engine-result-1.json`](https://github.com/sktelecom/bomlens/blob/main/schemas/engine-result-1.json)으로 검사합니다. 이 문서는 계약 버전 `1.1.0`을 설명합니다.
 
 ## 파일
 
@@ -151,11 +151,29 @@ docker run --rm -v "$PWD/src:/src:ro" -v "$PWD/out:/host-output" \
 | `output_file` | 1단계가 쓰고 2단계가 읽는 SBOM 파일 이름 |
 | `stages[]` | 순서대로 `generate`(1단계)와 `postprocess`(2단계) |
 
-각 단계에는 `image`와 `image_digest`(1단계는 항상 다이제스트로 고정, 2단계는 `BOMLENS_IMAGE_REF`와 `BOMLENS_IMAGE_DIGEST`를 그대로 적음), `user`, `entrypoint`, `args`, `workdir`, `env`(설정할 이름과 값), `env_passthrough`(값이 있으면 호출자의 환경에서 그대로 넘길 이름), `network`(패키지 레지스트리 접속이 필요한지), `mounts`가 있습니다. 마운트에는 `role`(`source`, `output`, 출력 폴더 안 경로를 `source`로 가진 `plan-file`, 선택 항목인 `guard-state`와 캐시), `target`, `mode`가 있습니다. 소스는 1단계에서만 쓰기 가능합니다. 해석기가 그 안에 lock 파일을 쓰고, 1단계가 끝날 때 트리를 원래대로 되돌립니다. 1단계가 강제 종료되면(메모리 부족, 시간 초과) 되돌리지 못합니다. 호출자의 폴더 하나를 `guard-state`로 마운트하고 스캔마다 고유한 `BOMLENS_GUARD_ID`를 넘겨 두면, 강제 종료 뒤 같은 1단계를 `BOMLENS_GUARD_RESTORE_ONLY=1`로 다시 실행해 소스를 되돌릴 수 있습니다. 두 단계 모두에 `HOST_UID`와 `HOST_GID`를 넘기면 단계가 쓴 파일이 root가 아니라 호출자 사용자 소유가 됩니다.
+각 단계에는 `image`와 `image_digest`(1단계는 항상 다이제스트로 고정, 2단계는 `BOMLENS_IMAGE_REF`와 `BOMLENS_IMAGE_DIGEST`를 그대로 적음), `user`, `entrypoint`, `args`, `workdir`, `env`(설정할 이름과 값), `env_passthrough`(값이 있으면 호출자의 환경에서 그대로 넘길 이름), `network`(패키지 레지스트리 접속이 필요한지), `mounts`가 있습니다. 마운트에는 `role`(`source`, `output`, 출력 폴더 안 경로를 `source`로 가진 `plan-file`, 선택 항목인 `guard-state`와 캐시, 선택 항목인 `trivy-db`), `target`, `mode`가 있습니다. 데이터베이스(`db/trivy.db`)가 든 Trivy 캐시 폴더를 `trivy-db`로 읽기 전용 마운트하고 `GENERATE_SECURITY=true`를 주면(2단계 보고서 옵션은 이미지 참조 문서대로 호출자가 정함), 2단계는 그 데이터베이스를 내려받거나 갱신하거나 쓰지 않고 그대로 읽습니다. 그래서 네트워크 없이, 읽기 전용 루트로 실행됩니다. `trivy-db` 마운트에 데이터베이스가 없으면 `scan-security`가 그 사유로 실패하고, 데이터베이스가 `BOMLENS_TRIVY_DB_MAX_AGE_DAYS`일(7일)보다 오래됐으면 `degraded`(`unavailable`)로 기록합니다. 나이는 `db/metadata.json`의 `UpdatedAt`(데이터베이스를 만든 시각)부터 셉니다. 데이터베이스를 갱신하는 주기에 맞는 값을 넘기세요. 소스는 1단계에서만 쓰기 가능합니다. 해석기가 그 안에 lock 파일을 쓰고, 1단계가 끝날 때 트리를 원래대로 되돌립니다. 1단계가 강제 종료되면(메모리 부족, 시간 초과) 되돌리지 못합니다. 호출자의 폴더 하나를 `guard-state`로 마운트하고 스캔마다 고유한 `BOMLENS_GUARD_ID`를 넘겨 두면, 강제 종료 뒤 같은 1단계를 `BOMLENS_GUARD_RESTORE_ONLY=1`로 다시 실행해 소스를 되돌릴 수 있습니다. 두 단계 모두에 `HOST_UID`와 `HOST_GID`를 넘기면 단계가 쓴 파일이 root가 아니라 호출자 사용자 소유가 됩니다.
 
 `MODE=PLAN`은 계획을 썼으면 `ok`든 `unsupported`든 0으로 끝납니다. `unsupported` 계획은 결과 매니페스트에 `plan` 단계를 `skipped`로 기록하므로 실행은 `succeeded_degraded`입니다. 빈 소스(대개 컨테이너에 닿지 않은 마운트)는 0이 아닌 종료 코드로 거부합니다. 계획을 쓰기 전에 출력 폴더에서 이전 계획과 이전 실행의 1단계 산출물을 지웁니다. 2단계는 새 SBOM과 남은 SBOM을 구분할 수 없기 때문입니다. 1단계 이미지는 이 BomLens 릴리스가 시험한 cdxgen 태그로 고정되어 있어, `CDXGEN_TAG`를 바꾸면 언어 이미지는 `unsupported`(`no-pinned-digest`)가 됩니다.
 
 2단계는 1단계 종료 코드와 관계없이 실행하고, 그 코드를 `BOMLENS_STAGE1_EXIT`로, 1단계 컨테이너가 메모리 부족으로 종료됐으면 `BOMLENS_STAGE1_OOM`에 `true`를, 출력 폴더에 저장한 1단계 로그의 파일 이름을 `BOMLENS_STAGE1_LOG`로 넘깁니다. 1단계가 실패했거나 SBOM을 남기지 않았으면 2단계가 syft로 소스를 대신 스캔하고(직접 의존성만), 사유를 `bomlens:sbom-tool-degraded`(`oom`, `disk-space`, `network`, `cdxgen-crash`, `cdxgen-unavailable`)에 적으며, 결과 매니페스트는 `generate`를 `degraded`(`fallback`)로 기록합니다. CLI와 같은 동작입니다. 1단계를 실행하지 않는 `unsupported` 계획에서는 SBOM 없이 `BOMLENS_STAGE1_EXIT=127`(또는 `BOMLENS_STAGE1_REASON=cdxgen-unavailable`)을 넘기면 사유가 `cdxgen-unavailable`이 됩니다.
+
+## 제한된 네트워크
+
+스캔이 네트워크로 접속하는 대상과 각 대상의 설정입니다. 실행 계획은 이 이름들을 `env_passthrough`에 담으므로, 호출자는 자기가 설정한 값을 넘기면 됩니다.
+
+| 대상 | 단계 | 설정 |
+|------|------|------|
+| 프록시 | 1, 2 | `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`(소문자 이름도) |
+| 패키지 레지스트리(pip, npm, Maven 등) | 1 | 프록시를 거침. 각 패키지 관리자의 미러 설정도 평소대로 쓸 수 있음 |
+| cdxgen의 라이선스 조회 | 1 | `FETCH_LICENSE=false`로 끔 |
+| Trivy 취약점 데이터베이스 | 2 | `trivy-db` 마운트(네트워크가 전혀 필요 없음). 또는 미러를 `TRIVY_DB_REPOSITORY`, `TRIVY_JAVA_DB_REPOSITORY`로 지정. 컨테이너에 설정된 그 밖의 `TRIVY_*` 변수도 Trivy가 읽음(CLI는 가진 것을 모두 넘김) |
+| EPSS와 CISA KEV | 2 | 계획에서는 꺼져 있음(2단계 `env`가 `SECURITY_ENRICH=false`). CLI와 이미지를 단독으로 쓰면 켜져 있음. 미러는 `EPSS_API`, `KEV_URL` |
+| deps.dev(레지스트리 라이선스, 버전 경과 기간) | 2 | 요청할 때만 켜짐(`LICENSE_REGISTRY`, `STALENESS_ENRICH`). 미러는 `LICENSE_REGISTRY_API` |
+| PURL 저장소 확인 | 2 | 요청할 때만 켜짐(`PURL_RESOLVE`) |
+| SCANOSS(벤더링 코드 식별) | 2 | 요청할 때만 켜짐(`IDENTIFY_VENDORED`). 자체 설치 엔드포인트는 `SCANOSS_API_URL` |
+| NVD(심층 CVE 일치 확인) | 2 | 요청할 때만 켜짐(`DEEP_CVE`와 함께 `SECURITY_NVD_VERIFY`) |
+
+지원 종료(end-of-life) 데이터와 악성 패키지 데이터는 이미지에 들어 있어 네트워크가 필요 없습니다.
 
 ## 진행 이벤트
 
