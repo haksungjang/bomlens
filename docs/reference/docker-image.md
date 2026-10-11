@@ -135,6 +135,7 @@ MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
 | `TARGET_DIR` | Per mode | — | Directory path for `ROOTFS` mode |
 | `UPLOAD_ENABLED` | — | `true` | If `false`, save locally without uploading (same as CLI `--generate-only`) |
 | `HOST_OUTPUT_DIR` | — | — | Mounted path to copy the outputs to |
+| `BOMLENS_IMAGE_REF`, `BOMLENS_IMAGE_DIGEST` | — | — | The image reference and digest the caller ran, repeated in `bomlens-result.json` (see [Engine contract](engine-contract.md)) |
 | `GENERATE_NOTICE` | — | `false` | Generate the open-source notice (CLI `--notice`) |
 | `GENERATE_SECURITY` | — | `false` | Generate the Trivy security report (CLI `--security`) |
 | `GENERATE_REPORT` | — | `false` | Generate the open-source risk analysis report (off in direct runs, unlike the CLI default) |

@@ -180,6 +180,11 @@ for engine in cvebintool grype yocto; do
     [ -f "$SIDECAR" ] && jq -e '.Results' "$SIDECAR" >/dev/null 2>&1 || continue
     SIDE_N=$(jq '[.Results[].Vulnerabilities[]?] | length' "$SIDECAR" 2>/dev/null || echo 0)
     [ "${SIDE_N:-0}" -gt 0 ] || continue
+    # Keep Trivy's own output apart before the first merge: a program that runs
+    # this image as its scan engine reads one engine's results (the
+    # vulnerabilities.trivy output in bomlens-result.json). Without a sidecar
+    # there is no copy, and _security.json itself is Trivy's output.
+    [ -f "${OUT_PREFIX}_security_trivy.json" ] || cp "$JSON" "${OUT_PREFIX}_security_trivy.json"
     tmp_m="$(mktemp)"
     # Append the sidecar's Results but drop any (purl-or-name, cve) already present
     # in the accumulated report, so the raw _security.json is de-duplicated at the

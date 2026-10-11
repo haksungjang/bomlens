@@ -35,7 +35,9 @@ set -e
 # ========================================================
 
 SCAN_MODE="${MODE:-POSTPROCESS}"
-LIBDIR="/usr/local/lib/sbom"
+# BOMLENS_LIBDIR lets tests/test-engine-contract.sh run this script from a
+# checkout against the repository's docker/lib, without building the image.
+LIBDIR="${BOMLENS_LIBDIR:-/usr/local/lib/sbom}"
 
 # --- UI mode: hand off to the web server, no project metadata needed ---
 if [ "$SCAN_MODE" = "UI" ]; then
@@ -102,6 +104,7 @@ KNOWN_ARTIFACT_SUFFIXES=(
     _bom.spdx3.json _bom.spdx3.json.sig _spdx3-check.json _spdx3-check.md _ai-declaration.template.json
     _modelica.cdx.json _cocoapods.cdx.json _conda.cdx.json
     _security_cvebintool.json _security_grype.json _security_yocto.json
+    _security_trivy.json
 )
 # Only a caller that knows about this cleanup runs it at all. An old
 # scan-sbom.sh or server.py (built before this existed) sends neither signal
@@ -157,6 +160,15 @@ fi
 # and never aborts the run.
 case "${REPORT_LANG:-en}" in ko) REPORT_LANG="ko" ;; *) REPORT_LANG="en" ;; esac
 export REPORT_LANG
+
+# Result manifest (bomlens-result.json) for a program that runs this image as
+# its scan engine: each step is recorded as it runs, and the manifest is written
+# on exit, also when the run stops early. See engine-result.sh.
+# shellcheck source=docker/lib/engine-result.sh
+. "$LIBDIR/engine-result.sh"
+er_init
+trap 'er_finish "$?"' EXIT
+er_phase generate
 
 # Shared language detection + cdxgen image selection (also used by the CLI).
 # shellcheck source=docker/lib/source-detect.sh
@@ -935,6 +947,14 @@ esac
 rm -f "$(dirname "$OUTPUT_FILE")"/.sbom-xml.*.json* "$(dirname "$OUT_PREFIX")"/.sbom-xml.*.json* 2>/dev/null || true
 if [ ! -s "$OUTPUT_FILE" ]; then echo "[ERROR] SBOM file is empty: $OUTPUT_FILE"; exit 1; fi
 echo "[INFO] SBOM ready: $OUTPUT_FILE"
+_gen_count="$(jq '[.components[]?] | length' "$OUTPUT_FILE" 2>/dev/null || echo 0)"
+_gen_degraded="$(jq -r '[.metadata.properties[]? | select(.name == "bomlens:sbom-tool-degraded") | .value] | first // empty' "$OUTPUT_FILE" 2>/dev/null)"
+if [ -n "$_gen_degraded" ]; then
+    er_record generate degraded fallback "$_gen_degraded" "$ER_PHASE_STARTED" "" "{\"components\":${_gen_count:-0}}"
+else
+    er_record generate ok "" "" "$ER_PHASE_STARTED" "" "{\"components\":${_gen_count:-0}}"
+fi
+er_phase_end
 
 # Warn (don't fail) when the SBOM has no components. A genuine no-dependency
 # project can legitimately be empty, but more often this means the scan saw
@@ -989,7 +1009,10 @@ VENDORED_SRC="${SOURCE_ROOT:-/src}"
 if [ "$SOURCE_SCAN" = "true" ] && [ "${IDENTIFY_VENDORED:-false}" = "true" ] && [ -d "$VENDORED_SRC" ]; then
     echo "[INFO] Identifying vendored open source (SCANOSS)..."
     VEND_SBOM="${OUT_PREFIX}_vendored.cdx.json"
+    _vend_started="$(er_now)"
+    _vend_status=failed
     if bash "$LIBDIR/identify-vendored.sh" "$VENDORED_SRC" "$VEND_SBOM" "$PROJECT_VERSION"; then
+        _vend_status=ok
         VEND_N=$(jq '[.components[]?] | length' "$VEND_SBOM" 2>/dev/null || echo 0)
         # Reconcile against the package-manager scan before merging: drop vendored
         # matches whose name a cdxgen/syft component already carries (see
@@ -1006,14 +1029,21 @@ if [ "$SOURCE_SCAN" = "true" ] && [ "${IDENTIFY_VENDORED:-false}" = "true" ] && 
                 mv "${OUTPUT_FILE}.merged" "$OUTPUT_FILE"
             else
                 echo "[WARN] merge of vendored components failed; keeping the original SBOM." >&2
+                _vend_status=failed
                 rm -f "${OUTPUT_FILE}.merged"
             fi
         else
             echo "[INFO] no new vendored open source to add (after reconciliation)."
         fi
     fi
-elif [ "$SOURCE_SCAN" = "true" ] && [ -d "$VENDORED_SRC" ]; then
-    run_optional_step suggest-vendored bash "$LIBDIR/suggest-vendored.sh" "$OUTPUT_FILE" "$VENDORED_SRC"
+    er_record vendored "$_vend_status" "$([ "$_vend_status" = failed ] && echo failed)" "" "$_vend_started"
+elif [ "$SOURCE_SCAN" = "true" ] && [ "${IDENTIFY_VENDORED:-false}" = "true" ]; then
+    er_record vendored skipped no_input "no source tree at $VENDORED_SRC"
+elif [ "$SOURCE_SCAN" = "true" ]; then
+    er_record vendored disabled
+    if [ -d "$VENDORED_SRC" ]; then
+        run_optional_step suggest-vendored bash "$LIBDIR/suggest-vendored.sh" "$OUTPUT_FILE" "$VENDORED_SRC"
+    fi
 fi
 
 # ========================================================
@@ -1031,7 +1061,10 @@ if [ "$SOURCE_SCAN" = "true" ] && [ -d "$COCOA_SRC" ] \
     if [ "${HAS_COCOA:-0}" -eq 0 ]; then
         echo "[INFO] Identifying CocoaPods dependencies from Podfile.lock (syft)..."
         COCOA_SBOM="${OUT_PREFIX}_cocoapods.cdx.json"
+        _cocoa_started="$(er_now)"
+        _cocoa_status=failed
         if bash "$LIBDIR/identify-cocoapods.sh" "$COCOA_SRC" "$COCOA_SBOM" "$PROJECT_VERSION"; then
+            _cocoa_status=ok
             COCOA_N=$(jq '[.components[]?] | length' "$COCOA_SBOM" 2>/dev/null || echo 0)
             if [ "${COCOA_N:-0}" -gt 0 ]; then
                 echo "[INFO] CocoaPods components identified: $COCOA_N — merging into SBOM."
@@ -1039,10 +1072,12 @@ if [ "$SOURCE_SCAN" = "true" ] && [ -d "$COCOA_SRC" ] \
                     mv "${OUTPUT_FILE}.merged" "$OUTPUT_FILE"
                 else
                     echo "[WARN] merge of CocoaPods components failed; keeping the original SBOM." >&2
+                    _cocoa_status=failed
                     rm -f "${OUTPUT_FILE}.merged"
                 fi
             fi
         fi
+        er_record cocoapods "$_cocoa_status" "$([ "$_cocoa_status" = failed ] && echo failed)" "" "$_cocoa_started"
     fi
 fi
 
@@ -1177,7 +1212,10 @@ case "$SCAN_MODE" in
         # No `|| true`: a stamp failure means the SBOM still carries a leaked/placeholder
         # root name (e.g. src@latest), which collides in some SBOM import platforms. Fail closed under
         # set -e so a mis-named SBOM is never normalized, signed, or uploaded.
+        er_phase stamp-metadata
         bash "$LIBDIR/stamp-metadata.sh" "$OUTPUT_FILE" "$PROJECT_NAME" "$PROJECT_VERSION"
+        er_record stamp-metadata ok "" "" "$ER_PHASE_STARTED"
+        er_phase_end
         ;;
 esac
 
@@ -1227,6 +1265,8 @@ mark_compositions_aggregate "$OUTPUT_FILE"
 # disabled with ENRICH_CPE=false. Generic across modes; best-effort (|| true).
 if [ "${ENRICH_CPE:-true}" != "false" ] && [ "$AI_MODEL_SCAN" != "true" ]; then
     run_optional_step enrich-cpe bash "$LIBDIR/enrich-cpe.sh" "$OUTPUT_FILE"
+elif [ "$AI_MODEL_SCAN" != "true" ]; then
+    er_record enrich-cpe disabled
 fi
 
 # OS-context enrichment: a supplier SBOM can list every rpm/deb/apk package yet
@@ -1241,6 +1281,8 @@ fi
 # distro= version). Runs before the security scan; best-effort, never aborts.
 if [ "${ENRICH_OS_CONTEXT:-true}" != "false" ] && [ "$AI_MODEL_SCAN" != "true" ]; then
     run_optional_step enrich-os-context python3 "$LIBDIR/enrich-os-context.py" "$OUTPUT_FILE"
+elif [ "$AI_MODEL_SCAN" != "true" ]; then
+    er_record enrich-os-context disabled
 fi
 
 # Distro supplier enrichment: an rpm/deb/apk component carries `publisher` but
@@ -1257,6 +1299,8 @@ fi
 # supplier name yet. Best-effort, never aborts.
 if [ "${ENRICH_DISTRO_SUPPLIER:-true}" != "false" ] && [ "$AI_MODEL_SCAN" != "true" ]; then
     run_optional_step enrich-distro-supplier python3 "$LIBDIR/enrich-distro-supplier.py" "$OUTPUT_FILE"
+elif [ "$AI_MODEL_SCAN" != "true" ]; then
+    er_record enrich-distro-supplier disabled
 fi
 
 # Maven CPE enrichment: maven libraries carry a PURL but no CPE, so a CPE-aware
@@ -1269,6 +1313,8 @@ fi
 # ENRICH_MAVEN_CPE=false; a no-op when the SBOM has no maven components.
 if [ "${ENRICH_MAVEN_CPE:-true}" != "false" ] && [ "$AI_MODEL_SCAN" != "true" ]; then
     run_optional_step enrich-maven-cpe python3 "$LIBDIR/enrich-maven-cpe.py" "$OUTPUT_FILE"
+elif [ "$AI_MODEL_SCAN" != "true" ]; then
+    er_record enrich-maven-cpe disabled
 fi
 
 # GitHub-coordinate CPE enrichment: a component identified only by its source
@@ -1284,6 +1330,8 @@ fi
 # has no pkg:github/ component in the map.
 if [ "${ENRICH_GITHUB_CPE:-true}" != "false" ] && [ "$AI_MODEL_SCAN" != "true" ]; then
     run_optional_step enrich-github-cpe python3 "$LIBDIR/enrich-github-cpe.py" "$OUTPUT_FILE"
+elif [ "$AI_MODEL_SCAN" != "true" ]; then
+    er_record enrich-github-cpe disabled
 fi
 
 # Interpreter CPE enrichment: a language interpreter distributed AS a package
@@ -1297,6 +1345,8 @@ fi
 # ENRICH_INTERPRETER_CPE=false; a no-op when the SBOM has no matching component.
 if [ "${ENRICH_INTERPRETER_CPE:-true}" != "false" ] && [ "$AI_MODEL_SCAN" != "true" ]; then
     run_optional_step enrich-interpreter-cpe python3 "$LIBDIR/enrich-interpreter-cpe.py" "$OUTPUT_FILE"
+elif [ "$AI_MODEL_SCAN" != "true" ]; then
+    er_record enrich-interpreter-cpe disabled
 fi
 
 # EOL enrichment: flag components whose release cycle is past its published
@@ -1308,6 +1358,8 @@ fi
 # (e.g. an image built without the dataset). Best-effort; never aborts the scan.
 if [ "${ENRICH_EOL:-true}" != "false" ] && [ "$AI_MODEL_SCAN" != "true" ]; then
     run_optional_step enrich-eol bash "$LIBDIR/enrich-eol.sh" "$OUTPUT_FILE"
+elif [ "$AI_MODEL_SCAN" != "true" ]; then
+    er_record enrich-eol disabled
 fi
 
 # Malicious-package check: flag components that are known-malicious packages
@@ -1320,6 +1372,8 @@ fi
 # with ENRICH_MALICIOUS=false. Best-effort; never aborts the scan.
 if [ "${ENRICH_MALICIOUS:-true}" != "false" ]; then
     run_optional_step enrich-malicious bash "$LIBDIR/enrich-malicious.sh" "$OUTPUT_FILE"
+else
+    er_record enrich-malicious disabled
 fi
 
 # Staleness enrichment (OPT-IN, default off): query deps.dev for absolute version
@@ -1329,6 +1383,8 @@ fi
 # and bounded (per-request timeout + wall-clock budget); never aborts the scan.
 if [ "${STALENESS_ENRICH:-false}" = "true" ] && [ "$AI_MODEL_SCAN" != "true" ]; then
     run_optional_step enrich-staleness python3 "$LIBDIR/enrich-staleness.py" "$OUTPUT_FILE"
+elif [ "$AI_MODEL_SCAN" != "true" ]; then
+    er_record enrich-staleness disabled
 fi
 
 # AI model risk assessment: stamp every model/dataset component with a
@@ -1385,15 +1441,23 @@ fi
 if [ "${DEEP_LICENSE:-false}" = "true" ] && [ -d /src ]; then
     if command -v scancode >/dev/null 2>&1; then
         echo "[INFO] Running scancode deep license detection..."
+        _dl_started="$(er_now)"
         if scancode --license --json-pp /tmp/scancode.json /src >/dev/null 2>&1; then
             cp /tmp/scancode.json "${OUT_PREFIX}_scancode.json"
             ARTIFACTS+=("${OUT_PREFIX}_scancode.json")
+            er_record deep-license ok "" "" "$_dl_started"
         else
             echo "[WARN] scancode run failed."
+            er_record deep-license failed failed "" "$_dl_started"
         fi
     else
         echo "[WARN] --deep-license requested but scancode not in image (rebuild with --build-arg SBOM_DEEP_LICENSE=true)."
+        er_record deep-license skipped not_installed "scancode is not in this image"
     fi
+elif [ "${DEEP_LICENSE:-false}" = "true" ]; then
+    er_record deep-license skipped no_input "no source tree mounted at /src"
+elif [ "$SOURCE_SCAN" = "true" ]; then
+    er_record deep-license disabled
 fi
 
 # Where this mode's scanned files sit on disk. SOURCE (web UI) and POSTPROCESS
@@ -1504,6 +1568,9 @@ fi
 # sync now so an interruption in either still leaves a complete, usable BOM.
 sync_artifacts
 
+if [ "${GENERATE_NOTICE:-false}" != "true" ]; then
+    er_record generate-notice disabled
+fi
 if [ "${GENERATE_NOTICE:-false}" = "true" ]; then
     run_optional_step generate-notice bash "$LIBDIR/generate-notice.sh" "$OUTPUT_FILE" "$OUT_PREFIX" "$PROJECT_NAME"
     [ -f "${OUT_PREFIX}_NOTICE.txt" ] && ARTIFACTS+=("${OUT_PREFIX}_NOTICE.txt")
@@ -1513,9 +1580,13 @@ if [ "${GENERATE_NOTICE:-false}" = "true" ]; then
     sync_artifacts
 fi
 
+if [ "${GENERATE_SECURITY:-false}" != "true" ]; then
+    er_record scan-security disabled
+fi
 if [ "${GENERATE_SECURITY:-false}" = "true" ]; then
     run_optional_step scan-security bash "$LIBDIR/scan-security.sh" "$OUTPUT_FILE" "$OUT_PREFIX" "$PROJECT_NAME"
     [ -f "${OUT_PREFIX}_security.json" ] && ARTIFACTS+=("${OUT_PREFIX}_security.json")
+    [ -f "${OUT_PREFIX}_security_trivy.json" ] && ARTIFACTS+=("${OUT_PREFIX}_security_trivy.json")
     [ -f "${OUT_PREFIX}_security.md" ] && ARTIFACTS+=("${OUT_PREFIX}_security.md")
     [ -f "${OUT_PREFIX}_security.html" ] && ARTIFACTS+=("${OUT_PREFIX}_security.html")
     sync_artifacts
@@ -1711,6 +1782,7 @@ fi
 if [ "${SIGN_SBOM:-false}" = "true" ]; then
     if command -v cosign >/dev/null 2>&1 && [ -n "${COSIGN_KEY:-}" ]; then
         echo "[INFO] Signing SBOM with cosign..."
+        _sign_started="$(er_now)"
         SIGN_FAILED=0
         # COSIGN_SIGN_FLAGS keeps the detached `.sig` next to the SBOM and keeps
         # the signature local. cosign 3 defaults to the Sigstore bundle format and
@@ -1763,6 +1835,7 @@ if [ "${SIGN_SBOM:-false}" = "true" ]; then
         # supply-chain tool. Do not exit 0 leaving the user to believe their
         # SBOM is signed when no .sig exists.
         if [ "$SIGN_FAILED" != "0" ]; then
+            er_record sign failed failed "" "$_sign_started"
             echo "[ERROR] --sign was requested but a signature could not be produced. The SBOM and other artifacts were still written."
             # The refreshed conformance report above only lives in the container;
             # the next sync_artifacts pass (near the end of this script) is what
@@ -1774,9 +1847,16 @@ if [ "${SIGN_SBOM:-false}" = "true" ]; then
             sync_artifacts
             exit 1
         fi
+        er_record sign ok "" "" "$_sign_started"
+    elif ! command -v cosign >/dev/null 2>&1; then
+        echo "[WARN] --sign requested but cosign/COSIGN_KEY unavailable; skipping."
+        er_record sign skipped not_installed "cosign is not in this image"
     else
         echo "[WARN] --sign requested but cosign/COSIGN_KEY unavailable; skipping."
+        er_record sign skipped no_input "COSIGN_KEY is not set"
     fi
+else
+    er_record sign disabled
 fi
 
 # AI compliance profile (AI SBOMs only): a governance one-pager that re-aggregates
