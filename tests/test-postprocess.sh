@@ -6432,8 +6432,9 @@ if [ "\$last" != "$PO_ROOT/src" ]; then
 {"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"metadata":{"component":{"name":"project","bom-ref":"pkg:pypi/project@latest"}},
  "components":[{"name":"requests","version":"2.31.0","purl":"pkg:pypi/requests@2.31.0","bom-ref":"pkg:pypi/requests@2.31.0"},
                {"name":"idna","version":"3.7","purl":"pkg:pypi/idna@3.7","bom-ref":"pkg:pypi/idna@3.7",
-                "properties":[{"name":"internal:SrcFile","value":"\$last/requirements.txt"},{"name":"SrcFileRel","value":"\$scratch/project/requirements.txt"}]}],
- "dependencies":[{"ref":"pkg:pypi/project@latest","dependsOn":["pkg:pypi/requests@2.31.0"]},
+                "properties":[{"name":"internal:SrcFile","value":"\$last/requirements.txt"},{"name":"SrcFileRel","value":"\$scratch/project/requirements.txt"}]},
+               {"name":"unknown","version":"latest","purl":"pkg:pypi/unknown@latest","bom-ref":"pkg:pypi/unknown@latest"}],
+ "dependencies":[{"ref":"pkg:pypi/project@latest","dependsOn":["pkg:pypi/requests@2.31.0","pkg:pypi/unknown@latest"]},
                  {"ref":"pkg:pypi/requests@2.31.0","dependsOn":["pkg:pypi/idna@3.7"]},
                  {"ref":"pkg:pypi/idna@3.7","dependsOn":[]}]}
 JSON
@@ -6508,6 +6509,40 @@ if python3 -c "import tomllib" 2>/dev/null; then
         || fail "seen: $(cat "$PO_ROOT/seen-requirements"), file: $(cat "$PO_ROOT/src/requirements.txt")"
 else
     echo "  SKIP: this host's python3 has no tomllib (3.11+)"
+fi
+
+echo "== python: cdxgen's pkg:pypi/unknown@latest is dropped =="
+PU_ROOT="$WORK/pypi-unknown"; mkdir -p "$PU_ROOT/bin" "$PU_ROOT/src" "$PU_ROOT/out"
+printf '[project]\nname = "x"\nversion = "1"\n' > "$PU_ROOT/src/pyproject.toml"
+cat > "$PU_ROOT/bin/cdxgen" <<'STUB'
+#!/bin/sh
+out=""; prev=""
+for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+r="${PU_REF:-pkg:pypi/unknown@latest}"
+cat > "$out" <<JSON
+{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"metadata":{"component":{"name":"x","bom-ref":"pkg:pypi/x@1"}},
+ "components":[{"name":"unknown","version":"latest","purl":"pkg:pypi/unknown@latest","bom-ref":"$r"},
+               {"name":"requests","version":"2.31.0","purl":"pkg:pypi/requests@2.31.0","bom-ref":"pkg:pypi/requests@2.31.0"}],
+ "dependencies":[{"ref":"pkg:pypi/x@1","dependsOn":["pkg:pypi/requests@2.31.0","$r"]},
+                 {"ref":"$r","dependsOn":[]}]}
+JSON
+STUB
+chmod +x "$PU_ROOT/bin/cdxgen"
+if command -v node >/dev/null 2>&1; then
+    PATH="$PU_ROOT/bin:$PATH" PU_REF=unk-1 sh "$LIB/build-prep.sh" "$PU_ROOT/src" "$PU_ROOT/out/bom2.json" > "$PU_ROOT/log2" 2>&1
+    jq -e '([.components[].purl] == ["pkg:pypi/requests@2.31.0"]) and ([.dependencies[] | .ref, .dependsOn[]] | index("unk-1") == null)' \
+        "$PU_ROOT/out/bom2.json" >/dev/null 2>&1 \
+        && pass "with a bom-ref of its own, every link to it goes too" \
+        || fail "pypi unknown (bom-ref): $(jq -c '{c: [.components[].purl], d: .dependencies}' "$PU_ROOT/out/bom2.json" 2>&1)"
+    PATH="$PU_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$PU_ROOT/src" "$PU_ROOT/out/bom.json" > "$PU_ROOT/log" 2>&1
+    jq -e '([.components[].purl] == ["pkg:pypi/requests@2.31.0"]) and (.dependencies == [{"ref":"pkg:pypi/x@1","dependsOn":["pkg:pypi/requests@2.31.0"]}])
+           and ([.metadata.properties[]? | select(.name == "bomlens:unnamed-packages-dropped") | .value] == ["1"])' \
+        "$PU_ROOT/out/bom.json" >/dev/null 2>&1 \
+        && grep -q 'dropped pkg:pypi/unknown@latest' "$PU_ROOT/log" \
+        && pass "pkg:pypi/unknown@latest is dropped with its links; the rest is left as it was" \
+        || fail "pypi unknown: $(jq -c '{c: [.components[].purl], d: .dependencies}' "$PU_ROOT/out/bom.json" 2>&1)" "$(tail -3 "$PU_ROOT/log")"
+else
+    echo "  SKIP: node unavailable"
 fi
 
 echo "== prep_step: every resolution step runs through it (no bare invocation left) =="
