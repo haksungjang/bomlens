@@ -20,6 +20,8 @@
 set -u
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The image settings of whoever runs this must not change what the plan names.
+unset CDXGEN_IMAGE_PREFIX CDXGEN_ALLINONE CDXGEN_TAG
 ENTRY="$ROOT_DIR/docker/entrypoint.sh"
 SCHEMA="$ROOT_DIR/schemas/engine-result-1.json"
 DOC="$ROOT_DIR/docs/reference/engine-contract.md"
@@ -579,6 +581,36 @@ P="$(plan_run stale "$PSRC")"
     && pass "PLAN removes an earlier run's SBOM and conda sidecar, and replaces the plan" \
     || fail "left: $(ls "$P")"
 
+# A registry mirror: the image is named from it, the digest is the published one.
+P0="$(plan_run mirror-default "$PSRC")"
+for pfx in registry.example/mirror/cdxgen/ registry.example/mirror/cdxgen; do
+    P="$(plan_run "mirror-${pfx//\//-}" "$PSRC" CDXGEN_IMAGE_PREFIX="$pfx")"
+    [ "$(jq -r '.stages[0].image' "$P/bomlens-plan.json")" = "registry.example/mirror/cdxgen/cdxgen-alpine-node24:$(jq -r .tag "$ROOT_DIR/docker/lib/cdxgen-images.json")" ] \
+        && [ "$(jq -r '.stages[0].image_digest' "$P/bomlens-plan.json")" = "$(jq -r '.stages[0].image_digest' "$P0/bomlens-plan.json")" ] \
+        && [ "$(jq -r .status "$P/bomlens-plan.json")" = ok ] \
+        && pass "CDXGEN_IMAGE_PREFIX=$pfx names the image from the mirror, with the published digest" \
+        || fail "mirror $pfx: $(jq -c '{status, s: .stages[0] | {image, image_digest}}' "$P/bomlens-plan.json" 2>&1)"
+done
+# A mixed source uses the all-in-one image: from the mirror too, with its digest.
+MIXSRC="$WORK/plan-src-mixed"; mkdir -p "$MIXSRC"
+echo '{"dependencies":{"a":"1"}}' > "$MIXSRC/package.json"; echo 'requests==2.31.0' > "$MIXSRC/requirements.txt"
+P="$(plan_run mirror-mixed "$MIXSRC" CDXGEN_IMAGE_PREFIX=registry.example/mirror/cdxgen/)"
+[ "$(jq -r '.stages[0] | .image + " " + .image_digest' "$P/bomlens-plan.json")" = "registry.example/mirror/cdxgen/cdxgen:$(jq -r '.tag + " " + .digests["ghcr.io/cdxgen/cdxgen"]' "$ROOT_DIR/docker/lib/cdxgen-images.json")" ] \
+    && pass "a mixed source's all-in-one image is named from the mirror, with its published digest" \
+    || fail "mixed mirror: $(jq -c '{status, s: .stages[0] | {image, image_digest}}' "$P/bomlens-plan.json" 2>&1)"
+# The Android SDK image builds on the cdxgen Java image; its FROM is kept at
+# CDXGEN_TAG by hand, since the ARG in the name hides it from the updaters.
+and_tag="$(sed -n 's/^FROM \${CDXGEN_IMAGE_PREFIX}cdxgen-temurin-java21:\([^@]*\)@.*/\1/p' "$ROOT_DIR/docker/android/Dockerfile")"
+[ -n "$and_tag" ] && [ "$and_tag" = "$(jq -r .tag "$ROOT_DIR/docker/lib/cdxgen-images.json")" ] \
+    && pass "the Android SDK image's base is at CDXGEN_TAG ($and_tag)" \
+    || fail "docker/android/Dockerfile base tag '$and_tag' is not CDXGEN_TAG $(jq -r .tag "$ROOT_DIR/docker/lib/cdxgen-images.json")"
+# Under the bash that runs scan-sbom.sh on macOS (3.2), the all-in-one name too.
+if [ -x /bin/bash ]; then
+    [ "$(/bin/bash -c ". '$ROOT_DIR/docker/lib/source-detect.sh'; img_for_lang mixed" 2>&1)" = "ghcr.io/cdxgen/cdxgen:$(jq -r .tag "$ROOT_DIR/docker/lib/cdxgen-images.json")" ] \
+        && [ "$(/bin/bash -c "CDXGEN_IMAGE_PREFIX=reg.example/m/; . '$ROOT_DIR/docker/lib/source-detect.sh'; img_for_lang mixed" 2>&1)" = "reg.example/m/cdxgen:$(jq -r .tag "$ROOT_DIR/docker/lib/cdxgen-images.json")" ] \
+        && pass "/bin/bash ($(/bin/bash -c 'echo $BASH_VERSION')) names the all-in-one image, with and without a mirror" \
+        || fail "/bin/bash all-in-one name: $(/bin/bash -c ". '$ROOT_DIR/docker/lib/source-detect.sh'; img_for_lang mixed" 2>&1)"
+fi
 EMPTYSRC="$WORK/plan-src-empty"; mkdir -p "$EMPTYSRC"
 P="$(plan_run empty "$EMPTYSRC")"
 [ "$(cat "$P.rc") $(jq -r '.run.status + " " + ([.steps[] | select(.id=="plan")][0].status)' "$P/bomlens-result.json")" != "0 succeeded ok" ] \

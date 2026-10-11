@@ -395,7 +395,7 @@ generate_sbom_cdxgen() {
         if ! docker image inspect "$img" >/dev/null 2>&1; then
             echo "[ERROR] Android SDK image not found: $img"
             echo "        Build it on the host once, then re-run:"
-            echo "          docker build --build-arg ANDROID_API=$api -t $img docker/android"
+            echo "          docker build --build-arg ANDROID_API=$api$([ "$CDXGEN_IMAGE_PREFIX" = "ghcr.io/cdxgen/" ] || printf ' --build-arg CDXGEN_IMAGE_PREFIX=%s' "$CDXGEN_IMAGE_PREFIX") -t $img docker/android"
             echo "        (accepting https://developer.android.com/studio/terms), or set"
             echo "        ANDROID_IMAGE_PREFIX to an image built elsewhere."
             return 1

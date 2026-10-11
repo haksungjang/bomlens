@@ -28,6 +28,8 @@ SCAN="$REPO/scripts/scan-sbom.sh"
 VERBOSE="${VERBOSE:-false}"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/sbom-win.XXXXXX")"
+# A mirror set by whoever runs this must not change the image names checked.
+unset CDXGEN_IMAGE_PREFIX
 BIN="$WORK/bin"; mkdir -p "$BIN"
 cleanup() { cd "$REPO" 2>/dev/null || true; rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM
@@ -332,6 +334,12 @@ BOMLENS_CANCEL_GRACE=45 scan_in "$d" --ui --output-dir "$d"
 in_log "-e BOMLENS_CANCEL_GRACE" \
   && pass "BOMLENS_CANCEL_GRACE passed to the web UI container" \
   || { fail "BOMLENS_CANCEL_GRACE passed to the web UI container" "rc=$RC"; show; }
+
+d="$(new_proj ui_mirror)"
+CDXGEN_IMAGE_PREFIX=registry.example/mirror/cdxgen/ scan_in "$d" --ui --output-dir "$d"
+in_log "-e CDXGEN_IMAGE_PREFIX" \
+  && pass "CDXGEN_IMAGE_PREFIX passed to the web UI container" \
+  || { fail "CDXGEN_IMAGE_PREFIX passed to the web UI container" "rc=$RC"; show; }
 
 # The UI's security scans keep Trivy's database in SBOM_TRIVY_CACHE too, and a
 # proxy at the host's loopback address is not passed into the container.
@@ -809,6 +817,13 @@ DOCKER_STUB_ARGV_DUMP=1 HTTPS_PROXY=http://proxy.example:3128 TRIVY_DB_REPOSITOR
   && in_log "trivy cache:/trivy-cache>" && in_log "<TRIVY_CACHE_DIR=/trivy-cache>" && [ -d "$WORK/trivy cache" ]; } \
   && pass "network settings go by name, a host TRIVY_CACHE_DIR does not, SBOM_TRIVY_CACHE is mounted (space in path)" \
   || { fail "network settings not passed as expected"; show; cat "$LOG"; }
+
+# A registry mirror for the cdxgen images.
+d="$(new_proj mirror)"; printf '{"name":"a","dependencies":{"x":"1"}}' > "$d/package.json"
+CDXGEN_IMAGE_PREFIX=registry.example/mirror/cdxgen/ scan_in "$d" --project MI --version 1 --generate-only
+{ in_log "registry.example/mirror/cdxgen/cdxgen-alpine-node24:" && ! in_log "ghcr.io/cdxgen/cdxgen-alpine-node24"; } \
+  && pass "CDXGEN_IMAGE_PREFIX: the source scan's cdxgen image comes from the mirror" \
+  || { fail "cdxgen image not taken from CDXGEN_IMAGE_PREFIX"; show; cat "$LOG"; }
 
 d="$(new_proj hf_dataset)"
 DOCKER_STUB_ARGV_DUMP=1 HF_TOKEN=hf_secret_value \

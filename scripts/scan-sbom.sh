@@ -511,6 +511,9 @@ Environment:
                          usual. always: block and re-pull every run. never:
                          touch no network; fail if the image is absent
   SBOM_SCANNER_IMAGE     Override the scanner image
+  CDXGEN_IMAGE_PREFIX    Where the cdxgen images come from (language and
+                         all-in-one), everything before the image name (default
+                         ghcr.io/cdxgen/); set it to a registry mirror's path
   SBOM_FIRMWARE_IMAGE    Override the firmware image
   SBOM_AIBOM_IMAGE       Override the AI SBOM (OWASP AIBOM Generator) image
   SBOM_DEEP_CVE_IMAGE    Override the deep-cve (grype) image
@@ -704,12 +707,14 @@ if [ "$UI_MODE" = "true" ]; then
     read -ra PREP_ENV_FLAGS <<< "$(build_prep_env_args) $(stage2_network_env_args)"
     # The Trivy cache folder (SBOM_TRIVY_CACHE) for the UI's security scans too.
     TRIVY_CACHE_FLAGS=()
-    mapfile -t TRIVY_CACHE_FLAGS < <(trivy_cache_args)
+    while IFS= read -r _l; do TRIVY_CACHE_FLAGS+=("$_l"); done < <(trivy_cache_args)
     [ "${#TRIVY_CACHE_FLAGS[@]}" -eq 4 ] && TRIVY_CACHE_FLAGS[1]="$(hostpath "${TRIVY_CACHE_FLAGS[1]%:/trivy-cache}"):/trivy-cache"
     # Name-only, same reason: a host override of the scan-cancel grace period
     # must reach server.py inside the UI container (it reads the env var
     # itself; a host-side default here would never be seen there).
     CANCEL_ENV_FLAGS=(-e BOMLENS_CANCEL_GRACE)
+    # The web UI's source scans pull the cdxgen images from the same mirror.
+    CDXGEN_ENV_FLAGS=(-e CDXGEN_IMAGE_PREFIX)
     # /bomlens-state: the same host-persistent guard-state directory
     # the CLI path uses, so a directory scan launched through --ui can also
     # recover a source tree a prior, too-hard-killed scan left dirty. entrypoint.sh
@@ -720,7 +725,7 @@ if [ "$UI_MODE" = "true" ]; then
     ensure_image_fresh "$POSTPROCESS_IMAGE"
     exec "${DOCKER_ENV[@]}" docker run --rm "${TTY_FLAGS[@]}" -p "${UI_BIND_ADDRESS}:${UI_PORT}:8080" \
         -v "$(hostpath "$UI_BASE")":/src -v "$(hostpath "$UI_BASE")":/host-output \
-        "${MOUNT_FLAGS[@]}" "${HF_FLAGS[@]}" "${GO_ENV_FLAGS[@]}" "${PREP_ENV_FLAGS[@]}" "${CANCEL_ENV_FLAGS[@]}" "${TRIVY_CACHE_FLAGS[@]}" \
+        "${MOUNT_FLAGS[@]}" "${HF_FLAGS[@]}" "${GO_ENV_FLAGS[@]}" "${PREP_ENV_FLAGS[@]}" "${CANCEL_ENV_FLAGS[@]}" "${TRIVY_CACHE_FLAGS[@]}" "${CDXGEN_ENV_FLAGS[@]}" \
         "${UI_GUARD_FLAGS[@]}" \
         -v /var/run/docker.sock:/var/run/docker.sock \
         -e MODE=UI -e UI_PORT=8080 -e SBOM_UI_HOST_DIR="$(hostpath "$UI_BASE")" \
@@ -1023,8 +1028,8 @@ pp_env() {
     # SBOM_TRIVY_CACHE: a host folder kept as Trivy's cache, so its database
     # is downloaded once rather than on every scan (or put there for an
     # offline host, with TRIVY_SKIP_DB_UPDATE=true).
-    local _tc=()
-    mapfile -t _tc < <(trivy_cache_args)
+    local _tc=() _l
+    while IFS= read -r _l; do _tc+=("$_l"); done < <(trivy_cache_args)
     [ "${#_tc[@]}" -eq 4 ] && printf ' -v %q -e TRIVY_CACHE_DIR=/trivy-cache' "$(hostpath "${_tc[1]%:/trivy-cache}"):/trivy-cache"
 }
 
@@ -2046,6 +2051,7 @@ if [ "$MODE" = "SOURCE" ]; then
             echo "        and its terms do not allow us to redistribute it. Build it once:"
             echo ""
             echo "          docker build --build-arg ANDROID_API=$API \\"
+            [ "$CDXGEN_IMAGE_PREFIX" = "ghcr.io/cdxgen/" ] || echo "            --build-arg CDXGEN_IMAGE_PREFIX=$CDXGEN_IMAGE_PREFIX \\"
             echo "            -t $CDX_IMG $REPO_DIR/docker/android"
             echo ""
             echo "        Building it means accepting Google's SDK terms yourself:"

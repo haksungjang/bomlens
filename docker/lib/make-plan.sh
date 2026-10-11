@@ -69,7 +69,10 @@ case "$lang" in
         ;;
     *)
         image="$(img_for_lang "$lang")"
-        digest="$(jq -r --arg i "${image%:*}" --arg t "${image##*:}" \
+        # Digests are recorded by the published name; a mirror serves the
+        # same image under its own prefix.
+        _canon="${image%:*}"; _canon="ghcr.io/cdxgen/${_canon#"$CDXGEN_IMAGE_PREFIX"}"
+        digest="$(jq -r --arg i "$_canon" --arg t "${image##*:}" \
             'if .tag == $t then (.digests[$i] // "") else "" end' "$LIBDIR/cdxgen-images.json" 2>/dev/null || true)"
         if [ -z "$digest" ]; then
             status="unsupported"; reason="no-pinned-digest"
