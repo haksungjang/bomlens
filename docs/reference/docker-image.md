@@ -14,9 +14,10 @@ For everyday use we recommend the [`scan-sbom.sh`](../reference/cli.md) script, 
 | `ghcr.io/sktelecom/sbom-generator`, `ghcr.io/sktelecom/sbom-scanner` | Aliases of the same image (former names, same digest) |
 | `ghcr.io/sktelecom/bomlens-firmware` | Firmware analysis (includes GPL tools, opt-in) (legacy alias: sbom-scanner-firmware) |
 | `ghcr.io/sktelecom/bomlens-deep-cve` | Bundles grype for deep CVE matching (opt-in). Used by the CLI's `--deep-cve` and by the web UI's Deep CVE matching toggle, both of which pull it automatically as a sibling container when it is not already the running image |
+| `ghcr.io/sktelecom/bomlens-deep-license` | Bundles scancode for licence detection in the project's own files (opt-in). Used by the CLI's `--deep-license` for a source scan, pulled automatically. Carries LGPL components (7-Zip on linux/amd64, intbitset, chardet); the source for 7-Zip and intbitset is in the image under `/usr/share/bomlens/sources/`, and chardet ships as Python source |
 | `ghcr.io/sktelecom/bomlens-aibom` | Generates an AI-model ML-BOM (opt-in, legacy alias: sbom-scanner-aibom). Used by `--model`/`--model-file` and the web UI's AI model tile, pulled automatically as a sibling container |
 
-`latest` and version tags are available. All published images (`ghcr.io/sktelecom/bomlens`, `bomlens-firmware`, `bomlens-deep-cve`, `bomlens-aibom`, and their aliases) support both `linux/amd64` and `linux/arm64`, so pulling any of them on an `arm64` host (an Apple Silicon Mac, an Arm server) works natively. Images are signed with cosign before publishing.
+`latest` and version tags are available. All published images (`ghcr.io/sktelecom/bomlens`, `bomlens-firmware`, `bomlens-deep-cve`, `bomlens-deep-license`, `bomlens-aibom`, and their aliases) support both `linux/amd64` and `linux/arm64`, so pulling any of them on an `arm64` host (an Apple Silicon Mac, an Arm server) works natively. Images are signed with cosign before publishing.
 
 ```bash
 docker pull ghcr.io/sktelecom/bomlens:latest

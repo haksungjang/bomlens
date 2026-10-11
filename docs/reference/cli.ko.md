@@ -50,7 +50,7 @@ BomLens의 전체 옵션과 분석 모드, CI/CD 통합 방법, 트러블슈팅�
 | `--conformance-profile <default\|skt-submission>` | `default` | 적합성 검사 엄격도. `skt-submission`은 PURL 포함률 100%를 요구하고 `pkg:generic` 식별자가 하나라도 있으면 실패로 판정한다(SKT 공급사 제출 심사 기준과 동일). 웹 UI의 제출 전 점검 화면은 `skt-submission`이 기본값이지만 CLI는 아니므로, `--analyze`와 함께 명시적으로 지정해야 한다 |
 | `--license-registry` | 꺼짐 | 라이선스가 없는 컴포넌트의 라이선스를 패키지 레지스트리(deps.dev)에 조회하고, 하나뿐인 강한 카피레프트나 비상업 라이선스(GPL, AGPL, SSPL, BUSL, CC-BY-NC)를 레지스트리와 대조한다. 레지스트리 답이 다르면 그 답으로 바꾸고 원래 값은 `bomlens:license:superseded`에 남긴다. 이렇게 쓴 라이선스에는 `bomlens:licenseSource` = `registry (deps.dev)`가 붙는다. 본문, URL, concluded 판정이 붙은 라이선스는 대조하지 않고, `--analyze`에서는 빠진 라이선스만 채운다. 네트워크를 사용 |
 | `--resolve-purl` | 꺼짐 | `--analyze` 전용. 제출된 SBOM의 식별자가 실제 있는 패키지를 가리키는지 각 패키지 저장소에 조회해 적합성 보고서에 권고 항목으로 덧붙인다. 적합성 검사에서 네트워크를 쓰는 유일한 부분이다. 조회되지 않는 식별자는 보고만 하고 실패로 보지 않는다. 사내 저장소에만 올린 패키지도 같은 결과가 나오기 때문이다. 사내 네임스페이스는 `PURL_RESOLVE_IGNORE`로 제외한다 |
-| `--deep-license` | false | scancode 정밀 라이선스 탐지 (opt-in 이미지) |
+| `--deep-license` | false | scancode로 프로젝트 자체 파일의 라이선스 정밀 탐지 (opt-in `bomlens-deep-license` 이미지, 자동으로 내려받음. 내려받을 수 없으면 라이선스 탐지 없이 기본 이미지로 스캔) |
 | `--deep-cve` | false | grype의 NVD CPE 매칭으로 두 번째 대조를 더한다 (opt-in `bomlens-deep-cve` 이미지, 자동으로 내려받음). BomLens는 Maven 컴포넌트에만 NVD 대조가 가능한 CPE를 붙여 주므로, Trivy가 놓치는 NVD 전용 CVE는 대부분 오래된 Maven 라이브러리에서 나온다. `--security`를 자동으로 켠다. NVD 실시간 버전 범위로 확인하지 못한 결과는 보고서에 버전 미검증으로 표시된다 — [정밀 CVE 대조 가이드](../guides/reports.ko.md) 참고 |
 | `--identify-vendored` | false | 패키지 매니저가 없는 C/C++ 소스에 복사돼 들어간(vendored) 오픈소스를 식별. 파일 지문을 OSSKB 서비스와 대조 (발행 이미지에 포함; 소스가 아니라 해시 전송). [내장 오픈소스 식별 가이드](../guides/identify-vendored.ko.md) 참고 |
 | `--verify-weights` | false | `--model`과 함께 쓰면 저장소의 pickle 계열 가중치 파일(`.bin`/`.pt`/`.pth`/`.ckpt`, 로드 시 코드를 실행할 수 있는 형식)을 내려받아 `--model-file`이 실행하는 것과 같은 로컬 picklescan 검증을 돌린다. HuggingFace 자체 스캔 결과(`bomlens:hf:scan:*`)만 믿는 대신 독립적으로 확인하는 것이다. safetensors·GGUF·ONNX 가중치는 내려받지 않는다. 로드 시 코드를 실행하지 않는 형식이라 picklescan으로 확인할 대상이 없기 때문이다. 실제 네트워크·디스크 비용이 들고(`AIBOM_VERIFY_MAX_FILES`/`AIBOM_VERIFY_MAX_BYTES`로 상한, 기본 5개 파일 · 각 2GiB) 메타데이터만 읽는 `ENRICH_HF_SECURITY` 조회와 달리 옵트인이다. AI 모델 스캔 전용 |
@@ -72,6 +72,7 @@ BomLens의 전체 옵션과 분석 모드, CI/CD 통합 방법, 트러블슈팅�
 | `SBOM_FIRMWARE_IMAGE` | `ghcr.io/sktelecom/bomlens-firmware:latest` | 펌웨어 분석용 이미지 지정 |
 | `SBOM_AIBOM_IMAGE` | `ghcr.io/sktelecom/bomlens-aibom:latest` | AI 모델(ML-BOM) 생성용 이미지 지정 |
 | `SBOM_DEEP_CVE_IMAGE` | `ghcr.io/sktelecom/bomlens-deep-cve:latest` | `--deep-cve`(grype CPE 매칭)용 이미지 지정. 웹 UI의 같은 토글도 이 이미지를 쓴다 |
+| `SBOM_DEEP_LICENSE_IMAGE` | `SBOM_SCANNER_IMAGE`가 있으면 그 값, 없으면 `ghcr.io/sktelecom/bomlens-deep-license:latest` | `--deep-license`(scancode)일 때 소스 스캔의 후처리 단계를 실행할 이미지 |
 | `SBOM_OUTPUT_FLAT` | — | `1`로 두면 실행별 하위 폴더 없이 산출물을 베이스에 평면으로 저장(격리 이전 배치, 옛 경로를 기대하는 CI용) |
 | `SBOM_OUTPUT_DIR` | `~/sbom-output` | 데스크톱 앱과 웹 UI의 산출물 베이스(CLI는 대신 `--output-dir` 사용). 스캔마다 그 아래 `{Project}_{Version}/` 하위 폴더에 저장 |
 | `SBOM_UI_MOUNT_DIR` | — | CLI 인자를 받지 않는 Windows 실행 파일 `sbom-ui.bat`용: 웹 UI의 디렉터리 경로 입력에 읽기 전용 대상으로 추가할 폴더 하나(`--ui --mount`의 더블클릭 대응). `& ^ | < >` 가 없는 경로를 쓸 것 — 런처는 이런 문자가 있으면 잘못된 마운트를 Docker에 넘기는 대신 거부한다 |

@@ -70,6 +70,9 @@ POSTPROCESS_IMAGE="${SBOM_SCANNER_IMAGE:-ghcr.io/sktelecom/bomlens:latest}"     
 FIRMWARE_IMAGE="${SBOM_FIRMWARE_IMAGE:-ghcr.io/sktelecom/bomlens-firmware:latest}"     # opt-in (unblob/cve-bin-tool); legacy alias: sbom-scanner-firmware
 AIBOM_IMAGE="${SBOM_AIBOM_IMAGE:-ghcr.io/sktelecom/bomlens-aibom:latest}"               # opt-in (OWASP AIBOM Generator; HuggingFace network)
 DEEP_CVE_IMAGE="${SBOM_DEEP_CVE_IMAGE:-ghcr.io/sktelecom/bomlens-deep-cve:latest}"      # opt-in (grype + bundled NVD DB for maven CPE matching)
+# opt-in (scancode, for --deep-license). A caller who already points
+# SBOM_SCANNER_IMAGE at their own build keeps using it, as before this image existed.
+DEEP_LICENSE_IMAGE="${SBOM_DEEP_LICENSE_IMAGE:-${SBOM_SCANNER_IMAGE:-ghcr.io/sktelecom/bomlens-deep-license:latest}}"
 # Language detection + cdxgen image selection are shared with the web UI source
 # path (docker/entrypoint.sh) so both resolve transitive deps identically.
 # shellcheck source=docker/lib/source-detect.sh
@@ -510,6 +513,8 @@ Environment:
   SBOM_FIRMWARE_IMAGE    Override the firmware image
   SBOM_AIBOM_IMAGE       Override the AI SBOM (OWASP AIBOM Generator) image
   SBOM_DEEP_CVE_IMAGE    Override the deep-cve (grype) image
+  SBOM_DEEP_LICENSE_IMAGE
+                         Override the deep-license (scancode) image
   SECURITY_NVD_VERIFY    With --deep-cve: true drops loose-version false positives
                          via live NVD lookups (needs NVD_API_KEY, network/minutes)
   NVD_API_KEY            NVD API key for SECURITY_NVD_VERIFY (passed by name only)
@@ -2206,15 +2211,30 @@ FALLBACK_SH
     # scanned tree (/src) is never written to.
     # pp_env/cosign_run intentionally expand to several -e KEY=VAL tokens, so the
     # word splitting SC2046 flags here is required, not a bug.
-    ensure_image_fresh "$POSTPROCESS_IMAGE"
+    # --deep-license: the post-process step runs scancode over /src, and scancode
+    # is only in the deep-license image (the base image stays small).
+    # When that image is not here and cannot be pulled (not published yet, an
+    # offline host, SBOM_PULL=never), the scan still runs on the base image and
+    # records the licence step as not installed, as it did before this image.
+    PP_IMAGE="$POSTPROCESS_IMAGE"
+    if [ "$DEEP_LICENSE" = "true" ] && [ "$DEEP_LICENSE_IMAGE" != "$POSTPROCESS_IMAGE" ]; then
+        PP_IMAGE="$DEEP_LICENSE_IMAGE"
+        if ! docker image inspect "$PP_IMAGE" >/dev/null 2>&1 \
+           && { [ "$SBOM_PULL" = "never" ] || ! docker pull "$PP_IMAGE" >/dev/null 2>&1; }; then
+            echo "[WARN] --deep-license: the scancode image $PP_IMAGE is not available; continuing on $POSTPROCESS_IMAGE without the licence scan."
+            DEEP_LICENSE_FALLBACK_FROM="$PP_IMAGE"
+            PP_IMAGE="$POSTPROCESS_IMAGE"
+        fi
+    fi
+    ensure_image_fresh "$PP_IMAGE"
     export_scan_secrets
     # shellcheck disable=SC2046
     eval "$DOCKER_MSYS"docker run --rm \
         -v "\"$(hostpath "$SCAN_INPUT_DIR")\"":/src -v "\"$(hostpath "$OUTPUT_HOST_DIR")\"":/host-output \
         -w /host-output \
         --add-host=host.docker.internal:host-gateway \
-        -e MODE=POSTPROCESS -e BOMLENS_RUN_INPUT="$OUTPUT_FILE" -e NESTED_ROOTFS_HINT="\"$NESTED_ROOTFS_HINT\"" $(pp_env)$(cosign_run)$(vex_run)$(declare_run)$(gate_run) \
-        "\"$POSTPROCESS_IMAGE\""
+        -e MODE=POSTPROCESS -e BOMLENS_RUN_INPUT="$OUTPUT_FILE" -e NESTED_ROOTFS_HINT="\"$NESTED_ROOTFS_HINT\"" -e BOMLENS_DEEP_LICENSE_FALLBACK="\"${DEEP_LICENSE_FALLBACK_FROM:-}\"" $(pp_env)$(cosign_run)$(vex_run)$(declare_run)$(gate_run) \
+        "\"$PP_IMAGE\""
 else
     # image / binary / rootfs / firmware / aibom / analyze / merge: scanner image
     # runs the generation step + common pipeline in one shot. Firmware and aibom

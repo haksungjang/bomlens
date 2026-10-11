@@ -103,11 +103,43 @@ jq -e '[.files[]? | select(.type == "file" and (.path | test("(^|/)node_modules/
     && pass "no file inside node_modules is scanned" \
     || fail "files inside node_modules were scanned" "$(jq -c '[.files[]? | select(.path | test("node_modules")) | [.path, .type]]' "$SC" 2>/dev/null)"
 
+echo "== LGPL sources in the image, and no copyleft package beyond the documented ones =="
+src_ls="$(docker run --rm --entrypoint sh "$DL_IMAGE" -c 'ls /usr/share/bomlens/sources/p7zip-16.02 /usr/share/bomlens/sources/intbitset-*' 2>&1)"
+for f in p7zip_16.02_src_all.tar.bz2 "p7zip_16.02+dfsg-6.debian.tar.xz" 15-Enhanced-encryption-strength.patch.zip README intbitset-; do
+    printf '%s\n' "$src_ls" | grep -qF "$f" && pass "sources include $f" || fail "sources lack $f" "$src_ls"
+done
+# Every installed distribution whose licence metadata names a GPL family
+# licence must be one THIRD_PARTY_LICENSES.md accounts for (an LGPL component
+# with its source bundled, or a dual licence used under the other choice).
+copyleft="$(docker run --rm --entrypoint python3 "$DL_IMAGE" - <<'PY'
+import importlib.metadata as m, re
+allowed = {"chardet", "intbitset", "extractcode-7z", "gemfileparser2", "text-unidecode",
+           "typecode-libmagic", "extractcode-libarchive", "scancode-toolkit"}
+for d in m.distributions():
+    md = d.metadata
+    text = " ".join(filter(None, [md.get("License-Expression"), md.get("License")] + md.get_all("Classifier", [])))
+    name = re.sub(r"[-_.]+", "-", (md.get("Name") or "")).lower()
+    if re.search(r"\b(A|L)?GPL\b|General Public License", text) and name not in allowed:
+        print(name)
+PY
+)"
+[ -z "$copyleft" ] && pass "no undocumented GPL-family package in the image" || fail "undocumented GPL-family packages:" "$copyleft"
+
 if [ -n "$BASE_IMAGE" ]; then
     echo "== --deep-license on $BASE_IMAGE (no scancode) =="
     M="$(scan base-dl "$BASE_IMAGE" --deep-license)"
     [ "$(step_of "$M")" = "skipped not_installed" ] && pass "deep-license is skipped, not_installed" \
         || fail "deep-license is $(step_of "$M")" "$(tail -20 "$WORK/base-dl.log")"
+    echo "== --deep-license when the scancode image cannot be pulled =="
+    SBOM_SCANNER_IMAGE="$BASE_IMAGE" SBOM_DEEP_LICENSE_IMAGE="bomlens-test/no-such-image:0" \
+        bash "$ROOT_DIR/scripts/scan-sbom.sh" --project dl --version 1.0 \
+        --target "$ROOT_DIR/examples/nodejs" --generate-only --output-dir "$WORK/nopull" --deep-license \
+        > "$WORK/nopull.log" 2>&1
+    rc=$?
+    M="$WORK/nopull/dl_1.0/bomlens-result.json"
+    [ "$rc" = 0 ] && [ "$(step_of "$M")" = "skipped fallback" ] && [ "$(jq -r .run.status "$M")" = "succeeded_degraded" ] \
+        && pass "the scan still runs on the base image, records skipped/fallback, and the run is succeeded_degraded" \
+        || fail "rc=$rc, deep-license is $(step_of "$M")" "$(tail -20 "$WORK/nopull.log")"
     echo "== no --deep-license on $BASE_IMAGE =="
     M="$(scan base "$BASE_IMAGE")"
     [ "$(step_of "$M")" = "disabled null" ] && pass "deep-license is disabled" \

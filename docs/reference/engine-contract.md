@@ -30,8 +30,8 @@ The scan's exit code is unchanged by the contract. A run that produced its SBOM 
 
 | `run.status` | When |
 |---|---|
-| `succeeded` | exit code 0 and every recorded step `ok`, `skipped` or `disabled` |
-| `succeeded_degraded` | exit code 0, and at least one step `failed` or `degraded`. The SBOM is valid; read `steps[]` to decide whether the failed step matters to you |
+| `succeeded` | exit code 0, and every recorded step `ok`, `disabled`, or `skipped` because it had nothing to read (`no_input`) |
+| `succeeded_degraded` | exit code 0, and at least one step `failed` or `degraded`, or `skipped` for any other reason (a step that was asked for and could not run: its tool not installed, its input over a limit, its image unavailable). The SBOM is valid; read `steps[]` to decide whether the failed step matters to you |
 | `failed` | the run exited with a non-zero code (`reason` is `exit_code`) |
 | `cancelled` | the run was stopped by a signal (exit code 130 or 143) |
 
@@ -56,7 +56,7 @@ Every step that applies to the scan's mode is recorded, also when it did not run
 | `timeout` | the step ran out of time |
 | `not_installed` | the tool it needs is not in this image |
 | `too_large` | the input was over the step's size limit |
-| `fallback` | a simpler method was used instead (the SBOM came from the manifest-only fallback, direct dependencies only) |
+| `fallback` | a simpler method was used instead (the SBOM came from the manifest-only fallback, direct dependencies only), or the step ran without the image it needs (`--deep-license` when the scancode image could not be pulled) |
 | `unavailable` | the data the step reads was not available |
 | `budget_exhausted` | the step stopped at its work limit |
 | `no_input` | there was nothing for the step to read (no source tree, no signing key) |

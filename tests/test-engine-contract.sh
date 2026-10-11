@@ -284,8 +284,32 @@ D="$(new_run dl-off)"; run_engine "$D" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$SRCT
 D="$(new_run dl-missing)"; run_engine "$D" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$SRCT" DEEP_LICENSE=true BOMLENS_SCANCODE=/nonexistent/scancode
 [ "$(dl_step "$D")" = "skipped not_installed" ] && pass "requested on an image without scancode: skipped, not_installed" || fail "deep-license is $(dl_step "$D")"
 
+[ "$(jq -r .run.status "$D/bomlens-result.json")" = "succeeded_degraded" ] \
+    && pass "a requested step that could not run makes the run succeeded_degraded, not succeeded" \
+    || fail "run.status is $(jq -r .run.status "$D/bomlens-result.json") with deep-license skipped/not_installed"
+
+D="$(new_run dl-fallback)"; run_engine "$D" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$SRCT" DEEP_LICENSE=true BOMLENS_SCANCODE=/nonexistent/scancode BOMLENS_DEEP_LICENSE_FALLBACK=ghcr.io/example/bomlens-deep-license:latest
+[ "$(dl_step "$D") $(jq -r .run.status "$D/bomlens-result.json")" = "skipped fallback succeeded_degraded" ] \
+    && pass "the CLI fell back to the base image: skipped, fallback, and the run is succeeded_degraded" \
+    || fail "deep-license is $(dl_step "$D"), run.status $(jq -r .run.status "$D/bomlens-result.json")"
+# The same check against a copy whose run-status rule ignores skipped steps
+# must fail: the assertion above is what catches "no detection, still a pass".
+MUT2="$WORK/lib-mutant-skipped"
+cp -R "$ROOT_DIR/docker/lib" "$MUT2"
+sed -i.bak 's/or (.status == "skipped" and .reason != "no_input")//' "$MUT2/engine-result.sh"
+if grep -q 'reason != "no_input"' "$MUT2/engine-result.sh"; then
+    fail "could not remove the skipped rule from the copy (did its text change?)"
+else
+    D="$(new_run dl-fallback-mutant)"; run_engine "$D" "$MUT2" SOURCE_ROOT="$SRCT" DEEP_LICENSE=true BOMLENS_SCANCODE=/nonexistent/scancode BOMLENS_DEEP_LICENSE_FALLBACK=x
+    [ "$(jq -r .run.status "$D/bomlens-result.json" 2>/dev/null)" = "succeeded" ] \
+        && pass "without that rule the same run reads succeeded, so the check above can fail" \
+        || fail "the mutant run is $(jq -r .run.status "$D/bomlens-result.json" 2>/dev/null); the check does not isolate the rule"
+fi
+
 D="$(new_run dl-noinput)"; run_engine "$D" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$WORK/no-such-tree" DEEP_LICENSE=true BOMLENS_SCANCODE="$WORK/bin/scancode-stub"
 [ "$(dl_step "$D")" = "skipped no_input" ] && pass "no source tree: skipped, no_input" || fail "deep-license is $(dl_step "$D")"
+[ "$(jq -r .run.status "$D/bomlens-result.json")" = "succeeded" ] && pass "nothing to read (no_input) leaves the run succeeded" \
+    || fail "run.status is $(jq -r .run.status "$D/bomlens-result.json") with only a no_input skip"
 
 D="$(new_run dl-large)"; run_engine "$D" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$SRCT" DEEP_LICENSE=true BOMLENS_SCANCODE="$WORK/bin/scancode-stub" SCANCODE_STUB_ARGS="$WORK/args-large" DEEP_LICENSE_MAX_FILES=2
 [ "$(dl_step "$D")" = "skipped too_large" ] && pass "three own files over a limit of two: skipped, too_large" || fail "deep-license is $(dl_step "$D")"

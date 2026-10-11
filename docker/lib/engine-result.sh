@@ -232,7 +232,12 @@ er_finish() {
             | .stage = (if .id == "generate" and $mode == "POSTPROCESS" then 1 else 2 end))) as $steps
         | (if $rc == 130 or $rc == 143 then "cancelled"
            elif $rc != 0 then "failed"
-           elif any($steps[]; .status == "failed" or .status == "degraded") then "succeeded_degraded"
+           # A step that was asked for and could not run (its tool missing, its
+           # input over a limit, its image unavailable) leaves the result short
+           # of what was asked, the same as a failed one. Only "nothing to read"
+           # (no_input) is neutral.
+           elif any($steps[]; .status == "failed" or .status == "degraded"
+                    or (.status == "skipped" and .reason != "no_input")) then "succeeded_degraded"
            else "succeeded" end) as $status
         | {
             contract: {name: "bomlens-engine", version: $cv},
