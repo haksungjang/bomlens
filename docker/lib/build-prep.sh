@@ -746,13 +746,35 @@ fi
 # post-filter cdxgen's BOM to it near the end, mirroring the Android release-scope
 # filter. BOMLENS_NODE_FULL_GRAPH=1 opts out (keep the dev+prod superset).
 NODE_PROD_SET=""
-if [ -f package.json ] && ! opted_out "${BOMLENS_NODE_FULL_GRAPH:-}" \
+# A workspace root with no package-lock.json (yarn, pnpm or bun workspaces):
+# only the root package.json reaches the scratch resolve, so the members'
+# production dependencies would be missing from the set and filtered out.
+# Keep the full graph there.
+_node_ws_nolock=""
+if [ -f package.json ] && [ ! -f package-lock.json ] \
+   && { [ -f pnpm-workspace.yaml ] || { command -v node >/dev/null 2>&1 \
+        && node -e 'const p=JSON.parse(require("fs").readFileSync("package.json","utf8")); process.exit(p.workspaces ? 0 : 1)' 2>/dev/null; }; }; then
+    _node_ws_nolock=1
+    log "node: workspace root with no package-lock.json; keeping the full graph (production filter not applied)"
+fi
+if [ -f package.json ] && [ -z "$_node_ws_nolock" ] && ! opted_out "${BOMLENS_NODE_FULL_GRAPH:-}" \
    && command -v npm >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then
     log "node: resolving production dependency set"
     _npmtmp=$(mktemp -d)
     cp package.json "$_npmtmp/" 2>/dev/null
     # Copy a committed lockfile too so the prod resolve pins the same versions cdxgen sees.
     [ -f package-lock.json ] && cp package-lock.json "$_npmtmp/" 2>/dev/null
+    # Without one (a yarn, pnpm or bun project), npm resolves package.json's
+    # ranges to the newest releases while cdxgen reads the project's own lock,
+    # so the versions differ and a version match would drop the production
+    # packages themselves (measured: lodash 4.17.20 from yarn.lock, 4.17.21 from
+    # npm, "kept 0 of 1"). The set is then compared by name only. An
+    # npm-shrinkwrap.json alone counts the same: it is not copied, so npm's
+    # versions would not be its versions. Name matching has known limits: a
+    # dev tool sharing a name with a production package is kept, and a package
+    # only an older locked version needs can be dropped.
+    _node_by_name=""
+    [ -f package-lock.json ] || _node_by_name=1
     _nodeset=$(mktemp)
     if prep_step npm-production-set "$PREP_TIMEOUT_DEFAULT" sh -c "cd \"$_npmtmp\" && npm install --omit=dev --package-lock-only --no-audit --no-fund --ignore-scripts" >/dev/null \
        && [ -f "$_npmtmp/package-lock.json" ]; then
@@ -764,14 +786,16 @@ if [ -f package.json ] && ! opted_out "${BOMLENS_NODE_FULL_GRAPH:-}" \
           for (const [k,v] of Object.entries(pkgs)) {
             if (!k.startsWith("node_modules/")) continue;
             if (v.dev===true || !v.version) continue;
-            out.push(k.replace(/^.*node_modules\//,"")+"@"+v.version);
+            const name=k.replace(/^.*node_modules\//,"");
+            out.push(process.argv[2]==="name" ? name : name+"@"+v.version);
           }
-          process.stdout.write([...new Set(out)].join("\n"));
-        ' "$_npmtmp/package-lock.json" > "$_nodeset" 2>/dev/null
+          const set=[...new Set(out)];
+          process.stdout.write(set.join("\n")+(set.length?"\n":""));
+        ' "$_npmtmp/package-lock.json" "${_node_by_name:+name}" > "$_nodeset" 2>/dev/null
     fi
     if [ -s "$_nodeset" ]; then
         NODE_PROD_SET="$_nodeset"
-        log "node: production set = $(wc -l < "$_nodeset") components"
+        log "node: production set = $(wc -l < "$_nodeset" | tr -d ' ') components${_node_by_name:+ (matched by name: no package-lock.json)}"
     else
         log "node: could not resolve production set; using full graph"
         rm -f "$_nodeset"
@@ -1297,9 +1321,12 @@ if (!prod.size || !Array.isArray(bom.components)) process.exit(0);
 const mc = bom.metadata && bom.metadata.component;
 const rootRef = mc && (mc['bom-ref'] || mc.purl);
 const nameOf = c => (c.group ? c.group + '/' + c.name : c.name);
+// A set written by name only (no package-lock.json to pin versions) holds no
+// '@' after the first character; match those by name.
+const byName = [...prod].every(e => e.lastIndexOf('@') <= 0);
 const keep = c => {
   if (!(c.purl || '').startsWith('pkg:npm/')) return true;   // non-npm: leave alone
-  return prod.has(nameOf(c) + '@' + (c.version || ''));
+  return byName ? prod.has(nameOf(c)) : prod.has(nameOf(c) + '@' + (c.version || ''));
 };
 const before = bom.components.length;
 bom.components = bom.components.filter(keep);
