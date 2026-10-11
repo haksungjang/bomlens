@@ -3671,6 +3671,15 @@ def run_sibling_scan(image, mode, out_dir, on_log, *, upload_file=None, model_id
     for _k in ("DEEP_LICENSE_MAX_FILES", "DEEP_LICENSE_TIMEOUT", "BOMLENS_DEEP_LICENSE_ALL"):
         if env.get(_k):
             args += ["-e", _k]
+    # Where the cdxgen images come from (a registry mirror) and the network
+    # settings: proxy, Trivy's database, EPSS/KEV endpoints. By name, when set.
+    for _k in ("CDXGEN_IMAGE_PREFIX", "CDXGEN_TAG", "CDXGEN_ALLINONE",
+               "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+               "TRIVY_DB_REPOSITORY", "TRIVY_JAVA_DB_REPOSITORY", "TRIVY_SKIP_DB_UPDATE",
+               "TRIVY_SKIP_JAVA_DB_UPDATE", "TRIVY_OFFLINE_SCAN", "TRIVY_USERNAME", "TRIVY_PASSWORD",
+               "TRIVY_REGISTRY_TOKEN", "TRIVY_INSECURE", "KEV_URL", "EPSS_API"):
+        if env.get(_k):
+            args += ["-e", _k]
     # The profile the caller resolved (see the main handler's per-mode default),
     # re-derived from a closed allowlist like AI_USAGE_CONTEXT below, never the
     # env string itself, so an unrecognized value cannot reach the docker-run
