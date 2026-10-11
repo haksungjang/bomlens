@@ -135,6 +135,7 @@ MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
 | `TARGET_DIR` | 모드별 | — | `ROOTFS` 모드의 디렉터리 경로 |
 | `UPLOAD_ENABLED` | — | `true` | `false`면 업로드 없이 로컬 저장만 (CLI `--generate-only`와 동일) |
 | `HOST_OUTPUT_DIR` | — | — | 산출물을 복사할 마운트 경로 |
+| `BOMLENS_IMAGE_REF`, `BOMLENS_IMAGE_DIGEST` | — | — | 호출자가 실행한 이미지 참조와 다이제스트. `bomlens-result.json`에 그대로 적습니다([엔진 계약](engine-contract.ko.md) 참고) |
 | `GENERATE_NOTICE` | — | `false` | 오픈소스 고지문 생성 (CLI `--notice`) |
 | `GENERATE_SECURITY` | — | `false` | Trivy 보안 보고서 생성 (CLI `--security`) |
 | `GENERATE_REPORT` | — | `false` | 오픈소스위험분석보고서 생성 (CLI 기본값과 달리 직접 실행은 꺼짐) |
