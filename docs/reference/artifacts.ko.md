@@ -34,6 +34,7 @@ description: BomLens가 생성하는 산출물 파일 목록과 생성 조건, �
 | `{Project}_{Version}_vex_imported.json` | CLI의 `--vex <file>`, 또는 웹 UI 취약점 화면의 **VEX 가져오기**에 CycloneDX VEX 문서를 줄 때 생긴다 | 공급사가 보낸 VEX 문서 중 이 스캔 SBOM의 컴포넌트에 해당하는 진술과, 그 문서가 설명하는 제품이다. 직접 남긴 판단(`_vex.json`)과는 따로 보관한다. 받은 진술이 내 판단을 덮어쓰지 않으며 화면도 둘을 다른 이름으로 표시한다. CycloneDX `analysis.state`는 네 가지 상태로 옮긴다(`exploitable`은 영향 있음, `not_affected`와 `false_positive`는 영향 없음, `resolved`와 `resolved_with_pedigree`는 이미 고침, `in_triage`는 조사 중). 그 밖의 상태는 무시한다. 문서의 제품이나 버전이 스캔한 SBOM의 루트와 다르면 거부하고 아무것도 저장하지 않는다. 가져오기에 성공하면 이 파일을 교체하고, 거부되거나 적용할 진술이 없는 가져오기는 이전 파일을 그대로 둔다. 제품 자체를 가리키는 진술은 컴포넌트 없이 한 번만 저장하며, 그 CVE의 발견 항목 중 자기 진술이 없는 것 모두에 적용한다. `_vex.json`처럼 같은 프로젝트와 버전을 재스캔해도 지워지지 않는다 |
 | `{Project}_{Version}_vendored.cdx.json` | 소스 스캔에서 `--identify-vendored`, opt-in SCANOSS 이미지 필요 | 소스 트리 안에서 식별한 번들 오픈소스 컴포넌트(SCANOSS) |
 | `{Project}_{Version}_security_trivy.json` | 보안보고서를 생성할 때, 다른 엔진(grype, cve-bin-tool, Yocto)이 결과를 더한 경우 | `_security.json`으로 병합하기 전에 따로 남긴 Trivy 자체 결과 |
+| `bomlens-events.jsonl` | `BOMLENS_EVENTS=file` | 진행 이벤트, 한 줄에 JSON 객체 하나. [엔진 계약](engine-contract.ko.md#진행-이벤트) 참고 |
 | `bomlens-result.json` | 항상 | 실행 결과 매니페스트. 실행이 어떻게 끝났는지, 단계별 결과, 출력 파일별 역할을 담습니다. [엔진 계약](engine-contract.ko.md) 참고 |
 | `{Project}_{Version}_security_epss.json` | 보안보고서를 생성할 때마다 | 취약점별 EPSS 점수와 KEV 여부(오프라인 생성 시 null/false), 보안보고서 우선순위 산정에 사용 |
 | `{Project}_{Version}_bom.json.sig` | `--sign` | cosign 서명 (`--spdx`와 함께 쓰면 `_bom.spdx.json.sig`도 생성). AI 스캔에는 `_bom.spdx3.json.sig`도 추가되며, 초안도 서명한다. 서명은 파일의 출처를 보증할 뿐 완성 여부를 뜻하지 않는다 |

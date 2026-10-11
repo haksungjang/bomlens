@@ -23,6 +23,45 @@ ENGINE_RESULT_NAME="bomlens-result.json"
 
 er_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
+# Progress events (BOMLENS_EVENTS=file or stderr): one JSON object per line as
+# the run goes, for a caller that shows progress while it runs. "file" writes
+# bomlens-events.jsonl in the output folder, "stderr" writes to stderr. Types: run.start, step.start, step.end, run.end;
+# seq rises by one per event so a reader can tell a lost line. The result
+# manifest is the final record; where the two differ, the manifest wins.
+# ER_SEQ lives in this shell: an event emitted from a subshell or a child
+# process would repeat a number, which is why only entrypoint.sh's own shell
+# emits them (the scripts that source pipeline-step.sh do not have er_event).
+# In stderr mode the events share stderr with warnings and tool output; a
+# reader takes only the lines that start with {"v":1.
+ER_SEQ=0
+ER_EVENTS_FILE=""
+_er_events_on() {
+    case "${BOMLENS_EVENTS:-}" in file|stderr) return 0 ;; esac
+    return 1
+}
+# er_event <type> [step] [status] [reason] [detail]
+er_event() {
+    _er_events_on || return 0
+    command -v jq >/dev/null 2>&1 || return 0
+    ER_SEQ=$((ER_SEQ + 1))
+    local line stage=2
+    [ "${2:-}" = "generate" ] && [ "${SCAN_MODE:-}" = "POSTPROCESS" ] && stage=1
+    line="$(jq -nc --argjson seq "$ER_SEQ" --arg ts "$(er_now)" --arg type "$1" \
+        --arg step "${2:-}" --argjson stage "$stage" --arg st "${3:-}" --arg re "${4:-}" --arg de "${5:-}" '
+        def nn: if . == "" then null else . end;
+        {v: 1, seq: $seq, ts: $ts, type: $type}
+        + (if $step != "" then {step: $step, stage: $stage} else {} end)
+        + (if $st != "" then {status: $st} else {} end)
+        + (if $type == "step.end" then {reason: ($re | nn)} else {} end)
+        + (if $de != "" then {detail: ($de | gsub("[\u0000-\u001f]"; " ") | .[0:500])} else {} end)' 2>/dev/null)" || return 0
+    if [ "${BOMLENS_EVENTS}" = "stderr" ]; then
+        printf '%s\n' "$line" >&2
+    elif [ -n "$ER_EVENTS_FILE" ]; then
+        printf '%s\n' "$line" >> "$ER_EVENTS_FILE" 2>/dev/null || true
+    fi
+    return 0
+}
+
 # Start the run record. Safe to call once; later calls keep the first.
 er_init() {
     [ -n "${ER_STEPS:-}" ] && return 0
@@ -31,12 +70,20 @@ er_init() {
     # A manifest left from an earlier run in the same folder must not be read as
     # this run's: remove it now, so a run killed before its trap leaves none.
     [ -n "${HOST_OUTPUT_DIR:-}" ] && rm -f "$HOST_OUTPUT_DIR/$ENGINE_RESULT_NAME" 2>/dev/null
+    # An events file from an earlier run in this folder is not this run's,
+    # whether or not this run writes one.
+    [ -n "${HOST_OUTPUT_DIR:-}" ] && rm -f "$HOST_OUTPUT_DIR/bomlens-events.jsonl" 2>/dev/null
+    if [ "${BOMLENS_EVENTS:-}" = "file" ]; then
+        ER_EVENTS_FILE="${HOST_OUTPUT_DIR:-.}/bomlens-events.jsonl"
+        [ -d "$(dirname "$ER_EVENTS_FILE")" ] && : > "$ER_EVENTS_FILE" 2>/dev/null || ER_EVENTS_FILE=""
+    fi
+    er_event run.start
     return 0
 }
 
 # Mark the step now running outside run_optional_step, so an exit inside it is
 # recorded as its failure. er_phase_end clears it once the step has finished.
-er_phase() { ER_PHASE="$1"; ER_PHASE_STARTED="$(er_now)"; }
+er_phase() { ER_PHASE="$1"; ER_PHASE_STARTED="$(er_now)"; er_event step.start "$1"; }
 er_phase_end() { ER_PHASE=""; ER_PHASE_STARTED=""; }
 
 # er_record <id> <status> [reason] [detail] [started] [ended] [counts-json]
@@ -52,6 +99,7 @@ er_record() {
           started_at:$s, ended_at:$e}
          + (if $c == "" then {} else {counts:($c | fromjson? // {})} end)' \
         >> "$ER_STEPS" 2>/dev/null || true
+    er_event step.end "$1" "$2" "${3:-}" "${4:-}"
 }
 
 # The output role a file plays, from its suffix. Unknown suffixes are "other".
@@ -68,6 +116,7 @@ _er_role() {
         *_conformance.json) echo "conformance" ;;
         *_input.json) echo "input-description" ;;
         bomlens-plan.json) echo "plan" ;;
+        bomlens-events.jsonl) echo "events" ;;
         *) echo "other" ;;
     esac
 }
@@ -96,6 +145,9 @@ _er_input_kind() {
 er_exit_trap() {
     local rc=$?
     set +e
+    # A second Ctrl+C or TERM must not cut the manifest short: finishing it
+    # takes a moment, and the run's own code is already decided.
+    trap '' INT TERM
     er_finish "$rc"
     exit "$rc"
 }
@@ -194,6 +246,9 @@ er_finish() {
     local ended; ended="$(er_now)"
     local target=""
     [ "${SCAN_MODE:-}" = "IMAGE" ] && target="${TARGET_IMAGE:-}"
+    if [ -n "$ER_EVENTS_FILE" ] && [ -f "$ER_EVENTS_FILE" ]; then
+        outputs="$(jq -c --arg p "$(basename "$ER_EVENTS_FILE")" '. + [{role: "events", path: $p, sha256: "", bytes: 0}]' <<<"$outputs")"
+    fi
     local tmp="$outdir/.${ENGINE_RESULT_NAME}.tmp.$$"
     jq -s \
         --arg cv "$ENGINE_CONTRACT_VERSION" --arg ev "${BOMLENS_VERSION:-}" \
@@ -264,11 +319,24 @@ er_finish() {
             engines: $engines,
             data_sources: {trivy_db: $tdb},
             outputs: $outputs
-          }' "$ER_STEPS" > "$tmp" 2>/dev/null \
-        && mv "$tmp" "$outdir/$ENGINE_RESULT_NAME" \
-        || rm -f "$tmp"
+          }' "$ER_STEPS" > "$tmp" 2>/dev/null || { rm -f "$tmp"; rm -f "$ER_STEPS"; return 0; }
+    # Everything the manifest says is settled before it appears: run.end goes
+    # to the events, the events file's final size and hash go into the
+    # manifest, and only then is the manifest moved into place, in one step.
+    # A caller that waits for the file never sees a half-finished one.
+    if _er_events_on; then
+        er_event run.end "" "$(jq -r '.run.status // empty' "$tmp" 2>/dev/null)"
+        if [ -n "$ER_EVENTS_FILE" ] && [ -f "$ER_EVENTS_FILE" ]; then
+            local etmp="$tmp.ev"
+            jq --arg p "$(basename "$ER_EVENTS_FILE")" --arg h "$(_er_sha256 "$ER_EVENTS_FILE")" \
+               --argjson b "$(wc -c < "$ER_EVENTS_FILE" | tr -d '[:space:]')" \
+               '.outputs |= map(if .role == "events" and .path == $p then .sha256 = $h | .bytes = $b else . end)' \
+               "$tmp" > "$etmp" 2>/dev/null && mv "$etmp" "$tmp" || rm -f "$etmp"
+        fi
+    fi
+    mv "$tmp" "$outdir/$ENGINE_RESULT_NAME" || rm -f "$tmp"
     if [[ "${HOST_UID:-}" =~ ^[0-9]+$ ]] && [[ "${HOST_GID:-}" =~ ^[0-9]+$ ]]; then
-        chown "${HOST_UID}:${HOST_GID}" "$outdir/$ENGINE_RESULT_NAME" 2>/dev/null || true
+        chown "${HOST_UID}:${HOST_GID}" "$outdir/$ENGINE_RESULT_NAME" ${ER_EVENTS_FILE:+"$ER_EVENTS_FILE"} 2>/dev/null || true
     fi
     rm -f "$ER_STEPS"
     return 0

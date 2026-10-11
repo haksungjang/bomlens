@@ -120,6 +120,7 @@ BomLens 이미지를 스캔 엔진으로 쓰는 프로그램은 모든 스캔이
 | `vendored.cyclonedx` | `_vendored.cdx.json` |
 | `conformance` | `_conformance.json` |
 | `input-description` | `_input.json` |
+| `events` | `bomlens-events.jsonl`(`BOMLENS_EVENTS=file`) |
 | `other` | 실행이 쓴 그 밖의 파일(보고서, 보조 파일) |
 
 ## 패키지 식별자
@@ -155,6 +156,23 @@ docker run --rm -v "$PWD/src:/src:ro" -v "$PWD/out:/host-output" \
 `MODE=PLAN`은 계획을 썼으면 `ok`든 `unsupported`든 0으로 끝납니다. `unsupported` 계획은 결과 매니페스트에 `plan` 단계를 `skipped`로 기록하므로 실행은 `succeeded_degraded`입니다. 빈 소스(대개 컨테이너에 닿지 않은 마운트)는 0이 아닌 종료 코드로 거부합니다. 계획을 쓰기 전에 출력 폴더에서 이전 계획과 이전 실행의 1단계 산출물을 지웁니다. 2단계는 새 SBOM과 남은 SBOM을 구분할 수 없기 때문입니다. 1단계 이미지는 이 BomLens 릴리스가 시험한 cdxgen 태그로 고정되어 있어, `CDXGEN_TAG`를 바꾸면 언어 이미지는 `unsupported`(`no-pinned-digest`)가 됩니다.
 
 2단계는 1단계 종료 코드와 관계없이 실행하고, 그 코드를 `BOMLENS_STAGE1_EXIT`로, 1단계 컨테이너가 메모리 부족으로 종료됐으면 `BOMLENS_STAGE1_OOM`에 `true`를, 출력 폴더에 저장한 1단계 로그의 파일 이름을 `BOMLENS_STAGE1_LOG`로 넘깁니다. 1단계가 실패했거나 SBOM을 남기지 않았으면 2단계가 syft로 소스를 대신 스캔하고(직접 의존성만), 사유를 `bomlens:sbom-tool-degraded`(`oom`, `disk-space`, `network`, `cdxgen-crash`)에 적으며, 결과 매니페스트는 `generate`를 `degraded`(`fallback`)로 기록합니다. CLI와 같은 동작입니다.
+
+## 진행 이벤트
+
+`BOMLENS_EVENTS=file`로 두면 실행이 진행되는 동안 출력 폴더의 `bomlens-events.jsonl`에 JSON 객체를 한 줄씩 쓰고, `BOMLENS_EVENTS=stderr`로 두면 표준 오류에 씁니다. 표준 오류에는 경고와 내장 도구의 메시지도 함께 나오므로 `{"v":1`로 시작하는 줄만 읽습니다. 실행 중 진행 상황을 보여 줄 때 씁니다. 최종 기록은 결과 매니페스트이며, 둘이 다르면 매니페스트를 따릅니다. 각 줄은 [`schemas/engine-event-1.json`](https://github.com/sktelecom/bomlens/blob/main/schemas/engine-event-1.json)을 따릅니다.
+
+```json
+{"v":1,"seq":12,"ts":"2026-10-11T03:04:05Z","type":"step.end","step":"normalize","stage":2,"status":"ok","reason":null}
+```
+
+| `type` | 시점 |
+|---|---|
+| `run.start` | 실행 시작 |
+| `step.start` | 단계 시작(`step`, `stage`) |
+| `step.end` | 단계 종료. `status`, `reason`, `detail`은 매니페스트와 같음. 설정으로 꺼졌거나 실행할 수 없었던 단계는 시작 없이 종료만 있음 |
+| `run.end` | 실행 종료. 매니페스트의 `run.status`를 담음. 중단된 실행(`cancelled`)에는 시작만 있고 종료가 없는 단계가 남을 수 있음 |
+
+`seq`는 이벤트마다 1씩 늘어나므로 빠지거나 순서가 바뀐 줄을 알 수 있습니다. 파일은 매니페스트의 `outputs`에 역할 `events`로 올라가며, 매니페스트는 이벤트가 모두 기록된 뒤에 나타납니다. 이전 실행이 폴더에 남긴 이벤트 파일은 실행을 시작할 때 지웁니다.
 
 ## 버전 관리
 

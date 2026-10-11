@@ -633,6 +633,78 @@ else
     echo "  SKIP: syft is not installed on this host"
 fi
 
+echo "== progress events (BOMLENS_EVENTS) =="
+EV_SCHEMA="$ROOT_DIR/schemas/engine-event-1.json"
+event_errors() {  # event_errors <jsonl>: schema errors, one per bad line
+    if [ -z "$JSPY" ]; then
+        [ -n "${CI:-}" ] && echo "jsonschema is not installed, so the events were not validated"
+        return 0
+    fi
+    "$JSPY" - "$EV_SCHEMA" "$1" <<'PY'
+import json, sys
+import jsonschema
+v = jsonschema.Draft202012Validator(json.load(open(sys.argv[1])))
+for n, line in enumerate(open(sys.argv[2]), 1):
+    try:
+        doc = json.loads(line)
+    except ValueError:
+        print(f"line {n}: not JSON"); continue
+    for e in v.iter_errors(doc):
+        print(f"line {n}: {list(e.path)}: {e.message[:150]}")
+PY
+}
+D="$(new_run events-file)"
+run_engine "$D" "$ROOT_DIR/docker/lib" BOMLENS_EVENTS=file
+EVF="$D/bomlens-events.jsonl"
+[ -s "$EVF" ] && pass "BOMLENS_EVENTS=file writes bomlens-events.jsonl" || fail "no events file"
+err="$(event_errors "$EVF")"
+[ -z "$err" ] && pass "every event line validates against schemas/engine-event-1.json" || fail "event schema errors" "$err"
+[ "$(jq -s '[.[].seq] == [range(1; length + 1)]' "$EVF")" = "true" ] && pass "seq counts 1, 2, 3, ... with no gap" || fail "seq: $(jq -s -c '[.[].seq]' "$EVF")"
+[ "$(jq -s -r '.[0].type + " " + .[-1].type' "$EVF")" = "run.start run.end" ] && pass "the first event is run.start, the last run.end" || fail "first/last: $(jq -s -c '[.[0].type, .[-1].type]' "$EVF")"
+[ "$(jq -s -r '.[-1].status' "$EVF")" = "$(jq -r .run.status "$D/bomlens-result.json")" ] \
+    && pass "run.end carries the manifest's run.status" || fail "run.end $(jq -s -r '.[-1].status' "$EVF") vs manifest $(jq -r .run.status "$D/bomlens-result.json")"
+[ "$(jq -s -r '[.[] | select(.type=="step.end") | .step] | unique | sort | join(",")' "$EVF")" = "$(jq -r '[.steps[].id] | unique | sort | join(",")' "$D/bomlens-result.json")" ] \
+    && pass "the steps that end in the events are the manifest's steps" \
+    || fail "events vs manifest steps" "$(jq -s -c '[.[] | select(.type=="step.end") | .step] | unique' "$EVF") / $(jq -c '[.steps[].id] | unique' "$D/bomlens-result.json")"
+jq -s -e '(map(select(.step=="normalize")) | map(.type)) as $t | ($t | index("step.start")) < ($t | index("step.end"))' "$EVF" >/dev/null \
+    && pass "a step starts before it ends (normalize)" || fail "normalize events: $(jq -s -c 'map(select(.step=="normalize"))' "$EVF")"
+jq -s -e '[.[] | select(.type=="step.end" and .step=="generate")][0].stage == 1' "$EVF" >/dev/null \
+    && pass "generate is reported as stage 1 in POSTPROCESS" || fail "generate event: $(jq -s -c 'map(select(.step=="generate"))' "$EVF")"
+ev_sha="$( (sha256sum "$EVF" 2>/dev/null || shasum -a 256 "$EVF") | cut -d' ' -f1)"
+[ "$(jq -r '[.outputs[] | select(.role=="events")][0] | .path + " " + (.bytes | tostring) + " " + .sha256' "$D/bomlens-result.json")" = "bomlens-events.jsonl $(wc -c < "$EVF" | tr -d ' ') $ev_sha" ] \
+    && pass "the manifest lists the events file with its final size and hash (run.end included)" \
+    || fail "events output: $(jq -c '[.outputs[] | select(.role=="events")]' "$D/bomlens-result.json")"
+err="$(schema_errors "$D/bomlens-result.json")"
+[ -z "$err" ] && pass "the manifest of an events run validates against the schema" || fail "schema errors" "$err"
+# A later run in the same folder without events removes the earlier file.
+run_engine "$D" "$ROOT_DIR/docker/lib"
+[ ! -e "$EVF" ] && pass "an earlier run's events file is removed by a run without events" || fail "stale events file kept"
+D="$(new_run events-stderr)"
+( cd "$D" && env PATH="$WORK/bin:$PATH" MODE=POSTPROCESS PROJECT_NAME=demo PROJECT_VERSION=1.0 \
+    HOST_OUTPUT_DIR="$D" BOMLENS_LIBDIR="$ROOT_DIR/docker/lib" BOMLENS_RUN_INPUT=demo_1.0_bom.json \
+    UPLOAD_ENABLED=false ENRICH_EOL=false ENRICH_MALICIOUS=false BOMLENS_EVENTS=stderr bash "$ENTRY" ) \
+    > "$D.out" 2> "$D.err"
+grep '^{"v":1,' "$D.err" > "$D.events"
+[ -s "$D.events" ] && [ "$(jq -s -r '.[-1].type' "$D.events")" = "run.end" ] && ! grep -q '^{"v":1,' "$D.out" \
+    && [ ! -e "$D/bomlens-events.jsonl" ] \
+    && pass "BOMLENS_EVENTS=stderr writes the events to stderr only" || fail "stderr mode: $(head -3 "$D.events")"
+CE="$(new_run events-cancel)"
+( cd "$CE" && exec env PATH="$WORK/bin:$PATH" MODE=POSTPROCESS PROJECT_NAME=demo PROJECT_VERSION=1.0 \
+    HOST_OUTPUT_DIR="$CE" BOMLENS_LIBDIR="$ROOT_DIR/docker/lib" BOMLENS_RUN_INPUT=demo_1.0_bom.json \
+    UPLOAD_ENABLED=false GENERATE_SECURITY=true DEEP_CVE=false SECURITY_ENRICH=false \
+    ENRICH_EOL=false ENRICH_MALICIOUS=false TRIVY_STUB=sleep TRIVY_STUB_STARTED="$WORK/stub-started-ev" \
+    BOMLENS_EVENTS=file bash "$ENTRY" ) > "$CE.log" 2>&1 &
+pid=$!
+for _ in $(seq 1 100); do [ -f "$WORK/stub-started-ev" ] && break; sleep 0.1; done
+kill -TERM "$pid" 2>/dev/null; wait "$pid"
+[ "$(jq -s -r '.[-1] | .type + " " + .status' "$CE/bomlens-events.jsonl" 2>/dev/null)" = "run.end cancelled" ] \
+    && [ "$(jq -r .run.status "$CE/bomlens-result.json")" = "cancelled" ] \
+    && pass "a stopped run ends its events with run.end cancelled, matching the manifest" \
+    || fail "cancelled events end: $(tail -2 "$CE/bomlens-events.jsonl" 2>&1)"
+D="$(new_run events-off)"; run_engine "$D" "$ROOT_DIR/docker/lib"
+[ ! -e "$D/bomlens-events.jsonl" ] && ! jq -e 'any(.outputs[]; .role=="events")' "$D/bomlens-result.json" >/dev/null \
+    && pass "without BOMLENS_EVENTS nothing is written" || fail "events written without being asked"
+
 echo "== every step label in entrypoint.sh is documented =="
 missing=""
 for id in $(grep -v '^[[:space:]]*#' "$ENTRY" | grep -oE '(run_optional_step|er_record|er_phase) [a-z][a-z0-9-]+' | awk '{print $2}' | sort -u); do
