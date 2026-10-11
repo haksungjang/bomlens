@@ -6,7 +6,7 @@ description: The result manifest (bomlens-result.json) every scan writes, for a 
 
 A program that runs the BomLens image as its scan engine reads `bomlens-result.json`, written to the output folder by every scan. It says how the run ended, which steps ran, were turned off, could not run or failed, and which file in the folder plays which role, so the program does not parse the log or guess file names.
 
-The format is checked against [`schemas/engine-result-1.json`](https://github.com/sktelecom/bomlens/blob/main/schemas/engine-result-1.json) by `tests/test-engine-contract.sh` in CI. The contract is in development: `contract.version` is `1.0.0-dev` until the first release that fixes it as `1.0.0`.
+The format is checked against [`schemas/engine-result-1.json`](https://github.com/sktelecom/bomlens/blob/main/schemas/engine-result-1.json) by `tests/test-engine-contract.sh` in CI. This page describes contract version `1.0.0`.
 
 ## The file
 
@@ -119,6 +119,17 @@ Each step also has `stage` (1 for the SBOM a language image generated before thi
 | `conformance` | `_conformance.json` |
 | `input-description` | `_input.json` |
 | `other` | any other file the run wrote (reports, sidecars) |
+
+## Package identifiers
+
+Operating system packages in `bom.json` carry PURLs in the form Trivy and the purl-spec use, so they join the same packages from a Trivy scan or a supplier SBOM:
+
+- deb: the epoch is an `epoch` qualifier, not part of the version (`pkg:deb/debian/bsdutils@2.38.1-5?arch=amd64&distro=debian-12&epoch=1`).
+- apk: `distro` is the release id (`distro=3.20.10`).
+- deb, rpm, apk: no `upstream` qualifier; the source package is in the `aquasecurity:trivy:SrcName` property (with `SrcVersion`, `SrcRelease`, `SrcEpoch`), which is what Trivy matches distribution advisories on.
+- Qualifiers are sorted by name.
+
+A change to this form is a major version change (see below).
 
 ## Versioning
 

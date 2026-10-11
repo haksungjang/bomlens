@@ -6,7 +6,7 @@ description: BomLens 이미지를 스캔 엔진으로 쓰는 프로그램을 위
 
 BomLens 이미지를 스캔 엔진으로 쓰는 프로그램은 모든 스캔이 출력 폴더에 남기는 `bomlens-result.json`을 읽습니다. 이 파일에는 실행이 어떻게 끝났는지, 각 단계가 실행됐는지, 설정으로 꺼졌는지, 실행할 수 없었는지, 실패했는지, 그리고 폴더의 어떤 파일이 어떤 역할인지가 들어 있습니다. 그래서 호출하는 프로그램이 로그를 해석하거나 파일 이름을 추측하지 않아도 됩니다.
 
-형식은 CI의 `tests/test-engine-contract.sh`가 [`schemas/engine-result-1.json`](https://github.com/sktelecom/bomlens/blob/main/schemas/engine-result-1.json)으로 검사합니다. 계약은 아직 개발 중이며, `1.0.0`으로 고정하는 첫 릴리스 전까지 `contract.version`은 `1.0.0-dev`입니다.
+형식은 CI의 `tests/test-engine-contract.sh`가 [`schemas/engine-result-1.json`](https://github.com/sktelecom/bomlens/blob/main/schemas/engine-result-1.json)으로 검사합니다. 이 문서는 계약 버전 `1.0.0`을 설명합니다.
 
 ## 파일
 
@@ -119,6 +119,17 @@ BomLens 이미지를 스캔 엔진으로 쓰는 프로그램은 모든 스캔이
 | `conformance` | `_conformance.json` |
 | `input-description` | `_input.json` |
 | `other` | 실행이 쓴 그 밖의 파일(보고서, 보조 파일) |
+
+## 패키지 식별자
+
+`bom.json`의 운영체제 패키지 PURL은 Trivy와 purl-spec이 쓰는 형식을 따르므로, Trivy 스캔이나 공급사 SBOM의 같은 패키지와 연결됩니다.
+
+- deb: epoch는 버전의 일부가 아니라 `epoch` 한정자입니다(`pkg:deb/debian/bsdutils@2.38.1-5?arch=amd64&distro=debian-12&epoch=1`).
+- apk: `distro`는 릴리스 번호입니다(`distro=3.20.10`).
+- deb, rpm, apk: `upstream` 한정자는 없습니다. 소스 패키지는 `aquasecurity:trivy:SrcName` 속성(과 `SrcVersion`, `SrcRelease`, `SrcEpoch`)에 있으며, Trivy는 이 값으로 배포판 권고를 매칭합니다.
+- 한정자는 이름순으로 정렬합니다.
+
+이 형식을 바꾸는 것은 메이저 버전 변경입니다(아래 참조).
 
 ## 버전 관리
 

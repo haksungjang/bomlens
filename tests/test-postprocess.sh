@@ -1574,6 +1574,13 @@ cat > "$WORK/osc-apk.json" <<'JSON'
 JSON
 python3 "$OSCTX" "$WORK/osc-apk.json" >/dev/null 2>&1
 [ "$(osc_of "$WORK/osc-apk.json")" = "alpine 3.17.10" ] && pass "apk PURL (distro=alpine-3.17.10) -> operating-system alpine 3.17.10" || fail "apk OS='$(osc_of "$WORK/osc-apk.json")', expected 'alpine 3.17.10'"
+# The bare release id Trivy writes and normalize-sbom.sh produces (distro=3.17.10).
+cat > "$WORK/osc-apk2.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6","components":[
+ {"type":"library","name":"musl","version":"1.2.3-r5","purl":"pkg:apk/alpine/musl@1.2.3-r5?arch=x86_64&distro=3.17.10"}]}
+JSON
+python3 "$OSCTX" "$WORK/osc-apk2.json" >/dev/null 2>&1
+[ "$(osc_of "$WORK/osc-apk2.json")" = "alpine 3.17.10" ] && pass "apk PURL (distro=3.17.10) -> operating-system alpine 3.17.10" || fail "apk OS='$(osc_of "$WORK/osc-apk2.json")', expected 'alpine 3.17.10'"
 cat > "$WORK/osc-debian.json" <<'JSON'
 {"bomFormat":"CycloneDX","specVersion":"1.6","components":[
  {"type":"library","name":"bash","version":"5.1-2+deb11u1","purl":"pkg:deb/debian/bash@5.1-2+deb11u1?arch=amd64&distro=debian-11"}]}
@@ -3932,6 +3939,93 @@ npm_n=$(jq '[.components[] | select(.name=="lodash") | (.properties // [])[] | s
 bash "$LIB/normalize-sbom.sh" "$WORK/os.json" >/dev/null 2>&1
 total_src=$(jq '[.components[].properties[]? | select(.name=="aquasecurity:trivy:SrcName")] | length' "$WORK/os.json")
 [ "$total_src" = "7" ] && pass "idempotent: second normalize adds no duplicate properties" || fail "SrcName count after 2nd run = $total_src, expected 7"
+
+echo "== os-purl: deb/rpm/apk PURLs take the form Trivy and the purl-spec use =="
+# A container scan's identifiers must join the same packages from a Trivy scan:
+# deb epoch as a qualifier, no syft `upstream` qualifier (its content is in
+# SrcName by now), apk distro as the bare release id, qualifiers sorted.
+purl_of() { jq -r --arg n "$1" '[.components[] | select(.name==$n) | .purl] | first' "$WORK/os.json"; }
+p_dash="$(purl_of dash)"
+case "$p_dash" in
+    *@0.5.12-2\?*epoch=1*) pass "deb: the epoch moves from the version into an epoch qualifier ($p_dash)" ;;
+    *) fail "dash purl is $p_dash" ;;
+esac
+p_ssl="$(purl_of libssl3)"
+case "$p_ssl" in
+    *upstream=*) fail "libssl3 purl still carries upstream: $p_ssl" ;;
+    *) pass "deb: the upstream qualifier is dropped ($p_ssl)" ;;
+esac
+p_crypto="$(purl_of libcrypto3)"
+case "$p_crypto" in
+    *distro=alpine-*|*upstream=*) fail "libcrypto3 purl is $p_crypto" ;;
+    *distro=3.*) pass "apk: distro is the bare release id ($p_crypto)" ;;
+    *) fail "libcrypto3 purl has no distro: $p_crypto" ;;
+esac
+p_rpm="$(purl_of openssl-libs)"
+q_rpm="${p_rpm#*\?}"
+[ "$q_rpm" = "$(printf '%s' "$q_rpm" | tr '&' '\n' | sort | paste -sd '&' -)" ] && [ "${p_rpm#*upstream=}" = "$p_rpm" ] \
+    && pass "rpm: qualifiers sorted, upstream dropped, epoch kept ($p_rpm)" || fail "openssl-libs purl is $p_rpm"
+[ "$(purl_of lodash)" = "$(jq -r '.components[] | select(.name=="lodash") | .purl' "$FIX/os-pkgs-src.json")" ] \
+    && pass "a non-OS purl (npm) is not touched" || fail "lodash purl changed to $(purl_of lodash)"
+[ "$(srcprop libssl3 SrcName)" = "openssl" ] && pass "the source package survives in SrcName after upstream is dropped" || fail "libssl3 SrcName is $(srcprop libssl3 SrcName)"
+# Edge cases: an epoch qualifier already there leaves the version alone (no
+# second cut), a component without SrcName (nested here) keeps its upstream,
+# and a second normalize changes nothing.
+cat > "$WORK/os-edge.json" <<'OEOF'
+{"bomFormat":"CycloneDX","specVersion":"1.6","components":[
+ {"type":"library","name":"twocolon","version":"1:2:3-1","purl":"pkg:deb/debian/twocolon@1:2:3-1?distro=debian-12"},
+ {"type":"library","name":"hasepoch","version":"2.0","purl":"pkg:deb/debian/hasepoch@1:2.0?epoch=2&distro=debian-12"},
+ {"type":"library","name":"outer","version":"1.0","purl":"pkg:npm/outer@1.0","components":[
+   {"type":"library","name":"inner","purl":"pkg:deb/debian/inner?upstream=innersrc&distro=debian-12"}]}]}
+OEOF
+bash "$LIB/normalize-sbom.sh" "$WORK/os-edge.json" >/dev/null 2>&1
+cp "$WORK/os-edge.json" "$WORK/os-edge-1.json"
+bash "$LIB/normalize-sbom.sh" "$WORK/os-edge.json" >/dev/null 2>&1
+edge() { jq -r --arg n "$1" '[.. | objects | select(.name? == $n) | .purl] | first' "$WORK/os-edge.json"; }
+[ "$(edge twocolon)" = "pkg:deb/debian/twocolon@2:3-1?distro=debian-12&epoch=1" ] \
+    && pass "a version with a second colon loses only its epoch, once" || fail "twocolon purl is $(edge twocolon)"
+[ "$(edge hasepoch)" = "pkg:deb/debian/hasepoch@1:2.0?distro=debian-12&epoch=2" ] \
+    && pass "an existing epoch qualifier leaves the version as it is" || fail "hasepoch purl is $(edge hasepoch)"
+[ "$(edge inner)" = "pkg:deb/debian/inner?distro=debian-12&upstream=innersrc" ] \
+    && pass "a component with no SrcName keeps its upstream (qualifiers still sorted)" || fail "inner purl is $(edge inner)"
+cmp -s "$WORK/os-edge.json" "$WORK/os-edge-1.json" && pass "a second normalize changes no PURL" || fail "the second normalize changed the document"
+
+echo "== os-purl: merging an older and a newer BomLens SBOM names an OS package once =="
+cat > "$WORK/merge-old.json" <<'OEOF'
+{"bomFormat":"CycloneDX","specVersion":"1.6","metadata":{"component":{"type":"application","name":"old","version":"1"}},"components":[
+ {"type":"library","name":"bsdutils","version":"1:2.38.1-5","bom-ref":"a","purl":"pkg:deb/debian/bsdutils@1%3A2.38.1-5?arch=amd64&distro=debian-12&upstream=util-linux"}]}
+OEOF
+cat > "$WORK/merge-new.json" <<'OEOF'
+{"bomFormat":"CycloneDX","specVersion":"1.6","metadata":{"component":{"type":"application","name":"new","version":"1"}},"components":[
+ {"type":"library","name":"bsdutils","version":"1:2.38.1-5","bom-ref":"a","purl":"pkg:deb/debian/bsdutils@2.38.1-5?arch=amd64&distro=debian-12&epoch=1"}]}
+OEOF
+bash "$LIB/merge-sbom.sh" "$WORK/merged-os.json" srv 1.0 "$WORK/merge-old.json" "$WORK/merge-new.json" >/dev/null 2>&1
+bash "$LIB/normalize-sbom.sh" "$WORK/merged-os.json" >/dev/null 2>&1
+[ "$(jq '[.components[] | select(.name=="bsdutils")] | length' "$WORK/merged-os.json")" = "1" ] \
+    && pass "the old-form and new-form PURL are one component after merge and normalize" \
+    || fail "bsdutils appears $(jq '[.components[] | select(.name=="bsdutils")] | length' "$WORK/merged-os.json") times"
+
+echo "== deep-cve: distribution packages are left to Trivy =="
+# A CPE match on a deb/rpm/apk compares the distribution's version with upstream
+# NVD ranges and reports CVEs the distribution already patched; the deep-CVE
+# pass keeps only the other packages' matches.
+cat > "$WORK/grype-stub" <<'GEOF'
+#!/bin/sh
+case "$*" in
+  *sbom:*) cat <<'JSON'
+{"matches":[
+ {"vulnerability":{"id":"CVE-2022-28391","namespace":"nvd:cpe","severity":"High"},"artifact":{"name":"busybox","version":"1.35.0-r29","purl":"pkg:apk/alpine/busybox@1.35.0-r29?distro=3.17.0","cpes":["cpe:2.3:a:busybox:busybox:1.35.0:*:*:*:*:*:*:*"]}},
+ {"vulnerability":{"id":"CVE-2021-44228","namespace":"nvd:cpe","severity":"Critical"},"artifact":{"name":"log4j-core","version":"2.14.1","purl":"pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1","cpes":["cpe:2.3:a:apache:log4j:2.14.1:*:*:*:*:*:*:*"]}}]}
+JSON
+  ;;
+  *) echo '{"matches":[]}' ;;
+esac
+GEOF
+chmod +x "$WORK/grype-stub"
+echo '{"bomFormat":"CycloneDX","specVersion":"1.6","components":[]}' > "$WORK/dc.json"
+GRYPE_BIN="$WORK/grype-stub" SECURITY_NVD_VERIFY=false python3 "$LIB/scan-nvd-cpe.py" "$WORK/dc.json" "$WORK/dc-out" >/dev/null 2>&1
+dc_ids="$(jq -r '[.Results[]?.Vulnerabilities[]?.VulnerabilityID] | sort | join(" ")' "$WORK/dc-out_security_grype.json" 2>/dev/null)"
+[ "$dc_ids" = "CVE-2021-44228" ] && pass "the apk match is dropped, the maven one kept" || fail "deep-cve sidecar holds: '$dc_ids'"
 
 echo "== sec-fail: a failed Trivy run is recorded in the report, not passed off as 0 findings =="
 # Regression for the SCA-benchmark follow-up report: any Trivy failure (SBOM
