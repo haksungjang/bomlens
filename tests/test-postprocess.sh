@@ -6412,13 +6412,39 @@ echo "== poetry: exact pins of a lock-less Poetry project reach cdxgen as requir
 PO_ROOT="$WORK/poetry-nolock"
 mkdir -p "$PO_ROOT/bin" "$PO_ROOT/src" "$PO_ROOT/out"
 printf '[tool.poetry]\nname = "x"\nversion = "0.1.0"\n\n[tool.poetry.dependencies]\npython = "^3.11"\nrequests = "2.31.0"\nflask = "^2.0"\nlocal = { path = "../local" }\nclick = "==8.1.7"\n' > "$PO_ROOT/src/pyproject.toml"
-# cdxgen stub: record the requirements.txt it sees, write an empty BOM.
+# cdxgen stub. On the source tree: record the requirements.txt it sees and
+# write what cdxgen writes with pyproject.toml present (the pin as a
+# component, nothing linked). On any other folder (the second run, on
+# requirements.txt alone): the graph cdxgen resolves from it.
 cat > "$PO_ROOT/bin/cdxgen" <<STUB
 #!/bin/sh
-out=""; prev=""
-for a in "\$@"; do [ "\$prev" = "-o" ] && out="\$a"; prev="\$a"; done
+out=""; prev=""; last=""
+for a in "\$@"; do [ "\$prev" = "-o" ] && out="\$a"; prev="\$a"; last="\$a"; done
+if [ "\$last" != "$PO_ROOT/src" ]; then
+    [ "\$(cat "\$last/requirements.txt")" = "\$(cat "$PO_ROOT/seen-requirements")" ] || exit 3
+    [ -f "$PO_ROOT/graph-fails" ] && exit 1
+    if [ -f "$PO_ROOT/graph-empty" ]; then
+        printf '{"metadata":{"component":{"bom-ref":"r"}},"components":[],"dependencies":[{"ref":"r","dependsOn":[]}]}' > "\$out"
+        exit 0
+    fi
+    scratch="\$(basename "\$(dirname "\$last")")"
+    cat > "\$out" <<JSON
+{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"metadata":{"component":{"name":"project","bom-ref":"pkg:pypi/project@latest"}},
+ "components":[{"name":"requests","version":"2.31.0","purl":"pkg:pypi/requests@2.31.0","bom-ref":"pkg:pypi/requests@2.31.0"},
+               {"name":"idna","version":"3.7","purl":"pkg:pypi/idna@3.7","bom-ref":"pkg:pypi/idna@3.7",
+                "properties":[{"name":"internal:SrcFile","value":"\$last/requirements.txt"},{"name":"SrcFileRel","value":"\$scratch/project/requirements.txt"}]}],
+ "dependencies":[{"ref":"pkg:pypi/project@latest","dependsOn":["pkg:pypi/requests@2.31.0"]},
+                 {"ref":"pkg:pypi/requests@2.31.0","dependsOn":["pkg:pypi/idna@3.7"]},
+                 {"ref":"pkg:pypi/idna@3.7","dependsOn":[]}]}
+JSON
+    exit 0
+fi
 cat requirements.txt > "$PO_ROOT/seen-requirements" 2>/dev/null || echo NONE > "$PO_ROOT/seen-requirements"
-printf '{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"metadata":{},"components":[]}\n' > "\$out"
+cat > "\$out" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"metadata":{"component":{"name":"x","version":"0.1.0","bom-ref":"pkg:pypi/x@0.1.0"}},
+ "components":[{"name":"requests","version":"2.31.0","purl":"pkg:pypi/requests@2.31.0","bom-ref":"pkg:pypi/requests@2.31.0"}],
+ "dependencies":[{"ref":"pkg:pypi/x@0.1.0","dependsOn":[]}]}
+JSON
 STUB
 printf '#!/bin/sh\nexit 0\n' > "$PO_ROOT/bin/pip3"
 chmod +x "$PO_ROOT/bin/cdxgen" "$PO_ROOT/bin/pip3"
@@ -6436,6 +6462,41 @@ if python3 -c "import tomllib" 2>/dev/null; then
         || fail "cdxgen saw: $(cat "$PO_ROOT/seen-requirements" | tr '\n' ' ')" "$(tail -5 "$PO_ROOT/log")"
     [ ! -f "$PO_ROOT/src/requirements.txt" ] && pass "the written requirements.txt is removed after the scan" \
         || fail "requirements.txt was left in the source tree"
+    # cdxgen skips requirements.txt for the tree when pyproject.toml is there;
+    # the second run on the file alone supplies the root links and the pins'
+    # own dependencies.
+    jq -e '([.dependencies[] | select(.ref=="pkg:pypi/x@0.1.0") | .dependsOn[]] == ["pkg:pypi/requests@2.31.0"])
+           and ([.dependencies[] | select(.ref=="pkg:pypi/requests@2.31.0") | .dependsOn[]] == ["pkg:pypi/idna@3.7"])
+           and ([.dependencies[].dependsOn[]] | length == 2)
+           and ([.metadata.properties[]? | select(.name=="bomlens:pipeline-step-failed") | .value] | index("poetry-graph") == null)
+           and ([.components[] | .purl] | sort == ["pkg:pypi/idna@3.7", "pkg:pypi/requests@2.31.0"])' \
+        "$PO_ROOT/out/bom.json" >/dev/null 2>&1 \
+        && pass "the pins are linked from the root, with their own dependencies (2 edges, idna added once)" \
+        || fail "poetry graph" "$(jq -c '{c: [.components[].purl], d: .dependencies}' "$PO_ROOT/out/bom.json" 2>&1)"
+    [ "$(jq -c '[.components[] | select(.name=="idna") | .properties[].value]' "$PO_ROOT/out/bom.json" 2>/dev/null)" = '["requirements.txt","requirements.txt"]' ] \
+        && pass "the second run's scratch folder is not named in the SBOM (absolute or relative)" \
+        || fail "scratch path left: $(jq -c '[.components[] | select(.name=="idna") | .properties]' "$PO_ROOT/out/bom.json" 2>&1)"
+    bash "$LIB/validate-sbom.sh" "$PO_ROOT/out/bom.json" "$PO_ROOT/cf" >/dev/null 2>&1
+    [ "$(jq -r '.checks[] | select(.id=="transitive") | .status' "$PO_ROOT/cf_conformance.json" 2>/dev/null)" = "pass" ] \
+        && pass "the conformance check on transitive dependencies passes" \
+        || fail "transitive check" "$(jq -c '.checks[] | select(.id=="transitive")' "$PO_ROOT/cf_conformance.json" 2>&1)"
+    # The second run failing (no network) leaves the SBOM as the first run wrote it.
+    : > "$PO_ROOT/graph-fails"
+    PATH="$PO_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$PO_ROOT/src" "$PO_ROOT/out/bom.json" > "$PO_ROOT/log-gf" 2>&1
+    rm -f "$PO_ROOT/graph-fails"
+    jq -e '([.dependencies[].dependsOn[]] | length == 0)
+           and any(.metadata.properties[]; .name=="bomlens:pipeline-step-failed" and .value=="poetry-graph")' "$PO_ROOT/out/bom.json" >/dev/null 2>&1 \
+        && grep -q 'poetry: dependency graph not resolved' "$PO_ROOT/log-gf" \
+        && pass "a failed second run leaves the SBOM as the first run wrote it, says so and records poetry-graph as failed" \
+        || fail "graph failure case" "$(grep poetry "$PO_ROOT/log-gf"; jq -c .metadata.properties "$PO_ROOT/out/bom.json")"
+    # A second run that resolves nothing (no network: cdxgen still exits 0).
+    : > "$PO_ROOT/graph-empty"
+    PATH="$PO_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$PO_ROOT/src" "$PO_ROOT/out/bom.json" > "$PO_ROOT/log-ge" 2>&1
+    rm -f "$PO_ROOT/graph-empty"
+    jq -e 'any(.metadata.properties[]; .name=="bomlens:pipeline-step-failed" and .value=="poetry-graph")' "$PO_ROOT/out/bom.json" >/dev/null 2>&1 \
+        && grep -q 'second run found no dependency graph' "$PO_ROOT/log-ge" \
+        && pass "a second run that resolves nothing is recorded as failed too" \
+        || fail "empty graph case" "$(grep poetry "$PO_ROOT/log-ge")"
     jq -e '[.metadata.properties[]? | select(.name=="bomlens:prep-step-applied" and .value=="poetry-requirements")] | length == 1' \
         "$PO_ROOT/out/bom.json" >/dev/null 2>&1 \
         && pass "the step is recorded as poetry-requirements" || fail "no poetry-requirements record" "$(jq -c '.metadata.properties' "$PO_ROOT/out/bom.json" 2>&1)"
@@ -9111,6 +9172,44 @@ JSON
     [ "$(mca_agg "$WORK/mca-source-noedges.json")" = "unknown" ] \
         && pass "SOURCE with lock evidence but zero edges still declares unknown" \
         || fail "expected unknown" "$(mca_agg "$WORK/mca-source-noedges.json")"
+
+    # SOURCE, a Poetry project converted only in part: dependencies are
+    # missing by construction, whatever the graph that was resolved.
+    cat > "$WORK/mca-source-poetry-partial.json" <<'JSON'
+{"metadata":{"properties":[{"name":"bomlens:prep-step-applied","value":"poetry-requirements"},
+                            {"name":"bomlens:prep-step-applied","value":"poetry-requirements-partial"},
+                            {"name":"bomlens:prep-step-applied","value":"pip-install"}]},
+ "components":[{"name":"a"},{"name":"b"}],
+ "dependencies":[{"ref":"root","dependsOn":["a"]},{"ref":"a","dependsOn":["b"]}]}
+JSON
+    SCAN_MODE=SOURCE mark_compositions_aggregate "$WORK/mca-source-poetry-partial.json"
+    [ "$(mca_agg "$WORK/mca-source-poetry-partial.json")" = "incomplete" ] \
+        && pass "SOURCE with a partial Poetry conversion declares incomplete, even with lock evidence and edges" \
+        || fail "expected incomplete" "$(mca_agg "$WORK/mca-source-poetry-partial.json")"
+
+    cat > "$WORK/mca-source-poetry-graph-ok.json" <<'JSON'
+{"metadata":{"properties":[{"name":"bomlens:prep-step-applied","value":"poetry-requirements"},
+                            {"name":"bomlens:prep-step-applied","value":"pip-install"},
+                            {"name":"bomlens:prep-step-applied","value":"poetry-graph"}]},
+ "components":[{"name":"a"},{"name":"b"}],
+ "dependencies":[{"ref":"root","dependsOn":["a"]},{"ref":"a","dependsOn":["b"]}]}
+JSON
+    SCAN_MODE=SOURCE mark_compositions_aggregate "$WORK/mca-source-poetry-graph-ok.json"
+    [ "$(mca_agg "$WORK/mca-source-poetry-graph-ok.json")" = "complete" ] \
+        && pass "SOURCE whose Poetry pins were all resolved declares complete" \
+        || fail "expected complete" "$(mca_agg "$WORK/mca-source-poetry-graph-ok.json")"
+    cat > "$WORK/mca-source-poetry-graph-failed.json" <<'JSON'
+{"metadata":{"properties":[{"name":"bomlens:prep-step-applied","value":"poetry-requirements"},
+                            {"name":"bomlens:prep-step-applied","value":"pip-install"},
+                            {"name":"bomlens:prep-step-applied","value":"poetry-graph"},
+                            {"name":"bomlens:pipeline-step-failed","value":"poetry-graph"}]},
+ "components":[{"name":"a"},{"name":"b"}],
+ "dependencies":[{"ref":"a","dependsOn":["b"]}]}
+JSON
+    SCAN_MODE=SOURCE mark_compositions_aggregate "$WORK/mca-source-poetry-graph-failed.json"
+    [ "$(mca_agg "$WORK/mca-source-poetry-graph-failed.json")" = "incomplete" ] \
+        && pass "SOURCE whose Poetry pins could not be resolved further declares incomplete" \
+        || fail "expected incomplete" "$(mca_agg "$WORK/mca-source-poetry-graph-failed.json")"
 
     # SOURCE, syft fallback (bomlens:sbom-tool-degraded): incomplete outranks
     # a lock-evidence label that happens to also be present.
