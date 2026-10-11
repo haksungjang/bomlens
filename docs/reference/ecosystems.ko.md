@@ -126,7 +126,7 @@ docker build --build-arg ANDROID_API=<API> -t bomlens-android-sdk<API> docker/an
 
 감지 파일: `requirements.txt` 또는 `pyproject.toml` + `poetry.lock`
 
-> 주의: 버전을 `==`로 고정하거나 `poetry.lock` 같은 잠금 파일을 커밋하세요. 그렇지 않으면 SBOM에는 실제로 쓰는 버전이 아니라 스캔 시점에 받을 수 있는 버전이 담깁니다. 번들 예제는 버전을 고정해 두었고 모든 컴포넌트에 라이선스가 있습니다.
+> 주의: `poetry.lock`이 없는 Poetry 프로젝트는 `[tool.poetry.dependencies]`의 정확한 고정 버전(`requests = "2.31.0"`)으로 스캔합니다. `^2.0` 같은 범위와 경로·git 항목은 빠지고 직접 의존성만 나옵니다. 버전을 `==`로 고정하거나 `poetry.lock` 같은 잠금 파일을 커밋하세요. 그렇지 않으면 SBOM에는 실제로 쓰는 버전이 아니라 스캔 시점에 받을 수 있는 버전이 담깁니다. 번들 예제는 버전을 고정해 두었고 모든 컴포넌트에 라이선스가 있습니다.
 
 ---
 

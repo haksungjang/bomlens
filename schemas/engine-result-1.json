@@ -52,7 +52,7 @@
           "id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
           "stage": { "enum": [1, 2] },
           "status": { "enum": ["ok", "degraded", "failed", "skipped", "disabled"] },
-          "reason": { "enum": ["failed", "timeout", "not_installed", "too_large", "fallback", "unavailable", "budget_exhausted", "no_input", null] },
+          "reason": { "enum": ["failed", "timeout", "not_installed", "too_large", "fallback", "unavailable", "budget_exhausted", "no_input", "no_components", null] },
           "detail": { "type": ["string", "null"], "maxLength": 500 },
           "started_at": { "type": "string", "format": "date-time" },
           "ended_at": { "type": "string", "format": "date-time" },

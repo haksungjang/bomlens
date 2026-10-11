@@ -60,6 +60,7 @@ Every step that applies to the scan's mode is recorded, also when it did not run
 | `unavailable` | the data the step reads was not available |
 | `budget_exhausted` | the step stopped at its work limit |
 | `no_input` | there was nothing for the step to read (no source tree, no signing key) |
+| `no_components` | the source declares dependencies (a manifest or lock file lists some) but the SBOM has no component; `detail` names the manifests. Recorded on `generate` |
 <!-- reasons:end -->
 
 No step reports `budget_exhausted` yet; it is reserved for a work limit a later release records.

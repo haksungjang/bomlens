@@ -155,6 +155,11 @@ if [ -n "${BOMLENS_RUN_INPUT:-}" ] || [ "${BOMLENS_ARTIFACT_CLEANUP:-}" = "1" ];
         for _suf in "${KNOWN_ARTIFACT_SUFFIXES[@]}"; do
             _f="$HOST_OUTPUT_DIR/${OUT_PREFIX}${_suf}"
             [ -n "$_run_input" ] && [ "$(basename "$_f")" = "$_run_input" ] && continue
+            # Stage 1 also leaves the conda sidecar (build-prep.sh parses
+            # environment.yml there and drops cdxgen's python cataloger when it
+            # does); it is this run's input too, and scan-sbom.sh clears an old
+            # one before stage 1 for the same reason as the SBOM itself.
+            [ -n "$_run_input" ] && [ "$_suf" = "_conda.cdx.json" ] && continue
             if [ -f "$_f" ]; then
                 rm -f "$_f"
                 _cleaned+=("$(basename "$_f")")
@@ -957,8 +962,14 @@ if [ ! -s "$OUTPUT_FILE" ]; then echo "[ERROR] SBOM file is empty: $OUTPUT_FILE"
 echo "[INFO] SBOM ready: $OUTPUT_FILE"
 _gen_count="$(jq '[.components[]?] | length' "$OUTPUT_FILE" 2>/dev/null || echo 0)"
 _gen_degraded="$(jq -r '[.metadata.properties[]? | select(.name == "bomlens:sbom-tool-degraded") | .value] | first // empty' "$OUTPUT_FILE" 2>/dev/null)"
+# A Poetry project with no poetry.lock is scanned from its exact pins only
+# (build-prep.sh); when it also has ranged or table dependencies those are not
+# in the SBOM, which is a partial result and is recorded as one.
+_gen_poetry_partial="$(jq -r 'any(.metadata.properties[]?; .name == "bomlens:prep-step-applied" and .value == "poetry-requirements-partial")' "$OUTPUT_FILE" 2>/dev/null)"
 if [ -n "$_gen_degraded" ]; then
     er_record generate degraded fallback "$_gen_degraded" "$ER_PHASE_STARTED" "" "{\"components\":${_gen_count:-0}}"
+elif [ "$_gen_poetry_partial" = "true" ]; then
+    er_record generate degraded fallback "Poetry project with no poetry.lock: only exact pins resolved; ranged and table dependencies are missing" "$ER_PHASE_STARTED" "" "{\"components\":${_gen_count:-0}}"
 else
     er_record generate ok "" "" "$ER_PHASE_STARTED" "" "{\"components\":${_gen_count:-0}}"
 fi
@@ -1148,6 +1159,25 @@ if [ "$SOURCE_SCAN" = "true" ] && [ -d "$MODELICA_SRC" ] \
                 fi
             fi
         fi
+    fi
+fi
+
+# ========================================================
+# A source tree that declares dependencies (a manifest or lock file that lists
+# some, outside the non-shipped folders) yet ends with no component did not get
+# scanned the way it asked: a Poetry project with no lock file is the measured
+# case. Decided here, after every step that can still add components
+# (vendored, CocoaPods, conda, Modelica), on the final count. It reads the same
+# as a project with nothing to declare unless it is said, so it is recorded on
+# the SBOM (bomlens:sbom-empty-with-manifests) and in the result manifest.
+# ========================================================
+if [ "$SOURCE_SCAN" = "true" ] && [ -d "${SOURCE_ROOT:-/src}" ] \
+   && [ "$(jq '[.components[]?] | length' "$OUTPUT_FILE" 2>/dev/null || echo 1)" = "0" ]; then
+    _empty_manifests="$(source_manifests "${SOURCE_ROOT:-/src}" 5)"
+    if [ -n "$_empty_manifests" ]; then
+        echo "[WARN] the source declares dependencies ($_empty_manifests) but the SBOM has no components; the scan did not resolve them."
+        mark_document_status "$OUTPUT_FILE" "bomlens:sbom-empty-with-manifests" "$_empty_manifests"
+        er_record generate degraded no_components "manifests found: $_empty_manifests" "" "" "{\"components\":0}"
     fi
 fi
 

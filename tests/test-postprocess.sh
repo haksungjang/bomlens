@@ -6350,6 +6350,7 @@ jq -e '[.metadata.properties[]? | select(.name=="bomlens:prep-step-applied" and 
     "$CL_ROOT/out/bom.json" >/dev/null 2>&1 \
     && pass "the committed lock is recorded as lock evidence (cargo-lock-committed)" \
     || fail "no cargo-lock-committed evidence" "$(jq -c '.metadata.properties' "$CL_ROOT/out/bom.json" 2>&1)"
+
 echo "== node-scope: build-prep writes the production set the filter reads (stub npm and cdxgen, real node) =="
 # The set writer runs inside build-prep; this drives it end to end. The stub
 # npm writes the resolved lock a real npm would; the stub cdxgen reports what a
@@ -6405,6 +6406,47 @@ STUB
         || fail "workspace case kept: $(ns_run ws)" "$(grep 'node:' "$NS_ROOT/ws.log")"
 else
     echo "  SKIP: node unavailable"
+fi
+
+echo "== poetry: exact pins of a lock-less Poetry project reach cdxgen as requirements.txt =="
+PO_ROOT="$WORK/poetry-nolock"
+mkdir -p "$PO_ROOT/bin" "$PO_ROOT/src" "$PO_ROOT/out"
+printf '[tool.poetry]\nname = "x"\nversion = "0.1.0"\n\n[tool.poetry.dependencies]\npython = "^3.11"\nrequests = "2.31.0"\nflask = "^2.0"\nlocal = { path = "../local" }\nclick = "==8.1.7"\n' > "$PO_ROOT/src/pyproject.toml"
+# cdxgen stub: record the requirements.txt it sees, write an empty BOM.
+cat > "$PO_ROOT/bin/cdxgen" <<STUB
+#!/bin/sh
+out=""; prev=""
+for a in "\$@"; do [ "\$prev" = "-o" ] && out="\$a"; prev="\$a"; done
+cat requirements.txt > "$PO_ROOT/seen-requirements" 2>/dev/null || echo NONE > "$PO_ROOT/seen-requirements"
+printf '{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"metadata":{},"components":[]}\n' > "\$out"
+STUB
+printf '#!/bin/sh\nexit 0\n' > "$PO_ROOT/bin/pip3"
+chmod +x "$PO_ROOT/bin/cdxgen" "$PO_ROOT/bin/pip3"
+if python3 -c "import tomllib" 2>/dev/null; then
+    PATH="$PO_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$PO_ROOT/src" "$PO_ROOT/out/bom.json" > "$PO_ROOT/log" 2>&1
+    grep -q 'poetry: no poetry.lock; 2 exact pin(s).*2 range or table' "$PO_ROOT/log" \
+        && pass "the log says how many dependencies were left out (a range and a path entry)" \
+        || fail "poetry log: $(grep poetry "$PO_ROOT/log")"
+    jq -e '[.metadata.properties[]? | select(.name=="bomlens:prep-step-applied" and .value=="poetry-requirements-partial")] | length == 1' \
+        "$PO_ROOT/out/bom.json" >/dev/null 2>&1 \
+        && pass "a partial conversion is recorded as poetry-requirements-partial" \
+        || fail "no poetry-requirements-partial record" "$(jq -c '.metadata.properties' "$PO_ROOT/out/bom.json" 2>&1)"
+    [ "$(cat "$PO_ROOT/seen-requirements")" = "$(printf 'requests==2.31.0\nclick==8.1.7')" ] \
+        && pass "cdxgen sees the exact pins only (no python, range or path entries)" \
+        || fail "cdxgen saw: $(cat "$PO_ROOT/seen-requirements" | tr '\n' ' ')" "$(tail -5 "$PO_ROOT/log")"
+    [ ! -f "$PO_ROOT/src/requirements.txt" ] && pass "the written requirements.txt is removed after the scan" \
+        || fail "requirements.txt was left in the source tree"
+    jq -e '[.metadata.properties[]? | select(.name=="bomlens:prep-step-applied" and .value=="poetry-requirements")] | length == 1' \
+        "$PO_ROOT/out/bom.json" >/dev/null 2>&1 \
+        && pass "the step is recorded as poetry-requirements" || fail "no poetry-requirements record" "$(jq -c '.metadata.properties' "$PO_ROOT/out/bom.json" 2>&1)"
+    # A committed requirements.txt is the project's own and is never replaced.
+    printf 'django==4.2\n' > "$PO_ROOT/src/requirements.txt"
+    PATH="$PO_ROOT/bin:$PATH" sh "$LIB/build-prep.sh" "$PO_ROOT/src" "$PO_ROOT/out/bom.json" > "$PO_ROOT/log2" 2>&1
+    [ "$(cat "$PO_ROOT/seen-requirements")" = "django==4.2" ] && [ "$(cat "$PO_ROOT/src/requirements.txt")" = "django==4.2" ] \
+        && pass "an existing requirements.txt is used and left as it was" \
+        || fail "seen: $(cat "$PO_ROOT/seen-requirements"), file: $(cat "$PO_ROOT/src/requirements.txt")"
+else
+    echo "  SKIP: this host's python3 has no tomllib (3.11+)"
 fi
 
 echo "== prep_step: every resolution step runs through it (no bare invocation left) =="

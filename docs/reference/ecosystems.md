@@ -126,7 +126,7 @@ Detected file: `package.json` + `package-lock.json` (or `yarn.lock`, `pnpm-lock.
 
 Detected file: `requirements.txt`, or `pyproject.toml` + `poetry.lock`
 
-> Note: pin versions with `==` or commit a lock file such as `poetry.lock`. Without them the SBOM lists the versions available at scan time, not the ones you run. The bundled example pins its versions, and every component carries a license.
+> Note: a Poetry project without `poetry.lock` is scanned from the exact pins in `[tool.poetry.dependencies]` (`requests = "2.31.0"`); ranges such as `^2.0` and path or git entries are left out, and only direct dependencies appear. Pin versions with `==` or commit a lock file such as `poetry.lock`. Without them the SBOM lists the versions available at scan time, not the ones you run. The bundled example pins its versions, and every component carries a license.
 
 ---
 
