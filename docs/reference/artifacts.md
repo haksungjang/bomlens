@@ -115,7 +115,7 @@ A generated SBOM carries a `compositions[0].aggregate` entry stating how complet
 | Value | Meaning |
 |-------|---------|
 | `complete` | The scan found positive evidence the graph was fully resolved: an ecosystem's lock/resolve step succeeded, or a lockfile was already committed, plus at least one dependency edge. |
-| `incomplete` | A known failure affected the scan: the syft fallback ran instead of cdxgen, or a firmware package-cataloging step failed. |
+| `incomplete` | A known failure affected the scan: the syft fallback ran instead of cdxgen, a firmware package-cataloging step failed, or a Poetry project with no `poetry.lock` was converted only in part or its dependencies could not be resolved. |
 | `unknown` | Nothing in the SBOM confirms the graph is complete. This is the default whenever there is no positive evidence either way, for example an image/rootfs/firmware/binary scan (syft alone cannot see inter-package dependencies), an AI-model, dataset or merged SBOM, or a Maven source scan (no reliable signal tells a resolved graph apart from a degraded one). `unknown` is not a defect; it means the tool found no basis to judge, not that something went wrong. |
 
 An analyzed supplier SBOM's own `compositions` declaration, if it has one, is never overwritten.

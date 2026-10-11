@@ -46,6 +46,7 @@ const STEP_LABEL_KEY: Record<string, string> = {
   "swift-package-resolve": "pipelineSteps.swiftPackageResolve",
   "npm-production-set": "pipelineSteps.npmProductionSet",
   "pip-install": "pipelineSteps.pipInstall",
+  "poetry-graph": "pipelineSteps.poetryGraph",
   "cargo-workspace-metadata": "pipelineSteps.cargoWorkspaceMetadata",
   "cargo-license-metadata": "pipelineSteps.cargoLicenseMetadata",
   "composer-install": "pipelineSteps.composerInstall",

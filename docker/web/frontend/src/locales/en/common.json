@@ -697,6 +697,7 @@
     "swiftPackageResolve": "Swift package resolution",
     "npmProductionSet": "npm production dependency resolution",
     "pipInstall": "Python dependency installation",
+    "poetryGraph": "Poetry dependency graph",
     "cargoWorkspaceMetadata": "Cargo workspace member detection",
     "cargoLicenseMetadata": "Rust crate license lookup",
     "composerInstall": "PHP Composer dependency resolution",

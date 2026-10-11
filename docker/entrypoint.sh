@@ -556,7 +556,12 @@ mark_compositions_aggregate() {
                 | (.metadata.properties // []) as $props
                 | ([$props[] | select(.name=="bomlens:prep-step-applied") | .value]) as $applied
                 | ([$props[] | select(.name=="bomlens:pipeline-step-failed") | .value]) as $failed
-                | (($props | map(select(.name=="bomlens:sbom-tool-degraded")) | length) > 0) as $degraded
+                # A Poetry project converted only in part (ranges and table
+                # entries left out) is missing dependencies by construction,
+                # and so is one whose pins could not be resolved further.
+                | ((($props | map(select(.name=="bomlens:sbom-tool-degraded")) | length) > 0)
+                   or ($applied | index("poetry-requirements-partial") != null)
+                   or ($failed | index("poetry-graph") != null)) as $degraded
                 | (([$known[] | select(. as $l | ($applied|index($l)) and (($failed|index($l))|not))] | length) > 0) as $lock_ok
                 | ((.components // []) | length) as $components
                 | ([(.dependencies // [])[]?.dependsOn[]?] | length) as $edges

@@ -43,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The CLI's manifest-only fallback, used when cdxgen fails, now runs inside the post-processing step, the same code a caller of the execution plan gets. It now honours `BOMLENS_INCLUDE_NON_SHIPPED=1` (it used to leave test and sample manifests out regardless). The "Manifest-only fallback used" warning now appears after post-processing, once the fallback has succeeded.
 - When cdxgen exited without error but left an empty SBOM, the CLI stopped with "SBOM not found"; it now takes the manifest-only fallback, as the execution plan path does.
 - When cdxgen fails and the post-processing image is older than the CLI (it cannot run the fallback), the CLI now says so and names the image to pull, instead of stopping on a missing SBOM.
+- A Poetry project with no `poetry.lock` came back with its exact pins unlinked and without their own dependencies, so the conformance check on transitive dependencies failed. The pins are now linked from the project root, with their dependencies, resolved by a second cdxgen run on the temporary `requirements.txt` alone (the source tree is not touched). When some entries were left out, or that run fails (no network), `compositions` declares the graph `incomplete`.
 
 ## [v1.13.1] - 2026-10-10
 

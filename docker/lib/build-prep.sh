@@ -351,6 +351,15 @@ prep_step() {
 # Gemfile.lock/Package.resolved/composer.lock/packages.lock.json), not a
 # command whose failure prep_step would capture. Never touches PREP_FAILED --
 # there is nothing here that can fail.
+# Record a step as failed that does not run through prep_step (one that
+# decides failure itself). Same list, recorded on the SBOM the same way.
+mark_prep_failed() {
+    case " $PREP_FAILED " in
+        *" $1 "*) ;;
+        *) PREP_FAILED="${PREP_FAILED:+$PREP_FAILED }$1" ;;
+    esac
+}
+
 mark_prep_applied() {
     case " $PREP_APPLIED " in
         *" $1 "*) ;;
@@ -374,9 +383,10 @@ if opted_out "${BOMLENS_GUARD_RESTORE_ONLY:-}"; then
 fi
 
 guard_snapshot
-trap 'stop_supervised; guard_restore' EXIT
-trap 'stop_supervised; guard_restore; exit 130' INT
-trap 'stop_supervised; guard_restore; exit 143' TERM
+# _pg_dir: the Poetry dependency-graph run's scratch folder, while it exists.
+trap 'stop_supervised; guard_restore; [ -z "${_pg_dir:-}" ] || rm -rf "$_pg_dir"' EXIT
+trap 'stop_supervised; guard_restore; [ -z "${_pg_dir:-}" ] || rm -rf "$_pg_dir"; exit 130' INT
+trap 'stop_supervised; guard_restore; [ -z "${_pg_dir:-}" ] || rm -rf "$_pg_dir"; exit 143' TERM
 
 # Non-shipped trees: manifests under test, fixture, example, benchmark and demo
 # folders, and the GitHub Actions workflows, are left out of the SBOM because
@@ -770,6 +780,7 @@ PYEOF
                 log "poetry: no poetry.lock; $_poetry_pins exact pin(s) from [tool.poetry.dependencies] written to requirements.txt, $_poetry_skip range or table dependenc(ies) not resolved"
                 mark_prep_applied poetry-requirements
                 [ "$_poetry_skip" -gt 0 ] 2>/dev/null && mark_prep_applied poetry-requirements-partial
+                POETRY_REQUIREMENTS_WRITTEN=1
             elif [ "$_poetry_skip" -gt 0 ] 2>/dev/null; then
                 log "poetry: no poetry.lock and no exact pins; $_poetry_skip range or table dependenc(ies) not resolved"
             fi ;;
@@ -1071,6 +1082,112 @@ elif [ -f /opt/bin/cdxgen ]; then
 else
     echo "[build-prep] ERROR: cdxgen not found in image" >&2
     exit 1
+fi
+
+# Poetry with no lock file, second half. With pyproject.toml present cdxgen
+# takes the Poetry route (`poetry install`, which this image lacks) and never
+# reads the requirements.txt written above for the dependency tree: the pins
+# came through as components, with no link from the project root and none of
+# their own dependencies. cdxgen reads a requirements.txt on its own fully
+# (root link and dependencies), so it is run once more on a scratch folder
+# holding only that file, and its dependency graph is added to the SBOM:
+# components it found that the SBOM lacks, their dependencies, and the root's
+# links to the pins. The source tree is not touched. Recorded as poetry-graph;
+# when that run fails or finds nothing (no network, for one) the SBOM stays as
+# the first run left it and poetry-graph is recorded as failed, so the graph is
+# not declared complete. Not when conda took over the python cataloger above.
+if [ -n "${POETRY_REQUIREMENTS_WRITTEN:-}" ] && [ "${CONDA_N:-0}" -eq 0 ] 2>/dev/null \
+   && [ "${rc:-1}" -eq 0 ] && [ -f "$OUT" ] \
+   && [ -f requirements.txt ] && command -v node >/dev/null 2>&1; then
+    mark_prep_applied poetry-graph
+    _pg_ok=""
+    _pg_dir=$(mktemp -d 2>/dev/null) || _pg_dir=""
+    if [ -z "$_pg_dir" ] || ! mkdir -p "$_pg_dir/project" || ! cp requirements.txt "$_pg_dir/project/"; then
+        log "poetry: dependency graph not resolved (could not prepare a scratch folder)"
+    else
+        if command -v cdxgen >/dev/null 2>&1; then _pg_cmd="cdxgen"
+        elif [ -f /opt/cdxgen/bin/cdxgen.js ]; then _pg_cmd="node /opt/cdxgen/bin/cdxgen.js"
+        else _pg_cmd="/opt/bin/cdxgen"
+        fi
+        log "poetry: resolving the dependency graph of the exact pins (cdxgen on requirements.txt alone)"
+        # shellcheck disable=SC2086  # _pg_cmd is a command and its script path
+        run_supervised_timeout "$PREP_TIMEOUT_DEFAULT" $_pg_cmd -r -t python --spec-version "$SPEC" \
+            -o "$_pg_dir/graph.json" "$_pg_dir/project" > "$_pg_dir/log" 2>&1
+        _pg_rc=$?
+        if [ "$_pg_rc" -eq 0 ] && [ -s "$_pg_dir/graph.json" ]; then
+            node - "$OUT" "$_pg_dir/graph.json" "$(basename "$_pg_dir")" <<'POETRY_GRAPH_JS'
+const fs = require("fs");
+const [outPath, graphPath, scratchName] = process.argv.slice(2);
+let main, graph;
+try { main = JSON.parse(fs.readFileSync(outPath, "utf8")); }
+catch (e) { process.stderr.write("[build-prep] poetry: could not read the SBOM: " + e.message + "\n"); process.exit(1); }
+try { graph = JSON.parse(fs.readFileSync(graphPath, "utf8")); }
+catch (e) { process.stderr.write("[build-prep] poetry: could not read the second run's SBOM: " + e.message + "\n"); process.exit(1); }
+const mainRoot = main.metadata && main.metadata.component && main.metadata.component["bom-ref"];
+const graphRoot = graph.metadata && graph.metadata.component && graph.metadata.component["bom-ref"];
+const rootEntry = (graph.dependencies || []).find(d => d.ref === graphRoot);
+const graphRefs = new Set((graph.components || []).map(c => c["bom-ref"]).filter(Boolean));
+const rootLinks = (rootEntry ? (rootEntry.dependsOn || []) : []).filter(r => graphRefs.has(r));
+if (!mainRoot || !rootLinks.length) {
+  process.stderr.write("[build-prep] poetry: the second run found no dependency graph; SBOM left as it was\n");
+  process.exit(2);
+}
+// File locations name the scratch copy of requirements.txt, written absolute
+// or relative; the file sits at the top of the source tree, which is what
+// the first run writes too.
+const scratchPath = new RegExp("[^\"]*" + scratchName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "/project/", "g");
+const clean = c => JSON.parse(JSON.stringify(c).replace(scratchPath, ""));
+// bom-refs anywhere in the SBOM, nested components included.
+const have = new Set();
+const walk = list => { for (const c of list || []) { if (c["bom-ref"]) have.add(c["bom-ref"]); walk(c.components); } };
+main.components = main.components || [];
+walk(main.components);
+let added = 0;
+for (const c of graph.components || []) {
+  if (!c["bom-ref"] || have.has(c["bom-ref"])) continue;
+  main.components.push(clean(c));
+  have.add(c["bom-ref"]);
+  added++;
+}
+main.dependencies = main.dependencies || [];
+const byRef = new Map(main.dependencies.map(d => [d.ref, d]));
+let edges = 0;
+const link = (ref, targets) => {
+  targets = targets.filter(t => have.has(t));
+  let d = byRef.get(ref);
+  if (!d) { d = { ref, dependsOn: [] }; main.dependencies.push(d); byRef.set(ref, d); }
+  const before = (d.dependsOn || []).length;
+  d.dependsOn = [...new Set([...(d.dependsOn || []), ...targets])].sort();
+  edges += d.dependsOn.length - before;
+};
+for (const d of graph.dependencies || []) {
+  if (d.ref === graphRoot || !have.has(d.ref)) continue;
+  link(d.ref, d.dependsOn || []);
+}
+link(mainRoot, rootLinks);
+// Written next to the SBOM and moved over it, so a failed write cannot leave
+// it cut short.
+try {
+  fs.writeFileSync(outPath + ".poetry-graph.tmp", JSON.stringify(main, null, 2));
+  fs.renameSync(outPath + ".poetry-graph.tmp", outPath);
+} catch (e) {
+  process.stderr.write("[build-prep] poetry: could not write the SBOM: " + e.message + "\n");
+  process.exit(1);
+}
+process.stderr.write("[build-prep] poetry: dependency graph added (" + added + " component(s), " + edges + " new edge(s))\n");
+POETRY_GRAPH_JS
+            [ $? -eq 0 ] && _pg_ok=1
+            rm -f "$OUT.poetry-graph.tmp"
+        else
+            log "poetry: dependency graph not resolved (cdxgen on requirements.txt exited $_pg_rc); the pins stay without their dependencies"
+        fi
+        # Why the second run gave nothing (offline, cdxgen exits 0 with an
+        # empty graph): the end of its own log.
+        [ -n "$_pg_ok" ] || tail -5 "$_pg_dir/log" 2>/dev/null | sed 's/^/[build-prep]   /' >&2
+    fi
+    [ -n "$_pg_ok" ] || mark_prep_failed poetry-graph
+    [ -z "$_pg_dir" ] || rm -rf "$_pg_dir"
+    _pg_dir=""
 fi
 
 # Rust licenses. cdxgen reads only Cargo.lock for a Rust project, and a lock file
