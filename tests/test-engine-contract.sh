@@ -329,6 +329,113 @@ else
     echo "  SKIP: no timeout command on this host"
 fi
 
+echo "== license-registry: fill, replace, confirm, no answer, lookup failed (fixtures, no network) =="
+LRF="$WORK/lr-fixtures"
+mkdir -p "$LRF"
+echo '{"licenses":["MIT"]}' > "$LRF/npm_lodash_4.17.21.json"
+echo '{"licenses":["MIT"]}' > "$LRF/maven_org.slf4j_slf4j-api_2.0.13.json"
+echo '{"licenses":["GPL-3.0-only"]}' > "$LRF/pypi_gplpkg_1.0.json"
+cat > "$WORK/lr-bom.json" <<'EOF2'
+{"bomFormat":"CycloneDX","specVersion":"1.6","metadata":{"component":{"type":"application","name":"demo","version":"1.0","bom-ref":"root"}},
+ "components":[
+  {"type":"library","name":"lodash","version":"4.17.21","purl":"pkg:npm/lodash@4.17.21","bom-ref":"a"},
+  {"type":"library","name":"slf4j-api","version":"2.0.13","purl":"pkg:maven/org.slf4j/slf4j-api@2.0.13","bom-ref":"b","licenses":[{"license":{"id":"GPL-2.0-only"}}]},
+  {"type":"library","name":"mysql-connector-java","version":"8.0.33","purl":"pkg:maven/mysql/mysql-connector-java@8.0.33","bom-ref":"c","licenses":[{"license":{"id":"GPL-2.0-only"}}]},
+  {"type":"library","name":"gplpkg","version":"1.0","purl":"pkg:pypi/gplpkg@1.0","bom-ref":"d","licenses":[{"license":{"id":"GPL-3.0-only"}}]},
+  {"type":"library","name":"requests","version":"2.31.0","purl":"pkg:pypi/requests@2.31.0","bom-ref":"e","licenses":[{"license":{"id":"Apache-2.0"}}]}
+ ]}
+EOF2
+lic() { jq -r --arg n "$2" '[.components[] | select(.name==$n)][0] | [(.licenses[]? | .expression // .license.id), ((.properties // []) | map(select(.name=="bomlens:license:superseded"))[0].value // "-")] | join(" ")' "$1/demo_1.0_bom.json"; }
+
+D="$(new_run lr-off)"; cp "$WORK/lr-bom.json" "$D/demo_1.0_bom.json"; run_engine "$D" "$ROOT_DIR/docker/lib"
+[ "$(jq -r '[.steps[] | select(.id=="license-registry")][0].status' "$D/bomlens-result.json")" = "disabled" ] \
+    && pass "off by default: recorded as disabled" || fail "license-registry is $(jq -c '[.steps[] | select(.id=="license-registry")]' "$D/bomlens-result.json")"
+[ "$(lic "$D" lodash)" = "-" ] && pass "off by default: nothing is filled" || fail "lodash is '$(lic "$D" lodash)'"
+
+D="$(new_run lr-on)"; cp "$WORK/lr-bom.json" "$D/demo_1.0_bom.json"
+run_engine "$D" "$ROOT_DIR/docker/lib" LICENSE_REGISTRY=true LICENSE_REGISTRY_FIXTURE_DIR="$LRF"
+[ "$(lic "$D" lodash)" = "MIT -" ] && pass "a component with no licence is filled from the registry" || fail "lodash is '$(lic "$D" lodash)'"
+jq -e '[.components[] | select(.name=="lodash")][0].properties | any(.name=="bomlens:licenseSource" and .value=="registry (deps.dev)")' "$D/demo_1.0_bom.json" >/dev/null \
+    && pass "the filled licence is marked as coming from the registry" || fail "no bomlens:licenseSource on lodash"
+[ "$(lic "$D" slf4j-api)" = "MIT GPL-2.0-only" ] && pass "a single GPL the registry contradicts is replaced, the old value kept" || fail "slf4j-api is '$(lic "$D" slf4j-api)'"
+[ "$(lic "$D" mysql-connector-java)" = "GPL-2.0-only -" ] && pass "a GPL the registry has no answer for is kept" || fail "mysql-connector-java is '$(lic "$D" mysql-connector-java)'"
+[ "$(lic "$D" gplpkg)" = "GPL-3.0-only -" ] && pass "a GPL the registry confirms is kept, with no superseded mark" || fail "gplpkg is '$(lic "$D" gplpkg)'"
+[ "$(lic "$D" requests)" = "Apache-2.0 -" ] && pass "a licence not on the verify list is not asked about" || fail "requests is '$(lic "$D" requests)'"
+[ "$(jq -c '[.steps[] | select(.id=="license-registry")][0] | [.status, .counts.candidates, .counts.filled, .counts.superseded, .counts.confirmed, .counts.not_found]' "$D/bomlens-result.json")" = '["ok",4,1,1,1,1]' ] \
+    && pass "the manifest records the step as ok with its counts" \
+    || fail "license-registry is $(jq -c '[.steps[] | select(.id=="license-registry")]' "$D/bomlens-result.json")"
+
+D="$(new_run lr-err)"; cp "$WORK/lr-bom.json" "$D/demo_1.0_bom.json"
+mkdir -p "$WORK/lr-bad"; cp "$LRF"/*.json "$WORK/lr-bad/"; echo 'not json' > "$WORK/lr-bad/npm_lodash_4.17.21.json"
+run_engine "$D" "$ROOT_DIR/docker/lib" LICENSE_REGISTRY=true LICENSE_REGISTRY_FIXTURE_DIR="$WORK/lr-bad"
+[ "$(jq -r '[.steps[] | select(.id=="license-registry")][0] | "\(.status) \(.reason) \(.counts.lookup_failed)"' "$D/bomlens-result.json")" = "degraded unavailable 1" ] \
+    && pass "a lookup that failed leaves the step degraded (unavailable)" \
+    || fail "license-registry is $(jq -c '[.steps[] | select(.id=="license-registry")]' "$D/bomlens-result.json")"
+[ "$(lic "$D" lodash)" = "-" ] && pass "a failed lookup changes nothing for that component" || fail "lodash is '$(lic "$D" lodash)'"
+
+D="$(new_run lr-unreachable)"; cp "$WORK/lr-bom.json" "$D/demo_1.0_bom.json"
+run_engine "$D" "$ROOT_DIR/docker/lib" LICENSE_REGISTRY=true LICENSE_REGISTRY_API=http://127.0.0.1:9/v3
+[ "$(jq -r '[.steps[] | select(.id=="license-registry")][0] | "\(.status) \(.reason) \(.counts.lookup_failed)"' "$D/bomlens-result.json")" = "degraded unavailable 4" ] \
+    && pass "an endpoint that does not answer (LICENSE_REGISTRY_API): degraded, unavailable, every lookup counted as failed" \
+    || fail "license-registry is $(jq -c '[.steps[] | select(.id=="license-registry")]' "$D/bomlens-result.json")"
+[ "$(lic "$D" slf4j-api)" = "GPL-2.0-only -" ] \
+    && pass "with no answer the recorded licences are left as they were" || fail "slf4j-api is '$(lic "$D" slf4j-api)'"
+
+echo "== license-registry: evidence, deprecated ids, mixed answers, nesting, supplier SBOMs, budget =="
+echo '{"licenses":["MIT"]}' > "$LRF/npm_withtext_1.0.json"
+echo '{"licenses":["MIT"]}' > "$LRF/npm_concluded_1.0.json"
+echo '{"licenses":["GPL-2.0-or-later"]}' > "$LRF/npm_oldid_1.0.json"
+echo '{"licenses":["GPL-2.0-only","MIT"]}' > "$LRF/maven_org.x_dual_1.0.json"
+echo '{"licenses":["MIT","non-standard"]}' > "$LRF/npm_nonstd_1.0.json"
+echo '{"licenses":["MIT"]}' > "$LRF/npm_freetext_1.0.json"
+echo '{"licenses":["Apache-2.0"]}' > "$LRF/npm_inner_1.0.json"
+cat > "$WORK/lr-bom2.json" <<'EOF2'
+{"bomFormat":"CycloneDX","specVersion":"1.6","metadata":{"component":{"type":"application","name":"demo","version":"1.0","bom-ref":"root"}},
+ "components":[
+  {"type":"library","name":"withtext","version":"1.0","purl":"pkg:npm/withtext@1.0","bom-ref":"a","licenses":[{"license":{"url":"https://example.com/LICENSE","text":{"content":"Proprietary terms"}}}]},
+  {"type":"library","name":"concluded","version":"1.0","purl":"pkg:npm/concluded@1.0","bom-ref":"b","licenses":[{"license":{"id":"GPL-3.0-only","acknowledgement":"concluded"}}]},
+  {"type":"library","name":"oldid","version":"1.0","purl":"pkg:npm/oldid@1.0","bom-ref":"c","licenses":[{"license":{"id":"GPL-2.0+"}}]},
+  {"type":"library","name":"dual","version":"1.0","purl":"pkg:maven/org.x/dual@1.0","bom-ref":"d","licenses":[{"license":{"id":"GPL-2.0-only"}}]},
+  {"type":"library","name":"nonstd","version":"1.0","purl":"pkg:npm/nonstd@1.0","bom-ref":"e","licenses":[{"license":{"id":"GPL-3.0-only"}}]},
+  {"type":"library","name":"freetext","version":"1.0","purl":"pkg:npm/freetext@1.0","bom-ref":"f","licenses":[{"license":{"name":"GNU General Public License v2.0"}}]},
+  {"type":"library","name":"outer","version":"1.0","purl":"pkg:npm/outer@1.0","bom-ref":"g","licenses":[{"license":{"id":"MIT"}}],
+   "components":[{"type":"library","name":"inner","version":"1.0","purl":"pkg:npm/inner@1.0","bom-ref":"h"}]}
+ ]}
+EOF2
+D="$(new_run lr-edge)"; cp "$WORK/lr-bom2.json" "$D/demo_1.0_bom.json"
+run_engine "$D" "$ROOT_DIR/docker/lib" LICENSE_REGISTRY=true LICENSE_REGISTRY_FIXTURE_DIR="$LRF"
+jq -e '[.components[] | select(.name=="withtext")][0].licenses[0].license.text.content == "Proprietary terms"' "$D/demo_1.0_bom.json" >/dev/null \
+    && pass "a licence given only as text and url is kept, not filled over" || fail "withtext is $(jq -c '[.components[] | select(.name=="withtext")][0].licenses' "$D/demo_1.0_bom.json")"
+[ "$(lic "$D" concluded)" = "GPL-3.0-only -" ] && pass "a concluded licence is not checked against the registry" || fail "concluded is '$(lic "$D" concluded)'"
+[ "$(lic "$D" oldid)" = "GPL-2.0+ -" ] && pass "GPL-2.0+ against GPL-2.0-or-later is a confirmation, not a replacement" || fail "oldid is '$(lic "$D" oldid)'"
+[ "$(lic "$D" dual)" = "GPL-2.0-only -" ] && pass "an answer that lists the recorded licence among others confirms it" || fail "dual is '$(lic "$D" dual)'"
+[ "$(lic "$D" nonstd)" = "GPL-3.0-only -" ] && pass "an answer with a non-standard licence is not used" || fail "nonstd is '$(lic "$D" nonstd)'"
+[ "$(lic "$D" freetext)" = "MIT GPL-2.0-only" ] && pass "a GPL written as free text is normalized first, then checked" || fail "freetext is '$(lic "$D" freetext)'"
+jq -e '[.components[] | select(.name=="outer")][0].components[0].licenses[0] | (.expression // .license.id) == "Apache-2.0"' "$D/demo_1.0_bom.json" >/dev/null \
+    && pass "a nested component is filled" || fail "inner is $(jq -c '[.components[] | select(.name=="outer")][0].components' "$D/demo_1.0_bom.json")"
+jq -e '[.components[] | select(.name=="freetext")][0].properties | any(.name=="bomlens:licenseClass" and .value=="permissive")' "$D/demo_1.0_bom.json" >/dev/null \
+    && pass "a replaced licence is classified again (normalize runs after a change)" || fail "freetext props $(jq -c '[.components[] | select(.name=="freetext")][0].properties' "$D/demo_1.0_bom.json")"
+run_again="$(new_run lr-again)"; cp "$D/demo_1.0_bom.json" "$run_again/demo_1.0_bom.json"
+run_engine "$run_again" "$ROOT_DIR/docker/lib" LICENSE_REGISTRY=true LICENSE_REGISTRY_FIXTURE_DIR="$LRF"
+[ "$(jq -r '[.steps[] | select(.id=="license-registry")][0] | "\(.counts.filled) \(.counts.superseded)"' "$run_again/bomlens-result.json")" = "0 0" ] \
+    && pass "a second run over its own output changes nothing" || fail "second run: $(jq -c '[.steps[] | select(.id=="license-registry")][0].counts' "$run_again/bomlens-result.json")"
+
+D="$(new_run lr-analyze)"
+run_engine "$D" "$ROOT_DIR/docker/lib" MODE=ANALYZE ANALYZE_SBOM="$WORK/lr-bom.json" LICENSE_REGISTRY=true LICENSE_REGISTRY_FIXTURE_DIR="$LRF"
+[ "$(lic "$D" slf4j-api)" = "GPL-2.0-only -" ] && [ "$(lic "$D" lodash)" = "MIT -" ] \
+    && pass "a supplier's SBOM (ANALYZE): a missing licence is filled, a declared one is never replaced" \
+    || fail "slf4j-api '$(lic "$D" slf4j-api)', lodash '$(lic "$D" lodash)'"
+
+D="$(new_run lr-budget)"; cp "$WORK/lr-bom.json" "$D/demo_1.0_bom.json"
+_t0=$(date +%s)
+run_engine "$D" "$ROOT_DIR/docker/lib" LICENSE_REGISTRY=true LICENSE_REGISTRY_FIXTURE_DIR="$LRF" LICENSE_REGISTRY_FIXTURE_DELAY=6 LICENSE_REGISTRY_BUDGET=1
+_t1=$(date +%s)
+[ "$(jq -r '[.steps[] | select(.id=="license-registry")][0] | "\(.status) \(.reason) \(.counts.budget_reached)"' "$D/bomlens-result.json")" = "degraded budget_exhausted 4" ] \
+    && pass "answers slower than the budget: degraded, budget_exhausted, all four counted" \
+    || fail "license-registry is $(jq -c '[.steps[] | select(.id=="license-registry")]' "$D/bomlens-result.json")"
+[ "$(lic "$D" lodash)" = "-" ] && pass "what did not answer in time is left as it was" || fail "lodash is '$(lic "$D" lodash)'"
+echo "  (license-registry with a 1 s budget and 6 s answers took $((_t1 - _t0)) s for the whole run)"
+
 echo "== every step label in entrypoint.sh is documented =="
 missing=""
 for id in $(grep -v '^[[:space:]]*#' "$ENTRY" | grep -oE '(run_optional_step|er_record|er_phase) [a-z][a-z0-9-]+' | awk '{print $2}' | sort -u); do

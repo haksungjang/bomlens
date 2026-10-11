@@ -75,6 +75,7 @@ Each step also has `stage` (1 for the SBOM a language image generated before thi
 | `cocoapods` | add CocoaPods dependencies from `Podfile.lock` |
 | `stamp-metadata` | set the root component to the project name and version; the run stops if this fails |
 | `docmeta` | record the document's author, tool and lifecycle phase |
+| `license-registry` | ask the package registry for missing licences and check a single strong-copyleft or non-commercial one (`--license-registry`); `counts` gives `candidates`, `filled`, `superseded`, `confirmed`, `no_answer`, `not_found`, `non_standard`, `lookup_failed`, `budget_reached` |
 | `normalize` | normalize licences, PURLs and duplicates |
 | `enrich-cpe` | add CPE identifiers |
 | `enrich-os-context` | record the operating system packages' distribution |
