@@ -31,6 +31,10 @@ LABEL org.opencontainers.image.title="BomLens (post-process)"
 LABEL org.opencontainers.image.description="syft + Trivy + notice + signing + UI; SBOM generation delegated to cdxgen language images"
 LABEL org.opencontainers.image.vendor="SK Telecom"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
+# The engine contract this image follows (docs/reference/engine-contract.md),
+# the same value as ENGINE_CONTRACT_VERSION in docker/lib/engine-result.sh.
+# The CLI reads it to tell an image too old for the stage 1 hand-off.
+LABEL com.sktelecom.sbom.engine-contract="1.0.0"
 
 ENV DEBIAN_FRONTEND=noninteractive
 

@@ -624,6 +624,21 @@ elif command -v syft >/dev/null 2>&1; then
     [ "$rc" = 1 ] && [ "$(jq -r '[.steps[] | select(.id=="generate")][0].status' "$D/bomlens-result.json")" = "failed" ] \
         && pass "when the fallback fails too, the run exits 1 with generate failed" \
         || fail "rc $rc, generate $(jq -c '[.steps[] | select(.id=="generate")]' "$D/bomlens-result.json")"
+    # The CLI classifies the reason itself and prints its own guidance: a
+    # known reason is taken as it is, an unknown one is not, and the
+    # engine's own warning stays quiet.
+    D="$(new_run fallback-reason empty)"
+    run_engine "$D" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$FB" BOMLENS_STAGE1_EXIT=1 BOMLENS_STAGE1_REASON=disk-space _BOMLENS_CLI_FALLBACK=1
+    [ "$(jq -r '[.metadata.properties[]? | select(.name=="bomlens:sbom-tool-degraded") | .value] | first' "$D/demo_1.0_bom.json" 2>/dev/null)" = "disk-space" ] \
+        && ! grep -q 'stage 1 (cdxgen) did not produce an SBOM' "$D.log" \
+        && pass "a reason passed in is used, and the engine leaves the warning to the CLI" \
+        || fail "reason passed in: $(jq -c '[.metadata.properties[]? | select(.name=="bomlens:sbom-tool-degraded")]' "$D/demo_1.0_bom.json" 2>&1)" "$(grep -i stage "$D.log")"
+    D="$(new_run fallback-bad-reason empty)"
+    run_engine "$D" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$FB" BOMLENS_STAGE1_EXIT=1 'BOMLENS_STAGE1_REASON=x;y'
+    [ "$(jq -r '[.metadata.properties[]? | select(.name=="bomlens:sbom-tool-degraded") | .value] | first' "$D/demo_1.0_bom.json" 2>/dev/null)" = "cdxgen-crash" ] \
+        && grep -q 'stage 1 (cdxgen) did not produce an SBOM' "$D.log" \
+        && pass "an unknown reason is ignored and classified as usual" \
+        || fail "unknown reason: $(jq -c '[.metadata.properties[]? | select(.name=="bomlens:sbom-tool-degraded")]' "$D/demo_1.0_bom.json" 2>&1)"
     D="$(new_run stage1-ok)"
     run_engine "$D" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$FB" BOMLENS_STAGE1_EXIT=0
     [ "$(jq -r '[.steps[] | select(.id=="generate")][0].status' "$D/bomlens-result.json")" = "ok" ] \
@@ -704,6 +719,109 @@ kill -TERM "$pid" 2>/dev/null; wait "$pid"
 D="$(new_run events-off)"; run_engine "$D" "$ROOT_DIR/docker/lib"
 [ ! -e "$D/bomlens-events.jsonl" ] && ! jq -e 'any(.outputs[]; .role=="events")' "$D/bomlens-result.json" >/dev/null \
     && pass "without BOMLENS_EVENTS nothing is written" || fail "events written without being asked"
+
+echo "== the CLI's stage 1 is the one the execution plan describes =="
+# scripts/scan-sbom.sh and make-plan.sh both build stage 1; this keeps them the
+# same. A docker stub records the arguments the CLI really passes to its stage
+# 1 container, and they are compared with the plan for the same source:
+# image, user, entrypoint, arguments, the plan's environment and mount targets.
+# The one allowed difference: the CLI names the image by tag, the plan also by
+# digest.
+CMP="$WORK/cli-vs-plan"; mkdir -p "$CMP/bin" "$CMP/out"
+cat > "$CMP/bin/docker" <<'STUB'
+#!/bin/bash
+case "$1" in
+    info|rm|pull|stop|kill) exit 0 ;;
+    image)
+        case "$*" in *engine-contract*) [ -n "${STUB_OLD_IMAGE:-}" ] || echo 1.0.0 ;; esac
+        exit 0 ;;
+    inspect) echo false; exit 0 ;;
+    wait) echo 0; exit 0 ;;
+    ps) exit 0 ;;
+    run)
+        for a in "$@"; do [ "$a" = "/tmp/build-prep.sh" ] && { printf '%s\n' "$@" > "$CLI_ARGV_LOG"; exit 0; }; done
+        # Stage 2: the stub's stage 1 wrote no SBOM, so this is the fallback hand-off.
+        printf '%s\n' "$@" > "$CLI_ARGV_LOG.stage2"
+        exit 0 ;;
+esac
+exit 0
+STUB
+chmod +x "$CMP/bin/docker"
+CLI_SRC="$WORK/plan-src-node"
+mkdir -p "$CMP/tmp"
+( cd "$CMP" && env PATH="$CMP/bin:$PATH" CLI_ARGV_LOG="$CMP/argv" HOME="$CMP/home" TMPDIR="$CMP/tmp" \
+    bash "$ROOT_DIR/scripts/scan-sbom.sh" --project demo --version 1.0 --target "$CLI_SRC" \
+    --generate-only --output-dir "$CMP/out" ) > "$CMP/log" 2>&1
+P="$(plan_run cli-compare "$CLI_SRC")"
+if [ ! -s "$CMP/argv" ]; then
+    fail "the CLI's stage 1 docker run was not recorded" "$(tail -8 "$CMP/log")"
+elif [ "$(cat "$P.rc")" != 0 ] || ! jq -e '.stages[0] | type == "object" and (.env | type == "object") and (.env_passthrough | type == "array") and (.mounts | type == "array")' "$P/bomlens-plan.json" >/dev/null 2>&1; then
+    fail "no stage 1 in the plan to compare the CLI with" "$(tail -5 "$P.log")"
+else
+    cli_json="$(python3 - "$CMP/argv" <<'PY'
+import json, sys
+a = [l.rstrip("\n") for l in open(sys.argv[1])]
+out = {"user": None, "entrypoint": None, "image": None, "args": [], "env": {}, "envnames": [], "mounts": []}
+i = 1
+while i < len(a):
+    x = a[i]
+    if x in ("-u", "--user"): out["user"] = a[i + 1]; i += 2; continue
+    if x in ("--name", "--label", "-w"): i += 2; continue
+    if x == "-v": out["mounts"].append(a[i + 1].split(":")[1] if ":" in a[i + 1] else a[i + 1]); i += 2; continue
+    if x == "-e":
+        k, sep, v = a[i + 1].partition("=")
+        if sep: out["env"][k] = v
+        else: out["envnames"].append(k)
+        i += 2; continue
+    if x == "--entrypoint": out["entrypoint"] = a[i + 1]; i += 2; continue
+    if x.startswith("-"): i += 1; continue
+    out["image"] = x; out["args"] = a[i + 1:]; break
+print(json.dumps(out))
+PY
+)"
+    plan_stage1="$(jq -c '.stages[0]' "$P/bomlens-plan.json")"
+    diffs="$(jq -n -r --argjson c "$cli_json" --argjson p "$plan_stage1" '
+        [ (if $c.image != $p.image then "image: CLI \($c.image), plan \($p.image)" else empty end),
+          (if $c.user != $p.user then "user: CLI \($c.user), plan \($p.user)" else empty end),
+          (if [$c.entrypoint] != $p.entrypoint then "entrypoint: CLI \($c.entrypoint), plan \($p.entrypoint)" else empty end),
+          (if $c.args != $p.args then "args: CLI \($c.args), plan \($p.args)" else empty end),
+          ($p.env | to_entries[] | select($c.env[.key] != .value) | "env \(.key): CLI \($c.env[.key]), plan \(.value)"),
+          ($p.env_passthrough[] | select((($c.envnames + ($c.env | keys)) | index(.)) | not) | "env \(.): passed by the plan, not by the CLI"),
+          ($p.mounts[] | select((.optional // false) | not) | .target | select(($c.mounts | index(.)) | not) | "mount \(.): in the plan, not in the CLI")
+        ] | join("\n")')"; diffs_rc=$?
+    if [ "$diffs_rc" -ne 0 ] || [ -z "$cli_json" ]; then
+        fail "the CLI and plan stage 1 could not be compared" "jq exit $diffs_rc"
+    elif [ -z "$diffs" ]; then
+        pass "the CLI runs stage 1 as the plan describes it (image, user, entrypoint, arguments, environment, mounts)"
+    else
+        fail "the CLI's stage 1 differs from the plan" "$diffs"
+    fi
+fi
+# Stage 1 left no SBOM, so stage 2 got the hand-off the fallback needs.
+s2="$(tr '\n' ' ' < "$CMP/argv.stage2" 2>/dev/null)"
+case "$s2" in
+    *"-e BOMLENS_STAGE1_EXIT=0 "*"-e _BOMLENS_CLI_FALLBACK=1 "*"-e BOMLENS_STAGE1_REASON=cdxgen-crash "*) ;;
+    *) s2="" ;;
+esac
+[ -n "$s2" ] && case "$s2" in *"-e BOMLENS_INCLUDE_NON_SHIPPED "*) true ;; *) false ;; esac \
+    && pass "a stage 1 with no SBOM hands stage 2 its exit code, the reason and BOMLENS_INCLUDE_NON_SHIPPED" \
+    || fail "stage 2 hand-off" "$(tr '\n' ' ' < "$CMP/argv.stage2" 2>&1)"
+# The same failure with a post-processing image older than the contract
+# label: a clear error instead of stage 2 stopping on a missing SBOM.
+rm -f "$CMP/argv.stage2"
+( cd "$CMP" && env PATH="$CMP/bin:$PATH" CLI_ARGV_LOG="$CMP/argv" HOME="$CMP/home" TMPDIR="$CMP/tmp" STUB_OLD_IMAGE=1 \
+    bash "$ROOT_DIR/scripts/scan-sbom.sh" --project demo --version 1.0 --target "$CLI_SRC" \
+    --generate-only --output-dir "$CMP/out" ) > "$CMP/log-old" 2>&1
+old_rc=$?
+[ "$old_rc" -ne 0 ] && [ ! -e "$CMP/argv.stage2" ] \
+    && grep -q 'is older than this CLI: it cannot run the manifest-only fallback' "$CMP/log-old" \
+    && pass "an image without the engine-contract label is refused with a clear error when the fallback is needed" \
+    || fail "old image: rc $old_rc, stage 2 run: $([ -e "$CMP/argv.stage2" ] && echo yes || echo no)" "$(tail -4 "$CMP/log-old")"
+dlabel="$(sed -n 's/^LABEL com\.sktelecom\.sbom\.engine-contract="\(.*\)"$/\1/p' "$ROOT_DIR/docker/Dockerfile")"
+cver="$(sed -n 's/^ENGINE_CONTRACT_VERSION="\(.*\)"$/\1/p' "$ROOT_DIR/docker/lib/engine-result.sh")"
+[ -n "$dlabel" ] && [ "$dlabel" = "$cver" ] \
+    && pass "the image's engine-contract label matches ENGINE_CONTRACT_VERSION ($cver)" \
+    || fail "Dockerfile label '$dlabel', ENGINE_CONTRACT_VERSION '$cver'"
 
 echo "== every step label in entrypoint.sh is documented =="
 missing=""
