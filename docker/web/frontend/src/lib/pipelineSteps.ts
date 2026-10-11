@@ -15,6 +15,7 @@ const STEP_LABEL_KEY: Record<string, string> = {
   "model-security": "pipelineSteps.modelSecurity",
   conformance: "pipelineSteps.conformance",
   "resolve-purl": "pipelineSteps.resolvePurl",
+  "license-registry": "pipelineSteps.licenseRegistry",
   "describe-input": "pipelineSteps.describeInput",
   "suggest-vendored": "pipelineSteps.suggestVendored",
   docmeta: "pipelineSteps.docmeta",

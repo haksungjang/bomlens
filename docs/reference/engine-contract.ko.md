@@ -75,6 +75,7 @@ BomLens 이미지를 스캔 엔진으로 쓰는 프로그램은 모든 스캔이
 | `cocoapods` | `Podfile.lock`의 CocoaPods 의존성 추가 |
 | `stamp-metadata` | 루트 컴포넌트를 프로젝트 이름과 버전으로 지정. 실패하면 실행이 멈춤 |
 | `docmeta` | 문서 작성자, 도구, 수명 주기 단계 기록 |
+| `license-registry` | 패키지 레지스트리에서 빠진 라이선스를 조회하고, 하나뿐인 강한 카피레프트나 비상업 라이선스를 확인(`--license-registry`). `counts`에 `candidates`, `filled`, `superseded`, `confirmed`, `no_answer`, `not_found`, `non_standard`, `lookup_failed`, `budget_reached`를 기록 |
 | `normalize` | 라이선스, PURL, 중복 정규화 |
 | `enrich-cpe` | CPE 식별자 추가 |
 | `enrich-os-context` | 운영체제 패키지의 배포판 기록 |

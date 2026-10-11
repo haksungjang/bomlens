@@ -1258,6 +1258,45 @@ else
     run_optional_step normalize bash "$LIBDIR/normalize-sbom.sh" "$OUTPUT_FILE"
 fi
 
+# Registry licences (opt-in, network): fill a component that has no licence,
+# and check a single strong-copyleft or non-commercial licence against the
+# registry, replacing it when the registry says otherwise. After normalize, so
+# a licence written as free text has its SPDX id by now and is checked too;
+# when anything changed, normalize runs again to classify what was written. A
+# supplier's own SBOM (ANALYZE) only has missing licences filled: its declared
+# ones are never overwritten. The counts go to the result manifest; a lookup
+# that failed or ran out of time leaves the step degraded, since those
+# components were not checked.
+if [ "${LICENSE_REGISTRY:-false}" = "true" ] && [ "$AI_MODEL_SCAN" != "true" ]; then
+    echo "[INFO] Looking up licences in the package registries (deps.dev)..."
+    _lr_started="$(er_now)"
+    _lr_rc=0
+    _lr_args=()
+    [ "$SCAN_MODE" = "ANALYZE" ] && _lr_args=(--fill-only)
+    _lr_counts="$(python3 "$LIBDIR/enrich-license-registry.py" "${_lr_args[@]}" "$OUTPUT_FILE")" || _lr_rc=$?
+    if [ "$_lr_rc" -ne 0 ] || ! printf '%s' "$_lr_counts" | jq -e 'type == "object"' >/dev/null 2>&1; then
+        mark_pipeline_warning "$OUTPUT_FILE" license-registry
+        er_record license-registry failed failed "" "$_lr_started"
+    else
+        if printf '%s' "$_lr_counts" | jq -e '(.budget_reached // 0) > 0' >/dev/null; then
+            er_record license-registry degraded budget_exhausted "" "$_lr_started" "" "$_lr_counts"
+        elif printf '%s' "$_lr_counts" | jq -e '(.lookup_failed // 0) > 0' >/dev/null; then
+            er_record license-registry degraded unavailable "" "$_lr_started" "" "$_lr_counts"
+        else
+            er_record license-registry ok "" "" "$_lr_started" "" "$_lr_counts"
+        fi
+        if printf '%s' "$_lr_counts" | jq -e '(.filled // 0) + (.superseded // 0) > 0' >/dev/null; then
+            if [ "${BYTE_STABLE:-false}" = "true" ]; then
+                run_optional_step normalize bash "$LIBDIR/normalize-sbom.sh" "$OUTPUT_FILE" --stable
+            else
+                run_optional_step normalize bash "$LIBDIR/normalize-sbom.sh" "$OUTPUT_FILE"
+            fi
+        fi
+    fi
+elif [ "$AI_MODEL_SCAN" != "true" ]; then
+    er_record license-registry disabled
+fi
+
 # The component/dependency graph is final as of the normalize pass above; every
 # step below this point only enriches metadata (CPE, EOL, risk, ...) and must
 # not change compositions.aggregate's answer, so this runs once, here.
