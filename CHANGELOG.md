@@ -43,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The post-processing stage run as a user with no writable home (any UID, as a Kubernetes job runs it, or a read-only root filesystem) failed the `--deep-license` scan: scancode could not create its cache folder. Such a home is now replaced with a folder in the temporary directory, which also lets Trivy download its database there.
 - The result manifest now records `generate` as `degraded` (`fallback`) when a lock-less Poetry project's pins could not be resolved further (`poetry-graph` failed, for one with no network), so the run reads `succeeded_degraded`; before, only the SBOM said so.
 - A stage 2 told that stage 1 never ran (exit code 127, as for an `unsupported` plan, or `BOMLENS_STAGE1_REASON=cdxgen-unavailable`) records the fallback reason as `cdxgen-unavailable` instead of `cdxgen-crash`; the CLI reads exit code 127 the same way. A supplier SBOM under `--analyze` that carries these Poetry marks no longer degrades the analysis run.
 - The CLI's manifest-only fallback, used when cdxgen fails, now runs inside the post-processing step, the same code a caller of the execution plan gets. It now honours `BOMLENS_INCLUDE_NON_SHIPPED=1` (it used to leave test and sample manifests out regardless). The "Manifest-only fallback used" warning now appears after post-processing, once the fallback has succeeded.

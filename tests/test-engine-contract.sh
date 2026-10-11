@@ -53,6 +53,7 @@ while [ $# -gt 0 ]; do
     case "$1" in --output) out="$2"; shift 2 ;; *) shift ;; esac
 done
 [ -n "${TRIVY_ENV_LOG:-}" ] && { env | grep '^TRIVY_' | grep -v '^TRIVY_ENV_LOG=' | sort > "$TRIVY_ENV_LOG"; }
+[ -n "${TRIVY_HOME_LOG:-}" ] && { printf '%s\n' "$HOME" > "$TRIVY_HOME_LOG"; : > "$HOME/.written" 2>/dev/null && echo writable >> "$TRIVY_HOME_LOG"; }
 if [ "${TRIVY_STUB:-ok}" = "sleep" ]; then
     : > "$TRIVY_STUB_STARTED"
     sleep 3
@@ -965,6 +966,23 @@ else
         && pass "with no mount Trivy is left to its own settings" \
         || fail "no mount: env $(tr '\n' ' ' < "$D/trivy-env" 2>&1)"
 fi
+
+echo "== a user with no writable home (any UID, read-only root) =="
+RH="$WORK/readonly-home"; mkdir -p "$RH" "$WORK/tmp-home"; chmod 555 "$RH"
+if [ "$(id -u)" = 0 ]; then
+    echo "  SKIP: running as root, which can write any folder"
+else
+    D="$(new_run no-home)"; run_engine "$D" "$ROOT_DIR/docker/lib" HOME="$RH" TMPDIR="$WORK/tmp-home" TRIVY_HOME_LOG="$D/home"
+    [ "$(sed -n 2p "$D/home" 2>/dev/null)" = writable ] && [ "$(head -1 "$D/home")" != "$RH" ] \
+        && case "$(head -1 "$D/home")" in "$WORK/tmp-home/bomlens-home."*) true ;; *) false ;; esac \
+        && [ "$(jq -r '[.steps[] | select(.id=="scan-security")][0].status' "$D/bomlens-result.json")" = ok ] \
+        && pass "a home it cannot write is replaced with a writable folder in TMPDIR" \
+        || fail "home: $(cat "$D/home" 2>&1 | tr '\n' ' ')" "$(tail -4 "$D.log")"
+fi
+chmod 755 "$RH"
+D="$(new_run own-home)"; mkdir -p "$WORK/own-home"; run_engine "$D" "$ROOT_DIR/docker/lib" HOME="$WORK/own-home" TRIVY_HOME_LOG="$D/home"
+[ "$(head -1 "$D/home" 2>/dev/null)" = "$WORK/own-home" ] \
+    && pass "a writable home is left as it is" || fail "own home replaced: $(head -1 "$D/home" 2>&1)"
 
 echo "== every step label in entrypoint.sh is documented =="
 missing=""
