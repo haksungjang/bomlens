@@ -153,6 +153,21 @@ source_manifests() {
     printf '%s' "${out#, }"
 }
 
+# stage1_fail_reason <oom> [log]: why stage 1 (cdxgen) gave no SBOM, in the
+# words bomlens:sbom-tool-degraded uses: oom (the container was killed for
+# memory), disk-space, network, or cdxgen-crash. Same rules as the CLI's.
+stage1_fail_reason() {
+    if [ "${1:-}" = "true" ]; then echo oom; return; fi
+    local log="${2:-}"
+    if [ -n "$log" ] && [ -f "$log" ]; then
+        if grep -qi "no space left on device" "$log"; then echo disk-space; return; fi
+        if grep -qEi "temporary failure in name resolution|could not resolve host|network is unreachable|connection timed out|connect timed out|no route to host|ENOTFOUND|ETIMEDOUT" "$log"; then
+            echo network; return
+        fi
+    fi
+    echo cdxgen-crash
+}
+
 # The glob patterns applied, relative to the scan root, joined with ", ".
 non_shipped_globs() {
     local d out=""

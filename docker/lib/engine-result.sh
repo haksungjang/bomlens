@@ -67,6 +67,7 @@ _er_role() {
         *_vendored.cdx.json) echo "vendored.cyclonedx" ;;
         *_conformance.json) echo "conformance" ;;
         *_input.json) echo "input-description" ;;
+        bomlens-plan.json) echo "plan" ;;
         *) echo "other" ;;
     esac
 }
@@ -78,7 +79,7 @@ _er_sha256() {
 
 _er_input_kind() {
     case "$1" in
-        SOURCE|POSTPROCESS) echo source ;;
+        SOURCE|POSTPROCESS|PLAN) echo source ;;
         IMAGE) echo image ;;
         ANALYZE|MERGE) echo sbom ;;
         BINARY) echo binary ;;

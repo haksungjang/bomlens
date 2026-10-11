@@ -70,6 +70,7 @@ Each step also has `stage` (1 for the SBOM a language image generated before thi
 <!-- steps:begin -->
 | Step | What it does |
 |---|---|
+| `plan` | write the execution plan (`MODE=PLAN`, below) |
 | `generate` | produce the SBOM (stage 1 for a source scan, where the language image ran first) |
 | `vendored` | identify open source copied into the sources (`--identify-vendored`) |
 | `suggest-vendored` | suggest that identification when a C/C++ project scanned near-empty |
@@ -131,6 +132,29 @@ Operating system packages in `bom.json` carry PURLs in the form Trivy and the pu
 - Qualifiers are sorted by name.
 
 A change to this form is a major version change (see below).
+## Execution plan
+
+A source scan runs in two containers: stage 1 resolves the dependencies in a cdxgen language image, stage 2 is this image in `POSTPROCESS` mode. A program that runs the containers itself (a Kubernetes Job, a hardened Docker runner) asks BomLens what to run with `MODE=PLAN`: mount the source read-only at `/src` and an output folder at `/host-output`, and the image writes `bomlens-plan.json` there and copies the files stage 1 mounts into `bomlens-plan/`. Nothing is scanned. The format is [`schemas/engine-plan-1.json`](https://github.com/sktelecom/bomlens/blob/main/schemas/engine-plan-1.json).
+
+```bash
+docker run --rm -v "$PWD/src:/src:ro" -v "$PWD/out:/host-output" \
+  -e MODE=PLAN -e PROJECT_NAME=app -e PROJECT_VERSION=1.0 -e HOST_OUTPUT_DIR=/host-output \
+  -e BOMLENS_IMAGE_REF=ghcr.io/sktelecom/bomlens:<version> -e BOMLENS_IMAGE_DIGEST=sha256:... \
+  ghcr.io/sktelecom/bomlens:<version>
+```
+
+| Field | Meaning |
+|---|---|
+| `status` | `ok`, or `unsupported` with `reason` and `detail` (`android-sdk-image`: the Android SDK image is built by you and not published) and no stages |
+| `input.detected_ecosystem` | the language detection result that chose the stage 1 image |
+| `output_file` | the SBOM file name stage 1 writes and stage 2 reads |
+| `stages[]` | `generate` (stage 1) and `postprocess` (stage 2), in order |
+
+Each stage gives `image` and `image_digest` (stage 1 is always pinned by digest; stage 2 repeats `BOMLENS_IMAGE_REF` and `BOMLENS_IMAGE_DIGEST`), `user`, `entrypoint`, `args`, `workdir`, `env` (names and values to set), `env_passthrough` (names to pass from your own environment when set), `network` (whether it needs to reach the package registries) and `mounts`. A mount has a `role` (`source`, `output`, `plan-file` with a `source` path inside the output folder, the optional `guard-state`, or an optional cache), a `target` and a `mode`. The source is writable in stage 1 only: the resolvers write lock files there, and stage 1 puts the tree back as it was when it finishes. A stage 1 that is killed (out of memory, a timeout) cannot; mount a folder of your own as `guard-state` and set `BOMLENS_GUARD_ID` to a unique id per scan, and after a kill run the same stage 1 again with `BOMLENS_GUARD_RESTORE_ONLY=1` to restore the source. Pass `HOST_UID` and `HOST_GID` to both stages so the files they write belong to your user rather than root.
+
+`MODE=PLAN` exits 0 when it wrote a plan, `ok` or `unsupported`; an `unsupported` plan records the `plan` step as `skipped` in the result manifest, so the run reads `succeeded_degraded`. It refuses an empty source (usually a mount that did not reach the container) with a non-zero exit. Before writing, it removes an earlier plan and an earlier run's stage 1 outputs from the output folder, since stage 2 cannot tell a fresh SBOM from a leftover one. Stage 1 images are pinned for the cdxgen tag this BomLens release was tested with; overriding `CDXGEN_TAG` makes the language images `unsupported` (`no-pinned-digest`).
+
+Run stage 2 whatever stage 1's exit code, and pass that code as `BOMLENS_STAGE1_EXIT`, `true` in `BOMLENS_STAGE1_OOM` when the stage 1 container was killed for memory, and the stage 1 log saved in the output folder as `BOMLENS_STAGE1_LOG` (a file name). When stage 1 failed or left no SBOM, stage 2 scans the source with syft instead (direct dependencies only), records the reason in `bomlens:sbom-tool-degraded` (`oom`, `disk-space`, `network`, `cdxgen-crash`), and the result manifest records `generate` as `degraded` (`fallback`), the same as the CLI.
 
 ## Versioning
 
