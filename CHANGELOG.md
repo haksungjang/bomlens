@@ -9,15 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrade note
 
+- `_scancode.json` paths are now relative to the scanned tree (`src/app.js` becomes `app.js`), the same as `_files.json`; the source file viewer reads them either way.
+- `--deep-license` now scans only the project's own files: dependency folders (`node_modules`, `vendor`, virtual environments), build output and tool folders are left out of `_scancode.json`, and a tree with more than 20,000 such files is not scanned. Set `BOMLENS_DEEP_LICENSE_ALL=1` to scan everything, or raise `DEEP_LICENSE_MAX_FILES`.
 - A source scan now also leaves out manifests under `sample`, `bench`, `benchmark`, `demo` and `demos` folders. A project with dependencies declared only there shows fewer components than before; set `BOMLENS_INCLUDE_NON_SHIPPED=1` to keep them.
 
 ### Added
 
 - Every scan writes `bomlens-result.json` to its output folder: how the run ended, each step's outcome (`ok`, `degraded`, `failed`, `skipped` with a reason such as `not_installed`, or `disabled` by a setting) with its time span, the tool versions, the Trivy database date, and the role, sha256 and size of each output file. It is written also when a run stops early. A failed Trivy scan is reported as a failed `scan-security` step, so a run whose vulnerability scan did not run is never reported as a plain success. The format, `schemas/engine-result-1.json`, is documented as the engine contract (version `1.0.0-dev` until it is fixed) and checked by a new test. The scan's exit code is unchanged.
 - When another engine adds results to the security report, Trivy's own result is kept as `_security_trivy.json`.
+- `--deep-license` is bounded: scancode is stopped after `DEEP_LICENSE_TIMEOUT` seconds (default 600), and each run writes to its own temporary file instead of a fixed `/tmp/scancode.json`. The result manifest records the step as `skipped` (`not_installed`, `no_input`, `too_large`) or `failed` (`timeout`).
 
 ### Changed
 
+- `--deep-license` runs only in a source scan, on the scanned tree. Before, it scanned whatever was mounted at `/src` in any mode, which in the web UI could be the server's own folder for an SBOM analysis.
 - The non-shipped folder list gains the singular and short spellings `sample`, `bench`, `benchmark`, `demo` and `demos`, next to the plural forms it already had.
 
 ## [v1.13.1] - 2026-10-10

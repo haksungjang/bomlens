@@ -62,7 +62,7 @@ Every step that applies to the scan's mode is recorded, also when it did not run
 | `no_input` | there was nothing for the step to read (no source tree, no signing key) |
 <!-- reasons:end -->
 
-No step reports `timeout`, `too_large` or `budget_exhausted` yet; they are reserved for the limits later releases record.
+No step reports `budget_exhausted` yet; it is reserved for a work limit a later release records.
 
 Each step also has `stage` (1 for the SBOM a language image generated before this container started, 2 otherwise), `started_at`, `ended_at`, an optional `detail` of up to 500 characters, and for some steps `counts` (`generate` records `components`).
 

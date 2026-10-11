@@ -1446,26 +1446,39 @@ if [ "${GENERATE_REPORT:-false}" != "true" ] && [ -f "${OUT_PREFIX}_summary.resu
 fi
 
 # Deep license detection (scancode, opt-in). Only meaningful for source trees.
-if [ "${DEEP_LICENSE:-false}" = "true" ] && [ -d /src ]; then
-    if command -v scancode >/dev/null 2>&1; then
-        echo "[INFO] Running scancode deep license detection..."
-        _dl_started="$(er_now)"
-        if scancode --license --json-pp /tmp/scancode.json /src >/dev/null 2>&1; then
-            cp /tmp/scancode.json "${OUT_PREFIX}_scancode.json"
+DEEP_SRC="${SOURCE_ROOT:-/src}"
+if [ "$SOURCE_SCAN" = "true" ] && [ "${DEEP_LICENSE:-false}" = "true" ] && [ -d "$DEEP_SRC" ]; then
+    echo "[INFO] Running scancode deep license detection..."
+    _dl_started="$(er_now)"
+    _dl_rc=0
+    # This run's own output folder, when it sits inside the scanned tree (a
+    # CLI scan of the current folder), is not the project's source.
+    DEEP_LICENSE_EXCLUDE="${SRC_TREE_EXCLUDE:-} $OUT_PREFIX" \
+        bash "$LIBDIR/deep-license.sh" "$DEEP_SRC" "${OUT_PREFIX}_scancode.json" || _dl_rc=$?
+    case "$_dl_rc" in
+        0)
             ARTIFACTS+=("${OUT_PREFIX}_scancode.json")
-            er_record deep-license ok "" "" "$_dl_started"
-        else
+            er_record deep-license ok "" "" "$_dl_started" ;;
+        6)
+            ARTIFACTS+=("${OUT_PREFIX}_scancode.json")
+            er_record deep-license degraded failed "scancode reported errors on some files" "$_dl_started" ;;
+        3)
+            echo "[WARN] --deep-license requested but scancode not in image (rebuild with --build-arg SBOM_DEEP_LICENSE=true)."
+            er_record deep-license skipped not_installed "scancode is not in this image" "$_dl_started" ;;
+        4)
+            er_record deep-license skipped too_large "more than ${DEEP_LICENSE_MAX_FILES:-20000} source files" "$_dl_started" ;;
+        5)
+            er_record deep-license failed timeout "stopped after ${DEEP_LICENSE_TIMEOUT:-600}s" "$_dl_started" ;;
+        *)
             echo "[WARN] scancode run failed."
-            er_record deep-license failed failed "" "$_dl_started"
-        fi
-    else
-        echo "[WARN] --deep-license requested but scancode not in image (rebuild with --build-arg SBOM_DEEP_LICENSE=true)."
-        er_record deep-license skipped not_installed "scancode is not in this image"
-    fi
-elif [ "${DEEP_LICENSE:-false}" = "true" ]; then
-    er_record deep-license skipped no_input "no source tree mounted at /src"
+            er_record deep-license failed failed "" "$_dl_started" ;;
+    esac
+elif [ "$SOURCE_SCAN" = "true" ] && [ "${DEEP_LICENSE:-false}" = "true" ]; then
+    er_record deep-license skipped no_input "no source tree at $DEEP_SRC"
 elif [ "$SOURCE_SCAN" = "true" ]; then
     er_record deep-license disabled
+elif [ "${DEEP_LICENSE:-false}" = "true" ]; then
+    er_record deep-license skipped no_input "not a source scan"
 fi
 
 # Where this mode's scanned files sit on disk. SOURCE (web UI) and POSTPROCESS

@@ -153,6 +153,8 @@ In the web UI, deep license detection is one of the Generation options. Either w
 > # Web UI: SBOM_SCANNER_IMAGE=bomlens:deep ./scripts/scan-sbom.sh --ui
 > ```
 
+Only the project's own files are scanned: dependency folders (`node_modules`, `vendor`, virtual environments), build output and tool folders are left out, since their licences come from the package managers. A tree with more than 20,000 such files is not scanned, and scancode is stopped after 600 seconds; `DEEP_LICENSE_MAX_FILES` and `DEEP_LICENSE_TIMEOUT` change the limits ([Docker image environment variables](../reference/docker-image.md#environment-variables)). Either case is noted in the log and in the run's [result manifest](../reference/engine-contract.md).
+
 Additional output: `MyApp_1.0.0_scancode.json`
 
 ---

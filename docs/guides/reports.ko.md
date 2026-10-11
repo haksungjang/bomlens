@@ -153,6 +153,8 @@ SECURITY_NVD_VERIFY=true NVD_API_KEY="your-key" \
 > # 웹 UI:  SBOM_SCANNER_IMAGE=bomlens:deep ./scripts/scan-sbom.sh --ui
 > ```
 
+프로젝트 자체 파일만 검사합니다. 의존성 폴더(`node_modules`, `vendor`, 가상 환경), 빌드 결과물, 도구 폴더는 라이선스를 패키지 관리자에서 얻으므로 제외합니다. 검사 대상 파일이 20,000개를 넘는 트리는 검사하지 않고, scancode는 600초가 지나면 멈춥니다. 한도는 `DEEP_LICENSE_MAX_FILES`와 `DEEP_LICENSE_TIMEOUT`으로 바꿀 수 있습니다([Docker 이미지 환경 변수](../reference/docker-image.ko.md#환경-변수)). 어느 경우든 로그와 실행 [결과 매니페스트](../reference/engine-contract.ko.md)에 남습니다.
+
 추가 산출물: `MyApp_1.0.0_scancode.json`
 
 ---
