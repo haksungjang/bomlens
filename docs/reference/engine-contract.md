@@ -120,6 +120,7 @@ Each step also has `stage` (1 for the SBOM a language image generated before thi
 | `vendored.cyclonedx` | `_vendored.cdx.json` |
 | `conformance` | `_conformance.json` |
 | `input-description` | `_input.json` |
+| `events` | `bomlens-events.jsonl` (`BOMLENS_EVENTS=file`) |
 | `other` | any other file the run wrote (reports, sidecars) |
 
 ## Package identifiers
@@ -155,6 +156,23 @@ Each stage gives `image` and `image_digest` (stage 1 is always pinned by digest;
 `MODE=PLAN` exits 0 when it wrote a plan, `ok` or `unsupported`; an `unsupported` plan records the `plan` step as `skipped` in the result manifest, so the run reads `succeeded_degraded`. It refuses an empty source (usually a mount that did not reach the container) with a non-zero exit. Before writing, it removes an earlier plan and an earlier run's stage 1 outputs from the output folder, since stage 2 cannot tell a fresh SBOM from a leftover one. Stage 1 images are pinned for the cdxgen tag this BomLens release was tested with; overriding `CDXGEN_TAG` makes the language images `unsupported` (`no-pinned-digest`).
 
 Run stage 2 whatever stage 1's exit code, and pass that code as `BOMLENS_STAGE1_EXIT`, `true` in `BOMLENS_STAGE1_OOM` when the stage 1 container was killed for memory, and the stage 1 log saved in the output folder as `BOMLENS_STAGE1_LOG` (a file name). When stage 1 failed or left no SBOM, stage 2 scans the source with syft instead (direct dependencies only), records the reason in `bomlens:sbom-tool-degraded` (`oom`, `disk-space`, `network`, `cdxgen-crash`), and the result manifest records `generate` as `degraded` (`fallback`), the same as the CLI.
+
+## Progress events
+
+Set `BOMLENS_EVENTS=file` to have the run write one JSON object per line to `bomlens-events.jsonl` in the output folder as it goes, or `BOMLENS_EVENTS=stderr` to write them to stderr, where they share the stream with warnings and the bundled tools' own messages: read only the lines that start with `{"v":1`. Use them to show progress while the run is going; the result manifest is the final record, and where the two differ the manifest wins. Each line follows [`schemas/engine-event-1.json`](https://github.com/sktelecom/bomlens/blob/main/schemas/engine-event-1.json):
+
+```json
+{"v":1,"seq":12,"ts":"2026-10-11T03:04:05Z","type":"step.end","step":"normalize","stage":2,"status":"ok","reason":null}
+```
+
+| `type` | When |
+|---|---|
+| `run.start` | the run began |
+| `step.start` | a step began (`step`, `stage`) |
+| `step.end` | a step ended, with `status`, `reason` and `detail` as in the manifest. A step that was turned off or could not run has an end without a start |
+| `run.end` | the run ended, with the manifest's `run.status`. A run that is stopped (`cancelled`) can leave a step with a start and no end |
+
+`seq` rises by one per event, so a reader can tell a lost or reordered line. The file is listed in the manifest's `outputs` with the role `events`, and the manifest appears only once the events are complete. An events file left by an earlier run in the folder is removed when a run starts.
 
 ## Versioning
 

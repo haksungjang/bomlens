@@ -65,6 +65,7 @@ run_optional_step() {
     local label="$1"; shift
     local _started=""
     declare -F er_record >/dev/null && _started="$(er_now)"
+    declare -F er_event >/dev/null && er_event step.start "$label"
     if "$@"; then
         [ -n "$_started" ] && er_record "$label" ok "" "" "$_started"
         return 0

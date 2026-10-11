@@ -137,6 +137,7 @@ MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
 | `UPLOAD_ENABLED` | — | `true` | If `false`, save locally without uploading (same as CLI `--generate-only`) |
 | `HOST_OUTPUT_DIR` | — | — | Mounted path to copy the outputs to |
 | `BOMLENS_STAGE1_EXIT`, `BOMLENS_STAGE1_OOM`, `BOMLENS_STAGE1_LOG` | — | — | `POSTPROCESS` after a stage 1 you ran yourself: its exit code, `true` if it was killed for memory, and its log's file name in the output folder. Stage 2 then falls back to a syft scan when stage 1 left no SBOM (see [Engine contract](engine-contract.md#execution-plan)) |
+| `BOMLENS_EVENTS` | — | — | `file` or `stderr`: write progress events, one JSON object per line, to `bomlens-events.jsonl` in the output folder or to stderr (see [Engine contract](engine-contract.md#progress-events)) |
 | `BOMLENS_IMAGE_REF`, `BOMLENS_IMAGE_DIGEST` | — | — | The image reference and digest the caller ran, repeated in `bomlens-result.json` (see [Engine contract](engine-contract.md)) |
 | `GENERATE_NOTICE` | — | `false` | Generate the open-source notice (CLI `--notice`) |
 | `GENERATE_SECURITY` | — | `false` | Generate the Trivy security report (CLI `--security`) |
