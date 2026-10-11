@@ -56,7 +56,7 @@ Every step that applies to the scan's mode is recorded, also when it did not run
 | `timeout` | the step ran out of time |
 | `not_installed` | the tool it needs is not in this image |
 | `too_large` | the input was over the step's size limit |
-| `fallback` | a simpler method was used instead (the SBOM came from the manifest-only fallback, direct dependencies only), or the step ran without the image it needs (`--deep-license` when the scancode image could not be pulled) |
+| `fallback` | a simpler method was used instead (the SBOM came from the manifest-only fallback, direct dependencies only, or a Poetry project with no `poetry.lock` was resolved only in part: ranged or table dependencies left out, or the pins' own dependencies not resolved), or the step ran without the image it needs (`--deep-license` when the scancode image could not be pulled) |
 | `unavailable` | the data the step reads was not available |
 | `budget_exhausted` | the step stopped at its work limit |
 | `no_input` | there was nothing for the step to read (no source tree, no signing key) |
@@ -155,7 +155,7 @@ Each stage gives `image` and `image_digest` (stage 1 is always pinned by digest;
 
 `MODE=PLAN` exits 0 when it wrote a plan, `ok` or `unsupported`; an `unsupported` plan records the `plan` step as `skipped` in the result manifest, so the run reads `succeeded_degraded`. It refuses an empty source (usually a mount that did not reach the container) with a non-zero exit. Before writing, it removes an earlier plan and an earlier run's stage 1 outputs from the output folder, since stage 2 cannot tell a fresh SBOM from a leftover one. Stage 1 images are pinned for the cdxgen tag this BomLens release was tested with; overriding `CDXGEN_TAG` makes the language images `unsupported` (`no-pinned-digest`).
 
-Run stage 2 whatever stage 1's exit code, and pass that code as `BOMLENS_STAGE1_EXIT`, `true` in `BOMLENS_STAGE1_OOM` when the stage 1 container was killed for memory, and the stage 1 log saved in the output folder as `BOMLENS_STAGE1_LOG` (a file name). When stage 1 failed or left no SBOM, stage 2 scans the source with syft instead (direct dependencies only), records the reason in `bomlens:sbom-tool-degraded` (`oom`, `disk-space`, `network`, `cdxgen-crash`), and the result manifest records `generate` as `degraded` (`fallback`), the same as the CLI.
+Run stage 2 whatever stage 1's exit code, and pass that code as `BOMLENS_STAGE1_EXIT`, `true` in `BOMLENS_STAGE1_OOM` when the stage 1 container was killed for memory, and the stage 1 log saved in the output folder as `BOMLENS_STAGE1_LOG` (a file name). When stage 1 failed or left no SBOM, stage 2 scans the source with syft instead (direct dependencies only), records the reason in `bomlens:sbom-tool-degraded` (`oom`, `disk-space`, `network`, `cdxgen-crash`, `cdxgen-unavailable`), and the result manifest records `generate` as `degraded` (`fallback`), the same as the CLI. For an `unsupported` plan, where no stage 1 ran, pass `BOMLENS_STAGE1_EXIT=127` (or `BOMLENS_STAGE1_REASON=cdxgen-unavailable`) with no SBOM: the reason is then `cdxgen-unavailable`.
 
 ## Progress events
 

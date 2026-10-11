@@ -904,10 +904,12 @@ EOF
             _s1_log="${BOMLENS_STAGE1_LOG:-}"
             case "$_s1_log" in ''|*/*|.*) _s1_log="" ;; esac
             # A caller that already classified the failure (the CLI does, with
-            # the same stage1_fail_reason) passes the reason itself.
+            # the same stage1_fail_reason) passes the reason itself. One that
+            # never ran stage 1 (an unsupported plan) passes cdxgen-unavailable,
+            # or exit code 127.
             case "${BOMLENS_STAGE1_REASON:-}" in
-                oom|disk-space|network|cdxgen-crash) _s1_reason="$BOMLENS_STAGE1_REASON" ;;
-                *) _s1_reason="$(stage1_fail_reason "${BOMLENS_STAGE1_OOM:-}" "${_s1_log:+$HOST_OUTPUT_DIR/$_s1_log}")" ;;
+                oom|disk-space|network|cdxgen-crash|cdxgen-unavailable) _s1_reason="$BOMLENS_STAGE1_REASON" ;;
+                *) _s1_reason="$(stage1_fail_reason "${BOMLENS_STAGE1_OOM:-}" "${_s1_log:+$HOST_OUTPUT_DIR/$_s1_log}" "$BOMLENS_STAGE1_EXIT")" ;;
             esac
             # The CLI prints its own guidance for this, before and after.
             [ -n "${_BOMLENS_CLI_FALLBACK:-}" ] || \
@@ -1035,11 +1037,20 @@ _gen_degraded="$(jq -r '[.metadata.properties[]? | select(.name == "bomlens:sbom
 # A Poetry project with no poetry.lock is scanned from its exact pins only
 # (build-prep.sh); when it also has ranged or table dependencies those are not
 # in the SBOM, which is a partial result and is recorded as one.
+_gen_poetry_partial=""; _gen_poetry_graph_failed=""
+case "$SCAN_MODE" in SOURCE|POSTPROCESS)
 _gen_poetry_partial="$(jq -r 'any(.metadata.properties[]?; .name == "bomlens:prep-step-applied" and .value == "poetry-requirements-partial")' "$OUTPUT_FILE" 2>/dev/null)"
+# The pins' own dependencies are resolved by a second cdxgen run
+# (poetry-graph); when it failed (no network, for one) they are missing too.
+_gen_poetry_graph_failed="$(jq -r 'any(.metadata.properties[]?; .name == "bomlens:pipeline-step-failed" and .value == "poetry-graph")' "$OUTPUT_FILE" 2>/dev/null)"
+;; esac
 if [ -n "$_gen_degraded" ]; then
     er_record generate degraded fallback "$_gen_degraded" "$ER_PHASE_STARTED" "" "{\"components\":${_gen_count:-0}}"
-elif [ "$_gen_poetry_partial" = "true" ]; then
-    er_record generate degraded fallback "Poetry project with no poetry.lock: only exact pins resolved; ranged and table dependencies are missing" "$ER_PHASE_STARTED" "" "{\"components\":${_gen_count:-0}}"
+elif [ "$_gen_poetry_partial" = "true" ] || [ "$_gen_poetry_graph_failed" = "true" ]; then
+    _gen_poetry_detail="Poetry project with no poetry.lock:"
+    [ "$_gen_poetry_partial" = "true" ] && _gen_poetry_detail="$_gen_poetry_detail only exact pins resolved, ranged and table dependencies are missing;"
+    [ "$_gen_poetry_graph_failed" = "true" ] && _gen_poetry_detail="$_gen_poetry_detail the dependencies of the pins could not be resolved (poetry-graph failed);"
+    er_record generate degraded fallback "${_gen_poetry_detail%;}" "$ER_PHASE_STARTED" "" "{\"components\":${_gen_count:-0}}"
 else
     er_record generate ok "" "" "$ER_PHASE_STARTED" "" "{\"components\":${_gen_count:-0}}"
 fi

@@ -639,6 +639,19 @@ elif command -v syft >/dev/null 2>&1; then
         && grep -q 'stage 1 (cdxgen) did not produce an SBOM' "$D.log" \
         && pass "an unknown reason is ignored and classified as usual" \
         || fail "unknown reason: $(jq -c '[.metadata.properties[]? | select(.name=="bomlens:sbom-tool-degraded")]' "$D/demo_1.0_bom.json" 2>&1)"
+    # No stage 1 at all (an unsupported plan): exit 127 or the reason itself.
+    for how in exit reason; do
+        D="$(new_run "fallback-no-stage1-$how" empty)"
+        if [ "$how" = exit ]; then
+            run_engine "$D" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$FB" BOMLENS_STAGE1_EXIT=127
+        else
+            run_engine "$D" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$FB" BOMLENS_STAGE1_EXIT=1 BOMLENS_STAGE1_REASON=cdxgen-unavailable
+        fi
+        [ "$(jq -r '[.metadata.properties[]? | select(.name=="bomlens:sbom-tool-degraded") | .value] | first' "$D/demo_1.0_bom.json" 2>/dev/null)" = "cdxgen-unavailable" ] \
+            && [ "$(jq -r '[.steps[] | select(.id=="generate")][0] | "\(.status) \(.reason) \(.detail)"' "$D/bomlens-result.json")" = "degraded fallback cdxgen-unavailable" ] \
+            && pass "no stage 1 ($how) is recorded as cdxgen-unavailable, not a crash" \
+            || fail "no stage 1 ($how): $(jq -c '[.metadata.properties[]? | select(.name=="bomlens:sbom-tool-degraded")]' "$D/demo_1.0_bom.json" 2>&1)"
+    done
     D="$(new_run stage1-ok)"
     run_engine "$D" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$FB" BOMLENS_STAGE1_EXIT=0
     [ "$(jq -r '[.steps[] | select(.id=="generate")][0].status' "$D/bomlens-result.json")" = "ok" ] \
@@ -865,6 +878,33 @@ else
         && pass "an unreachable image fails with the credentials hint, syft's own error and a failed run" \
         || fail "unreachable image: rc $rc, $(jq -c .run "$IMG/bad/bomlens-result.json" 2>&1)" "$(tail -6 "$IMG/bad.log")"
 fi
+
+echo "== a lock-less Poetry SBOM whose pins could not be resolved further =="
+D="$(new_run poetry-analyze)"
+jq '.metadata.properties = ((.metadata.properties // []) + [{"name":"bomlens:pipeline-step-failed","value":"poetry-graph"}])' "$D/demo_1.0_bom.json" > "$D/supplier.json" && rm -f "$D/demo_1.0_bom.json"
+run_engine "$D" "$ROOT_DIR/docker/lib" MODE=ANALYZE ANALYZE_SBOM="$D/supplier.json"
+[ "$(jq -r '[.steps[] | select(.id=="generate")][0].status // "none"' "$D/bomlens-result.json" 2>/dev/null)" != "degraded" ] \
+    && pass "a supplier SBOM under ANALYZE that carries the Poetry mark does not degrade this run's generate" \
+    || fail "ANALYZE took the supplier's Poetry mark: $(jq -c '[.steps[] | select(.id=="generate")]' "$D/bomlens-result.json")" "$(tail -5 "$D.log")"
+# build-prep.sh records poetry-graph as failed on the SBOM (no network); the
+# manifest says the same on generate, so the run is not a plain success.
+for case in graph-failed partial both; do
+    D="$(new_run "poetry-$case")"
+    if [ "$case" = graph-failed ]; then
+        prop='[{"name":"bomlens:prep-step-applied","value":"poetry-requirements"},{"name":"bomlens:prep-step-applied","value":"poetry-graph"},{"name":"bomlens:pipeline-step-failed","value":"poetry-graph"}]'
+    elif [ "$case" = partial ]; then
+        prop='[{"name":"bomlens:prep-step-applied","value":"poetry-requirements"},{"name":"bomlens:prep-step-applied","value":"poetry-requirements-partial"},{"name":"bomlens:prep-step-applied","value":"poetry-graph"}]'
+    else
+        prop='[{"name":"bomlens:prep-step-applied","value":"poetry-requirements-partial"},{"name":"bomlens:pipeline-step-failed","value":"poetry-graph"}]'
+    fi
+    jq --argjson p "$prop" '.metadata.properties = ((.metadata.properties // []) + $p)' "$D/demo_1.0_bom.json" > "$D/x" && mv "$D/x" "$D/demo_1.0_bom.json"
+    run_engine "$D" "$ROOT_DIR/docker/lib"
+    got="$(jq -r '.run.status + " " + ([.steps[] | select(.id=="generate")][0] | "\(.status) \(.reason) \(.detail)")' "$D/bomlens-result.json")"
+    case "$case:$got" in
+        "graph-failed:succeeded_degraded degraded fallback "*"poetry-graph failed)"|"partial:succeeded_degraded degraded fallback "*"ranged and table dependencies are missing"|"both:succeeded_degraded degraded fallback "*"dependencies are missing; the dependencies of the pins could not be resolved (poetry-graph failed)") pass "Poetry $case: generate degraded (fallback), run succeeded_degraded" ;;
+        *) fail "Poetry $case: $got" ;;
+    esac
+done
 
 echo "== every step label in entrypoint.sh is documented =="
 missing=""

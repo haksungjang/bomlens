@@ -56,7 +56,7 @@ BomLens 이미지를 스캔 엔진으로 쓰는 프로그램은 모든 스캔이
 | `timeout` | 시간 제한을 넘김 |
 | `not_installed` | 필요한 도구가 이 이미지에 없음 |
 | `too_large` | 입력이 단계의 크기 제한을 넘음 |
-| `fallback` | 더 단순한 방법으로 대신함(매니페스트만 읽는 대체 경로로 SBOM을 만들어 직접 의존성만 있음), 또는 필요한 이미지 없이 진행함(scancode 이미지를 내려받지 못한 `--deep-license`) |
+| `fallback` | 더 단순한 방법으로 대신함(매니페스트만 읽는 대체 경로로 SBOM을 만들어 직접 의존성만 있음, 또는 `poetry.lock`이 없는 Poetry 프로젝트를 일부만 풀었음: 범위·테이블 의존성이 빠졌거나 고정 버전의 하위 의존성을 풀지 못함), 또는 필요한 이미지 없이 진행함(scancode 이미지를 내려받지 못한 `--deep-license`) |
 | `unavailable` | 단계가 읽는 데이터를 쓸 수 없었음 |
 | `budget_exhausted` | 작업량 제한에서 멈춤 |
 | `no_input` | 단계가 읽을 것이 없었음(소스 트리 없음, 서명 키 없음) |
@@ -155,7 +155,7 @@ docker run --rm -v "$PWD/src:/src:ro" -v "$PWD/out:/host-output" \
 
 `MODE=PLAN`은 계획을 썼으면 `ok`든 `unsupported`든 0으로 끝납니다. `unsupported` 계획은 결과 매니페스트에 `plan` 단계를 `skipped`로 기록하므로 실행은 `succeeded_degraded`입니다. 빈 소스(대개 컨테이너에 닿지 않은 마운트)는 0이 아닌 종료 코드로 거부합니다. 계획을 쓰기 전에 출력 폴더에서 이전 계획과 이전 실행의 1단계 산출물을 지웁니다. 2단계는 새 SBOM과 남은 SBOM을 구분할 수 없기 때문입니다. 1단계 이미지는 이 BomLens 릴리스가 시험한 cdxgen 태그로 고정되어 있어, `CDXGEN_TAG`를 바꾸면 언어 이미지는 `unsupported`(`no-pinned-digest`)가 됩니다.
 
-2단계는 1단계 종료 코드와 관계없이 실행하고, 그 코드를 `BOMLENS_STAGE1_EXIT`로, 1단계 컨테이너가 메모리 부족으로 종료됐으면 `BOMLENS_STAGE1_OOM`에 `true`를, 출력 폴더에 저장한 1단계 로그의 파일 이름을 `BOMLENS_STAGE1_LOG`로 넘깁니다. 1단계가 실패했거나 SBOM을 남기지 않았으면 2단계가 syft로 소스를 대신 스캔하고(직접 의존성만), 사유를 `bomlens:sbom-tool-degraded`(`oom`, `disk-space`, `network`, `cdxgen-crash`)에 적으며, 결과 매니페스트는 `generate`를 `degraded`(`fallback`)로 기록합니다. CLI와 같은 동작입니다.
+2단계는 1단계 종료 코드와 관계없이 실행하고, 그 코드를 `BOMLENS_STAGE1_EXIT`로, 1단계 컨테이너가 메모리 부족으로 종료됐으면 `BOMLENS_STAGE1_OOM`에 `true`를, 출력 폴더에 저장한 1단계 로그의 파일 이름을 `BOMLENS_STAGE1_LOG`로 넘깁니다. 1단계가 실패했거나 SBOM을 남기지 않았으면 2단계가 syft로 소스를 대신 스캔하고(직접 의존성만), 사유를 `bomlens:sbom-tool-degraded`(`oom`, `disk-space`, `network`, `cdxgen-crash`, `cdxgen-unavailable`)에 적으며, 결과 매니페스트는 `generate`를 `degraded`(`fallback`)로 기록합니다. CLI와 같은 동작입니다. 1단계를 실행하지 않는 `unsupported` 계획에서는 SBOM 없이 `BOMLENS_STAGE1_EXIT=127`(또는 `BOMLENS_STAGE1_REASON=cdxgen-unavailable`)을 넘기면 사유가 `cdxgen-unavailable`이 됩니다.
 
 ## 진행 이벤트
 
