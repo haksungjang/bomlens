@@ -6545,6 +6545,29 @@ else
     echo "  SKIP: node unavailable"
 fi
 
+echo "== gradle: a read-only account home moves Gradle's files to HOME =="
+GU_ROOT="$WORK/gradle-home"; mkdir -p "$GU_ROOT/bin" "$GU_ROOT/src" "$GU_ROOT/out" "$GU_ROOT/acct" "$GU_ROOT/home"
+printf "plugins { id 'java' }\n" > "$GU_ROOT/src/build.gradle"
+printf '#!/bin/sh\necho "root:x:0:0:root:%s:/bin/sh"\n' "$GU_ROOT/acct" > "$GU_ROOT/bin/getent"
+printf '#!/bin/sh\necho "${GRADLE_USER_HOME:-unset}" >> "%s/seen"\nexit 0\n' "$GU_ROOT" > "$GU_ROOT/bin/gradle"
+printf '#!/bin/sh\nout=""; prev=""; for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done\necho "${GRADLE_USER_HOME:-unset}" >> "%s/seen-cdxgen"\nprintf %s > "$out"\n' "$GU_ROOT" "'{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.6\",\"version\":1,\"metadata\":{},\"components\":[]}'" > "$GU_ROOT/bin/cdxgen"
+chmod +x "$GU_ROOT/bin/getent" "$GU_ROOT/bin/gradle" "$GU_ROOT/bin/cdxgen"
+if [ "$(id -u)" = 0 ]; then
+    echo "  SKIP: running as root, which can write any folder"
+else
+    chmod 555 "$GU_ROOT/acct"
+    env -u GRADLE_USER_HOME PATH="$GU_ROOT/bin:$PATH" HOME="$GU_ROOT/home" sh "$LIB/build-prep.sh" "$GU_ROOT/src" "$GU_ROOT/out/bom.json" > "$GU_ROOT/log" 2>&1
+    chmod 755 "$GU_ROOT/acct"
+    [ "$(sort -u "$GU_ROOT/seen" 2>/dev/null)" = "$GU_ROOT/home/.gradle" ] && [ "$(sort -u "$GU_ROOT/seen-cdxgen")" = "$GU_ROOT/home/.gradle" ] \
+        && pass "Gradle and cdxgen get GRADLE_USER_HOME under HOME when ~/.gradle cannot be written" \
+        || fail "gradle home: gradle $(sort -u "$GU_ROOT/seen" 2>&1 | tr '\n' ' '), cdxgen $(sort -u "$GU_ROOT/seen-cdxgen" 2>&1 | tr '\n' ' ')" "$(grep gradle "$GU_ROOT/log")"
+    rm -f "$GU_ROOT/seen" "$GU_ROOT/seen-cdxgen"
+    env -u GRADLE_USER_HOME PATH="$GU_ROOT/bin:$PATH" HOME="$GU_ROOT/home" sh "$LIB/build-prep.sh" "$GU_ROOT/src" "$GU_ROOT/out/bom.json" > "$GU_ROOT/log2" 2>&1
+    [ "$(sort -u "$GU_ROOT/seen" 2>/dev/null)" = "unset" ] \
+        && pass "a writable ~/.gradle (the CLI's mounted cache) is left in use" \
+        || fail "writable account home: gradle saw $(sort -u "$GU_ROOT/seen" 2>&1 | tr '\n' ' ')"
+fi
+
 echo "== prep_step: every resolution step runs through it (no bare invocation left) =="
 # The pre-prep_step patterns (silently discarded stderr, no time limit) must
 # not reappear alongside prep_step for the same command.

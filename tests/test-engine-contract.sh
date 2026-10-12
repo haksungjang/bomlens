@@ -480,6 +480,13 @@ jq -r '.metadata.properties[]? | select(.name=="bomlens:sbom-empty-with-manifest
     || fail "SBOM properties: $(jq -c '.metadata.properties' "$D/demo_1.0_bom.json")"
 err="$(schema_errors "$D/bomlens-result.json")"
 [ -z "$err" ] && pass "the no_components manifest validates against the schema" || fail "schema errors" "$err"
+# A resolver step that failed is the likely reason, and is named.
+D="$(new_run empty-step-failed empty)"
+echo '{"bomFormat":"CycloneDX","specVersion":"1.6","metadata":{"component":{"type":"application","name":"x","version":"1"},"properties":[{"name":"bomlens:pipeline-step-failed","value":"gradle-dependencies"}]},"components":[]}' > "$D/demo_1.0_bom.json"
+run_engine "$D" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$DECL"
+[ "$(jq -r '[.steps[] | select(.id=="generate")][0].detail' "$D/bomlens-result.json")" = "manifests found: pyproject.toml; steps that failed: gradle-dependencies" ] \
+    && pass "the no_components detail names the resolver steps that failed" \
+    || fail "no_components detail: $(jq -r '[.steps[] | select(.id=="generate")][0].detail' "$D/bomlens-result.json")"
 # A later step that fills the SBOM (here the conda sidecar build-prep leaves
 # for the merge) means the scan did find the dependencies: no flag.
 D="$(new_run empty-then-filled empty)"; empty_bom "$D"

@@ -568,6 +568,20 @@ fi
 ANDROID_RELEASE_SET=""
 if { [ -f build.gradle ] || [ -f build.gradle.kts ]; } && command -v gradle >/dev/null 2>&1; then
     if [ -x ./gradlew ]; then GRADLEW="./gradlew"; else GRADLEW="gradle"; fi
+    # Gradle keeps its files under ~/.gradle, where ~ is the account's home
+    # from the password file (/root), not HOME. With a read-only root it
+    # cannot unpack its native library there and every Gradle build fails at
+    # once (cdxgen too, with an empty SBOM). Then it uses $HOME/.gradle. A
+    # writable ~/.gradle (the CLI mounts the host's Gradle cache there) is
+    # kept.
+    if [ -z "${GRADLE_USER_HOME:-}" ]; then
+        _acct_home="$( (getent passwd "$(id -u)" 2>/dev/null || true) | cut -d: -f6)"
+        [ -n "$_acct_home" ] || _acct_home=/root
+        if ! { mkdir -p "$_acct_home/.gradle" 2>/dev/null && [ -w "$_acct_home/.gradle" ]; }; then
+            export GRADLE_USER_HOME="${HOME:-/tmp}/.gradle"
+            log "gradle: $_acct_home/.gradle cannot be written; using $GRADLE_USER_HOME"
+        fi
+    fi
 
     # Android scope fix: cdxgen resolves EVERY Gradle configuration, so an AGP
     # project drags its build/test toolchain (androidTestUtil, Unified Test
