@@ -987,6 +987,74 @@ LCJSON
         || fail "licenseConflict stamping broke --byte-stable determinism"
 fi
 
+echo "== os-licenses: a Debian package's several licenses all apply, never a choice =="
+# Trivy lists each license of a copyright file as its own entry. They must stay
+# separate entries (no OR expression), and the class and the conflict verdict
+# must read them as all applying: a GPL-2.0-only among them is strong copyleft
+# and incompatible with a permissive product. A Maven package's several
+# entries stay a choice, and an apk expression is kept as syft wrote it.
+OSLT="$WORK/osl-multi"; mkdir -p "$OSLT/bin"
+cat > "$OSLT/trivy.cdx.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.7","components":[
+ {"name":"libxxhash0","purl":"pkg:deb/debian/libxxhash0@0.8.1-1?arch=amd64","licenses":[{"license":{"id":"BSD-2-Clause"}},{"license":{"id":"GPL-2.0-only"}}]},
+ {"name":"base-passwd","purl":"pkg:deb/debian/base-passwd@3.6.1?arch=amd64","licenses":[{"license":{"id":"GPL-2.0-only"}},{"license":{"name":"public-domain"}}]},
+ {"name":"ncurses-base","purl":"pkg:deb/debian/ncurses-base@6.4-4?arch=all","licenses":[{"license":{"name":"MIT-X11"}},{"license":{"id":"X11"}},{"license":{"id":"BSD-3-Clause"}}]}]}
+JSON
+cat > "$OSLT/bin/trivy" <<'STUB'
+#!/bin/bash
+out=""; prev=""; for a in "$@"; do [ "$prev" = "--output" ] && out="$a"; prev="$a"; done
+cp "$OSLT_FIXTURE" "$out"
+STUB
+chmod +x "$OSLT/bin/trivy"
+cat > "$OSLT/bom.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,
+ "metadata":{"component":{"type":"container","name":"img","version":"1","licenses":[{"license":{"id":"Apache-2.0"}}]}},
+ "components":[
+ {"type":"library","name":"libxxhash0","version":"0.8.1-1","purl":"pkg:deb/debian/libxxhash0@0.8.1-1?arch=amd64","licenses":[{"license":{"name":"sha256:0b1c"}}]},
+ {"type":"library","name":"base-passwd","version":"3.6.1","purl":"pkg:deb/debian/base-passwd@3.6.1?arch=amd64"},
+ {"type":"library","name":"ncurses-base","version":"6.4-4","purl":"pkg:deb/debian/ncurses-base@6.4-4?arch=all"},
+ {"type":"library","name":"musl","version":"1.2.5","purl":"pkg:apk/alpine/musl@1.2.5","licenses":[{"expression":"MPL-2.0 OR MIT"}]},
+ {"type":"library","name":"choice","version":"1","purl":"pkg:maven/x/choice@1","licenses":[{"license":{"id":"MIT"}},{"license":{"id":"GPL-2.0-only"}}]},
+ {"type":"library","name":"updeb","version":"1","purl":"PKG:DEB/debian/updeb@1","licenses":[{"license":{"id":"MIT"}},{"license":{"id":"GPL-2.0-only"}}]}]}
+JSON
+osl_counts="$(env PATH="$OSLT/bin:$PATH" OSLT_FIXTURE="$OSLT/trivy.cdx.json" bash "$LIB/os-licenses.sh" "$OSLT/bom.json" IMAGE debian:12 2>/dev/null)"
+osl_lic() { jq -c --arg n "$1" '[.components[] | select(.name == $n) | .licenses[]? | (.license.id // .license.name // ("expression:" + .expression))]' "$OSLT/bom.json"; }
+[ "$osl_counts" = "3 0" ] && [ "$(osl_lic libxxhash0)" = '["BSD-2-Clause","GPL-2.0-only"]' ] \
+    && [ "$(osl_lic ncurses-base)" = '["MIT-X11","X11","BSD-3-Clause"]' ] \
+    && pass "os-licenses: each license Trivy lists for a deb package is its own entry" \
+    || fail "os-licenses: counts '$osl_counts', libxxhash0 $(osl_lic libxxhash0), ncurses-base $(osl_lic ncurses-base)"
+bash "$LIB/normalize-sbom.sh" "$OSLT/bom.json" >/dev/null 2>&1
+osl_or="$(jq '[.components[] | select((.purl // "") | startswith("pkg:deb/")) | .licenses[]?
+    | select(has("expression") or ((.license.id // .license.name // "") | test("\\s(OR|AND)\\s"; "i")))] | length' "$OSLT/bom.json")"
+osl_prop() { jq -r --arg n "$1" --arg p "$2" '[.components[] | select(.name == $n) | .properties[]? | select(.name == $p) | .value] | first // "none"' "$OSLT/bom.json"; }
+[ "$osl_or" = 0 ] && [ "$(osl_lic libxxhash0)" = '["BSD-2-Clause","GPL-2.0-only"]' ] \
+    && pass "after normalize no deb package carries an OR or AND expression, the entries stay separate" \
+    || fail "deb licenses were joined into an expression ($osl_or entries): libxxhash0 $(osl_lic libxxhash0)"
+[ "$(osl_prop libxxhash0 bomlens:licenseClass)" = strong-copyleft ] && [ "$(osl_prop base-passwd bomlens:licenseClass)" = strong-copyleft ] \
+    && pass "a deb package with GPL-2.0-only among its licenses is strong copyleft" \
+    || fail "strong-copyleft flag: libxxhash0 $(osl_prop libxxhash0 bomlens:licenseClass), base-passwd $(osl_prop base-passwd bomlens:licenseClass)"
+[ "$(osl_prop libxxhash0 bomlens:licenseConflict)" = incompatible ] && [ "$(osl_prop base-passwd bomlens:licenseConflict)" = incompatible ] \
+    && pass "the conflict verdict reads a deb package's licenses as all applying (GPL-2.0-only and BSD-2-Clause is incompatible with Apache-2.0)" \
+    || fail "deb conflict verdict: libxxhash0 $(osl_prop libxxhash0 bomlens:licenseConflict), base-passwd $(osl_prop base-passwd bomlens:licenseConflict)"
+[ "$(osl_prop ncurses-base bomlens:licenseConflict)" = compatible ] \
+    && pass "a deb package whose licenses are all permissive (MIT-X11, X11, BSD-3-Clause) is compatible" \
+    || fail "ncurses-base verdict: $(osl_prop ncurses-base bomlens:licenseConflict)"
+[ "$(osl_prop ncurses-base bomlens:licenseClass)" = permissive ] \
+    && pass "Debian's MIT-X11 is classed as permissive" \
+    || fail "ncurses-base class: $(osl_prop ncurses-base bomlens:licenseClass)"
+[ "$(osl_prop updeb bomlens:licenseConflict)" = incompatible ] \
+    && pass "a deb purl written in upper case is still read as all applying" \
+    || fail "PKG:DEB verdict: $(osl_prop updeb bomlens:licenseConflict)"
+[ "$(osl_prop choice bomlens:licenseConflict)" = compatible ] && [ "$(osl_lic musl)" = '["expression:MPL-2.0 OR MIT"]' ] \
+    && pass "a Maven package's several licenses stay a choice and an apk expression is kept" \
+    || fail "non-deb: choice $(osl_prop choice bomlens:licenseConflict), musl $(osl_lic musl)"
+bash "$LIB/generate-notice.sh" "$OSLT/bom.json" "$OSLT/n" img >/dev/null 2>&1
+osl_under() { awk -v h="License: $1" -v c="  - $2@" '$0 == h {on = 1; next} /^License: / {on = 0} on && index($0, c) == 1 {found = 1} END {exit !found}' "$OSLT/n_NOTICE.txt"; }
+osl_under BSD-2-Clause libxxhash0 && osl_under GPL-2.0-only libxxhash0 \
+    && ! grep -qE '^License: .*(GPL-2\.0-only OR|OR GPL-2\.0-only)' "$OSLT/n_NOTICE.txt" \
+    && pass "the NOTICE lists a deb package under each of its licenses" \
+    || fail "NOTICE grouping of libxxhash0" "$(grep -n -E '^License: |libxxhash0' "$OSLT/n_NOTICE.txt" 2>/dev/null | head -10)"
+
 echo "== license-conflict drift guard: the jq parser and licenses.ts share one grammar =="
 # Same contract as the license-class guard above: the SPDX operator patterns and
 # the exception test are hand-mirrored, so extract both sides and diff them.
