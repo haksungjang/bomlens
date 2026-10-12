@@ -394,6 +394,7 @@ cdx_checks() {
         detail:((if \$dep_edges==0 and \$tot==0 then \"nothing to relate\"
                  else \"\(\$dep_edges) edge(s)\" end)
                 + (if \$agg==\"\" then \"\"
+                   elif \$agg==\"unknown\" and \$dep_edges==0 and \$tot>0 then \", graph completeness unknown\"
                    elif \$agg==\"unknown\" then \", graph completeness unknown (no positive evidence found, not a defect)\"
                    else \", declared \(\$agg)\" end)), missing:[]},
        {id:\"license\", label:\"License coverage (>= \(\$licmin)%, recommended)\", required:false,

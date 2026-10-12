@@ -9417,6 +9417,15 @@ case "$cu" in
     *) fail "transitive check detail/status wrong for an unknown declaration" "$cu" ;;
 esac
 
+jq '.compositions = [{"aggregate":"unknown"}] | .dependencies = []' "$FIX/good-cyclonedx.json" > "$WORK/comp-unknown-noedge.json"
+bash "$LIB/validate-sbom.sh" "$WORK/comp-unknown-noedge.json" "$WORK/compun" "supplier" >/dev/null 2>&1
+cun=$(jq -r '.checks[] | select(.id=="transitive") | "\(.status)\t\(.detail)"' "$WORK/compun_conformance.json")
+case "$cun" in
+    fail*"not a defect"*) fail "a failed transitive check must not carry the not-a-defect note" "$cun" ;;
+    fail*"graph completeness unknown") pass "a failed transitive check with an unknown declaration leaves out the not-a-defect note" ;;
+    *) fail "transitive check detail/status wrong for an unknown declaration with no edges" "$cun" ;;
+esac
+
 bash "$LIB/validate-sbom.sh" "$FIX/good-cyclonedx.json" "$WORK/compnone" "supplier" >/dev/null 2>&1
 cn=$(jq -r '.checks[] | select(.id=="transitive") | .detail' "$WORK/compnone_conformance.json")
 [ "$cn" = "1 edge(s)" ] \
