@@ -255,7 +255,7 @@ def expr_verdict($s; $outbound; $compat):
 #     licenses offers a choice), so the best verdict wins, the same rule as OR.
 def component_license_conflict($outbound; $compat):
   [ (.licenses // [])[] | (.license.id // .license.name // .expression // "") | select(. != "") ] as $strings
-  | ((.purl // "") | startswith("pkg:deb/")) as $all_apply
+  | ((.purl // "") | ascii_downcase | startswith("pkg:deb/")) as $all_apply
   | if ($strings | length) == 0 then {verdict: "unknown", why: "The component declares no license."}
     elif $all_apply then
       [ $strings[] | (expr_verdict(.; $outbound; $compat)

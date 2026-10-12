@@ -1014,7 +1014,8 @@ cat > "$OSLT/bom.json" <<'JSON'
  {"type":"library","name":"base-passwd","version":"3.6.1","purl":"pkg:deb/debian/base-passwd@3.6.1?arch=amd64"},
  {"type":"library","name":"ncurses-base","version":"6.4-4","purl":"pkg:deb/debian/ncurses-base@6.4-4?arch=all"},
  {"type":"library","name":"musl","version":"1.2.5","purl":"pkg:apk/alpine/musl@1.2.5","licenses":[{"expression":"MPL-2.0 OR MIT"}]},
- {"type":"library","name":"choice","version":"1","purl":"pkg:maven/x/choice@1","licenses":[{"license":{"id":"MIT"}},{"license":{"id":"GPL-2.0-only"}}]}]}
+ {"type":"library","name":"choice","version":"1","purl":"pkg:maven/x/choice@1","licenses":[{"license":{"id":"MIT"}},{"license":{"id":"GPL-2.0-only"}}]},
+ {"type":"library","name":"updeb","version":"1","purl":"PKG:DEB/debian/updeb@1","licenses":[{"license":{"id":"MIT"}},{"license":{"id":"GPL-2.0-only"}}]}]}
 JSON
 osl_counts="$(env PATH="$OSLT/bin:$PATH" OSLT_FIXTURE="$OSLT/trivy.cdx.json" bash "$LIB/os-licenses.sh" "$OSLT/bom.json" IMAGE debian:12 2>/dev/null)"
 osl_lic() { jq -c --arg n "$1" '[.components[] | select(.name == $n) | .licenses[]? | (.license.id // .license.name // ("expression:" + .expression))]' "$OSLT/bom.json"; }
@@ -1038,6 +1039,12 @@ osl_prop() { jq -r --arg n "$1" --arg p "$2" '[.components[] | select(.name == $
 [ "$(osl_prop ncurses-base bomlens:licenseConflict)" = compatible ] \
     && pass "a deb package whose licenses are all permissive (MIT-X11, X11, BSD-3-Clause) is compatible" \
     || fail "ncurses-base verdict: $(osl_prop ncurses-base bomlens:licenseConflict)"
+[ "$(osl_prop ncurses-base bomlens:licenseClass)" = permissive ] \
+    && pass "Debian's MIT-X11 is classed as permissive" \
+    || fail "ncurses-base class: $(osl_prop ncurses-base bomlens:licenseClass)"
+[ "$(osl_prop updeb bomlens:licenseConflict)" = incompatible ] \
+    && pass "a deb purl written in upper case is still read as all applying" \
+    || fail "PKG:DEB verdict: $(osl_prop updeb bomlens:licenseConflict)"
 [ "$(osl_prop choice bomlens:licenseConflict)" = compatible ] && [ "$(osl_lic musl)" = '["expression:MPL-2.0 OR MIT"]' ] \
     && pass "a Maven package's several licenses stay a choice and an apk expression is kept" \
     || fail "non-deb: choice $(osl_prop choice bomlens:licenseConflict), musl $(osl_lic musl)"

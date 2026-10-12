@@ -435,7 +435,7 @@ export function componentConflict(
 ): ConflictResult {
   if (licenses.length === 0)
     return { verdict: "unknown", why: "The component declares no license." };
-  if (purl?.startsWith("pkg:deb/"))
+  if (purl?.toLowerCase().startsWith("pkg:deb/"))
     return licenses
       .map(
         (l): ConflictResult =>

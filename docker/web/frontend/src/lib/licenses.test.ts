@@ -284,6 +284,12 @@ describe("componentConflict", () => {
 
   it("classes Debian's MIT-X11 license as permissive", () => {
     expect(deb(["MIT-X11", "X11", "BSD-3-Clause"])).toBe("compatible");
+    // purl types are case-insensitive, and a single OR expression on a deb
+    // package is a real choice stated in one entry.
+    expect(
+      componentConflict(["MIT", "GPL-2.0-only"], "Apache-2.0", RULES, "PKG:DEB/debian/x@1").verdict,
+    ).toBe("incompatible");
+    expect(deb(["GPL-2.0-only OR MIT"])).toBe("compatible");
   });
 });
 
