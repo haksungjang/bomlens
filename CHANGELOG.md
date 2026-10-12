@@ -44,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A project named `app` or `src` stopped every scan: the names scanners give a project they cannot name were refused even when the caller chose them. They are now refused only when the SBOM is uploaded (`UPLOAD_ENABLED` is not `false`), where they collide on an SBOM import platform; otherwise the name is kept with a warning.
 - A Gradle project scanned with a read-only root filesystem (as an execution-plan caller runs stage 1) came back with no components: Gradle keeps its files under the account's `~/.gradle`, not `HOME`, and failed at once when it could not write there. It now uses `$HOME/.gradle` in that case; a writable `~/.gradle`, such as the CLI's mounted Gradle cache, is still used. When a source that declares dependencies yields none, the result manifest's `generate` detail now also names the resolver steps that failed.
 - The execution plan (`bomlens-plan.json`) gave its `contract.version` as `1.0.0` while the result manifest and the image label said `1.2.0`. The plan now takes the one engine contract version the manifest uses, and a test keeps the label, the plan, the manifest and the contract page in step.
 - A Python project scanned from its `pyproject.toml` could list `pkg:pypi/unknown@latest`, linked from the project: a package cdxgen could not name in its own environment, not one of the project's. It is now left out, and the result manifest says so: `generate` counts it as `unresolved` and its `detail` names it.

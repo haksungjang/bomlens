@@ -1115,6 +1115,18 @@ done
 err="$(schema_errors "$D/bomlens-result.json")"
 [ -z "$err" ] && pass "a manifest with unresolved packages validates" || fail "schema errors" "$err"
 
+echo "== a project named app, nothing uploaded =="
+D="$(new_run name-app)"; mv "$D/demo_1.0_bom.json" "$D/app_1.0_bom.json"
+( cd "$D" && env PATH="$WORK/bin:$PATH" MODE=POSTPROCESS PROJECT_NAME=app PROJECT_VERSION=1.0 \
+    HOST_OUTPUT_DIR="$D" BOMLENS_LIBDIR="$ROOT_DIR/docker/lib" BOMLENS_RUN_INPUT=app_1.0_bom.json \
+    UPLOAD_ENABLED=false GENERATE_SECURITY=false SECURITY_ENRICH=false ENRICH_EOL=false ENRICH_MALICIOUS=false \
+    bash "$ENTRY" ) > "$D.log" 2>&1
+rc=$?
+[ "$rc" = 0 ] && jq -e '[.steps[] | select(.id=="stamp-metadata")][0] | .status == "ok" and (.detail // "" | startswith("the project name '"'"'app'"'"' is also the name scanners give"))' "$D/bomlens-result.json" >/dev/null \
+    && [ "$(jq -r .run.status "$D/bomlens-result.json")" = succeeded ] \
+    && pass "a project named app runs through: stamp-metadata ok with the warning in its detail" \
+    || fail "name app: rc $rc, $(jq -c '[.steps[] | select(.id=="stamp-metadata")], .run.status' "$D/bomlens-result.json" 2>&1)" "$(grep -i 'stamp' "$D.log")"
+
 echo "== every step label in entrypoint.sh is documented =="
 missing=""
 for id in $(grep -v '^[[:space:]]*#' "$ENTRY" | grep -oE '(run_optional_step|er_record|er_phase) [a-z][a-z0-9-]+' | awk '{print $2}' | sort -u); do

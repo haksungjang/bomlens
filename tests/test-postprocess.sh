@@ -193,10 +193,19 @@ echo "== final net: stamp fails closed on the placeholder name and on bad input 
 # The engine-agnostic net must reject 'src'/'app' as the stamped name (a colliding
 # codelocation), not silently pass it through.
 cp "$FIX/src-latest-root.json" "$WORK/g.json"
-if bash "$LIB/stamp-metadata.sh" "$WORK/g.json" "src" "1.0.0" >/dev/null 2>&1; then
+if env -u UPLOAD_ENABLED bash "$LIB/stamp-metadata.sh" "$WORK/g.json" "src" "1.0.0" >/dev/null 2>&1; then
     fail "stamp accepted the generic placeholder 'src' as a project name"
 else
-    pass "stamp rejects 'src' as a project name (exit != 0)"
+    pass "stamp rejects 'src' as a project name when the SBOM may be uploaded (exit != 0)"
+fi
+# Nothing uploaded (an execution plan's caller): a project the user named
+# "app" keeps its name, with a warning.
+cp "$FIX/src-latest-root.json" "$WORK/g2.json"
+if UPLOAD_ENABLED=false bash "$LIB/stamp-metadata.sh" "$WORK/g2.json" "app" "1.0.0" > "$WORK/g2.log" 2>&1 \
+   && [ "$(jq -r .metadata.component.name "$WORK/g2.json")" = app ] && grep -q 'WARN: the project name .app.' "$WORK/g2.log"; then
+    pass "with UPLOAD_ENABLED=false a project named 'app' is kept, with a warning"
+else
+    fail "UPLOAD_ENABLED=false and 'app': $(cat "$WORK/g2.log")"
 fi
 # A missing jq or invalid JSON is a build/runtime defect; stamp must fail closed so a
 # mis-named SBOM is never delivered, rather than warn-and-exit-0 as before.
