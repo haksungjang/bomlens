@@ -876,9 +876,12 @@ old_rc=$?
     || fail "old image: rc $old_rc, stage 2 run: $([ -e "$CMP/argv.stage2" ] && echo yes || echo no)" "$(tail -4 "$CMP/log-old")"
 dlabel="$(sed -n 's/^LABEL com\.sktelecom\.sbom\.engine-contract="\(.*\)"$/\1/p' "$ROOT_DIR/docker/Dockerfile")"
 cver="$(sed -n 's/^ENGINE_CONTRACT_VERSION="\(.*\)"$/\1/p' "$ROOT_DIR/docker/lib/engine-result.sh")"
-[ -n "$dlabel" ] && [ "$dlabel" = "$cver" ] \
-    && pass "the image's engine-contract label matches ENGINE_CONTRACT_VERSION ($cver)" \
-    || fail "Dockerfile label '$dlabel', ENGINE_CONTRACT_VERSION '$cver'"
+pver="$(jq -r '.contract.version' "$(plan_run contract-version "$PSRC")/bomlens-plan.json" 2>/dev/null)"
+mver="$(jq -r '.contract.version' "$D/bomlens-result.json" 2>/dev/null)"
+docver="$(sed -n 's/^.*This page describes contract version `\([^`]*\)`.*$/\1/p' "$ROOT_DIR/docs/reference/engine-contract.md")"
+[ -n "$cver" ] && [ "$dlabel" = "$cver" ] && [ "$pver" = "$cver" ] && [ "$mver" = "$cver" ] && [ "$docver" = "$cver" ] \
+    && pass "one engine contract version ($cver): the image label, the plan, the result manifest and the contract page" \
+    || fail "contract versions differ: label '$dlabel', ENGINE_CONTRACT_VERSION '$cver', plan '$pver', manifest '$mver', docs '$docver'"
 
 echo "== IMAGE mode without the Docker socket =="
 # syft reads the image from the registry when no daemon is there (a

@@ -32,7 +32,10 @@ LIBDIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=docker/lib/cdx-version.sh
 . "$LIBDIR/cdx-version.sh"
 
-PLAN_CONTRACT_VERSION="1.0.0"
+# The plan follows the same engine contract as the result manifest: one
+# version, kept in engine-result.sh (ENGINE_CONTRACT_VERSION).
+PLAN_CONTRACT_VERSION="$(sed -n 's/^ENGINE_CONTRACT_VERSION="\(.*\)"$/\1/p' "$LIBDIR/engine-result.sh")"
+[ -n "$PLAN_CONTRACT_VERSION" ] || { echo "[plan] engine contract version not found in engine-result.sh" >&2; exit 1; }
 # An earlier plan, and an earlier run's stage 1 outputs, are not this scan's:
 # stage 2 cannot tell a fresh SBOM from a leftover one at the same name, so
 # they go before stage 1 runs (the CLI does the same).
