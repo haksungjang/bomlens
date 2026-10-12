@@ -1318,7 +1318,10 @@ if [ "$SOURCE_SCAN" = "true" ] && [ -d "${SOURCE_ROOT:-/src}" ] \
     if [ -n "$_empty_manifests" ]; then
         echo "[WARN] the source declares dependencies ($_empty_manifests) but the SBOM has no components; the scan did not resolve them."
         mark_document_status "$OUTPUT_FILE" "bomlens:sbom-empty-with-manifests" "$_empty_manifests"
-        er_record generate degraded no_components "manifests found: $_empty_manifests" "" "" "{\"components\":0}"
+        # The resolver steps that failed, which are most often why (a Gradle
+        # or pip step that could not run), from the SBOM build-prep stamped.
+        _empty_failed="$(jq -r '[.metadata.properties[]? | select(.name == "bomlens:pipeline-step-failed") | .value] | unique | join(", ")' "$OUTPUT_FILE" 2>/dev/null)"
+        er_record generate degraded no_components "manifests found: $_empty_manifests${_empty_failed:+; steps that failed: $_empty_failed}" "" "" "{\"components\":0}"
     fi
 fi
 
