@@ -1035,8 +1035,8 @@ osl_prop() { jq -r --arg n "$1" --arg p "$2" '[.components[] | select(.name == $
 [ "$(osl_prop libxxhash0 bomlens:licenseConflict)" = incompatible ] && [ "$(osl_prop base-passwd bomlens:licenseConflict)" = incompatible ] \
     && pass "the conflict verdict reads a deb package's licenses as all applying (GPL-2.0-only and BSD-2-Clause is incompatible with Apache-2.0)" \
     || fail "deb conflict verdict: libxxhash0 $(osl_prop libxxhash0 bomlens:licenseConflict), base-passwd $(osl_prop base-passwd bomlens:licenseConflict)"
-[ "$(osl_prop ncurses-base bomlens:licenseConflict)" = unknown ] \
-    && pass "a deb license the rules do not know keeps the package unknown, the known permissive ones cannot clear it" \
+[ "$(osl_prop ncurses-base bomlens:licenseConflict)" = compatible ] \
+    && pass "a deb package whose licenses are all permissive (MIT-X11, X11, BSD-3-Clause) is compatible" \
     || fail "ncurses-base verdict: $(osl_prop ncurses-base bomlens:licenseConflict)"
 [ "$(osl_prop choice bomlens:licenseConflict)" = compatible ] && [ "$(osl_lic musl)" = '["expression:MPL-2.0 OR MIT"]' ] \
     && pass "a Maven package's several licenses stay a choice and an apk expression is kept" \

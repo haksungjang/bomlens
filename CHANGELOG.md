@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- A Debian package whose copyright file names several licenses, for example `BSD-2-Clause` and `GPL-2.0-only`, could be judged compatible with a permissive product license (`bomlens:licenseConflict`, the risk report's conflict section and `--fail-on license-conflict`): the licenses were read as a choice, so the most permissive one decided. They usually belong to different files and all apply, so the least compatible one now decides, and a license with no rule makes the package `unknown`. The SBOM still lists each license as its own entry. A choice the copyright file states (`GPL-2+ or Artistic`) is also read as licenses that all apply, since Trivy lists it the same way. Several licenses on a Maven package are still read as a choice.
+- A Debian package whose copyright file names several licenses, for example `BSD-2-Clause` and `GPL-2.0-only`, could be judged compatible with a permissive product license (`bomlens:licenseConflict`, the risk report's conflict section and `--fail-on license-conflict`): the licenses were read as a choice, so the most permissive one decided. They usually belong to different files and all apply, so the least compatible one now decides, and a license with no rule makes the package `unknown`. The SBOM still lists each license as its own entry. A choice the copyright file states (`GPL-2+ or Artistic`) is also read as licenses that all apply, since Trivy lists it the same way. Several licenses on a Maven package are still read as a choice. Debian's `MIT-X11` license (on ncurses) is now classed as permissive.
 
 ## [v1.13.2] - 2026-10-12
 
