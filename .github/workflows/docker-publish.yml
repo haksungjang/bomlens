@@ -149,6 +149,13 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.PUBLISH_OWNER }}/bomlens
             ${{ env.REGISTRY }}/${{ env.PUBLISH_OWNER }}/sbom-generator
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # The repository the image comes from is the publishing owner's, not
+          # the caller's: release-upstream.yml runs this workflow from the fork,
+          # and metadata-action would otherwise label sktelecom's images with
+          # the fork's address (GHCR links a package to its repository by it).
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ env.PUBLISH_OWNER }}/bomlens
+            org.opencontainers.image.url=https://github.com/${{ env.PUBLISH_OWNER }}/bomlens
           tags: |
             type=semver,pattern={{version}},value=${{ inputs.version }}
             type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
@@ -385,6 +392,13 @@ jobs:
           images: |
             ${{ env.REGISTRY }}/${{ env.PUBLISH_OWNER }}/bomlens-firmware
             ${{ env.REGISTRY }}/${{ env.PUBLISH_OWNER }}/sbom-scanner-firmware
+          # The repository the image comes from is the publishing owner's, not
+          # the caller's: release-upstream.yml runs this workflow from the fork,
+          # and metadata-action would otherwise label sktelecom's images with
+          # the fork's address (GHCR links a package to its repository by it).
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ env.PUBLISH_OWNER }}/bomlens
+            org.opencontainers.image.url=https://github.com/${{ env.PUBLISH_OWNER }}/bomlens
           tags: |
             type=semver,pattern={{version}},value=${{ inputs.version }}
             type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
@@ -596,6 +610,13 @@ jobs:
           images: |
             ${{ env.REGISTRY }}/${{ env.PUBLISH_OWNER }}/bomlens-aibom
             ${{ env.REGISTRY }}/${{ env.PUBLISH_OWNER }}/sbom-scanner-aibom
+          # The repository the image comes from is the publishing owner's, not
+          # the caller's: release-upstream.yml runs this workflow from the fork,
+          # and metadata-action would otherwise label sktelecom's images with
+          # the fork's address (GHCR links a package to its repository by it).
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ env.PUBLISH_OWNER }}/bomlens
+            org.opencontainers.image.url=https://github.com/${{ env.PUBLISH_OWNER }}/bomlens
           tags: |
             type=semver,pattern={{version}},value=${{ inputs.version }}
             type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
@@ -729,6 +750,13 @@ jobs:
         with:
           images: |
             ${{ env.REGISTRY }}/${{ env.PUBLISH_OWNER }}/bomlens-deep-cve
+          # The repository the image comes from is the publishing owner's, not
+          # the caller's: release-upstream.yml runs this workflow from the fork,
+          # and metadata-action would otherwise label sktelecom's images with
+          # the fork's address (GHCR links a package to its repository by it).
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ env.PUBLISH_OWNER }}/bomlens
+            org.opencontainers.image.url=https://github.com/${{ env.PUBLISH_OWNER }}/bomlens
           tags: |
             type=semver,pattern={{version}},value=${{ inputs.version }}
             type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
@@ -889,6 +917,13 @@ jobs:
         with:
           images: |
             ${{ env.REGISTRY }}/${{ env.PUBLISH_OWNER }}/bomlens-deep-license
+          # The repository the image comes from is the publishing owner's, not
+          # the caller's: release-upstream.yml runs this workflow from the fork,
+          # and metadata-action would otherwise label sktelecom's images with
+          # the fork's address (GHCR links a package to its repository by it).
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ env.PUBLISH_OWNER }}/bomlens
+            org.opencontainers.image.url=https://github.com/${{ env.PUBLISH_OWNER }}/bomlens
           tags: |
             type=semver,pattern={{version}},value=${{ inputs.version }}
             type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
