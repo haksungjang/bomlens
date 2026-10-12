@@ -1396,7 +1396,12 @@ case "$SCAN_MODE" in
         # set -e so a mis-named SBOM is never normalized, signed, or uploaded.
         er_phase stamp-metadata
         bash "$LIBDIR/stamp-metadata.sh" "$OUTPUT_FILE" "$PROJECT_NAME" "$PROJECT_VERSION"
-        er_record stamp-metadata ok "" "" "$ER_PHASE_STARTED"
+        # A name scanners also give a project they cannot name, kept because
+        # nothing is uploaded: the run is complete, so ok, with the warning.
+        case "$PROJECT_NAME" in
+            src|app) er_record stamp-metadata ok "" "the project name '$PROJECT_NAME' is also the name scanners give a project they cannot name; kept, since nothing is uploaded" "$ER_PHASE_STARTED" ;;
+            *) er_record stamp-metadata ok "" "" "$ER_PHASE_STARTED" ;;
+        esac
         er_phase_end
         ;;
 esac
