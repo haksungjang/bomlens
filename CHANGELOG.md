@@ -56,6 +56,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - When cdxgen exited without error but left an empty SBOM, the CLI stopped with "SBOM not found"; it now takes the manifest-only fallback, as the execution plan path does.
 - When cdxgen fails and the post-processing image is older than the CLI (it cannot run the fallback), the CLI now says so and names the image to pull, instead of stopping on a missing SBOM.
 - A Poetry project with no `poetry.lock` came back with its exact pins unlinked and without their own dependencies, so the conformance check on transitive dependencies failed. The pins are now linked from the project root, with their dependencies, resolved by a second cdxgen run on the temporary `requirements.txt` alone (the source tree is not touched). When some entries were left out, or that run fails (no network), `compositions` declares the graph `incomplete`.
+- When the conformance check on transitive dependencies fails and the SBOM declares its graph completeness `unknown`, the detail no longer adds "not a defect", which read as if the failure itself were not a problem. A passing check keeps the note.
+- When the dependency analysis gave no result (`cdxgen-unavailable`), the web UI's result overview asked to make sure Docker is available, also when cdxgen ran and left no SBOM. It now says the SBOM was built from the manifests only, that the scan log gives the reason, and asks to check Docker only for a scan that could not reach it.
 
 ## [v1.13.1] - 2026-10-10
 
