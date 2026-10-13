@@ -12,7 +12,7 @@ The format is checked against [`schemas/engine-result-1.json`](https://github.co
 
 `bomlens-result.json` has a fixed name, so give each scan its own output folder. A manifest left in the folder by an earlier run is removed when the run starts, before anything else is checked, and the new one is written when the run ends, also when it stops early on an error. A folder with no manifest after the run means the engine was killed before it could write one.
 
-The scan's exit code is unchanged by the contract. A run that produced its SBOM exits 0 even when a step failed along the way; the manifest is where that failure is reported.
+The scan's exit code is unchanged by the contract. A run that produced its SBOM exits 0 even when a step failed along the way; the manifest is where that failure is reported. The one exception is a `--component-versions` file that is refused: every file is still written, and the run exits 1, since the versions it was given were not applied.
 
 | Field | Meaning |
 |---|---|
@@ -79,7 +79,7 @@ Each step also has `stage` (1 for the SBOM a language image generated before thi
 | `stamp-metadata` | set the root component to the project name and version; the run stops if this fails |
 | `docmeta` | record the document's author, tool and lifecycle phase |
 | `license-registry` | ask the package registry for missing licences and check a single strong-copyleft or non-commercial one (`--license-registry`); `counts` gives `candidates`, `filled`, `superseded`, `confirmed`, `no_answer`, `not_found`, `non_standard`, `lookup_failed`, `budget_reached` |
-| `component-versions` | a firmware, root filesystem or binary scan: fill the versions given with `--component-versions` and write the components still missing one to `_component-versions.template.csv`; `failed` when the file is refused |
+| `component-versions` | a firmware, root filesystem or binary scan: fill the versions given with `--component-versions` and write the components still missing one to `_component-versions.template.csv`; `failed` when the file is refused, with the reason in `detail`, and the run then exits 1 |
 | `normalize` | normalize licences, PURLs and duplicates |
 | `enrich-cpe` | add CPE identifiers |
 | `upstream-purl` | a firmware, root filesystem or binary scan: set the upstream source repository purl from the mapping table; `disabled` with `ENRICH_UPSTREAM_PURL=false` |

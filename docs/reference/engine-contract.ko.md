@@ -12,7 +12,7 @@ BomLens 이미지를 스캔 엔진으로 쓰는 프로그램은 모든 스캔이
 
 `bomlens-result.json`은 이름이 고정되어 있으므로 스캔마다 출력 폴더를 따로 두세요. 이전 실행이 남긴 매니페스트는 실행을 시작하자마자 다른 확인보다 먼저 지우고, 새 매니페스트는 실행이 끝날 때 씁니다. 오류로 중간에 멈춘 경우에도 씁니다. 실행 뒤에 매니페스트가 없다면 엔진이 매니페스트를 쓰기 전에 강제 종료된 것입니다.
 
-계약 때문에 스캔의 종료 코드가 바뀌지는 않습니다. SBOM을 만든 실행은 도중에 어떤 단계가 실패해도 0으로 끝나며, 그 실패는 매니페스트로 알립니다.
+계약 때문에 스캔의 종료 코드가 바뀌지는 않습니다. SBOM을 만든 실행은 도중에 어떤 단계가 실패해도 0으로 끝나며, 그 실패는 매니페스트로 알립니다. 예외는 `--component-versions` 파일을 거부한 경우 하나입니다. 이때도 파일은 모두 쓰지만, 받은 버전을 적용하지 못했으므로 1로 끝납니다.
 
 | 필드 | 뜻 |
 |---|---|
@@ -79,7 +79,7 @@ BomLens 이미지를 스캔 엔진으로 쓰는 프로그램은 모든 스캔이
 | `stamp-metadata` | 루트 컴포넌트를 프로젝트 이름과 버전으로 지정. 실패하면 실행이 멈춤 |
 | `docmeta` | 문서 작성자, 도구, 수명 주기 단계 기록 |
 | `license-registry` | 패키지 레지스트리에서 빠진 라이선스를 조회하고, 하나뿐인 강한 카피레프트나 비상업 라이선스를 확인(`--license-registry`). `counts`에 `candidates`, `filled`, `superseded`, `confirmed`, `no_answer`, `not_found`, `non_standard`, `lookup_failed`, `budget_reached`를 기록 |
-| `component-versions` | 펌웨어, 루트 파일시스템, 바이너리 스캔에서 `--component-versions`로 받은 버전을 채우고, 아직 버전이 없는 컴포넌트를 `_component-versions.template.csv`로 씀. 파일을 거부하면 `failed` |
+| `component-versions` | 펌웨어, 루트 파일시스템, 바이너리 스캔에서 `--component-versions`로 받은 버전을 채우고, 아직 버전이 없는 컴포넌트를 `_component-versions.template.csv`로 씀. 파일을 거부하면 `failed`이고 이유를 `detail`에 적으며, 실행은 1로 끝남 |
 | `normalize` | 라이선스, PURL, 중복 정규화 |
 | `enrich-cpe` | CPE 식별자 추가 |
 | `upstream-purl` | 펌웨어, 루트 파일시스템, 바이너리 스캔에서 변환표로 upstream 소스 저장소 purl을 붙임. `ENRICH_UPSTREAM_PURL=false`이면 `disabled` |

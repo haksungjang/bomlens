@@ -26,7 +26,8 @@
 #   - it has no purl, or one of a type listed in replaceablePurlTypes;
 #   - it has a version, and that version, after removing the suffixes the entry
 #     allows (a package rebuild count, a kernel build hash), matches the entry's
-#     version expression in full;
+#     version expression in full (a kernel or glibc X.Y.0 is read as X.Y,
+#     the form its repository tags);
 #   - its name is in the entry's names, or its CPE vendor:product is in the
 #     entry's cpe list, and the two do not point at different entries.
 # Anything else is left exactly as it is. A name the table does not hold is
@@ -60,6 +61,9 @@ _RELEASE = re.compile(r"-r?[0-9]{1,3}$")
 # A build hash the kernel package carries after its version
 # (5.15.167-1-040d391394b36f9ba6b7b1889d15738a).
 _BUILD_HASH = re.compile(r"-[0-9a-f]{20,}$")
+# A base release written with a zero third part (5.4.0) where the repository
+# tags it with two (v5.4): the kernel and glibc never tag an X.Y.0.
+_ZERO_SUBLEVEL = re.compile(r"^([0-9]+\.[0-9]+)\.0$")
 _CPE23 = re.compile(r"^cpe:2\.3:[aho]:([^:]+):([^:]+):")
 _CPE22 = re.compile(r"^cpe:/[aho]:([^:]+):([^:]+)")
 
@@ -98,6 +102,8 @@ def normalize_version(entry, version):
         v = _BUILD_HASH.sub("", v)
     if "release" in steps:
         v = _RELEASE.sub("", v)
+    if "zero-sublevel" in steps:
+        v = _ZERO_SUBLEVEL.sub(r"\1", v)
     return v
 
 

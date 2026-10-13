@@ -10,15 +10,25 @@
 # Usage: component-versions.py [--no-template] <sbom.json> <out_prefix> [versions.csv]
 #   edits <sbom.json> in place when a file is given, and writes
 #   <out_prefix>_component-versions.template.csv listing every component that
-#   still has no version (removed when there is none). --no-template only
+#   still has no version and whose name the file can hold (removed when there
+#   is none). --no-template only
 #   lists them: the entrypoint passes it when the file given is that template,
 #   so the supplier's filled-in copy is not overwritten.
 #
 # The file (--component-versions on the CLI) is CSV with two columns, name and
 # version. A first row reading "name,version" is a header; blank lines and
 # lines starting with '#' are skipped; a row with an empty version is read as
-# "not known" and skipped, so the template this script writes can be passed
-# back with only some rows filled.
+# "not known" and skipped before anything else in the row is checked, so the
+# template this script writes can be passed back with only some rows filled.
+#
+# A version normalize-sbom.sh removes counts as no version here: the
+# placeholder UNKNOWN (a kernel module with no version in its metadata), and an
+# operating-system epoch:version-release string on a component whose purl is
+# not an OS package. This step runs before normalize, so such a component is
+# listed in the template, and a version the file gives replaces the
+# placeholder instead of being dropped with it. A name the file format cannot
+# hold (outside the character set below) is listed on the console, not in the
+# template, so the template passed back is always accepted.
 #
 # What a row does, matched on the component name (case is ignored):
 #   - a package component with no version takes the version from the file. A
@@ -51,10 +61,19 @@ VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+~-]{0,63}$")
 PACKAGE_TYPES = {"library", "application", "framework", "firmware", "operating-system"}
 TEMPLATE_SUFFIX = "_component-versions.template.csv"
 DECLARED = "supplier-declared"
+# What normalize-sbom.sh removes from .version (UNKNOWN_VERSION_FIX and
+# VERSION_EVR_CONTAMINATION_FIX); keep the two in step.
+PLACEHOLDER_VERSIONS = {"unknown"}
+_EVR_PREFIX = re.compile(r"^[0-9]+:")
+_OS_PURL = re.compile(r"^pkg:(rpm|deb|apk|alpm)/")
 
 
 class Refused(Exception):
     pass
+
+
+def valid_name(name):
+    return bool(NAME_RE.match(name)) and ".." not in name
 
 
 def read_versions(path):
@@ -93,11 +112,11 @@ def read_versions(path):
                 continue
             if any(ord(ch) < 32 or ord(ch) == 127 for ch in name + version):
                 raise Refused(f"line {line}: a control character is not allowed")
-            if not NAME_RE.match(name) or ".." in name:
-                raise Refused(f"line {line}: '{name[:60]}' is not a component name "
-                              "(letters, digits and . _ + - only, up to 128 characters)")
             if version == "":
                 continue
+            if not valid_name(name):
+                raise Refused(f"line {line}: '{name[:60]}' is not a component name "
+                              "(letters, digits and . _ + - only, up to 128 characters)")
             if not VERSION_RE.match(version) or ".." in version:
                 raise Refused(f"line {line}: '{version[:60]}' is not a version "
                               "(letters, digits and . _ + ~ - only, up to 64 characters)")
@@ -122,9 +141,20 @@ def is_package(c):
     return isinstance(c, dict) and c.get("type", "library") in PACKAGE_TYPES
 
 
+def placeholder_version(c):
+    """True when .version holds a value normalize-sbom.sh removes."""
+    v = c.get("version")
+    if not isinstance(v, str):
+        return False
+    if v.strip().lower() in PLACEHOLDER_VERSIONS:
+        return True
+    purl = c.get("purl") or ""
+    return bool(_EVR_PREFIX.match(v)) and purl != "" and not _OS_PURL.match(purl)
+
+
 def has_version(c):
     v = c.get("version")
-    return isinstance(v, str) and v.strip() != ""
+    return isinstance(v, str) and v.strip() != "" and not placeholder_version(c)
 
 
 def apply(doc, versions):
@@ -145,11 +175,16 @@ def apply(doc, versions):
             if c["version"] != version:
                 kept.append((c.get("name"), c["version"], version))
             continue
+        replaced = c.get("version") if placeholder_version(c) and _EVR_PREFIX.match(c["version"]) else None
         c["version"] = version
         props = [p for p in (c.get("properties") or [])
                  if not (isinstance(p, dict)
                          and ((p.get("name") == "bomlens:evidenceGrade" and p.get("value") == "presence-only")
-                              or p.get("name") == "bomlens:versionSource"))]
+                              or p.get("name") == "bomlens:versionSource"
+                              or (replaced and p.get("name") == "bomlens:versionContaminated")))]
+        if replaced:
+            # What normalize would have kept: the misattributed string, for audit.
+            props.append({"name": "bomlens:versionContaminated", "value": replaced})
         props.append({"name": "bomlens:versionSource", "value": DECLARED})
         c["properties"] = props
         filled.append((c.get("name"), version))
@@ -230,7 +265,16 @@ def main(argv):
                 print(f"[component-versions] WARN: {name}: the scan read {read}; the file says {declared}."
                       f" Keeping {read}, the version found in the delivered files.", file=sys.stderr)
     template = prefix + TEMPLATE_SUFFIX
-    missing = versionless(doc)
+    missing_all = versionless(doc)
+    missing = [n for n in missing_all if valid_name(n)]
+    unwritable = [n for n in missing_all if not valid_name(n)]
+    if unwritable:
+        shown = ", ".join(repr(n[:60]) for n in unwritable[:10]) + (
+            f" (and {len(unwritable) - 10} more)" if len(unwritable) > 10 else "")
+        print(f"[component-versions] {len(unwritable)} component(s) with no version have a name the"
+              f" --component-versions file cannot hold, so they are not in the template: {shown}")
+        print("[component-versions]   A name may hold only letters, digits and . _ + -"
+              " (up to 128 characters).")
     if missing:
         shown = ", ".join(missing[:30]) + (f" (and {len(missing) - 30} more)" if len(missing) > 30 else "")
         print(f"[component-versions] {len(missing)} component(s) still have no version: {shown}")

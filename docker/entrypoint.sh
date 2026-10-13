@@ -1531,7 +1531,12 @@ esac
 # keeps a version read from the delivered files when the file disagrees, and
 # adds the names the scan did not find as supplier-declared components. Every
 # such scan also writes the components still missing a version as a template
-# in the same format. Before normalize, so what is added is normalized too.
+# in the same format. Before normalize, so what is added is normalized too;
+# the placeholder versions normalize removes (UNKNOWN) count as missing here.
+# A refused file (exit 3) fails the step, and the run exits 1 at the end, after
+# every file is written, with the reason: the versions the user supplied were
+# not applied.
+CV_REFUSED=""
 case "$SCAN_MODE" in
     FIRMWARE|ROOTFS|BINARY)
         _cv_args=("$OUTPUT_FILE" "$OUT_PREFIX")
@@ -1544,7 +1549,25 @@ case "$SCAN_MODE" in
             fi
         fi
         if [ -f "$LIBDIR/component-versions.py" ]; then
-            run_optional_step component-versions python3 "$LIBDIR/component-versions.py" "${_cv_args[@]}"
+            _cv_started="$(er_now)"
+            er_event step.start component-versions
+            _cv_err="$(mktemp)"
+            _cv_rc=0
+            python3 "$LIBDIR/component-versions.py" "${_cv_args[@]}" 2> "$_cv_err" || _cv_rc=$?
+            cat "$_cv_err" >&2
+            if [ "$_cv_rc" -eq 0 ]; then
+                er_record component-versions ok "" "" "$_cv_started"
+            else
+                if [ "$_cv_rc" -eq 3 ]; then
+                    CV_REFUSED="$(sed -n 's/^\[component-versions\] ERROR: the --component-versions file was refused: //p' "$_cv_err" | head -n 1)"
+                    [ -n "$CV_REFUSED" ] || CV_REFUSED="the file was refused"
+                else
+                    echo "[WARN] post-process step 'component-versions' failed; continuing with a valid SBOM, but this step's output may be missing or incomplete." >&2
+                fi
+                mark_pipeline_warning "$OUTPUT_FILE" component-versions
+                er_record component-versions failed failed "${CV_REFUSED:+the --component-versions file was refused: $CV_REFUSED}" "$_cv_started"
+            fi
+            rm -f "$_cv_err"
         fi
         [ "$CV_INPUT_IS_TEMPLATE" != true ] && [ -f "${OUT_PREFIX}_component-versions.template.csv" ] \
             && ARTIFACTS+=("${OUT_PREFIX}_component-versions.template.csv")
@@ -2317,6 +2340,15 @@ fi
 # and the AI profile.
 # ========================================================
 sync_artifacts
+
+# A refused --component-versions file: everything above is written, without
+# the versions it held. Said last so it is the line the user reads, and a
+# non-zero exit, since the user asked for those versions and did not get them.
+if [ -n "$CV_REFUSED" ]; then
+    echo "[ERROR] --component-versions: the file was refused, so none of its versions were applied: ${CV_REFUSED}" >&2
+    echo "[ERROR]   The SBOM and the other files were written without them. Fix the file (CSV, two columns: name,version) and run the scan again." >&2
+    exit 1
+fi
 
 # ========================================================
 # Upload handling (optional — Dependency-Track or TRUSCA)

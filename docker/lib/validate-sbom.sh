@@ -149,9 +149,9 @@ if [ -f "$PURL_TYPES_FILE" ]; then
 else
     echo "[validate] WARN: $PURL_TYPES_FILE not found; PURL namespace checks cover OS packages only and the purl type check is skipped." >&2
 fi
-# The submission profile also accepts the purl types the submission review
-# resolves for projects published outside GitHub, which purl-spec has not
-# defined yet: pkg:sourceforge and pkg:gnu. upstream-purl.py writes them for the
+# The submission profile also accepts two purl types for projects published
+# outside GitHub, which purl-spec has not defined yet: pkg:sourceforge and
+# pkg:gnu, each naming the project at its release on that site. upstream-purl.py writes them for the
 # projects that are found there (boa, readline). Space-separated; empty turns
 # the exception off.
 if [ "$CONFORMANCE_PROFILE" = "skt-submission" ] && [ "$PURL_KNOWN_TYPES" != "[]" ]; then
@@ -1026,6 +1026,10 @@ fi
 # cannot fix by editing the SBOM. Both are already counted by the generic rows
 # above (name+version, PURL coverage, no pkg:generic); these two say which is
 # which. Package components only, the same set those rows measure.
+#
+# Under --analyze the document is a supplier's SBOM under review: no template is
+# written and --component-versions is not offered, and the upstream purl table
+# is not applied. The rows stay, worded as what to ask the supplier for.
 # --------------------------------------------------------
 SUBMIT_FILE="$(basename "$OUT_PREFIX")_bom.json"
 # Which file goes to the reviewer. A scan writes a dozen files, and all of them
@@ -1036,7 +1040,9 @@ if [ "$CONFORMANCE_PROFILE" = "skt-submission" ] && [ "${MODE:-}" != "ANALYZE" ]
     SUBMIT_NOTE_FILE="$SUBMIT_FILE"
 fi
 if [ "$CONFORMANCE_PROFILE" = "skt-submission" ] && [ "$FORMAT" = "CycloneDX" ]; then
-    if SUBMIT_ROWS=$(jq -c --argjson cap "$MISSING_CAP" \
+    _submit_analyze=false
+    [ "${MODE:-}" = "ANALYZE" ] && _submit_analyze=true
+    if SUBMIT_ROWS=$(jq -c --argjson cap "$MISSING_CAP" --argjson analyze "$_submit_analyze" \
             --arg tmpl "$(basename "$OUT_PREFIX")_component-versions.template.csv" '
         [ .components[]? | select(.type != "data" and .type != "file" and .type != "operating-system") ] as $pkg
         | [ $pkg[] | select(((.version // "") | tostring) == "") | (.name // "(unnamed)") ] as $nover
@@ -1049,20 +1055,28 @@ if [ "$CONFORMANCE_PROFILE" = "skt-submission" ] && [ "$FORMAT" = "CycloneDX" ];
              naKind: (if ($pkg | length) == 0 then "not-applicable" else "" end),
              status: (if ($nover | length) == 0 then "pass" else "fail" end),
              detail: "\($nover | length) without a version", missing: ($nover[0:$cap]),
-             reviewGuide: {
+             reviewGuide: (if $analyze then {
+               how: "This SBOM lists these components without a version, so they cannot be checked for vulnerabilities. Ask the supplier for the version shipped in the product, in a corrected SBOM: a BomLens firmware, root filesystem or binary scan writes the components it could not read a version for to a template the supplier fills in and passes back with --component-versions.",
+               how_ko: "이 SBOM에는 버전이 없는 구성요소가 있어 취약점을 확인할 수 없습니다. 제품에 들어간 버전을 넣은 SBOM을 공급사에 다시 요청합니다. BomLens 펌웨어, 루트 파일시스템, 바이너리 스캔은 버전을 읽지 못한 구성요소를 템플릿 파일로 쓰고, 공급사는 버전을 채운 템플릿을 --component-versions 옵션으로 넘겨 다시 스캔합니다.",
+               docUrl: "https://sktelecom.github.io/bomlens/guides/supplier-sbom/"}
+             else {
                how: ("The scan found these components but could not read their version. Write the version shipped in the product after each name in " + $tmpl + " (CSV: name,version), then scan again with --component-versions " + $tmpl + ". A version the scan read from the delivered files is kept."),
                how_ko: ("스캔이 찾았지만 버전을 읽지 못한 구성요소입니다. " + $tmpl + " 파일(CSV, name,version)의 각 이름 뒤에 제품에 들어간 버전을 적고 --component-versions " + $tmpl + " 옵션으로 다시 스캔합니다. 스캔이 배포 파일에서 읽은 버전은 그대로 유지됩니다."),
-               docUrl: "https://sktelecom.github.io/bomlens/guides/firmware/"}},
+               docUrl: "https://sktelecom.github.io/bomlens/guides/firmware/"} end)},
             {id: "upstream-purl", label: "Upstream purl for every versioned component (no upstream purl)",
              label_ko: "버전이 있는 모든 구성요소의 upstream purl (upstream purl 없음)",
              required: true, source: (if ($pkg | length) == 0 then "na" else "auto" end),
              naKind: (if ($pkg | length) == 0 then "not-applicable" else "" end),
              status: (if ($noup | length) == 0 then "pass" else "fail" end),
              detail: "\($noup | length) without an upstream purl", missing: ($noup[0:$cap]),
-             reviewGuide: {
+             reviewGuide: (if $analyze then {
+               how: "These components have a version but no purl that names their source repository (none, pkg:generic, pkg:opkg or pkg:openwrt), so they cannot be looked up by purl. Ask the supplier for an SBOM that gives each one the purl of its source repository at the release tag, for example by rescanning with a current BomLens firmware, root filesystem or binary scan.",
+               how_ko: "버전은 있지만 소스 저장소를 가리키는 purl이 없어(purl 없음, pkg:generic, pkg:opkg, pkg:openwrt) purl로 조회할 수 없는 구성요소입니다. 각 구성요소에 릴리스 태그 기준 소스 저장소 purl을 넣은 SBOM을 공급사에 요청합니다. 최신 BomLens로 펌웨어, 루트 파일시스템, 바이너리를 다시 스캔하는 방법이 있습니다.",
+               docUrl: "https://sktelecom.github.io/bomlens/guides/supplier-sbom/"}
+             else {
                how: "These components have a version but no purl that names their source repository, because the upstream purl table does not cover the project or that version form. Editing the SBOM by hand is not the fix: report the component name and version so the table can be extended.",
                how_ko: "버전은 있지만 소스 저장소를 가리키는 purl이 없는 구성요소입니다. upstream purl 변환표에 해당 프로젝트나 그 버전 형식이 없기 때문입니다. SBOM을 직접 고치지 말고 구성요소 이름과 버전을 알려 주면 변환표에 추가합니다.",
-               docUrl: "https://sktelecom.github.io/bomlens/guides/firmware/"}} ]
+               docUrl: "https://sktelecom.github.io/bomlens/guides/firmware/"} end)} ]
         ' "$SBOM" 2>/dev/null); then
         CHECKS=$(printf '%s\n%s' "$CHECKS" "$SUBMIT_ROWS" | jq -cs 'add')
     else

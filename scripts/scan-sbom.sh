@@ -2810,12 +2810,17 @@ if [ -f "$SUMMARY_RESULT_FILE" ]; then
     esac
 fi
 # Components a firmware, root filesystem or binary scan found without a version.
-# Counted from the template the scan wrote (one name per row after the header).
+# Counted from the template the scan wrote: the rows after the header whose
+# version is still empty. The template can also be the file this run read
+# (filled in by the supplier and left as written), so a filled row is not one.
 VERSIONS_TEMPLATE="${SAFE_PROJECT}_${SAFE_VERSION}_component-versions.template.csv"
 if [ -f "$OUTPUT_HOST_DIR/$VERSIONS_TEMPLATE" ]; then
-    n_versionless=$(grep -v '^#' "$OUTPUT_HOST_DIR/$VERSIONS_TEMPLATE" | grep -vc '^name,version$' || true)
-    echo "[WARN] ${n_versionless} component(s) have no version, so nothing can be matched against them."
-    echo "  Write each version in ${VERSIONS_TEMPLATE} and run again with --component-versions \"$OUTPUT_HOST_DIR/$VERSIONS_TEMPLATE\""
+    n_versionless=$(tr -d '\r' < "$OUTPUT_HOST_DIR/$VERSIONS_TEMPLATE" | grep -v '^[[:space:]]*#' \
+        | grep -v '^name,version$' | grep -c '^[^,].*,[[:space:]]*$' || true)
+    if [ "${n_versionless:-0}" -gt 0 ]; then
+        echo "[WARN] ${n_versionless} component(s) have no version, so nothing can be matched against them."
+        echo "  Write each version in ${VERSIONS_TEMPLATE} and run again with --component-versions \"$OUTPUT_HOST_DIR/$VERSIONS_TEMPLATE\""
+    fi
 fi
 echo "=========================================="
 
