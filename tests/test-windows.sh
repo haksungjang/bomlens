@@ -676,16 +676,16 @@ scan_in "$d" --project Rel --version 1 --target images --generate-only
   && pass "release folder with one rootfs → ROOTFS of that rootfs, with a notice" \
   || { fail "release folder with one rootfs did not switch to it" "rc=$RC"; show; }
 
-d="$(new_proj relfw)"; mkdir -p "$d/images/docs"; printf 'blob\n' > "$d/images/device-1.0.img"
+d="$(new_proj relfw)"; mkdir -p "$d/images/docs"; printf 'blob\n' > "$d/images/device-1.0.trx"
 printf 'readme\n' > "$d/images/README.txt"
 scan_in "$d" --project Rel --version 1 --target images/ --generate-only
-{ in_out "Mode: FIRMWARE" && in_out "images/device-1.0.img" && in_log "TARGET_FILE=/target/device-1.0.img"; } \
+{ in_out "Mode: FIRMWARE" && in_out "images/device-1.0.trx" && in_log "TARGET_FILE=/target/device-1.0.trx"; } \
   && pass "release folder with one firmware image → FIRMWARE of that file" \
   || { fail "release folder with one firmware image did not switch to it" "rc=$RC"; show; }
 
-d="$(new_proj reltwo)"; mk_rootfs "$d/images/rootfs"; printf 'blob\n' > "$d/images/device.bin"
+d="$(new_proj reltwo)"; mk_rootfs "$d/images/rootfs"; printf 'blob\n' > "$d/images/device.ubi"
 scan_in "$d" --project Rel --version 1 --target images --generate-only
-{ [ "$RC" -ne 0 ] && in_out '--target "images/rootfs"' && in_out '--target "images/device.bin" --firmware' \
+{ [ "$RC" -ne 0 ] && in_out '--target "images/rootfs"' && in_out '--target "images/device.ubi" --firmware' \
   && ! in_out "Mode:" && ! grep -q '^docker run' "$LOG"; } \
   && pass "release folder with two candidates stops before scanning and lists both" \
   || { fail "two candidates were not refused with a list" "rc=$RC"; show; }
@@ -700,15 +700,42 @@ scan_in "$d" --project Rel --version 1 --target images --generate-only
   && pass "a rootfs with no package database names the large file beside it as a --firmware command" \
   || { fail "the large file beside a package-less rootfs was not offered" "rc=$RC"; show; }
 
-# A .bix image is recognized, so a folder holding it next to a rootfs has two candidates.
+# A .bix image is recognized, so a folder holding it next to a rootfs, an
+# install tree and a kernel has two candidates (the kernel is not one).
 d="$(new_proj relbix)"; mk_rootfs "$d/images/rootfs"; printf 'opaque\n' > "$d/images/dev-2.60.bix"
+mkdir -p "$d/images/install"; printf 'kernel\n' > "$d/images/vmlinuz"
 scan_in "$d" --project Rel --version 1 --target images --generate-only
-{ [ "$RC" -ne 0 ] && in_out '--target "images/rootfs"' && in_out '--target "images/dev-2.60.bix" --firmware'; } \
-  && pass "a .bix image next to a rootfs makes two candidates, both listed" \
+{ [ "$RC" -ne 0 ] && in_out '--target "images/rootfs"' && in_out '--target "images/dev-2.60.bix" --firmware' \
+  && ! in_out 'vmlinuz'; } \
+  && pass "rootfs/, install/, a kernel and a .bix stop with the two candidates listed" \
   || { fail "a .bix image next to a rootfs was not listed" "rc=$RC"; show; }
 d="$(new_proj bix)"; printf 'opaque\n' > "$d/dev-2.60.bix"
 scan_in "$d" --project Bix --version 1 --target dev-2.60.bix --generate-only
 in_out "Mode: FIRMWARE" && pass "--target *.bix → FIRMWARE mode (extension)" || { fail "--target .bix → FIRMWARE" "rc=$RC"; show; }
+
+# Folders that hold a .bin but are an application, a model or a build output
+# stay a SOURCE scan: no switch and no stop.
+d="$(new_proj relapp)"; mkdir -p "$d/app/resources/app" "$d/app/locales"
+for f in App.exe ffmpeg.dll libEGL.dll snapshot_blob.bin v8_context_snapshot.bin resources.pak; do printf 'x\n' > "$d/app/$f"; done
+: > "$d/app/resources/app.asar"
+scan_in "$d" --project App --version 1 --target app --generate-only
+{ in_out "Mode: SOURCE" && ! in_out "is not a source tree" && [ "$RC" -eq 0 ]; } \
+  && pass "an Electron app folder stays SOURCE" \
+  || { fail "an Electron app folder was rerouted or stopped" "rc=$RC"; show; }
+d="$(new_proj relmodel)"; mkdir -p "$d/snap"
+printf '{}\n' > "$d/snap/config.json"; printf '{}\n' > "$d/snap/tokenizer.json"
+{ printf 'PK\003\004'; head -c 200 /dev/zero; } > "$d/snap/pytorch_model.bin"
+scan_in "$d" --project Model --version 1 --target snap --generate-only
+{ in_out "Mode: SOURCE" && ! in_out "Mode: FIRMWARE" && ! in_out "is not a source tree"; } \
+  && pass "a model snapshot folder stays SOURCE, pytorch_model.bin is not taken as firmware" \
+  || { fail "a model snapshot folder was rerouted" "rc=$RC"; show; }
+d="$(new_proj relstage)"; mkdir -p "$d/staging/usr/lib" "$d/staging/bin"
+printf 'x\n' > "$d/staging/usr/lib/libfoo.so.1"; printf 'x\n' > "$d/staging/bin/app"
+printf 'x\n' > "$d/staging/app.bin"; printf 'x\n' > "$d/staging/libbar.so"
+scan_in "$d" --project Stage --version 1 --target staging --generate-only
+{ in_out "Mode: SOURCE" && ! in_out "is not a source tree"; } \
+  && pass "a build output staging folder stays SOURCE" \
+  || { fail "a build output staging folder was rerouted" "rc=$RC"; show; }
 
 d="$(new_proj relsrc)"; printf '{"name":"app","version":"1.0.0"}\n' > "$d/package.json"
 mk_rootfs "$d/rootfs"; printf 'blob\n' > "$d/sample.bin"
