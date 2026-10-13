@@ -9,16 +9,25 @@
 # same reference (Trivy's license scan, the file view) take exactly that image
 # even when the tag moves meanwhile. <syft source json> is syft's `source`
 # object (its syft-json model, written by entrypoint.sh through a template
-# output); <socket> says whether the Docker socket was mounted, which decides
-# where syft read a reference with no scheme.
+# output); <socket> says whether the Docker socket was mounted.
+#
+# Where syft read the image: the scheme says it when there is one. A plain
+# name with no socket is a registry read. With the socket syft tries the
+# daemon first and falls back to the registry, and its record does not name
+# the provider, so it is told from the record: a Docker Hub repository digest
+# written in full (index.docker.io/..., docker.io/...) is only written by the
+# registry read, and tags are only listed by the daemon read. When neither
+# shows, the source is unknown and the repository digest is used, which names
+# the same content in the daemon and in the registry.
 #
 # Prints one JSON object on stdout:
 #   reference         the reference as given
-#   source            registry, daemon, archive or other
+#   source            registry, daemon, unknown, archive or other
 #   digest            registry: the manifest digest of the image read (one
-#                     platform); daemon: the repository digest the daemon holds
-#                     for this repository (for a multi-platform image, the index);
-#                     null for an archive, or when it cannot be resolved
+#                     platform); daemon or unknown: the repository digest for
+#                     this repository (for a multi-platform image, the index);
+#                     null for an archive, or when it cannot be resolved or the
+#                     name cannot be pinned
 #   index_digest      registry only, when the reference resolved through an
 #                     image index (manifest list) whose digest differs
 #   platform          os/architecture[/variant], or null
@@ -41,8 +50,9 @@ case "$REF" in
     # syft's containerd: scheme has no Trivy counterpart: not pinned.
     containerd:*) source=other ;;
 esac
+# A plain name: registry with no socket; with it, decided from syft's record.
 if [ -z "$source" ]; then
-    if [ "$SOCKET" = true ]; then source=daemon; else source=registry; fi
+    if [ "$SOCKET" = true ]; then source=plain-socket; else source=registry; fi
 fi
 
 # The repository: the name less any @digest, then less a :tag on its last
@@ -67,17 +77,24 @@ jq -nc --arg ref "$REF" --arg source "$source" --arg scheme "$scheme" --arg repo
     # repoDigests entries are <repository>@<digest>.
     ([$m.repoDigests[]? | strings | select(contains("@"))
       | {repo: (split("@")[0]), digest: (split("@")[1] | dig)} | select(.digest != null)]) as $rd
-    | (if $source == "registry" then ($m.manifestDigest | dig)
-       elif $source == "daemon" then
+    | (if $source != "plain-socket" then $source
+       elif any($rd[]; .repo | test("^(index\\.)?docker\\.io/")) then "registry"
+       elif (($m.tags // []) | type) == "array" and (($m.tags // []) | length) > 0 then "daemon"
+       else "unknown" end) as $source
+    | (if ($source == "registry" or $source == "daemon" or $source == "unknown") and ($repo_ok | not) then null
+       elif $source == "registry" then ($m.manifestDigest | dig)
+       elif $source == "daemon" or $source == "unknown" then
          ([$rd[] | select((.repo | norm) == ($repo | norm)) | .digest] | first)
        else null end) as $digest
     | (if $source == "registry" and $digest != null then
          ([$rd[].digest | select(. != $digest)] | first)
        else null end) as $index
+    # The variant is architectureVariant in the syft record, else in the image config.
+    | ($m.architectureVariant // (try ($m.config | @base64d | fromjson | .variant) catch null)) as $variant
     | ([($m.os | part), ($m.architecture | part)] | if all(. != null) then
-         (. + [($m.variant | part)] | map(select(. != null)) | join("/")) else null end) as $platform
+         (. + [($variant | part)] | map(select(. != null)) | join("/")) else null end) as $platform
     | {reference: $ref, source: $source, digest: $digest}
       + (if $index != null then {index_digest: $index} else {} end)
       + {platform: $platform,
-         pinned_reference: (if $digest != null and $repo_ok and ($source == "registry" or $source == "daemon")
+         pinned_reference: (if $digest != null and ($source == "registry" or $source == "daemon" or $source == "unknown")
                             then "\($scheme)\($repo)@\($digest)" else null end)}'

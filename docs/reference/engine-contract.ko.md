@@ -144,7 +144,7 @@ BomLens 이미지를 스캔 엔진으로 쓰는 프로그램은 모든 스캔이
   "reference": "alpine:3.20",
   "source": "registry",
   "digest": "sha256:45e09956dc667c5eff3583c9d94830261fb1ca0be10a0a7db36266edf5de9e1d",
-  "platform": "linux/arm64",
+  "platform": "linux/arm64/v8",
   "index_digest": "sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
 }
 ```
@@ -152,9 +152,9 @@ BomLens 이미지를 스캔 엔진으로 쓰는 프로그램은 모든 스캔이
 | 필드 | 뜻 |
 |---|---|
 | `reference` | 입력으로 받은 이미지 참조(`TARGET_IMAGE`) |
-| `source` | syft가 이미지를 읽은 곳입니다. `registry`(`registry:` 스킴, 또는 Docker 소켓이 없을 때의 일반 이름), `daemon`(소켓이 있을 때의 일반 이름, 또는 `docker:`와 `podman:`), `archive`(`docker-archive:`, `oci-archive:`, `oci-dir:`), `other`(`containerd:`)이며, syft가 이미지를 읽기 전에 실행이 멈췄다면 `null`입니다 |
-| `digest` | `registry`이면 읽은 이미지의 매니페스트 다이제스트(플랫폼 하나), `daemon`이면 데몬이 그 저장소에 대해 가진 저장소 다이제스트입니다. 다중 플랫폼 이미지라면 인덱스의 다이제스트입니다. 아카이브는 파일을 그대로 읽으므로 `null`이고, 다이제스트를 알아낼 수 없을 때도 `null`입니다(로컬에서 빌드하고 푸시하지 않은 이미지에는 저장소 다이제스트가 없습니다). 이때 두 번째 읽기는 받은 참조를 그대로 쓰고, 로그에 그 사실을 남깁니다 |
-| `platform` | 읽은 이미지의 `os/architecture[/variant]`, 알 수 없으면 `null` |
+| `source` | syft가 이미지를 읽은 곳입니다. `registry`(`registry:` 스킴, 또는 Docker 소켓이 없을 때의 일반 이름), `daemon`(`docker:`와 `podman:`), `archive`(`docker-archive:`, `oci-archive:`, `oci-dir:`), `other`(`containerd:`)이며, syft가 이미지를 읽기 전에 실행이 멈췄다면 `null`입니다. 소켓이 있으면 syft는 일반 이름을 데몬에서 읽고, 데몬에서 이미지를 받지 못하면 레지스트리에서 읽습니다. syft의 기록에는 어느 쪽인지 적혀 있지 않으므로 기록 내용으로 판단합니다. Docker Hub 저장소 다이제스트가 전체 이름(`index.docker.io/...`)으로 적혀 있으면 `registry`, 태그가 있으면 `daemon`, 둘 다 아니면 `unknown`입니다 |
+| `digest` | `registry`이면 읽은 이미지의 매니페스트 다이제스트(플랫폼 하나), `daemon`과 `unknown`이면 그 저장소에 대해 기록된 저장소 다이제스트입니다. 다중 플랫폼 이미지라면 인덱스의 다이제스트이며, 데몬과 레지스트리에서 같은 내용을 가리킵니다. 아카이브는 파일을 그대로 읽으므로 `null`이고, 다이제스트를 알아낼 수 없을 때도 `null`입니다. 저장소 다이제스트가 없는 경우(로컬에서 빌드하고 푸시하지 않은 이미지), 일반 이미지 이름이 아닌 경우, syft의 소스 기록을 쓰지 못한 경우가 여기에 해당합니다. 이때 두 번째 읽기는 받은 참조를 그대로 쓰고, 로그에 그 사실을 남깁니다 |
+| `platform` | 읽은 이미지의 `os/architecture[/variant]`, 알 수 없으면 `null`입니다. variant는 syft의 `architectureVariant`를 쓰고, 없으면 이미지 설정의 `variant`를 씁니다(Docker는 arm64 이미지에 `v8`을 적습니다) |
 | `index_digest` | `registry`일 때만, 참조가 가리킨 이미지 인덱스(매니페스트 목록)의 다이제스트가 `digest`와 다르면 적습니다 |
 
 ## 실행 계획

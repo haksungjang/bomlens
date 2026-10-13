@@ -63,7 +63,7 @@
           "required": ["reference", "digest", "platform"],
           "properties": {
             "reference": { "type": ["string", "null"] },
-            "source": { "enum": ["registry", "daemon", "archive", "other", null] },
+            "source": { "enum": ["registry", "daemon", "unknown", "archive", "other", null] },
             "digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
             "index_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
             "platform": { "type": ["string", "null"], "pattern": "^[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)?$" }

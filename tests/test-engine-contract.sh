@@ -916,6 +916,16 @@ old_rc=$?
     && grep -q 'is older than this CLI: it cannot run the manifest-only fallback' "$CMP/log-old" \
     && pass "an image without the engine-contract label is refused with a clear error when the fallback is needed" \
     || fail "old image: rc $old_rc, stage 2 run: $([ -e "$CMP/argv.stage2" ] && echo yes || echo no)" "$(tail -4 "$CMP/log-old")"
+# The CLI refuses an image name starting with - before any container runs.
+rm -f "$CMP/argv.stage2"
+( cd "$CMP" && env PATH="$CMP/bin:$PATH" CLI_ARGV_LOG="$CMP/argv" HOME="$CMP/home" TMPDIR="$CMP/tmp" \
+    bash "$ROOT_DIR/scripts/scan-sbom.sh" --project demo --version 1.0 --target "--output=/tmp/x:1" \
+    --generate-only --output-dir "$CMP/out-dash" ) > "$CMP/log-dash" 2>&1
+dash_rc=$?
+[ "$dash_rc" -ne 0 ] && grep -q "\-\-target '--output=/tmp/x:1' starts with '-'" "$CMP/log-dash" \
+    && [ ! -e "$CMP/argv.stage2" ] \
+    && pass "the CLI refuses an image name starting with - before running a container" \
+    || fail "CLI dash: rc $dash_rc, container run: $([ -e "$CMP/argv.stage2" ] && echo yes || echo no)" "$(tail -3 "$CMP/log-dash")"
 dlabel="$(sed -n 's/^LABEL com\.sktelecom\.sbom\.engine-contract="\(.*\)"$/\1/p' "$ROOT_DIR/docker/Dockerfile")"
 cver="$(sed -n 's/^ENGINE_CONTRACT_VERSION="\(.*\)"$/\1/p' "$ROOT_DIR/docker/lib/engine-result.sh")"
 pver="$(jq -r '.contract.version' "$(plan_run contract-version "$PSRC")/bomlens-plan.json" 2>/dev/null)"
@@ -1139,15 +1149,33 @@ echo "== IMAGE mode pins the later reads to the digest syft read =="
 # recorded one (tests/fixtures/syft-source-*.json, from a real registry and a
 # real daemon read) there, and prints the Debian SBOM above so Trivy runs.
 PIN="$WORK/image-pin"; mkdir -p "$PIN/bin"
+# PIN_SYFT_FAIL makes the source record fail the way syft does: "after" writes
+# the SBOM, then exits 1 (a template it cannot render); "before" exits 1 with
+# no output (a template path it cannot write). Each call appends its arguments
+# and a "--end--" line.
 cat > "$PIN/bin/syft" <<'STUB'
 #!/bin/bash
-printf '%s\n' "$@" > "$PIN_SYFT_ARGV"
+printf '%s\n' "$@" --end-- >> "$PIN_SYFT_ARGV"
 tpl=""; prev=""
 for a in "$@"; do [ "$prev" = "-o" ] && case "$a" in template=*) tpl="${a#template=}" ;; esac; prev="$a"; done
-[ -n "$tpl" ] && [ -n "${PIN_SOURCE:-}" ] && cp "$PIN_SOURCE" "$tpl"
+if [ -n "$tpl" ]; then
+    case "${PIN_SYFT_FAIL:-}" in
+        after) bash "$PIN_OSL_SYFT"; echo "template: executing: bad function" >&2; exit 1 ;;
+        before) echo "unable to create report file: permission denied" >&2; exit 1 ;;
+    esac
+    [ -n "${PIN_SOURCE:-}" ] && cp "$PIN_SOURCE" "$tpl"
+fi
 exec bash "$PIN_OSL_SYFT"
 STUB
-chmod +x "$PIN/bin/syft"
+# The file view asks the daemon: info succeeds, create logs its reference and
+# fails, so the view gives up after naming the image it would read.
+cat > "$PIN/bin/docker" <<'STUB'
+#!/bin/bash
+[ "${1:-}" = info ] && exit 0
+[ "${1:-}" = create ] && printf '%s\n' "${@: -1}" >> "$PIN_DOCKER_LOG"
+exit 1
+STUB
+chmod +x "$PIN/bin/syft" "$PIN/bin/docker"
 REG_DIGEST=sha256:45e09956dc667c5eff3583c9d94830261fb1ca0be10a0a7db36266edf5de9e1d
 REG_INDEX=sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
 DMN_DIGEST=sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e
@@ -1160,7 +1188,7 @@ pin_run() {  # pin_run <dir> <sock|nosock> <image> <source fixture or ""> [VAR=v
     local d="$1" e="$PIN/entry-$2.sh" t="$3" src="$4"; shift 4
     mkdir -p "$d"
     ( cd "$d" && env PATH="$PIN/bin:$OSL/bin:$WORK/bin:$PATH" MODE=IMAGE TARGET_IMAGE="$t" PIN_SOURCE="$src" \
-        PIN_SYFT_ARGV="$d/syft-argv" PIN_OSL_SYFT="$OSL/bin/syft" OSL_TRIVY_ARGV="$d/trivy-argv" \
+        PIN_SYFT_ARGV="$d/syft-argv" PIN_OSL_SYFT="$OSL/bin/syft" OSL_TRIVY_ARGV="$d/trivy-argv" PIN_DOCKER_LOG="$d/docker-create" \
         PROJECT_NAME=demo PROJECT_VERSION=1.0 HOST_OUTPUT_DIR="$d" BOMLENS_LIBDIR="$ROOT_DIR/docker/lib" \
         UPLOAD_ENABLED=false GENERATE_SECURITY=false SECURITY_ENRICH=false ENRICH_EOL=false ENRICH_MALICIOUS=false \
         "$@" bash "$e" ) > "$d.log" 2>&1
@@ -1217,6 +1245,83 @@ else
         && [ "$(pin_image "$D")" = '{"reference":"alpine:3.20","source":"registry","digest":null,"platform":null}' ] \
         && pass "no source record from syft: the reference is read as given, digest and platform null" \
         || fail "no record: trivy $(tail -1 "$D/trivy-argv" 2>&1), image $(pin_image "$D")"
+    # More reference forms, the schemes and the file view.
+    pin_last() { tail -1 "$1/trivy-argv" 2>/dev/null; }
+    D="$WORK/pin-port"; pin_run "$D" nosock localhost:5000/team/app:1.2 "$FIX/syft-source-registry.json"
+    [ "$(pin_last "$D")" = "localhost:5000/team/app@$REG_DIGEST" ] \
+        && pass "a registry with a port keeps the port, loses the tag" || fail "port: $(pin_last "$D")"
+    D="$WORK/pin-has-digest"; pin_run "$D" nosock "alpine:3.20@$REG_INDEX" "$FIX/syft-source-registry.json"
+    [ "$(pin_last "$D")" = "alpine@$REG_DIGEST" ] && [ "$(jq -r .input.image.reference "$D/bomlens-result.json")" = "alpine:3.20@$REG_INDEX" ] \
+        && pass "a reference that already names a digest is pinned to the platform manifest syft read" || fail "has digest: $(pin_last "$D")"
+    D="$WORK/pin-no-tag"; pin_run "$D" nosock alpine "$FIX/syft-source-registry.json"
+    [ "$(pin_last "$D")" = "alpine@$REG_DIGEST" ] && pass "a name with no tag is pinned" || fail "no tag: $(pin_last "$D")"
+    for sch in docker podman; do
+        D="$WORK/pin-$sch"; pin_run "$D" sock "$sch:busybox:latest" "$FIX/syft-source-daemon.json"
+        [ "$(pin_last "$D")" = "busybox@$DMN_DIGEST" ] && grep -qx -- '--image-src' "$D/trivy-argv" && grep -qx "$sch" "$D/trivy-argv" \
+            && [ "$(jq -r .input.image.source "$D/bomlens-result.json")" = daemon ] \
+            && pass "$sch: gives Trivy --image-src $sch with the pinned reference" \
+            || fail "$sch: scheme: $(tr '\n' ' ' < "$D/trivy-argv" 2>&1)"
+    done
+    D="$WORK/pin-file-view"; pin_run "$D" sock busybox:latest "$FIX/syft-source-daemon.json"
+    [ "$(cat "$D/docker-create" 2>/dev/null)" = "busybox@$DMN_DIGEST" ] \
+        && pass "the file view creates its container from the pinned reference" || fail "file view: $(cat "$D/docker-create" 2>&1)"
+    for bad in "alpine 3.20" "x:1 --output=/tmp/y"; do
+        D="$WORK/pin-inject-$(printf '%s' "$bad" | tr -c 'a-z0-9' '_')"; pin_run "$D" nosock "$bad" "$FIX/syft-source-registry.json"
+        [ "$(pin_last "$D")" = "$bad" ] && [ "$(jq -c '.input.image | [.digest, .source]' "$D/bomlens-result.json")" = '[null,"registry"]' ] \
+            && pass "a name that is not a plain image name ('$bad') is never pinned" \
+            || fail "inject '$bad': trivy $(pin_last "$D"), image $(pin_image "$D")"
+    done
+
+    # A name starting with - would be an option to syft, Trivy and docker.
+    for bad in "-alpine:3.20" "--output=/tmp/x:1"; do
+        D="$WORK/pin-dash-$(printf '%s' "$bad" | tr -c 'a-z0-9' '_')"; pin_run "$D" sock "$bad" "$FIX/syft-source-registry.json"
+        rc=$?
+        [ "$rc" = 1 ] && [ ! -e "$D/syft-argv" ] && [ ! -e "$D/trivy-argv" ] && [ ! -e "$D/docker-create" ] \
+            && grep -q "TARGET_IMAGE '$bad' starts with '-'" "$D.log" \
+            && [ "$(jq -r .run.status "$D/bomlens-result.json")" = failed ] \
+            && pass "an image name starting with - ('$bad') is refused before any tool reads it" \
+            || fail "dash '$bad': rc $rc, syft run $([ -e "$D/syft-argv" ] && echo yes || echo no)" "$(tail -3 "$D.log")"
+    done
+
+    # Where syft read a plain name with the socket mounted, from its record.
+    D="$WORK/pin-fallback"; pin_run "$D" sock busybox:latest "$FIX/syft-source-registry-fallback.json"
+    [ "$(jq -c '.input.image | [.source, .digest, .index_digest]' "$D/bomlens-result.json")" = '["registry","sha256:365a051f12e05767b598e643676f14a450fb678a75ccf2beb0052c95d5c73b83","'"$DMN_DIGEST"'"]' ] \
+        && [ "$(pin_last "$D")" = "busybox@sha256:365a051f12e05767b598e643676f14a450fb678a75ccf2beb0052c95d5c73b83" ] \
+        && pass "with the socket, a record written by the registry read (syft fell back) is a registry read" \
+        || fail "fallback: $(pin_image "$D"), trivy $(pin_last "$D")"
+    jq '.metadata.tags = [] | .metadata.repoDigests = ["ghcr.io/team/app@'"$DMN_DIGEST"'"]' "$FIX/syft-source-daemon.json" > "$PIN/unknown.json"
+    D="$WORK/pin-unknown"; pin_run "$D" sock ghcr.io/team/app:1 "$PIN/unknown.json"
+    [ "$(jq -c '.input.image | [.source, .digest]' "$D/bomlens-result.json")" = '["unknown","'"$DMN_DIGEST"'"]' ] \
+        && [ "$(pin_last "$D")" = "ghcr.io/team/app@$DMN_DIGEST" ] \
+        && [ -z "$(schema_errors "$D/bomlens-result.json")" ] \
+        && pass "a record that does not show the provider is unknown, pinned by the repository digest" \
+        || fail "unknown: $(pin_image "$D"), trivy $(pin_last "$D")"
+
+    # The variant: architectureVariant in syft's record, else the image config.
+    D="$WORK/pin-armv7"; pin_run "$D" nosock alpine:3.20 "$FIX/syft-source-registry-armv7.json"
+    [ "$(jq -r .input.image.platform "$D/bomlens-result.json")" = linux/arm/v7 ] \
+        && pass "an arm/v7 image records linux/arm/v7" || fail "armv7: $(pin_image "$D")"
+    jq '.metadata |= del(.architectureVariant)' "$FIX/syft-source-registry-armv7.json" > "$PIN/armv7-config.json"
+    D="$WORK/pin-armv7-config"; pin_run "$D" nosock alpine:3.20 "$PIN/armv7-config.json"
+    [ "$(jq -r .input.image.platform "$D/bomlens-result.json")" = linux/arm/v7 ] \
+        && pass "with no architectureVariant the variant comes from the image config" || fail "armv7 config: $(pin_image "$D")"
+
+    # The source record is an extra: when syft cannot write it, the scan goes on.
+    D="$WORK/pin-record-after"; pin_run "$D" nosock alpine:3.20 "$FIX/syft-source-registry.json" PIN_SYFT_FAIL=after
+    rc=$?
+    [ "$rc" = 0 ] && [ "$(grep -c -- '--end--' "$D/syft-argv")" = 1 ] && [ "$(pin_last "$D")" = "alpine:3.20" ] \
+        && [ "$(jq -c '[.run.status, .input.image.digest]' "$D/bomlens-result.json")" = '["succeeded",null]' ] \
+        && grep -q 'syft could not write its source record' "$D.log" && ! grep -q 'registry needs credentials' "$D.log" \
+        && pass "a source record that fails after the SBOM is written: one read, the scan goes on, digest null" \
+        || fail "record after: rc $rc, calls $(grep -c -- '--end--' "$D/syft-argv" 2>&1), $(pin_image "$D")" "$(tail -4 "$D.log")"
+    D="$WORK/pin-record-before"; pin_run "$D" nosock alpine:3.20 "$FIX/syft-source-registry.json" PIN_SYFT_FAIL=before
+    rc=$?
+    [ "$rc" = 0 ] && [ "$(grep -c -- '--end--' "$D/syft-argv")" = 2 ] && ! sed -n '/--end--/,$p' "$D/syft-argv" | grep -q '^-t$' \
+        && [ "$(jq -r '.components | length' "$D/demo_1.0_bom.json")" -gt 0 ] \
+        && [ "$(jq -c '[.run.status, .input.image.digest]' "$D/bomlens-result.json")" = '["succeeded",null]' ] \
+        && grep -q 'syft could not write its source record' "$D.log" \
+        && pass "a source record that fails before any output: read once more without it, the scan goes on" \
+        || fail "record before: rc $rc, calls $(grep -c -- '--end--' "$D/syft-argv" 2>&1), $(pin_image "$D")" "$(tail -4 "$D.log")"
     D="$WORK/pin-failed"; mkdir -p "$D"
     ( cd "$D" && env PATH="$IMG/bin:$WORK/bin:$PATH" MODE=IMAGE TARGET_IMAGE=registry.example/denied:1 SYFT_ARGV_LOG="$D/argv" \
         PROJECT_NAME=demo PROJECT_VERSION=1.0 HOST_OUTPUT_DIR="$D" BOMLENS_LIBDIR="$ROOT_DIR/docker/lib" \

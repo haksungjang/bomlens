@@ -144,7 +144,7 @@ In `IMAGE` mode syft reads the image first, and Trivy reads it again for the lic
   "reference": "alpine:3.20",
   "source": "registry",
   "digest": "sha256:45e09956dc667c5eff3583c9d94830261fb1ca0be10a0a7db36266edf5de9e1d",
-  "platform": "linux/arm64",
+  "platform": "linux/arm64/v8",
   "index_digest": "sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
 }
 ```
@@ -152,9 +152,9 @@ In `IMAGE` mode syft reads the image first, and Trivy reads it again for the lic
 | Field | Meaning |
 |---|---|
 | `reference` | the image reference as given (`TARGET_IMAGE`) |
-| `source` | where syft read it: `registry` (the `registry:` scheme, or a plain name with no Docker socket), `daemon` (a plain name with the socket, or `docker:` and `podman:`), `archive` (`docker-archive:`, `oci-archive:`, `oci-dir:`), `other` (`containerd:`), or `null` when the run stopped before syft read the image |
-| `digest` | for `registry`, the manifest digest of the image read, one platform; for `daemon`, the repository digest the daemon holds for that repository, which for a multi-platform image is the digest of its index. `null` for an archive, which is read as it is, and when no digest could be resolved (an image built locally and never pushed has no repository digest): the later reads then use the reference as given, and the log says so |
-| `platform` | `os/architecture[/variant]` of the image read, or `null` |
+| `source` | where syft read it: `registry` (the `registry:` scheme, or a plain name with no Docker socket), `daemon` (`docker:` and `podman:`), `archive` (`docker-archive:`, `oci-archive:`, `oci-dir:`), `other` (`containerd:`), or `null` when the run stopped before syft read the image. With the socket, syft reads a plain name from the daemon and falls back to the registry when the daemon cannot give it the image, and its record does not name which it used. It is then told from the record: a Docker Hub repository digest written in full (`index.docker.io/...`) means `registry`, a listed tag means `daemon`, and anything else is `unknown` |
+| `digest` | for `registry`, the manifest digest of the image read, one platform; for `daemon` and `unknown`, the repository digest recorded for that repository, which for a multi-platform image is the digest of its index and names the same content in the daemon and in the registry. `null` for an archive, which is read as it is, and when no digest could be resolved: a repository with no repository digest (an image built locally and never pushed), a name that is not a plain image name, or a syft source record that could not be written. The later reads then use the reference as given, and the log says so |
+| `platform` | `os/architecture[/variant]` of the image read, or `null`. The variant is syft's `architectureVariant`, or else the `variant` in the image config (Docker writes `v8` for arm64 images) |
 | `index_digest` | `registry` only, present when the reference named an image index (manifest list) whose digest differs from `digest` |
 
 ## Execution plan
