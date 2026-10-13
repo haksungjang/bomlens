@@ -1870,7 +1870,13 @@ elif [ -n "$TARGET" ]; then
             # just because the folder exists.
             NESTED_ROOTFS_HINT="$(nested_rootfs_hint "$SCAN_INPUT_DIR" || true)"
         fi
-    else MODE="IMAGE"; fi
+    else
+        # An image name: syft, Trivy and docker would read one starting with - as an option.
+        case "$TARGET" in
+            -*) echo "[ERROR] --target '$TARGET' starts with '-': no file or folder has that name, and an image name cannot start with '-'. Give the image reference itself, for example --target alpine:3.20."; exit 1 ;;
+        esac
+        MODE="IMAGE"
+    fi
 elif [ "$FORCE_FIRMWARE" = "true" ]; then
     echo "[ERROR] --firmware requires '--target <firmware-file>'."; exit 1
 fi

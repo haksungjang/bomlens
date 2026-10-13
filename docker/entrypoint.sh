@@ -719,6 +719,10 @@ case "$SCAN_MODE" in
 
     IMAGE)
         if [ -z "$TARGET_IMAGE" ]; then echo "[ERROR] TARGET_IMAGE required for IMAGE mode."; exit 1; fi
+        # syft, Trivy and docker would read a name starting with - as an option.
+        case "$TARGET_IMAGE" in
+            -*) echo "[ERROR] TARGET_IMAGE '$TARGET_IMAGE' starts with '-': an image name cannot, and the scan tools would read it as an option. Give the image reference itself, for example alpine:3.20."; exit 1 ;;
+        esac
         # With the Docker socket mounted syft reads the image from the daemon;
         # without it, straight from the registry (no daemon needed, as in a
         # Kubernetes job), or from an archive named with its scheme
@@ -732,10 +736,38 @@ case "$SCAN_MODE" in
         IMAGE_SYFT_LOG=$(mktemp)
         # syft's source record (its syft-json `source`, through a template so
         # the file catalogue is not written twice) gives the digest it read.
-        IMAGE_SOURCE_TMPL=$(mktemp); IMAGE_SOURCE_JSON=$(mktemp)
-        printf '%s' '{{ toJson .source }}' > "$IMAGE_SOURCE_TMPL"
-        if ! syft "$TARGET_IMAGE" -o "cyclonedx-json@$CDX_SPEC_VERSION" \
-                -o "template=$IMAGE_SOURCE_JSON" -t "$IMAGE_SOURCE_TMPL" > "$OUTPUT_FILE" 2>"$IMAGE_SYFT_LOG"; then
+        # It is an extra: when it cannot be written, the scan goes on with the
+        # digest unresolved.
+        IMAGE_SOURCE_TMPL="$(mktemp 2>/dev/null)" || IMAGE_SOURCE_TMPL=""
+        IMAGE_SOURCE_JSON="$(mktemp 2>/dev/null)" || IMAGE_SOURCE_JSON=""
+        _img_extra=()
+        if [ -n "$IMAGE_SOURCE_TMPL" ] && [ -n "$IMAGE_SOURCE_JSON" ] \
+            && printf '%s' '{{ toJson .source }}' > "$IMAGE_SOURCE_TMPL" 2>/dev/null; then
+            _img_extra=(-o "template=$IMAGE_SOURCE_JSON" -t "$IMAGE_SOURCE_TMPL")
+        else
+            echo "[WARN] no temporary file for syft's source record, so the image digest is not resolved: later reads use the reference as given." >&2
+            rm -f ${IMAGE_SOURCE_TMPL:+"$IMAGE_SOURCE_TMPL"} ${IMAGE_SOURCE_JSON:+"$IMAGE_SOURCE_JSON"}
+            IMAGE_SOURCE_TMPL=""; IMAGE_SOURCE_JSON=""
+        fi
+        _img_rc=0
+        syft "$TARGET_IMAGE" -o "cyclonedx-json@$CDX_SPEC_VERSION" "${_img_extra[@]}" \
+            > "$OUTPUT_FILE" 2>"$IMAGE_SYFT_LOG" || _img_rc=$?
+        if [ "$_img_rc" -ne 0 ] && [ "${#_img_extra[@]}" -gt 0 ]; then
+            # syft writes the SBOM before the template: a complete SBOM means
+            # only the source record failed. Otherwise read once more without it.
+            if jq -e '.bomFormat == "CycloneDX" and (.components | type) == "array"' "$OUTPUT_FILE" >/dev/null 2>&1; then
+                _img_rc=0
+            else
+                _img_rc=0
+                syft "$TARGET_IMAGE" -o "cyclonedx-json@$CDX_SPEC_VERSION" \
+                    > "$OUTPUT_FILE" 2>"$IMAGE_SYFT_LOG" || _img_rc=$?
+            fi
+            if [ "$_img_rc" -eq 0 ]; then
+                echo "[WARN] syft could not write its source record, so the image digest is not resolved: later reads use the reference as given." >&2
+                rm -f "$IMAGE_SOURCE_JSON"; IMAGE_SOURCE_JSON=""
+            fi
+        fi
+        if [ "$_img_rc" -ne 0 ]; then
             case "$TARGET_IMAGE" in
                 docker-archive:*|oci-archive:*|oci-dir:*)
                     echo "[ERROR] syft could not read the image archive $TARGET_IMAGE: check that the path is mounted into the container and holds an image in that format." ;;
@@ -743,7 +775,7 @@ case "$SCAN_MODE" in
                     echo "[ERROR] syft could not read the image $TARGET_IMAGE: it does not exist, or the registry needs credentials (SYFT_REGISTRY_AUTH_USERNAME and SYFT_REGISTRY_AUTH_PASSWORD, or a docker config file in DOCKER_CONFIG). With the CLI, pulling it first (docker pull) also works." ;;
             esac
             [ -s "$IMAGE_SYFT_LOG" ] && tail -5 "$IMAGE_SYFT_LOG" >&2
-            rm -f "$IMAGE_SYFT_LOG" "$IMAGE_SOURCE_TMPL" "$IMAGE_SOURCE_JSON"
+            rm -f "$IMAGE_SYFT_LOG" ${IMAGE_SOURCE_TMPL:+"$IMAGE_SOURCE_TMPL"} ${IMAGE_SOURCE_JSON:+"$IMAGE_SOURCE_JSON"}
             exit 1
         fi
         rm -f "$IMAGE_SYFT_LOG"
@@ -753,17 +785,17 @@ case "$SCAN_MODE" in
         # the reference is read as given, and the manifest records it as null.
         _img_socket=false; [ -S /var/run/docker.sock ] && _img_socket=true
         ER_INPUT_IMAGE="$(bash "$LIBDIR/image-digest.sh" "$IMAGE_SOURCE_JSON" "$TARGET_IMAGE" "$_img_socket" 2>/dev/null)" || ER_INPUT_IMAGE=""
-        rm -f "$IMAGE_SOURCE_TMPL" "$IMAGE_SOURCE_JSON"
+        rm -f ${IMAGE_SOURCE_TMPL:+"$IMAGE_SOURCE_TMPL"} ${IMAGE_SOURCE_JSON:+"$IMAGE_SOURCE_JSON"}
         IMAGE_READ_TARGET="$TARGET_IMAGE"
         _img_json="${ER_INPUT_IMAGE:-"{}"}"
         _img_pinned="$(jq -r '.pinned_reference // empty' <<<"$_img_json" 2>/dev/null)" || _img_pinned=""
         case "$(jq -r '.source // empty' <<<"$_img_json" 2>/dev/null)" in
-            registry|daemon)
+            registry|daemon|unknown)
                 if [ -n "$_img_pinned" ]; then
                     IMAGE_READ_TARGET="$_img_pinned"
                     echo "[1/2] image digest: $(jq -r '.digest + (if .platform then " (" + .platform + ")" else "" end)' <<<"$ER_INPUT_IMAGE"); later reads use $IMAGE_READ_TARGET"
-                else
-                    echo "[WARN] could not resolve the digest of $TARGET_IMAGE (an image with no repository digest, such as one built locally): later reads use the reference as given." >&2
+                elif [ -n "$IMAGE_SOURCE_JSON" ]; then
+                    echo "[WARN] could not resolve the digest of $TARGET_IMAGE (no repository digest for this name, as for an image built locally, or a name that is not a plain image name): later reads use the reference as given." >&2
                 fi ;;
         esac
         export ER_INPUT_IMAGE
