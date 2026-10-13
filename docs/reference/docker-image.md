@@ -39,7 +39,7 @@ It is a lightweight image (based on python 3.12 slim) without language toolchain
 
 Tool versions are pinned with `ARG` in `docker/Dockerfile`.
 
-Every image also carries the NVD CPE index (`cpe_match.sqlite`, about 146 MB), built from the NVD data when the image is built. Firmware, root filesystem and binary scans with `--security` match the CPEs of components that have no package PURL against it, with no network (see [How CVEs are matched](../guides/firmware.md#how-cves-are-matched)). When you build an image yourself, `--build-arg SBOM_CPE_INDEX=false` leaves it out; the firmware image always has it.
+Every image also carries the NVD CPE index (`cpe_match.sqlite`, about 146 MB), built from the NVD data when the image is built. Firmware, root filesystem and binary scans with `--security` match the CPEs of components that have no package PURL against it, with no network (see [How CVEs are matched](../guides/firmware.md#how-cves-are-matched)). Building it clones the NVD data feeds from GitHub. When you build an image yourself where GitHub is not reachable, the build stops at that step and names `--build-arg SBOM_CPE_INDEX=false`, which leaves the index out; a firmware build does not accept it, so the firmware image always has the index.
 
 ## Running directly
 
