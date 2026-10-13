@@ -223,6 +223,10 @@ ARTIFACT_SUFFIXES = (
     # across re-scans, like _vex.json) and the empty declaration to start from.
     "_bom.spdx3.json", "_bom.spdx3.json.sig", "_spdx3-check.json", "_spdx3-check.md",
     "_ai-declaration.json", "_ai-declaration.template.json",
+    # Components a firmware, rootfs or binary scan found without a version, in
+    # the --component-versions CSV format with the versions left empty: the user
+    # fills it and passes it back, so list/download it.
+    "_component-versions.template.csv",
 )
 
 # Recent-scans sidebar shows the newest N; older scans stay on disk but are not
@@ -1121,6 +1125,7 @@ MAX_SCAN_WARNINGS = 12
 MAX_VULN_ROWS = 2000
 MAX_VULN_REFS = 12  # reference links per CVE in the detail view
 MAX_VULN_DESC = 600  # description chars per CVE (keeps the SSE payload bounded)
+MAX_UNCHECKED_ROWS = 500  # components listed whose vulnerabilities were not checked
 MAX_CONFORMANCE_MISSING = 50  # missing items per conformance check
 MAX_CHECK_REGULATIONS = 12  # regulation refs mapped to one conformance check
 MAX_GUIDANCE_SNIPPET = 2000  # chars of the CycloneDX fill-in fragment per check
@@ -1353,7 +1358,52 @@ def security_summary(run_id):
     vex_count = len(_load_vex_verdicts(run_id))
     if vex_count:
         sev["vexCount"] = vex_count
+    # Components no vulnerability check could reach (scan-security.sh's
+    # UncheckedComponents: no version, or neither a purl nor a CPE a check
+    # used). Zero findings says nothing about them, so the UI must not call
+    # such a result clean. Both keys are omitted when there are none.
+    unchecked = _unchecked_components(data.get("UncheckedComponents"))
+    if unchecked:
+        sev["uncheckedCount"], sev["uncheckedComponents"] = unchecked
     return sev
+
+
+def _unchecked_components(block):
+    """Normalize _security.json's UncheckedComponents {Count, Components[{Name,
+    Version, PURL, Reason}]} to (count, rows[{name, version, purl?, reason}]),
+    rows capped at MAX_UNCHECKED_ROWS. None when absent, malformed or empty.
+    The count is the larger of the declared Count and the rows present, so a
+    truncated list never lowers it."""
+    if not isinstance(block, dict):
+        return None
+    comps = block.get("Components")
+    comps = comps if isinstance(comps, list) else []
+    rows = []
+    for c in comps:
+        if len(rows) >= MAX_UNCHECKED_ROWS:
+            break
+        if not isinstance(c, dict):
+            continue
+        name = c.get("Name")
+        if not isinstance(name, str) or not name:
+            continue
+        version = c.get("Version")
+        reason = c.get("Reason")
+        row = {
+            "name": name,
+            "version": version if isinstance(version, str) else "",
+            "reason": reason if isinstance(reason, str) and reason else "unknown",
+        }
+        purl = c.get("PURL")
+        if isinstance(purl, str) and purl:
+            row["purl"] = purl
+        rows.append(row)
+    declared = block.get("Count")
+    count = declared if isinstance(declared, int) and not isinstance(declared, bool) else 0
+    count = max(count, len([c for c in comps if isinstance(c, dict) and c.get("Name")]))
+    if count <= 0:
+        return None
+    return count, rows
 
 
 def _norm_purl(purl):

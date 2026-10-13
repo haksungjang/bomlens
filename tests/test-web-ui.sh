@@ -1977,6 +1977,76 @@ else
 fi
 rm -f "$OUT"/serr_1.0_* "$OUT"/sok_1.0_*
 
+echo "== uncheckedComponents exposure (security_summary) =="
+# scan-security.sh records components no vulnerability check could reach as
+# UncheckedComponents. A report with zero findings but unchecked components
+# must carry them so the UI never calls it clean; both keys are omitted when
+# the block is absent, empty or malformed.
+cat > "$OUT/unchk_1.0_security.json" <<'JSON'
+{"Results":[],"UncheckedComponents":{"Count":3,"Components":[
+ {"Name":"busybox","Version":"","PURL":"","Reason":"no-version"},
+ {"Name":"libvendor","Version":"2.1","PURL":"pkg:generic/libvendor@2.1","Reason":"no-identifier"},
+ {"Name":"","Version":"1","Reason":"no-version"},
+ "junk"]}}
+JSON
+cat > "$OUT/unchk0_1.0_security.json" <<'JSON'
+{"Results":[],"UncheckedComponents":{"Count":0,"Components":[]}}
+JSON
+cat > "$OUT/unchkbad_1.0_security.json" <<'JSON'
+{"Results":[],"UncheckedComponents":"oops"}
+JSON
+cat > "$OUT/unchknone_1.0_security.json" <<'JSON'
+{"Results":[]}
+JSON
+cat > "$OUT/unchkcap_1.0_security.json" <<'JSON'
+{"Results":[],"UncheckedComponents":{"Count":1,"Components":[]}}
+JSON
+if SBOM_OUTPUT_DIR="$OUT" python3 - "$ROOT_DIR" <<'PY'
+import sys, os, json
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+# A long list is capped at MAX_UNCHECKED_ROWS but the count is kept.
+n = server.MAX_UNCHECKED_ROWS + 5
+big = {"Results": [], "UncheckedComponents": {"Count": n, "Components": [
+    {"Name": "c%d" % i, "Version": "", "PURL": "", "Reason": "no-version"} for i in range(n)]}}
+with open(os.path.join(os.environ["SBOM_OUTPUT_DIR"], "unchkbig_1.0_security.json"), "w") as f:
+    json.dump(big, f)
+s = server.security_summary("unchk_1.0")
+assert s["TOTAL"] == 0, s
+assert s["uncheckedCount"] == 3, s
+rows = s["uncheckedComponents"]
+assert rows == [
+    {"name": "busybox", "version": "", "reason": "no-version"},
+    {"name": "libvendor", "version": "2.1", "reason": "no-identifier", "purl": "pkg:generic/libvendor@2.1"},
+], rows
+for rid in ("unchk0_1.0", "unchkbad_1.0", "unchknone_1.0"):
+    o = server.security_summary(rid)
+    assert "uncheckedCount" not in o and "uncheckedComponents" not in o, (rid, o)
+c = server.security_summary("unchkcap_1.0")
+assert c["uncheckedCount"] == 1 and c["uncheckedComponents"] == [], c
+b = server.security_summary("unchkbig_1.0")
+assert b["uncheckedCount"] == n and len(b["uncheckedComponents"]) == server.MAX_UNCHECKED_ROWS, b["uncheckedCount"]
+PY
+then
+    pass "uncheckedCount/uncheckedComponents surfaced, normalized and capped; absent when none"
+else
+    fail "uncheckedComponents exposure is wrong"
+fi
+rm -f "$OUT"/unchk*_1.0_*
+
+echo "== component-versions template CSV is a listed artifact =="
+if SBOM_OUTPUT_DIR="$OUT" python3 - "$ROOT_DIR" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.join(sys.argv[1], "docker", "web"))
+import server
+assert "fw_1.0_component-versions.template.csv".endswith(server.ARTIFACT_SUFFIXES)
+PY
+then
+    pass "_component-versions.template.csv is in ARTIFACT_SUFFIXES"
+else
+    fail "_component-versions.template.csv missing from ARTIFACT_SUFFIXES"
+fi
+
 echo "== purl attached to vulnerability rows (security_summary) =="
 # Two different components (different ecosystems) can share a name and
 # installed version by coincidence. Without the purl on each row, a consumer
