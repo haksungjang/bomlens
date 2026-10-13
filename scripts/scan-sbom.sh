@@ -118,6 +118,7 @@ fail_on_bad_coverage() {
 }
 FORCE_FIRMWARE="false"; FORCE_SOURCE="false"; RELEASE_FOLDER_DIR=""; ANALYZE_SBOM=""; MODEL=""; MODEL_FILE=""; VEX_FILE=""
 AI_DECLARE_FILE=""; GENERATE_SPDX3="true"
+COMPONENT_VERSIONS_FILE=""
 # Set when --target turned out to be a Yocto build directory: the folder the
 # user pointed at, while ANALYZE_SBOM holds the image SBOM found inside it.
 YOCTO_BUILD_DIR=""
@@ -181,6 +182,7 @@ while [[ "$#" -gt 0 ]]; do
         # report, so asking for a VEX asks for that report too (as --deep-cve does).
         --vex) VEX_FILE="$2"; GENERATE_SECURITY="true"; shift ;;
         --ai-declare) AI_DECLARE_FILE="$2"; shift ;;
+        --component-versions) COMPONENT_VERSIONS_FILE="$2"; shift ;;
         --no-spdx3) GENERATE_SPDX3="false" ;;
         --usage) USAGE_CONTEXT="$2"; shift ;;
         --merge)
@@ -296,6 +298,17 @@ Options:
                          yet: its base models (model.baseModels) and datasets
                          (datasets[].ref) are read from the hub by id, and the
                          rest comes from the declaration (base image).
+  --component-versions <file>
+                         For a firmware, root filesystem or binary scan: a CSV
+                         file with two columns, name,version, giving the version
+                         of components the scan found but could not read a
+                         version for. A version the scan read from the delivered
+                         files is kept (a warning names both), and a name the
+                         scan did not find is added as a supplier-declared
+                         component. Every such scan writes the components still
+                         missing a version to
+                         <Project>_<Version>_component-versions.template.csv,
+                         in this format, to fill in and pass back.
   --no-spdx3             For an AI model or dataset scan: do not write the
                          SPDX 3.0.1 AI document (<Project>_<Version>_bom.spdx3.json)
                          and its check
@@ -663,6 +676,7 @@ SBOM_PULL="${SBOM_PULL:-missing}"
 if [ "$UI_MODE" = "true" ]; then
     [ -z "$VEX_FILE" ] || { echo "[ERROR] --vex is not offered with --ui (import a VEX from the Vulnerabilities screen instead)."; exit 1; }
     [ -z "$AI_DECLARE_FILE" ] || { echo "[ERROR] --ai-declare is not offered with --ui (fill the declaration on the Models & datasets screen instead)."; exit 1; }
+    [ -z "$COMPONENT_VERSIONS_FILE" ] || { echo "[ERROR] --component-versions is not offered with --ui (it applies to one firmware, root filesystem or binary scan)."; exit 1; }
     [ "${#FAIL_ON[@]}" -eq 0 ] || { echo "[ERROR] --fail-on is not offered with --ui (it exits on one scan's result; the UI runs many)."; exit 1; }
     [ "$FAIL_ON_CONFORMANCE" = "true" ] && { echo "[ERROR] --fail-on-conformance is not offered with --ui (it exits on one scan's result; the UI runs many)."; exit 1; }
     docker_check
@@ -755,6 +769,7 @@ if [ -n "$DIFF_OLD" ]; then
     [ "${#FAIL_ON[@]}" -eq 0 ] || { echo "[ERROR] --fail-on cannot be combined with --diff (a diff judges no scan)."; exit 1; }
     [ -z "$VEX_FILE" ] || { echo "[ERROR] --vex cannot be combined with --diff (a diff writes no SBOM to attach statements to)."; exit 1; }
     [ -z "$AI_DECLARE_FILE" ] || { echo "[ERROR] --ai-declare cannot be combined with --diff (a diff writes no AI document to declare into)."; exit 1; }
+    [ -z "$COMPONENT_VERSIONS_FILE" ] || { echo "[ERROR] --component-versions cannot be combined with --diff (a diff writes no SBOM to add versions to)."; exit 1; }
     docker_check
     [ -f "$DIFF_OLD" ] || { echo "[ERROR] --diff: old SBOM not found: $DIFF_OLD"; exit 1; }
     [ -f "$DIFF_NEW" ] || { echo "[ERROR] --diff: new SBOM not found: $DIFF_NEW"; exit 1; }
@@ -1087,6 +1102,15 @@ declare_run() {
     local d f
     d="$(cd "$(dirname "$AI_DECLARE_FILE")" && pwd)"; f="$(basename "$AI_DECLARE_FILE")"
     printf ' -v %q:/declare-in/declaration.json:ro -e AI_DECLARATION_FILE=/declare-in/declaration.json' "$(hostpath "$d/$f")"
+}
+
+# --component-versions: mounted the same way as --vex, one file, read-only, at
+# a fixed container path. component-versions.py validates its content.
+component_versions_run() {
+    [ -n "$COMPONENT_VERSIONS_FILE" ] || return 0
+    local d f
+    d="$(cd "$(dirname "$COMPONENT_VERSIONS_FILE")" && pwd)"; f="$(basename "$COMPONENT_VERSIONS_FILE")"
+    printf ' -v %q:/component-versions-in/versions.csv:ro -e COMPONENT_VERSIONS_FILE=/component-versions-in/versions.csv' "$(hostpath "$d/$f")"
 }
 
 # --fail-on: the conditions travel to the container as one comma-separated value.
@@ -1711,6 +1735,17 @@ if [ -n "$VEX_FILE" ] && [ ! -f "$VEX_FILE" ]; then
     echo "[ERROR] --vex file not found: $VEX_FILE"
     echo "[ERROR] Pass the path of a CycloneDX VEX document (JSON), e.g. --vex supplier-vex.json."; exit 1
 fi
+if [ -n "$COMPONENT_VERSIONS_FILE" ]; then
+    if [ ! -f "$COMPONENT_VERSIONS_FILE" ]; then
+        echo "[ERROR] --component-versions file not found: $COMPONENT_VERSIONS_FILE"
+        echo "[ERROR] Pass a CSV file with two columns, name,version. A firmware, root filesystem or binary scan writes one to start from: <Project>_<Version>_component-versions.template.csv."; exit 1
+    fi
+    # The container checks every row; refusing an oversized file here saves
+    # starting the scan for it.
+    if [ "$(wc -c < "$COMPONENT_VERSIONS_FILE" | tr -d ' ')" -gt 262144 ]; then
+        echo "[ERROR] --component-versions: the file is larger than 256 KiB. It lists one component per line (name,version)."; exit 1
+    fi
+fi
 
 if [ -n "$GIT_URL" ]; then
     [ -z "$TARGET" ]      || { echo "[ERROR] --git is mutually exclusive with --target."; exit 1; }
@@ -2042,6 +2077,9 @@ fi
 
 if [ -n "${USAGE_CONTEXT:-}" ] && [ "$MODE" != "AIBOM" ] && [ "$MODE" != "MODELFILE" ] && [ "$MODE" != "DATASET" ] && [ "$MODE" != "AIDECLARE" ]; then
     echo "[ERROR] --usage applies to AI model and dataset scans only (use it with --model or --model-file)."; exit 1
+fi
+if [ -n "$COMPONENT_VERSIONS_FILE" ] && [ "$MODE" != "FIRMWARE" ] && [ "$MODE" != "ROOTFS" ] && [ "$MODE" != "BINARY" ]; then
+    echo "[ERROR] --component-versions applies to firmware, root filesystem and binary scans only (this target is scanned as $MODE)."; exit 1
 fi
 
 if { [ -n "$AI_DECLARE_FILE" ] || [ "$GENERATE_SPDX3" = "false" ]; } \
@@ -2551,7 +2589,7 @@ else
     # shellcheck disable=SC2046
     eval "$DOCKER_MSYS"docker run --rm $VOL \
         --add-host=host.docker.internal:host-gateway \
-        -e MODE="$MODE" -e BOMLENS_ARTIFACT_CLEANUP=1 $ENVV $(pp_env)$(cosign_run)$(vex_run)$(declare_run)$(gate_run) \
+        -e MODE="$MODE" -e BOMLENS_ARTIFACT_CLEANUP=1 $ENVV $(pp_env)$(cosign_run)$(vex_run)$(declare_run)$(component_versions_run)$(gate_run) \
         "\"$RUN_IMAGE\""
 fi
 
@@ -2698,6 +2736,14 @@ if [ -f "$SUMMARY_RESULT_FILE" ]; then
             fi
             ;;
     esac
+fi
+# Components a firmware, root filesystem or binary scan found without a version.
+# Counted from the template the scan wrote (one name per row after the header).
+VERSIONS_TEMPLATE="${SAFE_PROJECT}_${SAFE_VERSION}_component-versions.template.csv"
+if [ -f "$OUTPUT_HOST_DIR/$VERSIONS_TEMPLATE" ]; then
+    n_versionless=$(grep -v '^#' "$OUTPUT_HOST_DIR/$VERSIONS_TEMPLATE" | grep -vc '^name,version$' || true)
+    echo "[WARN] ${n_versionless} component(s) have no version, so nothing can be matched against them."
+    echo "  Write each version in ${VERSIONS_TEMPLATE} and run again with --component-versions \"$OUTPUT_HOST_DIR/$VERSIONS_TEMPLATE\""
 fi
 echo "=========================================="
 

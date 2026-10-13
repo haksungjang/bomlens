@@ -84,6 +84,24 @@ The unpacker also reports how much of the image it could open, and BomLens recor
 
 If the syft package-identification pass fails, the scan does not stop: syft's own error goes into the scan log, and the SBOM records which pass failed as `bomlens:pipeline-step-failed` (`firmware-packages` for the main rootfs; `firmware-extra-roots` for a secondary package source unpacking finds alongside it, such as a nested container image store or a filesystem with its own package database). A component count lower than expected is worth checking the scan log for this before assuming the firmware genuinely holds that few packages.
 
+## Upstream repository purl
+
+A component read out of a binary or a firmware package database has no purl, a `pkg:generic` one, or a `pkg:opkg` one. None of these names a project, so a tool that looks components up by purl cannot identify it even when the name and version are right. For firmware, root filesystem and binary scans, BomLens sets the purl of the project's upstream source repository at its release tag, for example `pkg:github/mirror/busybox@1_22_1`, `pkg:github/gregkh/linux@v3.10.18`, `pkg:sourceforge/boa@0.94.13` or `pkg:gnu/readline@5.2`.
+
+The conversion uses a closed table (`docker/lib/upstream-purl-map.json`) of projects whose repository and tag spelling were checked: BusyBox, curl, OpenSSL 1.x, OpenSSH, Linux, zlib, U-Boot, Net-SNMP, ncurses, net-tools, libxml2, SQLite, glibc, Dropbear, Mbed TLS, Python, Boa and readline. A component is matched by its name or its CPE, and only when it has a version of a form the table covers; a package rebuild count such as `-1` and a kernel build hash are removed first. A component not in the table keeps the identifier it had, since a guessed repository or tag would name a different version. The version, the CPE and the evidence are not changed, so the CVEs found from them stay in the report. The new purl is marked `bomlens:purlSource = upstream-map`, and a purl it replaced is kept in `bomlens:originalPurl`. Set `ENRICH_UPSTREAM_PURL=false` to turn it off.
+
+## Supplying the versions the scan could not read
+
+A component tagged `presence-only` has no version, so neither a CVE lookup nor a purl lookup can use it. Every firmware, root filesystem and binary scan lists those components on the console and writes them to `<Project>_<Version>_component-versions.template.csv`. Write the version shipped in the product after each name and pass the file back:
+
+```bash
+./scripts/scan-sbom.sh --project device-fw --version 1.0.0 \
+  --target "./device.bin" --firmware \
+  --component-versions device-fw_1.0.0_component-versions.template.csv --generate-only
+```
+
+The file is CSV with two columns, `name,version`; lines starting with `#` and rows left empty are skipped. The template can be filled in where it is: when the file passed is that template, the scan leaves it as you wrote it and only lists what is still missing. A filled version is marked `bomlens:versionSource = supplier-declared` and gets the upstream purl above. When the scan read a version from the delivered files, that version is kept and a warning shows both, because a source tree can hold several releases of one project and the binary shows which one shipped. A name the scan did not find is added as a component marked `bomlens:identifiedBy = supplier-declared`. A file over 256 KiB, a row that is not two fields, a name or version with characters outside letters, digits and `. _ + ~ -`, or one name given two versions is refused with the line number, and the SBOM is left unchanged.
+
 ## CVE matching, online and offline
 
 CVE matching for static binaries uses cve-bin-tool with its own vulnerability database. The firmware image ships in a hybrid arrangement, so the same image works both air-gapped and online.

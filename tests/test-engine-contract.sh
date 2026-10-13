@@ -1824,6 +1824,60 @@ schema_fp_reasons="$(jq -r '."$defs".input_fingerprint.properties.reasons.items.
     && pass "the fingerprint reasons in the contract page and both schemas agree ($doc_fp_reasons)" \
     || fail "fingerprint reasons: docs '$doc_fp_reasons', schema '$schema_fp_reasons'"
 
+echo "== a binary scan: supplied versions, upstream purls and the submission rows =="
+# syft is stubbed to return a firmware-shaped SBOM; the rest of the pipeline is real.
+mkdir -p "$WORK/bin-syft"
+cat > "$WORK/bin-syft/syft" <<EOF
+#!/bin/bash
+[ "\${1:-}" = "version" ] && { echo "Version: 0.0.0-stub"; exit 0; }
+cat "$FIX/firmware-upstream-purl.json"
+EOF
+chmod +x "$WORK/bin-syft/syft"
+UB="$(new_run upstream-binary empty)"
+printf 'x' > "$WORK/upstream-fw.bin"
+printf 'name,version\nncurses,5.7\n' > "$WORK/upstream-versions.csv"
+( cd "$UB" && env PATH="$WORK/bin-syft:$WORK/bin:$PATH" MODE=BINARY TARGET_FILE="$WORK/upstream-fw.bin" \
+    PROJECT_NAME=demo PROJECT_VERSION=1.0 HOST_OUTPUT_DIR="$UB" BOMLENS_LIBDIR="$ROOT_DIR/docker/lib" \
+    BOMLENS_ARTIFACT_CLEANUP=1 UPLOAD_ENABLED=false GENERATE_SECURITY=false SECURITY_ENRICH=false \
+    ENRICH_EOL=false ENRICH_MALICIOUS=false CONFORMANCE_PROFILE=skt-submission \
+    COMPONENT_VERSIONS_FILE="$WORK/upstream-versions.csv" bash "$ENTRY" ) > "$UB.log" 2>&1
+[ "$(jq -c '[.steps[] | select(.id == "component-versions" or .id == "upstream-purl") | "\(.id)=\(.status)"]' "$UB/bomlens-result.json" 2>/dev/null)" = '["component-versions=ok","upstream-purl=ok"]' ] \
+    && pass "the two steps run in order and are recorded" \
+    || fail "steps: $(jq -c '[.steps[] | {id, status}]' "$UB/bomlens-result.json" 2>&1)" "$(tail -5 "$UB.log")"
+[ "$(jq -r '.components[] | select(.name == "ncurses") | "\(.version) \(.purl)"' "$UB/demo_1.0_bom.json" 2>/dev/null)" = "5.7 pkg:github/mirror/ncurses@v5.7" ] \
+    && pass "a version from the file reaches the SBOM with its upstream purl" \
+    || fail "ncurses: $(jq -c '.components[] | select(.name == "ncurses")' "$UB/demo_1.0_bom.json" 2>&1)"
+[ "$(grep -v '^#' "$UB/demo_1.0_component-versions.template.csv" 2>/dev/null | tr '\n' ' ')" = "name,version net-snmp, " ] \
+    && jq -e 'any(.outputs[]; .path == "demo_1.0_component-versions.template.csv")' "$UB/bomlens-result.json" >/dev/null \
+    && pass "the template of what is still missing is written and listed in the outputs" \
+    || fail "template: $(cat "$UB/demo_1.0_component-versions.template.csv" 2>&1)"
+[ "$(jq -c '[.checks[] | select(.id == "versions-needed" or .id == "upstream-purl") | .missing] + [.submitFile]' "$UB/demo_1.0_conformance.json" 2>/dev/null)" = '[["net-snmp"],["gcc@3.4.4","openssl@3.0.13"],"demo_1.0_bom.json"]' ] \
+    && pass "the submission profile names what is missing and the file to submit" \
+    || fail "conformance: $(jq -c '[.checks[] | select(.id == "versions-needed" or .id == "upstream-purl")] + [.submitFile]' "$UB/demo_1.0_conformance.json" 2>&1)"
+# The template filled in place and passed back is the supplier's record: the
+# run reads it, and neither sweeps nor rewrites it.
+printf '# filled\nname,version\nnet-snmp,5.7.1\n' > "$UB/demo_1.0_component-versions.template.csv"
+cp "$UB/demo_1.0_component-versions.template.csv" "$WORK/upstream-filled.csv"
+( cd "$UB" && env PATH="$WORK/bin-syft:$WORK/bin:$PATH" MODE=BINARY TARGET_FILE="$WORK/upstream-fw.bin" \
+    PROJECT_NAME=demo PROJECT_VERSION=1.0 HOST_OUTPUT_DIR="$UB" BOMLENS_LIBDIR="$ROOT_DIR/docker/lib" \
+    BOMLENS_ARTIFACT_CLEANUP=1 UPLOAD_ENABLED=false GENERATE_SECURITY=false SECURITY_ENRICH=false \
+    ENRICH_EOL=false ENRICH_MALICIOUS=false \
+    COMPONENT_VERSIONS_FILE="$UB/demo_1.0_component-versions.template.csv" bash "$ENTRY" ) > "$UB.2.log" 2>&1
+cmp -s "$WORK/upstream-filled.csv" "$UB/demo_1.0_component-versions.template.csv" \
+    && [ "$(jq -r '.components[] | select(.name == "net-snmp") | .purl' "$UB/demo_1.0_bom.json" 2>/dev/null)" = "pkg:github/net-snmp/net-snmp@v5.7.1" ] \
+    && grep -q "Add them to the file passed with --component-versions" "$UB.2.log" \
+    && pass "a filled-in template passed back is applied and left as the supplier wrote it" \
+    || fail "template passed back: $(cat "$UB/demo_1.0_component-versions.template.csv" 2>&1)" "$(grep component-versions "$UB.2.log")"
+UB2="$(new_run upstream-binary-off empty)"
+( cd "$UB2" && env PATH="$WORK/bin-syft:$WORK/bin:$PATH" MODE=BINARY TARGET_FILE="$WORK/upstream-fw.bin" \
+    PROJECT_NAME=demo PROJECT_VERSION=1.0 HOST_OUTPUT_DIR="$UB2" BOMLENS_LIBDIR="$ROOT_DIR/docker/lib" \
+    BOMLENS_ARTIFACT_CLEANUP=1 UPLOAD_ENABLED=false GENERATE_SECURITY=false SECURITY_ENRICH=false \
+    ENRICH_EOL=false ENRICH_MALICIOUS=false ENRICH_UPSTREAM_PURL=false bash "$ENTRY" ) > "$UB2.log" 2>&1
+[ "$(jq -r '.steps[] | select(.id == "upstream-purl") | .status' "$UB2/bomlens-result.json" 2>/dev/null)" = disabled ] \
+    && ! jq -e 'any(.components[]; (.purl // "") | startswith("pkg:github/"))' "$UB2/demo_1.0_bom.json" >/dev/null \
+    && pass "ENRICH_UPSTREAM_PURL=false leaves the purls alone and records the step as disabled" \
+    || fail "upstream-purl off: $(jq -c '[.steps[] | select(.id == "upstream-purl")]' "$UB2/bomlens-result.json" 2>&1)"
+
 echo "== every step label in entrypoint.sh is documented =="
 missing=""
 for id in $(grep -v '^[[:space:]]*#' "$ENTRY" | grep -oE '(run_optional_step|er_record|er_phase) [a-z][a-z0-9-]+' | awk '{print $2}' | sort -u); do
