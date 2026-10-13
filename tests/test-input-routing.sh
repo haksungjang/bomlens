@@ -152,18 +152,18 @@ has_source_manifest "$WORK/gitrepo" && pass "a git checkout counts as source" \
     || fail "a git checkout was not read as source"
 
 # A .bix image is a firmware container `file` reports only as "data".
-printf 'opaque\n' > "$WORK/dev-2.60.bix"
-is_firmware "$WORK/dev-2.60.bix" && pass ".bix is recognized as a firmware image" \
+printf 'opaque\n' > "$WORK/dev-1.0.bix"
+is_firmware "$WORK/dev-1.0.bix" && pass ".bix is recognized as a firmware image" \
     || fail ".bix was not recognized as a firmware image"
 
 # The folder from a lab delivery: rootfs/, install/, a kernel and a .bix image.
 # The kernel is not a candidate, so the two left are listed.
 mkdir -p "$WORK/lab/rootfs"/{etc,bin,usr,lib} "$WORK/lab/install"
-printf 'kernel\n' > "$WORK/lab/vmlinuz"; printf 'opaque\n' > "$WORK/lab/dev-2.60.bix"
+printf 'kernel\n' > "$WORK/lab/vmlinuz"; printf 'opaque\n' > "$WORK/lab/dev-1.0.bix"
 cands="$(release_folder_candidates "$WORK/lab")"
 if [ "$(printf '%s\n' "$cands" | grep -c .)" = 2 ] \
    && printf '%s\n' "$cands" | grep -qx "rootfs	$WORK/lab/rootfs" \
-   && printf '%s\n' "$cands" | grep -qx "firmware	$WORK/lab/dev-2.60.bix"; then
+   && printf '%s\n' "$cands" | grep -qx "firmware	$WORK/lab/dev-1.0.bix"; then
     pass "rootfs/, install/, a kernel and a .bix make two candidates"
 else
     fail "lab release folder candidates" "got: $cands"
