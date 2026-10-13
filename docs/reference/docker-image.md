@@ -29,13 +29,13 @@ It is a lightweight image (based on python 3.12 slim) without language toolchain
 
 | Tool | Version | Role |
 |------|------|------|
-| syft | v1.52.0 | Scans images, binaries, and directories |
-| Trivy | v0.74.0 | Vulnerability report |
+| syft | v1.54.1 | Scans images, binaries, and directories |
+| Trivy | v0.75.0 | Vulnerability report |
 | cosign | v3.1.3 | SBOM signing |
 | jq | — | SBOM normalization and notice generation |
 | ScanCode Toolkit | 32.5.0 | Precise license detection (included only in opt-in builds) |
-| docker CLI | 29.8.1 | Starts a sibling cdxgen container when the web UI runs a source scan |
-| cdxgen | 13.2.0 | Model pedigree enrichment (`bomlens-aibom` image only) |
+| docker CLI | 29.9.0 | Starts a sibling cdxgen container when the web UI runs a source scan |
+| cdxgen | 13.3.0 | Model pedigree enrichment (`bomlens-aibom` image only) |
 
 Tool versions are pinned with `ARG` in `docker/Dockerfile`.
 

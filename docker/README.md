@@ -174,8 +174,8 @@ Tool versions are pinned as `ARG`s in the `Dockerfile`, and Renovate tracks the 
 
 | Tool | ARG | Pinned version |
 |------|-----|----------|
-| syft | `SYFT_VERSION` | v1.52.0 |
-| Trivy | `TRIVY_VERSION` | v0.74.0 |
+| syft | `SYFT_VERSION` | v1.54.1 |
+| Trivy | `TRIVY_VERSION` | v0.75.0 |
 | cosign | `COSIGN_VERSION` | See the [Docker image reference](../docs/reference/docker-image.md) |
 | docker CLI | `DOCKER_CLI_VERSION` | See the [Docker image reference](../docs/reference/docker-image.md) |
 | scanoss.py | `SCANOSS_VERSION` | 1.54.2 |

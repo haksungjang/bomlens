@@ -52,9 +52,9 @@ ENV BOMLENS_VERSION=${BOMLENS_VERSION}
 # Dependabot cannot see these ARG-pinned, curl/pip-installed tools. See
 # docs/internal/dependency-upgrade-policy.md.
 # renovate: datasource=github-releases depName=anchore/syft
-ARG SYFT_VERSION=v1.52.0
+ARG SYFT_VERSION=v1.54.1
 # renovate: datasource=github-releases depName=aquasecurity/trivy
-ARG TRIVY_VERSION=v0.74.0
+ARG TRIVY_VERSION=v0.75.0
 # renovate: datasource=github-releases depName=sigstore/cosign
 ARG COSIGN_VERSION=v3.1.3
 # renovate: datasource=pypi depName=scancode-toolkit
@@ -80,7 +80,7 @@ ARG TARGETARCH=amd64
 # docker CLI (client only) — lets the web UI source scan launch cdxgen language
 # images as sibling containers via the mounted host socket (transitive deps).
 # renovate: datasource=github-tags depName=docker/cli extractVersion=^v(?<version>.+)$
-ARG DOCKER_CLI_VERSION=29.8.1
+ARG DOCKER_CLI_VERSION=29.9.0
 
 # Firmware analysis (opt-in image `sbom-scanner-firmware`). The GPL analysis
 # tools are isolated here so the base image carries only permissively licensed
@@ -111,7 +111,7 @@ ARG SASQUATCH_VERSION=sasquatch-v4.5.1-6
 # (~1.8 GB), so it is kept out of the base image. Apache-2.0.
 ARG SBOM_DEEP_CVE=false
 # renovate: datasource=github-releases depName=anchore/grype
-ARG GRYPE_VERSION=v0.119.0
+ARG GRYPE_VERSION=v0.120.1
 
 # AI SBOM generation (opt-in image `bomlens-aibom`). owasp-aibom-generator is
 # Apache-2.0 and fetches HuggingFace model-card metadata over the network at scan
@@ -125,7 +125,7 @@ ARG AIBOM_GENERATOR_REF=c5a3f2f647b801ab4ab7569aade4a6cdaf1f9591
 # harvest model pedigree / performance metrics that the OWASP tool omits. Opt-in
 # with the aibom image only; enrich-aibom.sh degrades gracefully when it is absent.
 # renovate: datasource=npm depName=@cdxgen/cdxgen
-ARG CDXGEN_VERSION=13.2.0
+ARG CDXGEN_VERSION=13.3.0
 # cdxgen 13 requires Node.js >= 24; Debian's own nodejs package (bundled in the
 # python:3.12-slim base) is still on the 20.x line, so Node is installed from
 # the official upstream release tarball instead of apt. Pinned like syft/trivy/
