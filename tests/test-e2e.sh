@@ -675,9 +675,9 @@ fi
 # The cve.db download progress filter (_cvedb_progress_filter) is gone: the
 # CPE index ships in the image, so nothing is downloaded at scan time and
 # scan-firmware.sh must no longer emit the progress marker. Guard against it
-# coming back without its consumer contract.
+# coming back, since nothing reads it any more.
 if [ -f "$LIB/scan-firmware.sh" ] && grep -q "firmware-cvedb-progress" "$LIB/scan-firmware.sh"; then
-    fail "scan-firmware.sh emits firmware-cvedb-progress again — restore the filter test and the server.py consumer contract"
+    fail "scan-firmware.sh emits firmware-cvedb-progress again; nothing reads it, so remove it"
 else
     pass "scan-firmware.sh no longer emits cve.db download progress (bundled CPE index)"
 fi
