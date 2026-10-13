@@ -287,8 +287,8 @@ Set `BOMLENS_EVENTS=file` to have the run write one JSON object per line to `bom
 
 The contract version changes on its own schedule, not with each BomLens release.
 
-- Major: a field, step id, output role or status value is removed, renamed, or changes meaning, or a change makes the same input produce a different PURL or licence id, or reports a failure as success.
-- Minor: a new optional field, step id, reason, output role or status detail. A reader ignores values it does not know.
+- Major: a field, step id, output role or status value is removed, renamed, or changes meaning, or a change makes the same input produce a different package PURL (one with a package ecosystem type, such as `pkg:npm` or `pkg:deb`) or licence id, or reports a failure as success.
+- Minor: a new optional field, step id, reason, output role or status detail, or a PURL added or replaced on a component that had no package PURL (none, `pkg:generic`, `pkg:opkg`), as firmware, root filesystem and binary scans do. A reader ignores values it does not know.
 - Patch: no change a reader can see in the fields above.
 
 Properties named `bomlens:*` in the SBOM, and the human-readable reports, are not part of the contract and can change in any release.
