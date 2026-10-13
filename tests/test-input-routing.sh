@@ -33,7 +33,7 @@ extract_fn() {
 }
 
 for fn in _is_rootfs_dir find_rootfs_dir nested_rootfs_hint has_package_db is_container_archive is_archive \
-          is_firmware has_source_manifest release_folder_candidates; do
+          is_firmware has_source_manifest release_folder_candidates release_folder_large_files; do
     body="$(extract_fn "$fn")"
     if [ -z "$body" ]; then
         echo "[ERROR] could not lift $fn out of scan-sbom.sh (was it renamed?)"; exit 1
@@ -149,6 +149,29 @@ fi
 mkdir -p "$WORK/gitrepo/.git"
 has_source_manifest "$WORK/gitrepo" && pass "a git checkout counts as source" \
     || fail "a git checkout was not read as source"
+
+# A .bix image is a firmware container `file` reports only as "data".
+printf 'opaque\n' > "$WORK/dev-2.60.bix"
+is_firmware "$WORK/dev-2.60.bix" && pass ".bix is recognized as a firmware image" \
+    || fail ".bix was not recognized as a firmware image"
+
+# Large files beside a rootfs with no package database are offered as firmware
+# commands: over 1 MiB only, no symlinks, at most five then a count.
+mkdir -p "$WORK/big"
+for i in 1 2 3 4 5 6 7; do head -c 1048577 /dev/zero > "$WORK/big/blob$i.pak"; done
+head -c 1048576 /dev/zero > "$WORK/big/exactly-1mib.pak"; printf 'x' > "$WORK/big/small.txt"
+ln -s "$WORK/big/blob1.pak" "$WORK/big/link.pak" 2>/dev/null || true
+large="$(release_folder_large_files "$WORK/big")"
+if [ "$(printf '%s\n' "$large" | grep -c -- '--firmware')" = 5 ] \
+   && printf '%s\n' "$large" | grep -qF -- "--target \"$WORK/big/blob1.pak\" --firmware" \
+   && printf '%s\n' "$large" | grep -qF "(and 2 more)" \
+   && ! printf '%s\n' "$large" | grep -qE 'small|exactly|link'; then
+    pass "files over 1 MiB are listed as firmware commands, five at most"
+else
+    fail "release_folder_large_files" "got: $large"
+fi
+[ -z "$(release_folder_large_files "$WORK/nodeps")" ] && pass "a folder with no large file lists nothing" \
+    || fail "release_folder_large_files listed something for a folder without large files"
 
 # This repository's own example projects and test fixtures must keep scanning
 # as source: none of them is a folder without source that holds a rootfs or a

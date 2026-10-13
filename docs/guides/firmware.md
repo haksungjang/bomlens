@@ -72,9 +72,9 @@ Pass the firmware file you received to `--target` and add `--firmware`:
   --all --generate-only
 ```
 
-- Recognized extensions (`.bin`, `.img`, `.squashfs`, `.ubi`, `.ubifs`, `.trx`, `.chk`, `.fw`, `.rom`) are auto-detected even without `--firmware`, but being explicit is recommended.
+- Recognized extensions (`.bin`, `.img`, `.squashfs`, `.sqsh`, `.ubi`, `.ubifs`, `.trx`, `.chk`, `.fw`, `.rom`, `.dlf`, `.bix`) are auto-detected even without `--firmware`, but being explicit is recommended.
 - The outputs are the same three as a normal scan: the notice (`_NOTICE`), the SBOM (`_bom.json`), and the risk report (`_risk-report`).
-- A release folder can be passed as it is. When `--target` is a folder with no manifest or build file at its top level that directly holds one firmware image or one extracted root filesystem (for example `images/` with `rootfs/`, `install/`, a kernel and an image file), that image or root filesystem is scanned and the scan prints which one. When there are several, the scan stops and lists the `--target` for each. `--as-source` scans the folder itself as source instead.
+- A release folder can be passed as it is. When `--target` is a folder with no manifest or build file at its top level that directly holds one firmware image or one extracted root filesystem (for example `images/` with `rootfs/`, `install/`, a kernel and an image file), that image or root filesystem is scanned and the scan prints which one. When there are several, the scan stops and lists the `--target` for each. When the root filesystem it picked has no package database, the warning also lists the larger files beside it (over 1 MiB, at most five) as `--target "<file>" --firmware` commands to try. `--as-source` scans the folder itself as source instead.
 
 ## Reading the results
 

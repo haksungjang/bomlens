@@ -116,7 +116,7 @@ fail_on_bad_coverage() {
     echo "[ERROR] --fail-on: '$1' needs a whole percentage from 0 to 100 without leading zeros, for example license-coverage=80 (there is no default)."
     exit 1
 }
-FORCE_FIRMWARE="false"; FORCE_SOURCE="false"; ANALYZE_SBOM=""; MODEL=""; MODEL_FILE=""; VEX_FILE=""
+FORCE_FIRMWARE="false"; FORCE_SOURCE="false"; RELEASE_FOLDER_DIR=""; ANALYZE_SBOM=""; MODEL=""; MODEL_FILE=""; VEX_FILE=""
 AI_DECLARE_FILE=""; GENERATE_SPDX3="true"
 # Set when --target turned out to be a Yocto build directory: the folder the
 # user pointed at, while ANALYZE_SBOM holds the image SBOM found inside it.
@@ -1119,11 +1119,14 @@ is_model_file() {
     return 1
 }
 
+# .bix is a vendor firmware image container (in the one examined, a 64-byte
+# header, then a gzip kernel with its initramfs). `file` calls it "data", so only the extension
+# says what it is; unblob unpacks it through the gzip inside.
 is_firmware() {
     local f="$1" lower magic
     lower=$(printf '%s' "$f" | tr '[:upper:]' '[:lower:]')
     case "$lower" in
-        *.bin|*.img|*.squashfs|*.sqsh|*.ubi|*.ubifs|*.trx|*.chk|*.fw|*.rom|*.dlf) return 0 ;;
+        *.bin|*.img|*.squashfs|*.sqsh|*.ubi|*.ubifs|*.trx|*.chk|*.fw|*.rom|*.dlf|*.bix) return 0 ;;
     esac
     if command -v file >/dev/null 2>&1; then
         magic=$(file -b "$f" 2>/dev/null)
@@ -1535,6 +1538,30 @@ resolve_release_folder() {
     echo "[INFO]   Scanning $path as $as instead. Other files in $dir are not scanned."
     echo "[INFO]   To scan $dir itself as source, add --as-source."
     TARGET="$path"
+    RELEASE_FOLDER_DIR="$dir"
+}
+
+# Regular files directly in a release folder that are larger than 1 MiB. Called
+# when the scan switched to a root filesystem with no package database: a
+# firmware image the extension and magic checks did not recognize is then the
+# better thing to scan, so the warning names these as commands to try. At most
+# five, then a count of the rest.
+release_folder_large_files() {
+    local d="$1" e size shown=0 more=0
+    for e in "$d"/*; do
+        [ -L "$e" ] && continue
+        [ -f "$e" ] || continue
+        size="$(wc -c < "$e" 2>/dev/null | tr -d ' ')"
+        [ "${size:-0}" -gt 1048576 ] || continue
+        if [ "$shown" -lt 5 ]; then
+            echo "         --target \"$e\" --firmware"
+            shown=$((shown + 1))
+        else
+            more=$((more + 1))
+        fi
+    done
+    [ "$more" -eq 0 ] || echo "         (and $more more)"
+    return 0
 }
 
 # Does the root filesystem record its own packages? syft reads apk/dpkg/rpm and
@@ -1976,6 +2003,13 @@ elif [ -n "$TARGET" ]; then
                 echo "       so there is no installed-package list to read. Re-run with"
                 echo "       --firmware to identify the binaries by signature instead"
                 echo "       (opt-in image: docker build --build-arg SBOM_FIRMWARE=true)."
+                if [ -n "$RELEASE_FOLDER_DIR" ]; then
+                    large="$(release_folder_large_files "$RELEASE_FOLDER_DIR")"
+                    if [ -n "$large" ]; then
+                        echo "       Files beside it in $RELEASE_FOLDER_DIR that may be a firmware image:"
+                        printf '%s\n' "$large"
+                    fi
+                fi
             fi
             MODE="ROOTFS"
         else
