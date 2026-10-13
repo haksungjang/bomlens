@@ -122,6 +122,26 @@ if [ "$SCAN_MODE" = "PLAN" ]; then
     esac
 fi
 
+# --component-versions: read the supplier's file before anything in the output
+# folder is removed. The template a scan writes is the file a supplier fills in
+# and passes back, so the input can be that very file. It is then neither
+# removed by the sweep below nor rewritten by this run: it holds the versions
+# the next scan needs as well.
+CV_INPUT_IS_TEMPLATE=false
+if [ -n "${COMPONENT_VERSIONS_FILE:-}" ] && [ -f "$COMPONENT_VERSIONS_FILE" ]; then
+    _cv_copy="$(mktemp)"
+    if cp "$COMPONENT_VERSIONS_FILE" "$_cv_copy" 2>/dev/null; then
+        if [ -n "$HOST_OUTPUT_DIR" ] && command -v cmp >/dev/null 2>&1 \
+           && cmp -s "$_cv_copy" "$HOST_OUTPUT_DIR/${OUT_PREFIX}_component-versions.template.csv"; then
+            CV_INPUT_IS_TEMPLATE=true
+        fi
+        COMPONENT_VERSIONS_FILE="$_cv_copy"
+    else
+        rm -f "$_cv_copy"
+    fi
+    unset _cv_copy
+fi
+
 # Stale-artifact cleanup. A re-scan of the same project/version reuses this
 # folder (mkdir -p, never recreated: scan-sbom.sh and server.py's
 # claim_run_id both do this) and sync_artifacts below only ever copies, never
@@ -156,7 +176,7 @@ KNOWN_ARTIFACT_SUFFIXES=(
     _bom.spdx3.json _bom.spdx3.json.sig _spdx3-check.json _spdx3-check.md _ai-declaration.template.json
     _modelica.cdx.json _cocoapods.cdx.json _conda.cdx.json
     _security_cvebintool.json _security_grype.json _security_yocto.json
-    _security_trivy.json
+    _security_trivy.json _component-versions.template.csv
 )
 # Only a caller that knows about this cleanup runs it at all. An old
 # scan-sbom.sh or server.py (built before this existed) sends neither signal
@@ -198,6 +218,7 @@ if [ -n "${BOMLENS_RUN_INPUT:-}" ] || [ "${BOMLENS_ARTIFACT_CLEANUP:-}" = "1" ];
             # does); it is this run's input too, and scan-sbom.sh clears an old
             # one before stage 1 for the same reason as the SBOM itself.
             [ -n "$_run_input" ] && [ "$_suf" = "_conda.cdx.json" ] && continue
+            [ "${CV_INPUT_IS_TEMPLATE:-false}" = true ] && [ "$_suf" = "_component-versions.template.csv" ] && continue
             if [ -f "$_f" ]; then
                 rm -f "$_f"
                 _cleaned+=("$(basename "$_f")")
@@ -1504,6 +1525,32 @@ case "$SCAN_MODE" in
         ;;
 esac
 
+# Versions the scan could not read. A firmware, root filesystem or binary scan
+# can prove a component is there without finding its version. A supplier's
+# two-column file (--component-versions, CSV name,version) fills those in,
+# keeps a version read from the delivered files when the file disagrees, and
+# adds the names the scan did not find as supplier-declared components. Every
+# such scan also writes the components still missing a version as a template
+# in the same format. Before normalize, so what is added is normalized too.
+case "$SCAN_MODE" in
+    FIRMWARE|ROOTFS|BINARY)
+        _cv_args=("$OUTPUT_FILE" "$OUT_PREFIX")
+        [ "$CV_INPUT_IS_TEMPLATE" = true ] && _cv_args=(--no-template "${_cv_args[@]}")
+        if [ -n "${COMPONENT_VERSIONS_FILE:-}" ]; then
+            if [ -f "$COMPONENT_VERSIONS_FILE" ]; then
+                _cv_args+=("$COMPONENT_VERSIONS_FILE")
+            else
+                echo "[WARN] --component-versions skipped: the file is not visible inside the container ($COMPONENT_VERSIONS_FILE). If it is a symbolic link, pass the real file." >&2
+            fi
+        fi
+        if [ -f "$LIBDIR/component-versions.py" ]; then
+            run_optional_step component-versions python3 "$LIBDIR/component-versions.py" "${_cv_args[@]}"
+        fi
+        [ "$CV_INPUT_IS_TEMPLATE" != true ] && [ -f "${OUT_PREFIX}_component-versions.template.csv" ] \
+            && ARTIFACTS+=("${OUT_PREFIX}_component-versions.template.csv")
+        ;;
+esac
+
 if [ "${BYTE_STABLE:-false}" = "true" ]; then
     run_optional_step normalize bash "$LIBDIR/normalize-sbom.sh" "$OUTPUT_FILE" --stable
 else
@@ -1567,6 +1614,25 @@ if [ "${ENRICH_CPE:-true}" != "false" ] && [ "$AI_MODEL_SCAN" != "true" ]; then
 elif [ "$AI_MODEL_SCAN" != "true" ]; then
     er_record enrich-cpe disabled
 fi
+
+# Upstream repository purl: a component a firmware, root filesystem or binary
+# scan identified has no purl, a pkg:generic one, or an opkg one, none of which
+# a tool that looks components up by purl can resolve. upstream-purl.py sets
+# the purl of the project's source repository at the release tag
+# (pkg:github/<owner>/<repo>@<tag>, pkg:sourceforge, pkg:gnu) from a closed,
+# checked table (upstream-purl-map.json); a name not in it is left alone. The
+# version, CPE and evidence stay, so the CVE matching that ran on them keeps
+# its result. After enrich-cpe, so a CPE it added can identify the project too.
+# Disable with ENRICH_UPSTREAM_PURL=false.
+case "$SCAN_MODE" in
+    FIRMWARE|ROOTFS|BINARY)
+        if [ "${ENRICH_UPSTREAM_PURL:-true}" != "false" ]; then
+            run_optional_step upstream-purl python3 "$LIBDIR/upstream-purl.py" "$OUTPUT_FILE"
+        else
+            er_record upstream-purl disabled
+        fi
+        ;;
+esac
 
 # OS-context enrichment: a supplier SBOM can list every rpm/deb/apk package yet
 # omit the operating-system component Trivy needs to pick a distro advisory DB.

@@ -207,7 +207,7 @@ for flag in --project --version --target --git --branch --firmware --analyze \
             --byte-stable --sign --output-dir --timestamp --ui \
             --license --sbom-author --model --model-file --usage --merge --merge-root \
             --diff --trusca --upload-target --deep-cve --identify-vendored --verify-weights --spdx --lang \
-            --conformance-profile --fail-on-conformance --fail-on --vex --ai-declare --no-spdx3 --as-source; do
+            --conformance-profile --fail-on-conformance --fail-on --vex --ai-declare --no-spdx3 --as-source --component-versions; do
   if printf '%s' "$HELP" | grep -q -- "$flag"; then pass "help documents $flag"
   else fail "help documents $flag"; fi
 done
@@ -766,6 +766,9 @@ guard "--vex is refused with --ui"      "--vex is not offered with --ui" --ui --
 guard "--ai-declare file must exist"    "--ai-declare file not found" --project p --version 1 --model o/r --ai-declare no-such.json
 guard "--ai-declare is refused with --diff" "--ai-declare cannot be combined with --diff" --project p --version 1 --diff a.json b.json --ai-declare d.json
 guard "--ai-declare is refused with --ui" "--ai-declare is not offered with --ui" --ui --ai-declare d.json
+guard "--component-versions file must exist" "--component-versions file not found" --project p --version 1 --target z --component-versions no-such.csv
+guard "--component-versions is refused with --diff" "--component-versions cannot be combined with --diff" --project p --version 1 --diff a.json b.json --component-versions v.csv
+guard "--component-versions is refused with --ui" "--component-versions is not offered with --ui" --ui --component-versions v.csv
 guard "--merge needs >=2 files"         "needs at least 2" --project p --version 1 --merge one.json
 guard "--merge-root without --merge"    "only applies with --merge" --project p --version 1 --merge-root x.json
 guard "--merge-root not in --merge list" "must be one of the --merge input files" \
@@ -1099,6 +1102,25 @@ in_log "/dir with space/supplier vex.json:/vex-in/vex.json:ro>" \
 in_log "<GENERATE_SECURITY=true>" \
   && pass "--vex turns the security report on" \
   || { fail "--vex did not enable the security report"; show; cat "$LOG"; }
+
+# --component-versions: the supplier's version file is mounted read-only under
+# /component-versions-in and named by its container path, for a binary scan.
+d="$(new_proj cv-mount)"; printf 'ELFish\n' > "$d/app.out"; mkdir -p "$d/dir with space"
+printf 'name,version\nncurses,5.7\n' > "$d/dir with space/versions list.csv"
+DOCKER_STUB_ARGV_DUMP=1 \
+  scan_in "$d" --project CV1 --version 1 --target app.out --generate-only \
+  --component-versions "dir with space/versions list.csv"
+in_log "<COMPONENT_VERSIONS_FILE=/component-versions-in/versions.csv>" \
+  && in_log "/dir with space/versions list.csv:/component-versions-in/versions.csv:ro>" \
+  && pass "--component-versions mounts the file alone, read-only, and names its container path" \
+  || { fail "--component-versions was not mounted as a single read-only file"; show; cat "$LOG"; }
+# A source scan has nothing for it to fill, and is refused before any container runs.
+d="$(new_proj cv-source)"; printf '{"name":"x","version":"1.0.0"}\n' > "$d/package.json"
+printf 'name,version\nx,1\n' > "$d/v.csv"
+scan_in "$d" --project CV2 --version 1 --generate-only --component-versions v.csv
+[ "$RC" -ne 0 ] && grep -q "applies to firmware, root filesystem and binary scans only" "$OUT" \
+  && pass "--component-versions is refused for a source scan" \
+  || { fail "--component-versions on a source scan: rc=$RC"; show; }
 
 # The SOURCE path runs a second (post-process) container: it must get the mount too.
 d="$(new_proj vex-source)"; printf '{"name":"x","version":"1.0.0"}\n' > "$d/package.json"

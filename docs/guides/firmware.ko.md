@@ -74,6 +74,24 @@ SBOM_FIRMWARE_IMAGE=<사내 미러>:<태그> ./scripts/scan-sbom.sh --ui
 
 syft의 패키지 식별 단계가 실패해도 스캔은 멈추지 않습니다. syft 자체의 오류가 스캔 로그에 남고, SBOM에는 어느 단계가 실패했는지 `bomlens:pipeline-step-failed`로 기록됩니다(메인 rootfs는 `firmware-packages`, 압축 해제 중 함께 발견되는 별도 패키지 소스, 예를 들어 내장된 컨테이너 이미지 저장소나 독자적인 패키지 데이터베이스를 가진 파일시스템은 `firmware-extra-roots`). 예상보다 컴포넌트 수가 적으면 펌웨어에 실제로 그만큼만 있다고 단정하기 전에 스캔 로그에서 이 기록부터 확인하는 편이 좋습니다.
 
+## upstream 저장소 purl
+
+바이너리나 펌웨어의 패키지 데이터베이스에서 읽은 컴포넌트에는 purl이 없거나, `pkg:generic` 또는 `pkg:opkg` purl이 붙습니다. 어느 것도 프로젝트를 가리키지 않으므로, purl로 컴포넌트를 조회하는 도구는 이름과 버전이 맞아도 그 컴포넌트를 식별하지 못합니다. 펌웨어, 루트 파일시스템, 바이너리 스캔에서 BomLens는 프로젝트의 upstream 소스 저장소와 릴리스 태그로 purl을 붙입니다. 예를 들어 `pkg:github/mirror/busybox@1_22_1`, `pkg:github/gregkh/linux@v3.10.18`, `pkg:sourceforge/boa@0.94.13`, `pkg:gnu/readline@5.2`입니다.
+
+변환에는 저장소와 태그 표기를 확인한 프로젝트만 담은 변환표(`docker/lib/upstream-purl-map.json`)를 씁니다. BusyBox, curl, OpenSSL 1.x, OpenSSH, Linux, zlib, U-Boot, Net-SNMP, ncurses, net-tools, libxml2, SQLite, glibc, Dropbear, Mbed TLS, Python, Boa, readline이 들어 있습니다. 컴포넌트는 이름이나 CPE로 찾고, 변환표가 다루는 형식의 버전이 있을 때만 바꿉니다. 이때 `-1` 같은 패키지 재빌드 번호와 커널 빌드 해시는 먼저 뗍니다. 변환표에 없는 컴포넌트는 원래 식별자를 그대로 둡니다. 저장소나 태그를 추측하면 다른 버전을 가리키게 되기 때문입니다. 버전, CPE, 식별 근거는 바꾸지 않으므로 이를 근거로 찾은 CVE도 보고서에 그대로 남습니다. 새 purl에는 `bomlens:purlSource = upstream-map`이 붙고, 바꾸기 전 purl은 `bomlens:originalPurl`에 남습니다. 끄려면 `ENRICH_UPSTREAM_PURL=false`를 설정합니다.
+
+## 스캔이 읽지 못한 버전 채우기
+
+`presence-only` 컴포넌트에는 버전이 없어 CVE 조회에도 purl 조회에도 쓸 수 없습니다. 펌웨어, 루트 파일시스템, 바이너리 스캔은 이런 컴포넌트를 콘솔에 보여 주고 `<Project>_<Version>_component-versions.template.csv` 파일로 씁니다. 각 이름 뒤에 제품에 들어간 버전을 적고 그 파일을 다시 넘깁니다.
+
+```bash
+./scripts/scan-sbom.sh --project device-fw --version 1.0.0 \
+  --target "./device.bin" --firmware \
+  --component-versions device-fw_1.0.0_component-versions.template.csv --generate-only
+```
+
+파일은 `name,version` 두 열로 된 CSV입니다. `#`으로 시작하는 줄과 버전을 비워 둔 행은 건너뜁니다. 양식 파일은 그 자리에서 채워도 됩니다. 넘긴 파일이 그 양식이면 스캔은 적은 내용을 그대로 두고, 아직 빠진 항목만 알려 줍니다. 채운 버전에는 `bomlens:versionSource = supplier-declared`가 붙고, 위의 upstream purl도 붙습니다. 스캔이 배포 파일에서 버전을 읽었다면 그 버전을 유지하고 두 값을 경고로 보여 줍니다. 소스 트리에는 한 프로젝트의 여러 릴리스가 함께 있을 수 있고, 실제로 들어간 것은 바이너리가 보여 주기 때문입니다. 스캔이 찾지 못한 이름은 `bomlens:identifiedBy = supplier-declared` 컴포넌트로 추가합니다. 256 KiB를 넘는 파일, 두 열이 아닌 행, 영문자와 숫자와 `. _ + ~ -` 밖의 문자가 든 이름이나 버전, 한 이름에 두 버전을 적은 파일은 줄 번호와 함께 거부하며, 이때 SBOM은 바꾸지 않습니다.
+
 ## CVE 매칭, 온라인과 오프라인
 
 정적 바이너리의 CVE 매칭은 cve-bin-tool과 그 전용 취약점 데이터베이스로 이뤄집니다. 펌웨어 이미지는 하이브리드 방식이라, 같은 이미지로 에어갭 환경과 온라인 환경에서 모두 동작합니다.
