@@ -1474,8 +1474,16 @@ nested_rootfs_hint() {
 #   - only a folder with no manifest, lockfile or build file of its own at the
 #     top level, and no .git, is considered at all, so a source repository
 #     that keeps a rootfs-shaped test fixture or a .bin blob stays source;
+#   - a folder with signs of an application or a model at its top level
+#     (executables, shared libraries, .asar, node_modules, model weights or
+#     tokenizer files) or with more than 20 top-level files is not considered
+#     either, so an unpacked desktop app, a model snapshot or a build output
+#     staging folder stays source;
 #   - only its direct children are candidates, and symlinks are skipped, so a
 #     link to / or to a folder elsewhere is never followed into a scan;
+#   - a candidate is a root filesystem folder, or a file with a firmware or
+#     filesystem signature or an extension used for little but firmware;
+#     .bin and .img by name alone do not count;
 #   - several candidates stop the scan instead of picking one.
 # --as-source turns all of it off.
 
@@ -1505,19 +1513,81 @@ has_source_manifest() {
 
 # Print one "<kind><TAB><path>" line per direct child of $1 that would be
 # scanned on its own: kind is "rootfs" (a root filesystem directory) or
-# "firmware" (a file is_firmware recognizes). Hidden entries and symlinks are
-# skipped.
+# "firmware" (a file release_folder_firmware_file accepts). Hidden entries and
+# symlinks are skipped. Prints nothing for a folder that looks like an
+# application, a model or anything else with many files (release_folder_vetoed),
+# so such a folder stays a source scan.
 release_folder_candidates() {
     local d="${1%/}" e
+    release_folder_vetoed "$d" && return 0
     for e in "$d"/*; do
         [ -L "$e" ] && continue
         if [ -d "$e" ]; then
             _is_rootfs_dir "$e" && printf 'rootfs\t%s\n' "$e"
         elif [ -f "$e" ]; then
-            is_firmware "$e" && printf 'firmware\t%s\n' "$e"
+            release_folder_firmware_file "$e" && printf 'firmware\t%s\n' "$e"
         fi
     done
     return 0
+}
+
+# Is this file, found in a release folder, a firmware or filesystem image? Stricter
+# than is_firmware, which takes .bin and .img by name when the user points at the
+# file: in a folder, a .bin is as often a V8 snapshot or model weights. Here an
+# extension counts only when it is used for little else, and .bin/.img (or any
+# other name) only with a firmware or filesystem signature from `file`. A kernel
+# uImage is not counted: it sits beside the image it boots, and is not the thing
+# to scan on its own.
+release_folder_firmware_file() {
+    local f="$1" lower magic
+    lower=$(printf '%s' "$f" | tr '[:upper:]' '[:lower:]')
+    case "$lower" in
+        *.bix|*.trx|*.chk|*.dlf|*.ubi|*.ubifs|*.squashfs|*.sqsh|*.rom|*.fw|*.jffs2|*.cramfs) return 0 ;;
+    esac
+    command -v file >/dev/null 2>&1 || return 1
+    magic=$(file -b "$f" 2>/dev/null)
+    case "$magic" in
+        *Squashfs*|*"UBI image"*|*UBIfs*|*JFFS2*|*cramfs*|*"filesystem data"*) return 0 ;;
+    esac
+    return 1
+}
+
+# Does this top-level entry belong to an application or a model rather than to
+# a firmware release? Name checks only. Used to keep such folders out of the
+# release-folder switch, and such files out of the large-file hint.
+release_folder_app_entry() {
+    local e="$1" name lower
+    name="${e##*/}"
+    lower=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')
+    if [ -d "$e" ]; then
+        case "$lower" in
+            node_modules|*.app|contents|site-packages) return 0 ;;
+            resources) [ -e "$e/app.asar" ] || [ -d "$e/app" ] ;;
+            *) return 1 ;;
+        esac
+        return
+    fi
+    case "$lower" in
+        *.exe|*.dll|*.so|*.so.*|*.dylib|*.asar|*.jar|*.war|*.apk|*.ipa|*.msi|*.node) return 0 ;;
+        *.gguf|*.safetensors|*.onnx|*.tflite|*.mlmodel|*.h5|*.keras|*.pt|*.pth|*.ckpt|*.pkl|*.pickle|*.npz|*.npy) return 0 ;;
+        config.json|tokenizer.json|tokenizer_config.json|tokenizer.model|special_tokens_map.json \
+            |generation_config.json|preprocessor_config.json|vocab.json|vocab.txt|merges.txt|*.index.json) return 0 ;;
+    esac
+    return 1
+}
+
+# Is this folder something other than a release folder? True when any top-level
+# entry is an application or model file (release_folder_app_entry), or when it
+# has more than 20 top-level files: a release folder holds a handful of
+# artifacts, an unpacked application or a build output holds many.
+release_folder_vetoed() {
+    local d="${1%/}" e files=0
+    for e in "$d"/*; do
+        [ -e "$e" ] || [ -L "$e" ] || continue
+        release_folder_app_entry "$e" && return 0
+        [ -f "$e" ] && files=$((files + 1))
+    done
+    [ "$files" -gt 20 ]
 }
 
 # Decide what a directory --target that is not a source tree is scanned as.
@@ -1568,13 +1638,15 @@ resolve_release_folder() {
 # Regular files directly in a release folder that are larger than 1 MiB. Called
 # when the scan switched to a root filesystem with no package database: a
 # firmware image the extension and magic checks did not recognize is then the
-# better thing to scan, so the warning names these as commands to try. At most
-# five, then a count of the rest.
+# better thing to scan, so the warning names these as commands to try. Files
+# release_folder_app_entry marks as application or model files are left out.
+# At most five, then a count of the rest.
 release_folder_large_files() {
     local d="$1" e size shown=0 more=0
     for e in "$d"/*; do
         [ -L "$e" ] && continue
         [ -f "$e" ] || continue
+        release_folder_app_entry "$e" && continue
         size="$(wc -c < "$e" 2>/dev/null | tr -d ' ')"
         [ "${size:-0}" -gt 1048576 ] || continue
         if [ "$shown" -lt 5 ]; then
