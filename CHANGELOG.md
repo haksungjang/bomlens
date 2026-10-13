@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade note
+
+- Firmware, root filesystem and binary scans now give a component identified with no package PURL (none, `pkg:generic` or `pkg:opkg`) the upstream source repository PURL when it is in `docker/lib/upstream-purl-map.json`, for example `pkg:generic/openssl@1.0.2h` becomes `pkg:github/openssl/openssl@OpenSSL_1_0_2h`; the replaced one is kept in `bomlens:originalPurl`. A tool that joins these scans with an earlier BomLens SBOM by PURL sees these components as new once. Set `ENRICH_UPSTREAM_PURL=false` to keep the earlier PURLs. The engine contract counts this as a minor change: the version rules now name package PURLs.
+
 ### Added
 
 - The execution plan's `generate` stage has `input_fingerprint`: a sha256 over the whole source tree (every file and its execute bit, except any `.git`), the files stage 1 runs from BomLens, the stage 1 and BomLens image digests and the stage 1 settings, with whether the result can be reused and why not (`no-lockfile`, `unpinned-versions`, `registry-resolution`, `unsupported-ecosystem`, `plan-unsupported`, `unhashable-input`, `unknown-stage1-image`, and `stage1-degraded` in the result manifest). A caller that kept an earlier stage 1's SBOM with the same value may skip stage 1; stage 2 always runs. The result manifest's `generate` step carries the value stage 2 computes again from the source, with `plan_mismatch` when it differs from the plan's, `reused` when the caller passes `BOMLENS_STAGE1_REUSED=1`, and `reuse_unsafe` when that reuse was not allowed. Engine contract `1.3.0`.
