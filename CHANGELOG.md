@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The execution plan's `generate` stage has `input_fingerprint`: a sha256 over the whole source tree (every file and its execute bit, except any `.git`), the files stage 1 runs from BomLens, the stage 1 and BomLens image digests and the stage 1 settings, with whether the result can be reused and why not (`no-lockfile`, `unpinned-versions`, `registry-resolution`, `unsupported-ecosystem`, `plan-unsupported`, `unhashable-input`, `unknown-stage1-image`, and `stage1-degraded` in the result manifest). A caller that kept an earlier stage 1's SBOM with the same value may skip stage 1; stage 2 always runs. The result manifest's `generate` step carries the value stage 2 computes again from the source, with `plan_mismatch` when it differs from the plan's, `reused` when the caller passes `BOMLENS_STAGE1_REUSED=1`, and `reuse_unsafe` when that reuse was not allowed. Engine contract `1.3.0`.
+
 ### Fixed
 
 - A Debian package whose copyright file names several licenses, for example `BSD-2-Clause` and `GPL-2.0-only`, could be judged compatible with a permissive product license (`bomlens:licenseConflict`, the risk report's conflict section and `--fail-on license-conflict`): the licenses were read as a choice, so the most permissive one decided. They usually belong to different files and all apply, so the least compatible one now decides, and a license with no rule makes the package `unknown`. The SBOM still lists each license as its own entry. A choice the copyright file states (`GPL-2+ or Artistic`) is also read as licenses that all apply, since Trivy lists it the same way. Several licenses on a Maven package are still read as a choice. Debian's `MIT-X11` license (on ncurses) is now classed as permissive.
