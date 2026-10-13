@@ -246,6 +246,10 @@
       "aiDeclaration": {
         "title": "AI declaration",
         "desc": "Only the values you entered; nothing the scan filled. Edit it on screen with Fill in empty fields on Models & datasets, or edit the file and upload it again here, or pass it to the CLI with --ai-declare."
+      },
+      "componentVersions": {
+        "title": "Component versions template",
+        "desc": "Components found without a version, as a name,version CSV with the versions left empty. Fill in the versions and pass the file back with --component-versions."
       }
     },
     "download": "Download",
@@ -402,7 +406,25 @@
     "declarationNotJson": "That file is not JSON.",
     "declarationRefused": "The declaration was refused: {{reason}}",
     "checkFormat": "Check {{format}}",
-    "spdx3Rebuild": "Rebuild with the saved declaration"
+    "spdx3Rebuild": "Rebuild with the saved declaration",
+    "uncheckedTitle_one": "{{count}} component could not be checked for vulnerabilities",
+    "uncheckedTitle_other": "{{count}} components could not be checked for vulnerabilities",
+    "uncheckedHint": "The findings do not cover these components.",
+    "uncheckedList": "Show the components",
+    "uncheckedName": "Name",
+    "uncheckedVersion": "Version",
+    "uncheckedReasonCol": "Reason",
+    "uncheckedReason": {
+      "noVersion": "No version",
+      "noIdentifier": "No identifier",
+      "unknown": "Unknown"
+    },
+    "uncheckedTruncated": "Showing the first {{shown}} of {{count}}.",
+    "uncheckedTile_one": "{{count}} not checked",
+    "uncheckedTile_other": "{{count}} not checked",
+    "noVulnsInChecked": "No vulnerabilities were found in the components that were checked.",
+    "noVulnsSomeUnchecked_one": "No vulnerabilities in the checked components; {{count}} component could not be checked",
+    "noVulnsSomeUnchecked_other": "No vulnerabilities in the checked components; {{count}} components could not be checked"
   },
   "deps": {
     "loading": "Loading dependencies…",
@@ -705,7 +727,10 @@
     "pnpmWorkspaceTree": "pnpm workspace dependency tree resolution",
     "enrichDistroSupplier": "OS package supplier enrichment",
     "declaredSources": "Dataset sources named in the AI declaration",
-    "declaredService": "The service named in the AI declaration"
+    "declaredService": "The service named in the AI declaration",
+    "componentVersions": "supplied component version filling",
+    "upstreamPurl": "upstream source repository purl addition",
+    "matchCpe": "NVD CPE index matching"
   },
   "pipelineNote": {
     "titleScan": "Some data may be incomplete",

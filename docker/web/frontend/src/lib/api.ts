@@ -306,7 +306,23 @@ export type SecuritySummary = Record<Severity, number> & {
    *  for subsystems the image never compiled in, so mixing them in would make a
    *  device with two real criticals read like one with two thousand. */
   kernelCount?: number;
+  /** Components no vulnerability check could reach (no version, or no purl or
+   *  CPE a check used). Present only when there are some; may exceed the rows
+   *  in `uncheckedComponents`, which the server caps at 500. */
+  uncheckedCount?: number;
+  uncheckedComponents?: UncheckedComponent[];
 };
+
+/** Why a component's vulnerabilities were not checked. */
+export type UncheckedReason = "no-version" | "no-identifier" | "unknown";
+
+export interface UncheckedComponent {
+  name: string;
+  /** "" when the component has no version. */
+  version: string;
+  reason: UncheckedReason;
+  purl?: string;
+}
 
 /** One conformance check (base format requirement or a G7 AI minimum element). */
 export interface ConformanceCheck {
