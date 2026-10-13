@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Bundled tools are updated: Trivy 0.75.0, syft 1.54.1, grype 0.120.1 (deep-CVE image), cdxgen 13.3.0 (language images, digests and the AI SBOM image) and docker CLI 29.9.0.
+- Components named net-snmp, ncurses, readline, dhcpcd or quagga (and their `lib` names) get a CPE from `docker/lib/cpe-name-map.json`, so a firmware, root filesystem or binary scan matches their CVEs once they have a version.
 
 ### Fixed
 
