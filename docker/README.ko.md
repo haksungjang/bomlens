@@ -174,8 +174,8 @@ docker buildx imagetools inspect ghcr.io/sktelecom/bomlens:latest
 
 | 도구 | ARG | 고정 버전 |
 |------|-----|----------|
-| syft | `SYFT_VERSION` | v1.51.0 |
-| Trivy | `TRIVY_VERSION` | v0.74.0 |
+| syft | `SYFT_VERSION` | v1.54.1 |
+| Trivy | `TRIVY_VERSION` | v0.75.0 |
 | cosign | `COSIGN_VERSION` | [Docker image reference](../docs/reference/docker-image.ko.md) 참고 |
 | docker CLI | `DOCKER_CLI_VERSION` | [Docker image reference](../docs/reference/docker-image.ko.md) 참고 |
 | scanoss.py | `SCANOSS_VERSION` | 1.54.2 |
