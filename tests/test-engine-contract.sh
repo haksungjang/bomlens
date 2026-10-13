@@ -1134,6 +1134,102 @@ D="$WORK/osl-off"; mkdir -p "$D"; osl_run "$D" BOMLENS_OS_LICENSES=false
     && pass "BOMLENS_OS_LICENSES=false: no Trivy, the hashes are still dropped, the step is disabled" \
     || fail "off: trivy run $([ -e "$D/trivy-argv" ] && echo yes || echo no), libc6 $(lic "$D" libc6)" "$(osl_step "$D")"
 
+echo "== IMAGE mode pins the later reads to the digest syft read =="
+# syft writes its source record through a template output; the stub copies a
+# recorded one (tests/fixtures/syft-source-*.json, from a real registry and a
+# real daemon read) there, and prints the Debian SBOM above so Trivy runs.
+PIN="$WORK/image-pin"; mkdir -p "$PIN/bin"
+cat > "$PIN/bin/syft" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$@" > "$PIN_SYFT_ARGV"
+tpl=""; prev=""
+for a in "$@"; do [ "$prev" = "-o" ] && case "$a" in template=*) tpl="${a#template=}" ;; esac; prev="$a"; done
+[ -n "$tpl" ] && [ -n "${PIN_SOURCE:-}" ] && cp "$PIN_SOURCE" "$tpl"
+exec bash "$PIN_OSL_SYFT"
+STUB
+chmod +x "$PIN/bin/syft"
+REG_DIGEST=sha256:45e09956dc667c5eff3583c9d94830261fb1ca0be10a0a7db36266edf5de9e1d
+REG_INDEX=sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+DMN_DIGEST=sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e
+# Copies of entrypoint.sh that look for the socket where the test says, so
+# both paths run whether or not this host has Docker.
+sed "s#/var/run/docker.sock#$PIN/none.sock#g" "$ENTRY" > "$PIN/entry-nosock.sh"
+sed "s#/var/run/docker.sock#$PIN/d.sock#g" "$ENTRY" > "$PIN/entry-sock.sh"
+python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$PIN/d.sock" 2>/dev/null
+pin_run() {  # pin_run <dir> <sock|nosock> <image> <source fixture or ""> [VAR=value ...]
+    local d="$1" e="$PIN/entry-$2.sh" t="$3" src="$4"; shift 4
+    mkdir -p "$d"
+    ( cd "$d" && env PATH="$PIN/bin:$OSL/bin:$WORK/bin:$PATH" MODE=IMAGE TARGET_IMAGE="$t" PIN_SOURCE="$src" \
+        PIN_SYFT_ARGV="$d/syft-argv" PIN_OSL_SYFT="$OSL/bin/syft" OSL_TRIVY_ARGV="$d/trivy-argv" \
+        PROJECT_NAME=demo PROJECT_VERSION=1.0 HOST_OUTPUT_DIR="$d" BOMLENS_LIBDIR="$ROOT_DIR/docker/lib" \
+        UPLOAD_ENABLED=false GENERATE_SECURITY=false SECURITY_ENRICH=false ENRICH_EOL=false ENRICH_MALICIOUS=false \
+        "$@" bash "$e" ) > "$d.log" 2>&1
+}
+pin_image() { jq -c '.input.image' "$1/bomlens-result.json" 2>/dev/null; }
+if ! grep -q "$PIN/d.sock" "$PIN/entry-sock.sh" || [ ! -S "$PIN/d.sock" ]; then
+    fail "could not set up the socket copies of entrypoint.sh (no /var/run/docker.sock in it, or no socket made)"
+else
+    D="$WORK/pin-registry"; pin_run "$D" nosock alpine:3.20 "$FIX/syft-source-registry.json"
+    [ "$(tail -1 "$D/trivy-argv" 2>/dev/null)" = "alpine@$REG_DIGEST" ] \
+        && grep -q '^template=' "$D/syft-argv" \
+        && [ "$(pin_image "$D")" = "{\"reference\":\"alpine:3.20\",\"source\":\"registry\",\"digest\":\"$REG_DIGEST\",\"platform\":\"linux/arm64\",\"index_digest\":\"$REG_INDEX\"}" ] \
+        && grep -q "image digest: $REG_DIGEST (linux/arm64)" "$D.log" \
+        && pass "registry read: Trivy reads the platform manifest syft read, the manifest records digest, index and platform" \
+        || fail "registry pin: trivy $(tail -1 "$D/trivy-argv" 2>&1), image $(pin_image "$D")" "$(tail -4 "$D.log")"
+    err="$(schema_errors "$D/bomlens-result.json")"
+    [ -z "$err" ] && pass "a manifest with input.image validates against schemas/engine-result-1.json" || fail "schema errors" "$err"
+    D="$WORK/pin-registry-scheme"; pin_run "$D" sock registry:alpine:3.20 "$FIX/syft-source-registry.json"
+    [ "$(tail -1 "$D/trivy-argv" 2>/dev/null)" = "alpine@$REG_DIGEST" ] && grep -qx 'remote' "$D/trivy-argv" \
+        && [ "$(jq -r '.input.image.source' "$D/bomlens-result.json")" = registry ] \
+        && pass "registry: scheme with the socket mounted is still a registry read, pinned" \
+        || fail "registry: scheme: $(tr '\n' ' ' < "$D/trivy-argv" 2>&1)"
+    D="$WORK/pin-daemon"; pin_run "$D" sock busybox:latest "$FIX/syft-source-daemon.json"
+    [ "$(tail -1 "$D/trivy-argv" 2>/dev/null)" = "busybox@$DMN_DIGEST" ] \
+        && [ "$(pin_image "$D")" = "{\"reference\":\"busybox:latest\",\"source\":\"daemon\",\"digest\":\"$DMN_DIGEST\",\"platform\":\"linux/arm64\"}" ] \
+        && pass "daemon read: Trivy reads the repository digest the daemon holds, not syft's computed manifest digest" \
+        || fail "daemon pin: trivy $(tail -1 "$D/trivy-argv" 2>&1), image $(pin_image "$D")" "$(tail -4 "$D.log")"
+    D="$WORK/pin-daemon-qualified"; pin_run "$D" sock docker.io/library/busybox:latest "$FIX/syft-source-daemon.json"
+    [ "$(tail -1 "$D/trivy-argv" 2>/dev/null)" = "docker.io/library/busybox@$DMN_DIGEST" ] \
+        && pass "a fully qualified name matches the daemon's short repository digest" \
+        || fail "qualified daemon pin: $(tail -1 "$D/trivy-argv" 2>&1)"
+    D="$WORK/pin-daemon-nomatch"; pin_run "$D" sock myapp:dev "$FIX/syft-source-daemon.json"
+    [ "$(tail -1 "$D/trivy-argv" 2>/dev/null)" = "myapp:dev" ] \
+        && [ "$(jq -c '.input.image | [.source, .digest, .platform]' "$D/bomlens-result.json")" = '["daemon",null,"linux/arm64"]' ] \
+        && grep -q 'could not resolve the digest of myapp:dev' "$D.log" \
+        && [ "$(jq -r .run.status "$D/bomlens-result.json")" = succeeded ] \
+        && pass "no repository digest for this name: the reference is read as given, digest null, with a warning" \
+        || fail "no match: trivy $(tail -1 "$D/trivy-argv" 2>&1), image $(pin_image "$D")" "$(tail -4 "$D.log")"
+    D="$WORK/pin-archive"; pin_run "$D" sock docker-archive:/in/app.tar "$FIX/syft-source-registry.json"
+    grep -qx -- '--input' "$D/trivy-argv" && grep -qx '/in/app.tar' "$D/trivy-argv" \
+        && [ "$(jq -c '.input.image | [.reference, .source, .digest]' "$D/bomlens-result.json")" = '["docker-archive:/in/app.tar","archive",null]' ] \
+        && ! grep -q 'image digest:\|could not resolve the digest' "$D.log" \
+        && pass "an archive is read as it is, with no digest" \
+        || fail "archive: $(tr '\n' ' ' < "$D/trivy-argv" 2>&1), image $(pin_image "$D")"
+    jq '.metadata.manifestDigest = "sha256:45e0;touch /tmp/pwned" | .metadata.repoDigests = ["alpine@sha256:$(id)"]' \
+        "$FIX/syft-source-registry.json" > "$PIN/bad-digest.json"
+    D="$WORK/pin-bad-digest"; pin_run "$D" nosock alpine:3.20 "$PIN/bad-digest.json"
+    [ "$(tail -1 "$D/trivy-argv" 2>/dev/null)" = "alpine:3.20" ] \
+        && [ "$(jq -c '.input.image | [.digest, has("index_digest")]' "$D/bomlens-result.json")" = '[null,false]' ] \
+        && pass "a digest that is not sha256:<64 hex> is never used" \
+        || fail "bad digest: trivy $(tail -1 "$D/trivy-argv" 2>&1), image $(pin_image "$D")"
+    D="$WORK/pin-none"; pin_run "$D" nosock alpine:3.20 ""
+    [ "$(tail -1 "$D/trivy-argv" 2>/dev/null)" = "alpine:3.20" ] \
+        && [ "$(pin_image "$D")" = '{"reference":"alpine:3.20","source":"registry","digest":null,"platform":null}' ] \
+        && pass "no source record from syft: the reference is read as given, digest and platform null" \
+        || fail "no record: trivy $(tail -1 "$D/trivy-argv" 2>&1), image $(pin_image "$D")"
+    D="$WORK/pin-failed"; mkdir -p "$D"
+    ( cd "$D" && env PATH="$IMG/bin:$WORK/bin:$PATH" MODE=IMAGE TARGET_IMAGE=registry.example/denied:1 SYFT_ARGV_LOG="$D/argv" \
+        PROJECT_NAME=demo PROJECT_VERSION=1.0 HOST_OUTPUT_DIR="$D" BOMLENS_LIBDIR="$ROOT_DIR/docker/lib" \
+        UPLOAD_ENABLED=false GENERATE_SECURITY=false bash "$PIN/entry-nosock.sh" ) > "$D.log" 2>&1
+    [ "$(pin_image "$D")" = '{"reference":"registry.example/denied:1","source":null,"digest":null,"platform":null}' ] \
+        && [ -z "$(schema_errors "$D/bomlens-result.json")" ] \
+        && pass "a run that stopped before syft read the image records the reference only" \
+        || fail "failed run: image $(pin_image "$D")"
+fi
+D="$(new_run pin-not-image)"; run_engine "$D" "$ROOT_DIR/docker/lib"
+[ "$(jq -r '.input | has("image")' "$D/bomlens-result.json")" = false ] \
+    && pass "a run that is not an image scan has no input.image" || fail "input: $(jq -c .input "$D/bomlens-result.json")"
+
 echo "== a package cdxgen could not name is said in generate's detail =="
 for case in ok poetry; do
     D="$(new_run "unnamed-$case")"

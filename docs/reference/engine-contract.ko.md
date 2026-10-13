@@ -18,7 +18,7 @@ BomLens 이미지를 스캔 엔진으로 쓰는 프로그램은 모든 스캔이
 |---|---|
 | `contract` | `name`은 `bomlens-engine`, `version`은 계약 버전입니다(유의적 버전, BomLens 버전과 별개) |
 | `engine` | `version`은 이미지에 들어 있는 BomLens 버전입니다. `image`와 `image_digest`는 호출자가 `BOMLENS_IMAGE_REF`와 `BOMLENS_IMAGE_DIGEST`를 넘기면 그 값을 그대로 적습니다. 이미지는 자기 참조를 알 수 없기 때문입니다 |
-| `input` | `kind`(`source`, `image`, `sbom`, `binary`, `rootfs`, `firmware`, `ai-model`, `dataset`), 실행한 `MODE`, `target`(이미지 스캔의 이미지 참조, 경로는 적지 않음) |
+| `input` | `kind`(`source`, `image`, `sbom`, `binary`, `rootfs`, `firmware`, `ai-model`, `dataset`), 실행한 `MODE`, `target`(이미지 스캔의 이미지 참조, 경로는 적지 않음), 이미지 스캔이면 `image`(아래 참조) |
 | `run` | `status`, `reason`, `started_at`, `ended_at`(UTC), `exit_code` |
 | `steps[]` | 단계마다 하나씩, 기록된 순서대로. 단계는 끝날 때 기록됨(아래 표) |
 | `tools` | 도구 이름과 버전입니다. SBOM에 적힌 생성 도구, syft, 취약점 스캔이 돌았다면 Trivy가 들어갑니다 |
@@ -134,6 +134,29 @@ BomLens 이미지를 스캔 엔진으로 쓰는 프로그램은 모든 스캔이
 - 한정자는 이름순으로 정렬합니다.
 
 이 형식을 바꾸는 것은 메이저 버전 변경입니다(아래 참조).
+
+## 이미지 스캔
+
+`IMAGE` 모드에서는 syft가 먼저 이미지를 읽고, Debian 패키지의 라이선스를 읽는 Trivy(`os-licenses`)와 파일 보기가 같은 이미지를 한 번 더 읽습니다. 이 두 번째 읽기는 syft가 읽은 다이제스트로 이미지를 지정하므로(`<저장소>@sha256:...`), 그사이에 태그가 다른 이미지를 가리키게 되어도 같은 이미지를 읽습니다. `input.image`에 그 내용을 적습니다.
+
+```json
+"image": {
+  "reference": "alpine:3.20",
+  "source": "registry",
+  "digest": "sha256:45e09956dc667c5eff3583c9d94830261fb1ca0be10a0a7db36266edf5de9e1d",
+  "platform": "linux/arm64",
+  "index_digest": "sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
+}
+```
+
+| 필드 | 뜻 |
+|---|---|
+| `reference` | 입력으로 받은 이미지 참조(`TARGET_IMAGE`) |
+| `source` | syft가 이미지를 읽은 곳입니다. `registry`(`registry:` 스킴, 또는 Docker 소켓이 없을 때의 일반 이름), `daemon`(소켓이 있을 때의 일반 이름, 또는 `docker:`와 `podman:`), `archive`(`docker-archive:`, `oci-archive:`, `oci-dir:`), `other`(`containerd:`)이며, syft가 이미지를 읽기 전에 실행이 멈췄다면 `null`입니다 |
+| `digest` | `registry`이면 읽은 이미지의 매니페스트 다이제스트(플랫폼 하나), `daemon`이면 데몬이 그 저장소에 대해 가진 저장소 다이제스트입니다. 다중 플랫폼 이미지라면 인덱스의 다이제스트입니다. 아카이브는 파일을 그대로 읽으므로 `null`이고, 다이제스트를 알아낼 수 없을 때도 `null`입니다(로컬에서 빌드하고 푸시하지 않은 이미지에는 저장소 다이제스트가 없습니다). 이때 두 번째 읽기는 받은 참조를 그대로 쓰고, 로그에 그 사실을 남깁니다 |
+| `platform` | 읽은 이미지의 `os/architecture[/variant]`, 알 수 없으면 `null` |
+| `index_digest` | `registry`일 때만, 참조가 가리킨 이미지 인덱스(매니페스트 목록)의 다이제스트가 `digest`와 다르면 적습니다 |
+
 ## 실행 계획
 
 소스 스캔은 컨테이너 두 개로 돕니다. 1단계는 cdxgen 언어 이미지에서 의존성을 해석하고, 2단계는 이 이미지를 `POSTPROCESS` 모드로 실행합니다. 컨테이너를 직접 실행하는 프로그램(Kubernetes Job, 보안 설정을 한 Docker 실행기 등)은 `MODE=PLAN`으로 무엇을 실행할지 BomLens에 묻습니다. 소스를 `/src`에 읽기 전용으로, 출력 폴더를 `/host-output`에 마운트하면 이미지가 그 폴더에 `bomlens-plan.json`을 쓰고 1단계가 마운트할 파일을 `bomlens-plan/`에 복사합니다. 스캔은 하지 않습니다. 형식은 [`schemas/engine-plan-1.json`](https://github.com/sktelecom/bomlens/blob/main/schemas/engine-plan-1.json)입니다.

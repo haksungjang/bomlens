@@ -56,7 +56,19 @@
       "properties": {
         "kind": { "enum": ["source", "image", "sbom", "binary", "rootfs", "firmware", "ai-model", "dataset", "unknown"] },
         "mode": { "type": "string" },
-        "target": { "type": ["string", "null"] }
+        "target": { "type": ["string", "null"] },
+        "image": {
+          "description": "IMAGE mode: the image read, and the digest the later reads of it were pinned to.",
+          "type": "object",
+          "required": ["reference", "digest", "platform"],
+          "properties": {
+            "reference": { "type": ["string", "null"] },
+            "source": { "enum": ["registry", "daemon", "archive", "other", null] },
+            "digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+            "index_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+            "platform": { "type": ["string", "null"], "pattern": "^[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)?$" }
+          }
+        }
       }
     },
     "run": {

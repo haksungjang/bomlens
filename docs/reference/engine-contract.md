@@ -18,7 +18,7 @@ The scan's exit code is unchanged by the contract. A run that produced its SBOM 
 |---|---|
 | `contract` | `name` is `bomlens-engine`, `version` the contract version (semantic versioning, separate from the BomLens version) |
 | `engine` | `version` is the BomLens version built into the image. `image` and `image_digest` repeat `BOMLENS_IMAGE_REF` and `BOMLENS_IMAGE_DIGEST` when the caller passes them; the image cannot see its own reference |
-| `input` | `kind` (`source`, `image`, `sbom`, `binary`, `rootfs`, `firmware`, `ai-model`, `dataset`), the `MODE` it ran in, and `target` (the image reference for an image scan; paths are not recorded) |
+| `input` | `kind` (`source`, `image`, `sbom`, `binary`, `rootfs`, `firmware`, `ai-model`, `dataset`), the `MODE` it ran in, `target` (the image reference for an image scan; paths are not recorded), and for an image scan `image` (below) |
 | `run` | `status`, `reason`, `started_at`, `ended_at` (UTC), `exit_code` |
 | `steps[]` | one entry per step, in the order they were recorded; a step is recorded when it ends (below) |
 | `tools` | tool name and version: the generator recorded in the SBOM, syft, and Trivy when the vulnerability scan ran |
@@ -134,6 +134,29 @@ Operating system packages in `bom.json` carry PURLs in the form Trivy and the pu
 - Qualifiers are sorted by name.
 
 A change to this form is a major version change (see below).
+
+## Image scans
+
+In `IMAGE` mode syft reads the image first, and Trivy reads it again for the licenses of Debian packages (`os-licenses`), as does the file view. Those later reads take the image by the digest syft read, `<repository>@sha256:...`, so a tag that moves between the two reads cannot give them a different image. `input.image` records it:
+
+```json
+"image": {
+  "reference": "alpine:3.20",
+  "source": "registry",
+  "digest": "sha256:45e09956dc667c5eff3583c9d94830261fb1ca0be10a0a7db36266edf5de9e1d",
+  "platform": "linux/arm64",
+  "index_digest": "sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `reference` | the image reference as given (`TARGET_IMAGE`) |
+| `source` | where syft read it: `registry` (the `registry:` scheme, or a plain name with no Docker socket), `daemon` (a plain name with the socket, or `docker:` and `podman:`), `archive` (`docker-archive:`, `oci-archive:`, `oci-dir:`), `other` (`containerd:`), or `null` when the run stopped before syft read the image |
+| `digest` | for `registry`, the manifest digest of the image read, one platform; for `daemon`, the repository digest the daemon holds for that repository, which for a multi-platform image is the digest of its index. `null` for an archive, which is read as it is, and when no digest could be resolved (an image built locally and never pushed has no repository digest): the later reads then use the reference as given, and the log says so |
+| `platform` | `os/architecture[/variant]` of the image read, or `null` |
+| `index_digest` | `registry` only, present when the reference named an image index (manifest list) whose digest differs from `digest` |
+
 ## Execution plan
 
 A source scan runs in two containers: stage 1 resolves the dependencies in a cdxgen language image, stage 2 is this image in `POSTPROCESS` mode. A program that runs the containers itself (a Kubernetes Job, a hardened Docker runner) asks BomLens what to run with `MODE=PLAN`: mount the source read-only at `/src` and an output folder at `/host-output`, and the image writes `bomlens-plan.json` there and copies the files stage 1 mounts into `bomlens-plan/`. Nothing is scanned. The format is [`schemas/engine-plan-1.json`](https://github.com/sktelecom/bomlens/blob/main/schemas/engine-plan-1.json).

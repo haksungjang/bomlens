@@ -730,7 +730,12 @@ case "$SCAN_MODE" in
             echo "[1/2] syft: image $TARGET_IMAGE (no Docker socket: read from the registry or the archive)"
         fi
         IMAGE_SYFT_LOG=$(mktemp)
-        if ! syft "$TARGET_IMAGE" -o "cyclonedx-json@$CDX_SPEC_VERSION" > "$OUTPUT_FILE" 2>"$IMAGE_SYFT_LOG"; then
+        # syft's source record (its syft-json `source`, through a template so
+        # the file catalogue is not written twice) gives the digest it read.
+        IMAGE_SOURCE_TMPL=$(mktemp); IMAGE_SOURCE_JSON=$(mktemp)
+        printf '%s' '{{ toJson .source }}' > "$IMAGE_SOURCE_TMPL"
+        if ! syft "$TARGET_IMAGE" -o "cyclonedx-json@$CDX_SPEC_VERSION" \
+                -o "template=$IMAGE_SOURCE_JSON" -t "$IMAGE_SOURCE_TMPL" > "$OUTPUT_FILE" 2>"$IMAGE_SYFT_LOG"; then
             case "$TARGET_IMAGE" in
                 docker-archive:*|oci-archive:*|oci-dir:*)
                     echo "[ERROR] syft could not read the image archive $TARGET_IMAGE: check that the path is mounted into the container and holds an image in that format." ;;
@@ -738,10 +743,30 @@ case "$SCAN_MODE" in
                     echo "[ERROR] syft could not read the image $TARGET_IMAGE: it does not exist, or the registry needs credentials (SYFT_REGISTRY_AUTH_USERNAME and SYFT_REGISTRY_AUTH_PASSWORD, or a docker config file in DOCKER_CONFIG). With the CLI, pulling it first (docker pull) also works." ;;
             esac
             [ -s "$IMAGE_SYFT_LOG" ] && tail -5 "$IMAGE_SYFT_LOG" >&2
-            rm -f "$IMAGE_SYFT_LOG"
+            rm -f "$IMAGE_SYFT_LOG" "$IMAGE_SOURCE_TMPL" "$IMAGE_SOURCE_JSON"
             exit 1
         fi
         rm -f "$IMAGE_SYFT_LOG"
+        # Pin the later reads of this image (Trivy's license scan, the file
+        # view) to the digest syft read, so a tag that moves meanwhile cannot
+        # give them another image. An archive is read as it is. With no digest
+        # the reference is read as given, and the manifest records it as null.
+        _img_socket=false; [ -S /var/run/docker.sock ] && _img_socket=true
+        ER_INPUT_IMAGE="$(bash "$LIBDIR/image-digest.sh" "$IMAGE_SOURCE_JSON" "$TARGET_IMAGE" "$_img_socket" 2>/dev/null)" || ER_INPUT_IMAGE=""
+        rm -f "$IMAGE_SOURCE_TMPL" "$IMAGE_SOURCE_JSON"
+        IMAGE_READ_TARGET="$TARGET_IMAGE"
+        _img_json="${ER_INPUT_IMAGE:-"{}"}"
+        _img_pinned="$(jq -r '.pinned_reference // empty' <<<"$_img_json" 2>/dev/null)" || _img_pinned=""
+        case "$(jq -r '.source // empty' <<<"$_img_json" 2>/dev/null)" in
+            registry|daemon)
+                if [ -n "$_img_pinned" ]; then
+                    IMAGE_READ_TARGET="$_img_pinned"
+                    echo "[1/2] image digest: $(jq -r '.digest + (if .platform then " (" + .platform + ")" else "" end)' <<<"$ER_INPUT_IMAGE"); later reads use $IMAGE_READ_TARGET"
+                else
+                    echo "[WARN] could not resolve the digest of $TARGET_IMAGE (an image with no repository digest, such as one built locally): later reads use the reference as given." >&2
+                fi ;;
+        esac
+        export ER_INPUT_IMAGE
         ;;
 
     BINARY)
@@ -1104,7 +1129,7 @@ er_phase_end
 # read the target, the hashes are dropped and the step is degraded.
 case "$SCAN_MODE" in
     IMAGE|ROOTFS)
-        _osl_target="${TARGET_IMAGE:-}"; [ "$SCAN_MODE" = ROOTFS ] && _osl_target="$TARGET_DIR"
+        _osl_target="${IMAGE_READ_TARGET:-${TARGET_IMAGE:-}}"; [ "$SCAN_MODE" = ROOTFS ] && _osl_target="$TARGET_DIR"
         _osl_started="$(er_now)"; _osl_rc=0
         if [ "${BOMLENS_OS_LICENSES:-true}" = "false" ]; then
             bash "$LIBDIR/os-licenses.sh" "$OUTPUT_FILE" "$SCAN_MODE" "$_osl_target" >/dev/null || true
@@ -1740,7 +1765,7 @@ case "$SCAN_MODE" in
         # shape scan-firmware.sh already uses for its extraction. Best-effort:
         # an ELF binary or a missing docker socket prints nothing and the file
         # views are simply absent.
-        UNPACK_TARGET="$TARGET_IMAGE"
+        UNPACK_TARGET="${IMAGE_READ_TARGET:-$TARGET_IMAGE}"
         [ "$SCAN_MODE" = "BINARY" ] && UNPACK_TARGET="$TARGET_FILE"
         # stdout is the directory (empty when it could not unpack); stderr is the
         # reason, and belongs in the scan log where the user reads it.
