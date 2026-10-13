@@ -116,7 +116,7 @@ fail_on_bad_coverage() {
     echo "[ERROR] --fail-on: '$1' needs a whole percentage from 0 to 100 without leading zeros, for example license-coverage=80 (there is no default)."
     exit 1
 }
-FORCE_FIRMWARE="false"; ANALYZE_SBOM=""; MODEL=""; MODEL_FILE=""; VEX_FILE=""
+FORCE_FIRMWARE="false"; FORCE_SOURCE="false"; ANALYZE_SBOM=""; MODEL=""; MODEL_FILE=""; VEX_FILE=""
 AI_DECLARE_FILE=""; GENERATE_SPDX3="true"
 # Set when --target turned out to be a Yocto build directory: the folder the
 # user pointed at, while ANALYZE_SBOM holds the image SBOM found inside it.
@@ -243,6 +243,7 @@ while [[ "$#" -gt 0 ]]; do
         --resolve-purl) PURL_RESOLVE="true" ;;
         --license-registry) LICENSE_REGISTRY="true" ;;
         --firmware) FORCE_FIRMWARE="true" ;;
+        --as-source) FORCE_SOURCE="true" ;;
         --output-dir|-o) OUTPUT_BASE="$2"; shift ;;
         --timestamp) TIMESTAMP="true" ;;
         --ui) UI_MODE="true" ;;
@@ -313,6 +314,9 @@ Options:
                          A Yocto build directory is recognized as such: its
                          image SBOM under tmp/deploy/images/ is analyzed
                          instead of the build tree being walked.
+                         A folder with no manifest of its own that directly
+                         holds one root filesystem or firmware image (a
+                         release folder) is scanned as that; see --as-source.
   --git <url>            Clone a git/GitHub URL (shallow) and scan as source.
                          Private repos: set GIT_TOKEN env. Mutually exclusive
                          with --target/--analyze/--firmware.
@@ -322,6 +326,13 @@ Options:
                          on an archive too: the firmware unpacker reads it
                          directly, nested formats and all, instead of the
                          archive being extracted and scanned as source.
+  --as-source            Scan a directory --target as a source tree, as it is.
+                         Without it, a folder that is not a source tree (no
+                         manifest or build file at its top level) and directly
+                         holds one root filesystem or one firmware image is
+                         scanned as that instead; holding several stops the
+                         scan with a list to choose from. Also skips the Yocto
+                         build directory and root filesystem recognition.
   --analyze <sbom>       Validate + analyze a supplier SBOM (alias: --sbom).
                          CycloneDX or SPDX; mutually exclusive with --target.
   --model <ref>          Generate an AI SBOM (CycloneDX 1.7 ML-BOM) for a
@@ -1422,6 +1433,110 @@ nested_rootfs_hint() {
     printf '%s' "${found#"$d"/}"
 }
 
+# ---------------------------------------------------------------------------
+# Release folders
+#
+# A folder handed over with a product release often holds the built artifacts
+# side by side, not source: an extracted root filesystem, a firmware image, a
+# kernel, an install tree. Scanned as source it yields an almost empty SBOM,
+# because there is no manifest to read. When such a folder directly holds
+# exactly one root filesystem or firmware image, that is what gets scanned.
+#
+# The rule is kept narrow on purpose (see nested_rootfs_hint for why routing a
+# source tree away from cdxgen is the worse mistake):
+#   - only a folder with no manifest, lockfile or build file of its own at the
+#     top level, and no .git, is considered at all, so a source repository
+#     that keeps a rootfs-shaped test fixture or a .bin blob stays source;
+#   - only its direct children are candidates, and symlinks are skipped, so a
+#     link to / or to a folder elsewhere is never followed into a scan;
+#   - several candidates stop the scan instead of picking one.
+# --as-source turns all of it off.
+
+# Does this folder carry anything a source scan reads, at its top level only?
+# Broader than detect_lang on purpose: a C/C++ tree with only a Makefile or
+# CMakeLists.txt has no package manifest, yet is still source.
+has_source_manifest() {
+    local d="$1" f
+    [ -e "$d/.git" ] && return 0
+    for f in package.json package-lock.json yarn.lock pnpm-lock.yaml bun.lock \
+             pom.xml build.gradle build.gradle.kts settings.gradle settings.gradle.kts \
+             go.mod go.sum Cargo.toml Cargo.lock Gemfile Gemfile.lock \
+             requirements.txt pyproject.toml setup.py setup.cfg Pipfile poetry.lock uv.lock \
+             composer.json composer.lock Package.swift Podfile Cartfile \
+             conanfile.txt conanfile.py vcpkg.json packages.config \
+             CMakeLists.txt Makefile GNUmakefile makefile Makefile.am configure configure.ac \
+             meson.build MODULE.bazel WORKSPACE BUILD.bazel build.sbt mix.exs pubspec.yaml \
+             deno.json package.mo; do
+        [ -f "$d/$f" ] && return 0
+    done
+    for f in "$d"/*.csproj "$d"/*.fsproj "$d"/*.vbproj "$d"/*.sln "$d"/*.slnx \
+             "$d"/*.xcodeproj "$d"/*.xcworkspace "$d"/*.gemspec "$d"/*.cabal; do
+        [ -e "$f" ] && return 0
+    done
+    return 1
+}
+
+# Print one "<kind><TAB><path>" line per direct child of $1 that would be
+# scanned on its own: kind is "rootfs" (a root filesystem directory) or
+# "firmware" (a file is_firmware recognizes). Hidden entries and symlinks are
+# skipped.
+release_folder_candidates() {
+    local d="${1%/}" e
+    for e in "$d"/*; do
+        [ -L "$e" ] && continue
+        if [ -d "$e" ]; then
+            _is_rootfs_dir "$e" && printf 'rootfs\t%s\n' "$e"
+        elif [ -f "$e" ]; then
+            is_firmware "$e" && printf 'firmware\t%s\n' "$e"
+        fi
+    done
+    return 0
+}
+
+# Decide what a directory --target that is not a source tree is scanned as.
+# One candidate: point TARGET at it and say so. Several: list them and stop.
+# None: leave TARGET alone (it is scanned as source, as before).
+resolve_release_folder() {
+    local dir="${TARGET%/}" cands n kind path label as
+    has_source_manifest "$dir" && return 0
+    cands="$(release_folder_candidates "$dir")"
+    [ -n "$cands" ] || return 0
+    n="$(printf '%s\n' "$cands" | grep -c .)"
+    # The chosen path is interpolated into the eval'ed docker run below. The
+    # folder part is what the user typed, as with any --target; the entry name
+    # comes from the folder's contents, so refuse the few characters that
+    # would be more than a name there.
+    while IFS="$(printf '\t')" read -r kind path; do
+        case "${path##*/}" in
+            *'$'*|*'`'*|*'"'*|*'\'*)
+                echo "[ERROR] $dir holds an entry whose name contains a character that"
+                echo "        cannot be passed through safely: $path"
+                echo "        Rename it, or add --as-source to scan $dir itself as source."
+                exit 1 ;;
+        esac
+    done <<< "$cands"
+    if [ "$n" -gt 1 ]; then
+        echo "[ERROR] $dir is not a source tree, and it holds more than one thing to scan:"
+        while IFS="$(printf '\t')" read -r kind path; do
+            if [ "$kind" = "rootfs" ]; then
+                echo "          root filesystem  --target \"$path\""
+            else
+                echo "          firmware image   --target \"$path\" --firmware"
+            fi
+        done <<< "$cands"
+        echo "        Run again with one of the --target options above, or add --as-source"
+        echo "        to scan $dir itself as source."
+        exit 1
+    fi
+    IFS="$(printf '\t')" read -r kind path <<< "$cands"
+    if [ "$kind" = "rootfs" ]; then label="root filesystem"; as="ROOTFS"; else label="firmware image"; as="FIRMWARE"; fi
+    echo "[INFO] $dir is not a source tree (no manifest or build file at its top level),"
+    echo "[INFO]   and it holds one $label: $path"
+    echo "[INFO]   Scanning $path as $as instead. Other files in $dir are not scanned."
+    echo "[INFO]   To scan $dir itself as source, add --as-source."
+    TARGET="$path"
+}
+
 # Does the root filesystem record its own packages? syft reads apk/dpkg/rpm and
 # reports the installed set exactly; without one of these there is nothing for it
 # to read, and only binary signature identification (the firmware image) will
@@ -1703,6 +1818,16 @@ elif [ -n "$MODEL_FILE" ]; then
         *) echo "[ERROR] --usage must be one of: internal, product, redistribute, outputs-only."; exit 1 ;;
     esac
 elif [ -n "$TARGET" ]; then
+    [ "$FORCE_SOURCE" != "true" ] || [ "$FORCE_FIRMWARE" != "true" ] \
+        || { echo "[ERROR] --as-source cannot be combined with --firmware."; exit 1; }
+    # A release folder (built artifacts, no source) that holds one root
+    # filesystem or firmware image is scanned as that; see resolve_release_folder.
+    # A folder that is a rootfs or a Yocto build directory itself is left to
+    # the branches below, which already know what to do with it.
+    if [ -d "$TARGET" ] && [ "$FORCE_SOURCE" != "true" ] && [ "$FORCE_FIRMWARE" != "true" ] \
+       && ! _is_rootfs_dir "$TARGET" && ! is_yocto_build_dir "$TARGET"; then
+        resolve_release_folder
+    fi
     if [ -f "$TARGET" ]; then
         if [ "$FORCE_FIRMWARE" = "true" ] || is_firmware "$TARGET"; then
             MODE="FIRMWARE"
@@ -1734,7 +1859,7 @@ elif [ -n "$TARGET" ]; then
         else
             MODE="BINARY"
         fi
-    elif [ -d "$TARGET" ] && [ "$FORCE_FIRMWARE" != "true" ] && is_yocto_build_dir "$TARGET"; then
+    elif [ -d "$TARGET" ] && [ "$FORCE_FIRMWARE" != "true" ] && [ "$FORCE_SOURCE" != "true" ] && is_yocto_build_dir "$TARGET"; then
         # A Yocto build already knows what it put in the image; read that rather
         # than walking the build tree. Joins the ANALYZE path below with the
         # SBOM the build wrote — no separate mode, so validation, conformance
@@ -1842,7 +1967,7 @@ elif [ -n "$TARGET" ]; then
         GENERATE_NOTICE="true"; GENERATE_SECURITY="true"
         fi
     elif [ -d "$TARGET" ]; then
-        if _is_rootfs_dir "$TARGET"; then
+        if [ "$FORCE_SOURCE" != "true" ] && _is_rootfs_dir "$TARGET"; then
             # Looks like a real root filesystem (etc/ plus two of bin/sbin/usr/lib/var):
             # syft reads its package database directly, same as an archive that
             # unpacked to one (see INGEST_ROOTFS above).
@@ -1911,6 +2036,11 @@ fi
 
 if [ "$FORCE_FIRMWARE" = "true" ] && [ "$MODE" != "FIRMWARE" ]; then
     echo "[ERROR] --firmware expects a file target, but '$TARGET' is not a regular file."; exit 1
+fi
+
+if [ "$FORCE_SOURCE" = "true" ] && { [ -z "$TARGET" ] || [ ! -d "$TARGET" ] || [ "$MODE" != "SOURCE" ]; }; then
+    echo "[ERROR] --as-source applies to a directory --target only."
+    echo "        Pass the folder to scan as source: --target <folder> --as-source"; exit 1
 fi
 
 # Unified 오픈소스위험분석보고서 (risk-report) is on by default in every mode.

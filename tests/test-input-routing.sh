@@ -32,7 +32,8 @@ extract_fn() {
     ' "$SCRIPT"
 }
 
-for fn in _is_rootfs_dir find_rootfs_dir nested_rootfs_hint has_package_db is_container_archive is_archive; do
+for fn in _is_rootfs_dir find_rootfs_dir nested_rootfs_hint has_package_db is_container_archive is_archive \
+          is_firmware has_source_manifest release_folder_candidates; do
     body="$(extract_fn "$fn")"
     if [ -z "$body" ]; then
         echo "[ERROR] could not lift $fn out of scan-sbom.sh (was it renamed?)"; exit 1
@@ -113,6 +114,56 @@ if nested_rootfs_hint "$WORK/nodeps" >/dev/null; then
     fail "nested_rootfs_hint invented a candidate where none exists"
 else
     pass "an ordinary source tree with nothing nested gets no hint"
+fi
+
+echo "== release folders: only a folder with no source of its own is rerouted =="
+
+# release_folder_candidates looks at direct children only, skips symlinks, and
+# names each candidate by kind.
+mkdir -p "$WORK/rel/images/rootfs"/{etc,bin,usr} "$WORK/rel/images/install"
+printf 'blob\n' > "$WORK/rel/images/dev.img"
+ln -s / "$WORK/rel/images/hostroot" 2>/dev/null || true
+cands="$(release_folder_candidates "$WORK/rel/images")"
+if [ "$(printf '%s\n' "$cands" | grep -c .)" = 2 ] \
+   && printf '%s\n' "$cands" | grep -qx "rootfs	$WORK/rel/images/rootfs" \
+   && printf '%s\n' "$cands" | grep -qx "firmware	$WORK/rel/images/dev.img"; then
+    pass "a rootfs folder and a firmware file are both named, a symlink to / is not"
+else
+    fail "release_folder_candidates" "got: $cands"
+fi
+if has_source_manifest "$WORK/rel/images"; then
+    fail "a folder of build artifacts was taken for a source tree"
+else
+    pass "a folder of build artifacts has no source manifest"
+fi
+missed=""
+for m in package.json pom.xml go.mod Cargo.toml requirements.txt CMakeLists.txt Makefile meson.build App.csproj; do
+    mkdir -p "$WORK/srcm-$m"; : > "$WORK/srcm-$m/$m"
+    has_source_manifest "$WORK/srcm-$m" || missed="$missed $m"
+done
+if [ -z "$missed" ]; then
+    pass "a top-level manifest or build file marks a folder as source"
+else
+    fail "these at the top level were not read as source:$missed"
+fi
+mkdir -p "$WORK/gitrepo/.git"
+has_source_manifest "$WORK/gitrepo" && pass "a git checkout counts as source" \
+    || fail "a git checkout was not read as source"
+
+# This repository's own example projects and test fixtures must keep scanning
+# as source: none of them is a folder without source that holds a rootfs or a
+# firmware image directly. The one exception is a folder of binary samples that
+# is never a --target of a scan.
+hits=""
+while IFS= read -r d; do
+    _is_rootfs_dir "$d" && continue
+    has_source_manifest "$d" && continue
+    [ -n "$(release_folder_candidates "$d")" ] && hits="$hits ${d#"$ROOT_DIR"/}"
+done < <(find "$ROOT_DIR/examples" "$ROOT_DIR/tests/fixtures" -type d -not -path '*/node_modules/*')
+if [ "$hits" = " tests/fixtures/verstr-samples" ] || [ -z "$hits" ]; then
+    pass "examples/ and tests/fixtures/ stay source (no release folder among them)"
+else
+    fail "folders in this repository would be rerouted away from a source scan" "$hits"
 fi
 
 echo "== the package database decides which scanner can say anything =="

@@ -207,7 +207,7 @@ for flag in --project --version --target --git --branch --firmware --analyze \
             --byte-stable --sign --output-dir --timestamp --ui \
             --license --sbom-author --model --model-file --usage --merge --merge-root \
             --diff --trusca --upload-target --deep-cve --identify-vendored --verify-weights --spdx --lang \
-            --conformance-profile --fail-on-conformance --fail-on --vex --ai-declare --no-spdx3; do
+            --conformance-profile --fail-on-conformance --fail-on --vex --ai-declare --no-spdx3 --as-source; do
   if printf '%s' "$HELP" | grep -q -- "$flag"; then pass "help documents $flag"
   else fail "help documents $flag"; fi
 done
@@ -662,6 +662,56 @@ in_out "Mode: ROOTFS" && pass "--target directory → ROOTFS mode" || { fail "--
 d="$(new_proj analyze)"; printf '{"bomFormat":"CycloneDX"}' > "$d/supplier.json"
 scan_in "$d" --project Sup --version 1 --analyze supplier.json --generate-only
 in_out "Mode: ANALYZE" && pass "--analyze <sbom> → ANALYZE mode" || { fail "--analyze → ANALYZE" "rc=$RC"; show; }
+
+# A release folder: built artifacts side by side and no source of its own.
+# One root filesystem or firmware image in it is scanned as that, with a notice;
+# several stop the scan with the commands to choose from; --as-source keeps the
+# plain source scan; a source project holding a rootfs-shaped fixture stays source.
+mk_rootfs() { mkdir -p "$1/etc" "$1/bin" "$1/usr/bin" "$1/lib"; printf 'x' > "$1/usr/bin/f"; }
+d="$(new_proj relfs)"; mk_rootfs "$d/images/rootfs"; mkdir -p "$d/images/install" "$d/images/kernel"
+printf 'x' > "$d/images/install/app"; printf 'opaque\n' > "$d/images/dev-2.60.bix"
+scan_in "$d" --project Rel --version 1 --target images --generate-only
+{ in_out "Mode: ROOTFS" && in_out "images/rootfs" && in_out "add --as-source" \
+  && in_log "images/rootfs:/target"; } \
+  && pass "release folder with one rootfs → ROOTFS of that rootfs, with a notice" \
+  || { fail "release folder with one rootfs did not switch to it" "rc=$RC"; show; }
+
+d="$(new_proj relfw)"; mkdir -p "$d/images/docs"; printf 'blob\n' > "$d/images/device-1.0.img"
+printf 'readme\n' > "$d/images/README.txt"
+scan_in "$d" --project Rel --version 1 --target images/ --generate-only
+{ in_out "Mode: FIRMWARE" && in_out "images/device-1.0.img" && in_log "TARGET_FILE=/target/device-1.0.img"; } \
+  && pass "release folder with one firmware image → FIRMWARE of that file" \
+  || { fail "release folder with one firmware image did not switch to it" "rc=$RC"; show; }
+
+d="$(new_proj reltwo)"; mk_rootfs "$d/images/rootfs"; printf 'blob\n' > "$d/images/device.bin"
+scan_in "$d" --project Rel --version 1 --target images --generate-only
+{ [ "$RC" -ne 0 ] && in_out '--target "images/rootfs"' && in_out '--target "images/device.bin" --firmware' \
+  && ! in_out "Mode:" && ! grep -q '^docker run' "$LOG"; } \
+  && pass "release folder with two candidates stops before scanning and lists both" \
+  || { fail "two candidates were not refused with a list" "rc=$RC"; show; }
+
+d="$(new_proj relsrc)"; printf '{"name":"app","version":"1.0.0"}\n' > "$d/package.json"
+mk_rootfs "$d/rootfs"; printf 'blob\n' > "$d/sample.bin"
+mkdir -p "$d/wrap"; cp "$d/package.json" "$d/wrap/"; mk_rootfs "$d/wrap/rootfs"
+scan_in "$d" --project Src --version 1 --target wrap --generate-only
+{ in_out "Mode: SOURCE" && ! in_out "is not a source tree"; } \
+  && pass "a source project holding a rootfs fixture stays SOURCE" \
+  || { fail "a source project with a rootfs fixture was rerouted" "rc=$RC"; show; }
+
+d="$(new_proj relopt)"; mk_rootfs "$d/images/rootfs"; printf 'blob\n' > "$d/images/device.bin"
+scan_in "$d" --project Rel --version 1 --target images --as-source --generate-only
+{ in_out "Mode: SOURCE" && ! in_out "is not a source tree" && [ "$RC" -eq 0 ]; } \
+  && pass "--as-source keeps a release folder a SOURCE scan" \
+  || { fail "--as-source did not keep SOURCE" "rc=$RC"; show; }
+
+d="$(new_proj relopt2)"; mk_rootfs "$d/rootfs"
+scan_in "$d" --project Rel --version 1 --target rootfs --as-source --generate-only
+in_out "Mode: SOURCE" && pass "--as-source scans a rootfs directory itself as SOURCE" \
+  || { fail "--as-source on a rootfs directory" "rc=$RC"; show; }
+d="$(new_proj relopt3)"; printf 'blob\n' > "$d/dev.bin"
+scan_in "$d" --project Rel --version 1 --target dev.bin --as-source --generate-only
+{ [ "$RC" -ne 0 ] && in_out "--as-source applies to a directory --target only"; } \
+  && pass "--as-source on a file target is refused" || { fail "--as-source on a file was not refused" "rc=$RC"; show; }
 
 # --------------------------------------------------------
 section "Mutual-exclusivity & input guards"
