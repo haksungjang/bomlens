@@ -869,10 +869,10 @@ EOF
         echo "[1/2] firmware: unpack + identify $TARGET_FILE"
         # scan-firmware.sh is best-effort (always emits a valid SBOM); the empty-file
         # guard below still catches a hard failure.
-        # OUT_PREFIX lets scan-firmware.sh drop a Trivy-shaped cve-bin-tool CVE
-        # sidecar (${OUT_PREFIX}_security_cvebintool.json) that scan-security.sh
-        # merges into the security report — firmware binaries carry no purl/CPE,
-        # so Trivy alone matches nothing; cve-bin-tool matches by version signature.
+        # OUT_PREFIX names the file tree and snapshot it writes. Firmware
+        # binaries carry a CPE but no package purl, so Trivy alone matches
+        # nothing; their CVEs come from match-cpe-index.sh, run below once every
+        # CPE enrichment step has run.
         bash "$LIBDIR/scan-firmware.sh" "$TARGET_FILE" "$OUTPUT_FILE" "$PROJECT_VERSION" "$OUT_PREFIX"
         ;;
 
@@ -1607,7 +1607,8 @@ mark_compositions_aggregate "$OUTPUT_FILE"
 # SPDX licenses. The CPE keeps the SBOM identifier correct for consumers that read
 # it; note that `trivy sbom` matches by PURL and OS-context, NOT by component.cpe
 # (issue #458), so distro CVE matching comes from the OS component synthesized just
-# below and, for firmware, from the cve-bin-tool sidecar. Skipped for AI SBOMs and
+# below and, for firmware/rootfs/binary, from match-cpe-index.sh before the security
+# scan. Skipped for AI SBOMs and
 # disabled with ENRICH_CPE=false. Generic across modes; best-effort (|| true).
 if [ "${ENRICH_CPE:-true}" != "false" ] && [ "$AI_MODEL_SCAN" != "true" ]; then
     run_optional_step enrich-cpe bash "$LIBDIR/enrich-cpe.sh" "$OUTPUT_FILE"
@@ -1986,6 +1987,33 @@ if [ "${GENERATE_SECURITY:-false}" = "true" ] && [ -d "$TRIVY_DB_MOUNT" ]; then
         er_record scan-security failed failed "no Trivy database in the trivy-db mount ($TRIVY_DB_MOUNT/db/trivy.db)"
     fi
 fi
+# CPE index match (FIRMWARE, ROOTFS, BINARY): components with no package purl
+# but a CPE (a binary syft's classifier named, a library a signature checker
+# found, a CPE enrich-cpe.sh added from cpe-name-map.json) are matched against
+# the bundled NVD index, since Trivy never reads component.cpe. Runs here, after
+# every CPE enrichment step, and writes the sidecar scan-security.sh merges.
+# scan-security.sh is told whether it ran, so it can name the components no
+# check reached.
+BOMLENS_CPE_INDEX_MATCHED=false
+case "$SCAN_MODE" in FIRMWARE|ROOTFS|BINARY)
+    if [ "${GENERATE_SECURITY:-false}" != "true" ]; then
+        er_record match-cpe disabled
+    else
+        _mc_started="$(er_now)"; er_event step.start match-cpe
+        _mc_rc=0
+        _mc_counts="$(bash "$LIBDIR/match-cpe-index.sh" "$OUTPUT_FILE" "$OUT_PREFIX")" || _mc_rc=$?
+        case "$_mc_rc" in
+            0) BOMLENS_CPE_INDEX_MATCHED=true
+               er_record match-cpe ok "" "" "$_mc_started" "" "$_mc_counts" ;;
+            3) er_record match-cpe skipped not_installed "no CPE index in this image" "$_mc_started" ;;
+            4) er_record match-cpe disabled "" "CVE_BIN_TOOL_MODE=components-only" "$_mc_started" ;;
+            *) echo "[WARN] post-process step 'match-cpe' failed; CVEs of components with no package purl are not reported." >&2
+               mark_pipeline_warning "$OUTPUT_FILE" match-cpe
+               er_record match-cpe failed failed "" "$_mc_started" ;;
+        esac
+    fi ;;
+esac
+export BOMLENS_CPE_INDEX_MATCHED
 if [ "${GENERATE_SECURITY:-false}" = "true" ] && [ "$_trivy_db_ready" = true ]; then
     run_optional_step scan-security bash "$LIBDIR/scan-security.sh" "$OUTPUT_FILE" "$OUT_PREFIX" "$PROJECT_NAME"
     _trivy_db_max="${BOMLENS_TRIVY_DB_MAX_AGE_DAYS:-7}"

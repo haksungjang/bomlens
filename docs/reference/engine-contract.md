@@ -101,6 +101,7 @@ Each step also has `stage` (1 for the SBOM a language image generated before thi
 | `source-file-tree` | record the scanned tree's file list |
 | `source-snapshot` | keep the scanned files' content for the file viewer |
 | `generate-notice` | write the open source notice |
+| `match-cpe` | a firmware, root filesystem or binary scan with `--security`: match the CPEs of components that have no package PURL against the NVD CPE index bundled in the image; `counts` gives `offered`, `components` and `cves`, `skipped` (`not_installed`) in an image without the index, `disabled` without `--security` or with `CVE_BIN_TOOL_MODE=components-only` |
 | `scan-security` | match vulnerabilities with Trivy |
 | `generate-risk-report` | write the risk report |
 | `model-security` | check an AI model file for unsafe content |

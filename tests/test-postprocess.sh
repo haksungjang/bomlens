@@ -4161,6 +4161,228 @@ PATH="$FAKEBIN:$PATH" SECURITY_ENRICH=false \
 [ "$(jq '[.Results[].Vulnerabilities[]?] | length' "$WORK/secok_security.json")" = "1" ] \
     && pass "findings intact on a successful run" || fail "findings lost on a successful run"
 
+echo "== cpe-index: components with no package purl are matched against the CPE index =="
+# Trivy never reads component.cpe, so a binary syft's classifier named
+# (pkg:generic), an OS component such as busybox, or a library a signature
+# checker found reaches its CVEs only through match-cpe-index.sh. A tiny index
+# with the same schema build-cpe-index.py writes stands in for the bundled one.
+CPEDIR="$WORK/cpe-index"
+mkdir -p "$CPEDIR"
+CPEIDX="$CPEDIR/cpe_match.sqlite"
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "  SKIP: python3 not available"
+else
+python3 - "$CPEIDX" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.execute("""CREATE TABLE cpe_match (vendor TEXT NOT NULL, product TEXT NOT NULL,
+  exact_version TEXT, version_start TEXT, vs_incl INTEGER, version_end TEXT,
+  ve_incl INTEGER, cve_id TEXT NOT NULL, severity TEXT, cvss_version TEXT, cvss_score REAL)""")
+rows = [
+  ("openbsd", "openssh", None, None, None, "7.0", 0, "CVE-2099-0001", "CRITICAL", "3", 9.8),
+  ("busybox", "busybox", "1.00", None, None, None, None, "CVE-2099-0002", "HIGH", "3", 7.5),
+  ("openssl", "openssl", None, "1.0.2", 1, "1.0.2i", 0, "CVE-2099-0003", "HIGH", "3", 7.5),
+  ("python", "flask", None, None, None, "9.0", 0, "CVE-2099-0004", "LOW", "3", 2.0),
+]
+c.executemany("INSERT INTO cpe_match VALUES (?,?,?,?,?,?,?,?,?,?,?)", rows)
+c.commit()
+PY
+    # firmware order: the openssh and busybox CPEs come only from cpe-name-map.json.
+    cat > "$WORK/fwo.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6","metadata":{"component":{"type":"firmware","name":"fw.bin","version":"1"}},
+ "components":[
+  {"type":"library","name":"openssh","version":"6.2p2","bom-ref":"4-openssh"},
+  {"type":"operating-system","name":"busybox","version":"1.00","bom-ref":"os:busybox@1.00"}]}
+JSON
+    FW_CPE_INDEX="$CPEIDX" bash "$LIB/match-cpe-index.sh" "$WORK/fwo.json" "$WORK/fwo-before" >/dev/null 2>&1
+    [ ! -f "$WORK/fwo-before_security_cvebintool.json" ] \
+        && pass "with no CPE yet, nothing is matched" \
+        || fail "a component with no CPE was matched"
+    bash "$LIB/enrich-cpe.sh" "$WORK/fwo.json" >/dev/null 2>&1
+    fwo_counts="$(FW_CPE_INDEX="$CPEIDX" bash "$LIB/match-cpe-index.sh" "$WORK/fwo.json" "$WORK/fwo" 2>/dev/null)"
+    fwo_ids="$(jq -r '[.Results[].Vulnerabilities[] | "\(.PkgName)@\(.InstalledVersion)=\(.VulnerabilityID)"] | sort | join(" ")' \
+        "$WORK/fwo_security_cvebintool.json" 2>/dev/null)"
+    [ "$fwo_ids" = "busybox@1.00=CVE-2099-0002 openssh@6.2p2=CVE-2099-0001" ] \
+        && pass "CPEs added from cpe-name-map.json are matched (openssh, busybox)" \
+        || fail "after enrichment the match found: '${fwo_ids:-nothing}'"
+    [ "$(printf '%s' "$fwo_counts" | jq -c .)" = '{"offered":2,"components":2,"cves":2}' ] \
+        && pass "the step reports offered/components/cves counts" \
+        || fail "counts are '$fwo_counts'"
+
+    # The pipeline runs the match after every CPE enrichment step, and the
+    # firmware script no longer matches (or writes the sidecar) on its own.
+    _ep="$ROOT_DIR/docker/entrypoint.sh"
+    _l_cpe="$(grep -n 'run_optional_step enrich-cpe ' "$_ep" | head -1 | cut -d: -f1)"
+    _l_icpe="$(grep -n 'run_optional_step enrich-interpreter-cpe ' "$_ep" | head -1 | cut -d: -f1)"
+    _l_match="$(grep -n 'bash "$LIBDIR/match-cpe-index.sh"' "$_ep" | head -1 | cut -d: -f1)"
+    _l_sec="$(grep -n 'run_optional_step scan-security ' "$_ep" | head -1 | cut -d: -f1)"
+    if [ -n "$_l_cpe" ] && [ -n "$_l_icpe" ] && [ -n "$_l_match" ] && [ -n "$_l_sec" ] \
+       && [ "$_l_cpe" -lt "$_l_match" ] && [ "$_l_icpe" -lt "$_l_match" ] && [ "$_l_match" -lt "$_l_sec" ]; then
+        pass "entrypoint.sh matches the CPE index after CPE enrichment and before the security scan"
+    else
+        fail "step order in entrypoint.sh" "enrich-cpe=$_l_cpe enrich-interpreter-cpe=$_l_icpe match=$_l_match scan-security=$_l_sec"
+    fi
+    if grep -q 'firmware-cpe-match.py\|_security_cvebintool' "$ROOT_DIR/docker/lib/scan-firmware.sh"; then
+        fail "scan-firmware.sh still matches CVEs itself" "the same CVE would be reported from two passes"
+    else
+        pass "scan-firmware.sh leaves CVE matching to the pipeline step (no second pass)"
+    fi
+    grep -q 'FIRMWARE|ROOTFS|BINARY)' "$_ep" \
+        && pass "the step runs for firmware, rootfs and binary scans" \
+        || fail "the CPE index step is not scoped to FIRMWARE|ROOTFS|BINARY"
+
+    # rootfs / binary: syft's pkg:generic binary and a purl-less OS component are
+    # offered; an ecosystem purl stays with Trivy even when it carries a CPE.
+    cat > "$WORK/rfs.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6","metadata":{"component":{"type":"application","name":"rootfs","version":"1"}},
+ "components":[
+  {"type":"application","name":"openssl","version":"1.0.2h","purl":"pkg:generic/openssl@1.0.2h","cpe":"cpe:2.3:a:openssl:openssl:1.0.2h:*:*:*:*:*:*:*"},
+  {"type":"application","name":"openssl","version":"1.0.2h","purl":"pkg:generic/openssl@1.0.2h?package-id=2","cpe":"cpe:2.3:a:openssl:openssl:1.0.2h:*:*:*:*:*:*:*"},
+  {"type":"operating-system","name":"busybox","version":"1.00","cpe":"cpe:2.3:a:busybox:busybox:1.00:*:*:*:*:*:*:*"},
+  {"type":"library","name":"flask","version":"2.0","purl":"pkg:pypi/flask@2.0","cpe":"cpe:2.3:a:python:flask:2.0:*:*:*:*:*:*:*"},
+  {"type":"library","name":"libmystery","purl":"pkg:generic/libmystery"}]}
+JSON
+    FW_CPE_INDEX="$CPEIDX" bash "$LIB/match-cpe-index.sh" "$WORK/rfs.json" "$WORK/rfs" >/dev/null 2>&1
+    rfs_ids="$(jq -r '[.Results[].Vulnerabilities[] | "\(.PkgName)=\(.VulnerabilityID)"] | join(" ")' \
+        "$WORK/rfs_security_cvebintool.json" 2>/dev/null)"
+    [ "$rfs_ids" = "busybox=CVE-2099-0002 openssl=CVE-2099-0003" ] \
+        && pass "a pkg:generic binary and a purl-less OS component are matched; each CVE once" \
+        || fail "rootfs match found: '${rfs_ids:-nothing}'" "expected busybox and openssl once each, not flask"
+
+    # Exit status the pipeline records: 3 = no index (skipped), 4 = turned off.
+    _rc=0; FW_CPE_INDEX="$CPEDIR/absent.sqlite" bash "$LIB/match-cpe-index.sh" "$WORK/rfs.json" "$WORK/rfs-none" >/dev/null 2>&1 || _rc=$?
+    [ "$_rc" = 3 ] && [ ! -f "$WORK/rfs-none_security_cvebintool.json" ] \
+        && pass "an image without the index exits 3 (recorded as skipped) and writes nothing" \
+        || fail "missing index: exit $_rc"
+    _rc=0; CVE_BIN_TOOL_MODE=components-only FW_CPE_INDEX="$CPEIDX" bash "$LIB/match-cpe-index.sh" "$WORK/rfs.json" "$WORK/rfs-off" >/dev/null 2>&1 || _rc=$?
+    [ "$_rc" = 4 ] && pass "CVE_BIN_TOOL_MODE=components-only exits 4 (recorded as disabled)" \
+        || fail "components-only: exit $_rc"
+
+    echo "== cpe-index: the merged report counts a CVE once and names what was not checked =="
+    cat > "$FAKEBIN/trivy" <<'SH'
+#!/bin/sh
+out=""
+while [ $# -gt 0 ]; do
+    [ "$1" = "--output" ] && { out="$2"; shift; }
+    shift
+done
+echo '{"SchemaVersion":2,"Results":[]}' > "$out"
+exit 0
+SH
+    chmod +x "$FAKEBIN/trivy"
+    # Before the step existed (no index match): no finding, and the report must
+    # not read as a clean result.
+    PATH="$FAKEBIN:$PATH" SECURITY_ENRICH=false DEEP_CVE=false \
+        bash "$LIB/scan-security.sh" "$WORK/rfs.json" "$WORK/unm" proj >/dev/null 2>&1
+    if grep -q "No known vulnerabilities found" "$WORK/unm_security.md" "$WORK/unm_security.html"; then
+        fail "the report says 'No known vulnerabilities found' with unchecked components"
+    else
+        pass "with unchecked components the report does not claim a clean result"
+    fi
+    unm_list="$(jq -r '[.UncheckedComponents.Components[] | "\(.Name):\(.Reason)"] | join(" ")' "$WORK/unm_security.json" 2>/dev/null)"
+    [ "$unm_list" = "busybox:no-identifier libmystery:no-version openssl:no-identifier" ] \
+        && [ "$(jq '.UncheckedComponents.Count' "$WORK/unm_security.json")" = 3 ] \
+        && pass "_security.json lists the unchecked components with a reason (flask is Trivy's)" \
+        || fail "UncheckedComponents is '${unm_list:-absent}'"
+    grep -q "3 component(s) could not be checked" "$WORK/unm_security.md" \
+        && grep -q "| busybox | 1.00 |" "$WORK/unm_security.md" \
+        && grep -q "3 component(s) could not be checked" "$WORK/unm_security.html" \
+        && pass "the markdown and HTML reports say how many and list them" \
+        || fail "the report does not name the unchecked components"
+
+    # With the match done, only what it could not reach is left, and the CVE
+    # Trivy and the index would both report is counted once.
+    cat > "$FAKEBIN/trivy" <<'SH'
+#!/bin/sh
+out=""
+while [ $# -gt 0 ]; do
+    [ "$1" = "--output" ] && { out="$2"; shift; }
+    shift
+done
+echo '{"SchemaVersion":2,"Results":[{"Target":"sbom","Class":"lang-pkgs","Vulnerabilities":[{"VulnerabilityID":"CVE-2099-0002","PkgName":"busybox","InstalledVersion":"1.00","Severity":"HIGH"}]}]}' > "$out"
+exit 0
+SH
+    chmod +x "$FAKEBIN/trivy"
+    cp "$WORK/rfs_security_cvebintool.json" "$WORK/mat_security_cvebintool.json"
+    BOMLENS_CPE_INDEX_MATCHED=true PATH="$FAKEBIN:$PATH" SECURITY_ENRICH=false DEEP_CVE=false \
+        bash "$LIB/scan-security.sh" "$WORK/rfs.json" "$WORK/mat" proj >/dev/null 2>&1
+    mat_ids="$(jq -r '[.Results[].Vulnerabilities[]?.VulnerabilityID] | sort | join(" ")' "$WORK/mat_security.json")"
+    [ "$mat_ids" = "CVE-2099-0002 CVE-2099-0003" ] \
+        && pass "a CVE both engines report is kept once in _security.json" \
+        || fail "merged CVEs are '$mat_ids'"
+    [ "$(grep -c 'CVE-2099-0002' "$WORK/mat_security.md")" = 1 ] \
+        && pass "the report lists it once" || fail "CVE-2099-0002 appears $(grep -c 'CVE-2099-0002' "$WORK/mat_security.md") times"
+    mat_list="$(jq -r '[.UncheckedComponents.Components[] | .Name] | join(" ")' "$WORK/mat_security.json")"
+    [ "$mat_list" = "libmystery" ] \
+        && pass "after the index match only the component with no version is unchecked" \
+        || fail "UncheckedComponents after the match: '$mat_list'"
+
+    # A clean scan of fully identified components keeps the plain wording.
+    cat > "$WORK/clean.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6","components":[
+  {"type":"library","name":"flask","version":"2.0","purl":"pkg:pypi/flask@2.0"},
+  {"type":"operating-system","name":"debian","version":"12"}]}
+JSON
+    cat > "$FAKEBIN/trivy" <<'SH'
+#!/bin/sh
+out=""
+while [ $# -gt 0 ]; do
+    [ "$1" = "--output" ] && { out="$2"; shift; }
+    shift
+done
+echo '{"SchemaVersion":2,"Results":[]}' > "$out"
+exit 0
+SH
+    PATH="$FAKEBIN:$PATH" SECURITY_ENRICH=false DEEP_CVE=false \
+        bash "$LIB/scan-security.sh" "$WORK/clean.json" "$WORK/clean" proj >/dev/null 2>&1
+    grep -q "No known vulnerabilities found" "$WORK/clean_security.md" \
+        && [ "$(jq '.UncheckedComponents.Count' "$WORK/clean_security.json")" = 0 ] \
+        && pass "with every component checked the clean wording stays (a distro OS component is context, not a gap)" \
+        || fail "a fully checked SBOM lost the clean wording"
+
+    # An old kernel carries thousands of advisories; the list of what was
+    # found must not go through one command-line argument (128 KiB on Linux).
+    cat > "$FAKEBIN/trivy" <<'SH'
+#!/bin/sh
+out=""
+while [ $# -gt 0 ]; do
+    [ "$1" = "--output" ] && { out="$2"; shift; }
+    shift
+done
+python3 -c '
+import json, sys
+v = [{"VulnerabilityID": "CVE-2098-%05d" % i, "PkgName": "linux_kernel", "InstalledVersion": "2.6.19",
+      "Severity": "MEDIUM", "Title": "x" * 40} for i in range(6000)]
+json.dump({"SchemaVersion": 2, "Results": [{"Target": "sbom", "Vulnerabilities": v}]}, open(sys.argv[1], "w"))
+' "$out"
+exit 0
+SH
+    chmod +x "$FAKEBIN/trivy"
+    PATH="$FAKEBIN:$PATH" SECURITY_ENRICH=false DEEP_CVE=false \
+        bash "$LIB/scan-security.sh" "$WORK/rfs.json" "$WORK/big" proj >/dev/null 2>&1
+    [ "$(jq '.UncheckedComponents.Count' "$WORK/big_security.json" 2>/dev/null)" = 3 ] \
+        && pass "the unchecked list is still written beside 6,000 kernel advisories" \
+        || fail "with many findings UncheckedComponents is $(jq -c '.UncheckedComponents.Count' "$WORK/big_security.json" 2>/dev/null)"
+
+    # The risk report summary says the same, in both languages.
+    mkdir -p "$WORK/unmrisk"
+    cp "$WORK/unm_security.json" "$WORK/unmrisk/proj_1.0_security.json"
+    ( cd "$WORK/unmrisk" && bash "$LIB/generate-risk-report.sh" proj_1.0 proj ROOTFS >/dev/null 2>&1 )
+    if grep -q "3 component(s) could not be checked" "$WORK/unmrisk/proj_1.0_risk-report.md" \
+       && grep -q '`openssl` 1.0.2h' "$WORK/unmrisk/proj_1.0_risk-report.md" \
+       && grep -q "could not be checked" "$WORK/unmrisk/proj_1.0_risk-report.html" \
+       && ! grep -q "No known vulnerabilities" "$WORK/unmrisk/proj_1.0_risk-report.md"; then
+        pass "the risk report names the unchecked components instead of 'no known vulnerabilities'"
+    else
+        fail "the risk report does not name the unchecked components" "$(sed -n '/Vulnerability/,/License/p' "$WORK/unmrisk/proj_1.0_risk-report.md" | head -20)"
+    fi
+    ( cd "$WORK/unmrisk" && REPORT_LANG=ko bash "$LIB/generate-risk-report.sh" proj_1.0 proj ROOTFS >/dev/null 2>&1 )
+    grep -q "취약점을 확인하지 못한 컴포넌트 3개" "$WORK/unmrisk/proj_1.0_risk-report.md" \
+        && grep -q "취약점을 확인하지 못한 컴포넌트 3개" "$WORK/unmrisk/proj_1.0_risk-report.html" \
+        && pass "the Korean risk report says the same" \
+        || fail "the Korean risk report does not name the unchecked components"
+fi
+
 echo "== sec-firmware-type: a root type Trivy cannot decode is retried, not failed =="
 # Regression for the SCA-benchmark report: a firmware scan's root component
 # (metadata.component.type = "firmware", CycloneDX 1.4+) made the bundled Trivy 0.70
