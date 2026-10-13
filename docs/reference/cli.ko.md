@@ -83,8 +83,8 @@ BomLens의 전체 옵션과 분석 모드, CI/CD 통합 방법, 트러블슈팅�
 | `CDXGEN_IMAGE_PREFIX` | `ghcr.io/cdxgen/` | 소스 스캔의 cdxgen 이미지(언어 이미지와 올인원 이미지)를 받아 오는 곳으로, 이미지 이름 앞부분 전체다. ghcr.io에 접속할 수 없는 네트워크에서는 같은 이미지를 둔 레지스트리 미러로 지정한다(예: `registry.example/mirror/cdxgen/`). 이미지 이름과 태그는 그대로다. 웹 UI의 소스 스캔(`--ui`, `sbom-ui.bat`, 데스크톱 앱)에도 전달하고, Android SDK 이미지를 빌드할 때는 `--build-arg`로 넘긴다(이 빌드는 기반 이미지를 다이제스트로 고정하므로, 미러는 pull-through 캐시이거나 모든 플랫폼을 복사한 것이어야 한다) |
 | `SBOM_PULL` | `missing` | 스캐너 이미지 다운로드 정책. `scan-sbom.sh`와 Windows 런처 모두에 적용된다. `missing`(기본)은 이미지가 없을 때만 받고, 이미 있으면 백그라운드에서 조용히 최신 여부를 확인한다(시간 상한을 두고 최선을 다하는 방식이라, 확인이 멎거나 오프라인이면 그냥 포기하고 로컬 이미지로 진행한다). `always`는 매번 멈춰서 다시 받고, 실패하면 실행 자체를 중단한다. `never`는 네트워크를 전혀 쓰지 않고, 이미지가 없으면 실행을 중단한다 |
 | `SBOM_IMAGE_TAR` | — | `docker save`로 만든 이미지 tar 경로. Windows 런처가 pull 대신 이 파일을 불러온다. 스크립트 옆에 `bomlens-image.tar`가 있으면 자동으로 사용한다. `SBOM_PULL=never`와 함께 쓰면 완전 오프라인 설치가 된다 |
-| `CVE_BIN_TOOL_MODE` | `auto` | 펌웨어 CVE 매칭 방식. `auto`는 번들 CVE 데이터베이스가 있으면 그걸 쓰고, 없으면 네트워크에 닿을 때 NVD에서 내려받음. `offline`은 번들 데이터베이스로만 매칭. `online`은 항상 네트워크에서 갱신. `components-only`는 CVE 매칭을 건너뛰고 구성요소만 담은 SBOM을 생성 |
-| `CVE_BIN_TOOL_HOME` | `/opt/cve-bin-tool-home` | 번들 cve-bin-tool CVE 데이터베이스 위치. cve-bin-tool은 캐시를 `HOME` 기준으로 잡으므로 `$CVE_BIN_TOOL_HOME/.cache/cve-bin-tool/cve.db`를 읽음 |
+| `CVE_BIN_TOOL_MODE` | `auto` | 펌웨어, 루트 파일시스템, 바이너리 스캔에서 `components-only`로 두면 이미지에 들어 있는 NVD CPE 인덱스와의 CPE 대조를 끔. 펌웨어 바이너리 식별은 그대로 하며, 다른 값은 대조를 켠 채로 둠. 스캐너 컨테이너가 읽는 값(`docker run -e`)으로, CLI는 넘기지 않음 |
+| `CVE_BIN_TOOL_HOME` | `/opt/cve-bin-tool-home` | 이미지가 NVD CPE 인덱스(`cpe_match.sqlite`)와 그 데이터 고지를 두는 위치. 펌웨어 이미지는 cve-bin-tool이 시작하는 데 필요한 `cve.db`도 여기에 두지만, 이 파일에는 CVE 데이터가 없음 |
 | `CVE_BIN_TOOL_DISABLE_SOURCES` | `GAD,OSV` | 펌웨어 스캔에서 비활성화할 cve-bin-tool 데이터 출처. GAD(GitLab Advisory)와 OSV는 식별 과정이 네트워크로 나가지 않도록 기본 비활성화 |
 | `SCANOSS_API_URL` | OSSKB 무료 API | `--identify-vendored`의 엔드포인트. 에어갭·대량 사용 시 SCANOSS 상용·자체 호스팅 엔드포인트로 지정 |
 | `SCANOSS_API_KEY` | — | `SCANOSS_API_URL`이 요구하는 경우의 자격 증명 |

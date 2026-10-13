@@ -12,8 +12,8 @@ description: 네트워크 장비 펌웨어 바이너리(.bin, squashfs 등)를 �
 
 1. 언팩(unblob, 폴백으로 `unsquashfs`·`7z`·`binwalk`)으로 펌웨어를 풀어 rootfs를 추출합니다.
 2. `syft`로 패키지 매니저(opkg, dpkg, apk, rpm)가 설치한 구성요소를 식별합니다. 하나의 이미지가 파일시스템을 여럿 담을 수 있고, rootfs 안이 아니라 옆에 놓인 트리도 함께 식별합니다. 세 가지를 알아보며, 판정 근거는 디렉터리 이름이 아니라 그 안에 무엇이 설치돼 있는지를 적은 기록입니다. 첫째는 컨테이너 이미지 저장소로 Docker가 남기는 이미지 색인으로 알아봅니다(스위치 운영체제에서 흔한 구조로, 실제로 동작하는 것 대부분이 컨테이너 안에 있습니다). 둘째는 자체 패키지 데이터베이스를 가진 또 하나의 파일시스템입니다. 셋째는 Python `site-packages`처럼 인터프리터가 설치한 라이브러리 묶음입니다. rootfs만 읽으려면 `FW_EXTRA_ROOTS=false`로 둡니다. 컨테이너 저장소에서 나온 구성요소에는 어느 컨테이너 이미지에서 나왔는지가 `bomlens:container:image` 속성으로 남고, 이미지 자체도 `container` 구성요소로 들어갑니다. 컨테이너 안에서 `dpkg`로 설치된 패키지는 그 컨테이너가 어떤 배포판을 쓰는지를 자기 계층의 `os-release`에서 읽어 식별하며, 그래야 취약점 단계에서 대조할 대상이 생깁니다. 이렇게 식별한 것에는 `bomlens:purlSource` 속성이 붙습니다. SPDX로 내보내도 이 내용이 남습니다. 이미지와 배포판은 SPDX 패키지가 되고, 소속은 `CONTAINS` 관계로 들어갑니다.
-3. `cve-bin-tool`로 stripped 정적 바이너리(busybox, openssl, dropbear 등)의 버전과 취약점을 찾습니다.
-4. 두 결과를 하나의 SBOM으로 병합한 뒤, 일반 스캔과 동일한 후처리(라이선스, CVE, 서명)를 거칩니다.
+3. `cve-bin-tool`의 시그니처 검사기로 stripped 정적 바이너리(busybox, openssl, dropbear 등)를 식별하고 CPE를 붙입니다.
+4. 두 결과를 하나의 SBOM으로 병합한 뒤, 일반 스캔과 동일한 후처리(라이선스, CVE, 서명)를 거칩니다. 패키지 PURL이 없는 컴포넌트의 CVE는 이미지에 들어 있는 NVD CPE 인덱스에서 찾습니다([CVE 대조 방식](#cve-대조-방식) 참고).
 
 ## 펌웨어 이미지 준비
 
@@ -50,7 +50,7 @@ docker pull ghcr.io/sktelecom/bomlens-firmware:latest
 SBOM_FIRMWARE_IMAGE=<사내 미러>:<태그> ./scripts/scan-sbom.sh --ui
 ```
 
-프로젝트 이름과 버전을 입력하고, 펌웨어 업로드 타일을 골라 파일을 올린 뒤 스캔을 실행합니다. 온라인 첫 실행에서 CVE 데이터베이스를 받는 동안에는 UI에 다운로드 진행률 바가 표시됩니다.
+프로젝트 이름과 버전을 입력하고, 펌웨어 업로드 타일을 골라 파일을 올린 뒤 스캔을 실행합니다.
 
 ### CLI에서
 
@@ -92,21 +92,15 @@ syft의 패키지 식별 단계가 실패해도 스캔은 멈추지 않습니다
 
 파일은 `name,version` 두 열로 된 CSV입니다. `#`으로 시작하는 줄과 버전을 비워 둔 행은 건너뜁니다. 양식 파일은 그 자리에서 채워도 됩니다. 넘긴 파일이 그 양식이면 스캔은 적은 내용을 그대로 두고, 아직 빠진 항목만 알려 줍니다. 채운 버전에는 `bomlens:versionSource = supplier-declared`가 붙고, 위의 upstream purl도 붙습니다. 스캔이 배포 파일에서 버전을 읽었다면 그 버전을 유지하고 두 값을 경고로 보여 줍니다. 소스 트리에는 한 프로젝트의 여러 릴리스가 함께 있을 수 있고, 실제로 들어간 것은 바이너리가 보여 주기 때문입니다. 스캔이 찾지 못한 이름은 `bomlens:identifiedBy = supplier-declared` 컴포넌트로 추가합니다. 256 KiB를 넘는 파일, 두 열이 아닌 행, 영문자와 숫자와 `. _ + ~ -` 밖의 문자가 든 이름이나 버전, 한 이름에 두 버전을 적은 파일은 줄 번호와 함께 거부하며, 이때 SBOM은 바꾸지 않습니다.
 
-## CVE 매칭, 온라인과 오프라인
+## CVE 대조 방식
 
-패키지 PURL이 없는 컴포넌트는 CPE를 이미지에 들어 있는 NVD CPE 인덱스와 대조합니다. 이 대조는 BomLens가 관리하는 이름별 CPE 목록(`cpe-name-map.json`)으로 CPE를 붙인 뒤에 실행되므로, 시그니처 검사기가 CPE를 붙인 컴포넌트뿐 아니라 이름과 버전으로 식별한 컴포넌트(예: OpenSSH, BusyBox)도 대조합니다. 버전이나 CPE가 없는 컴포넌트는 보안 보고서에 확인하지 못한 컴포넌트로 표시됩니다.
+Trivy는 컴포넌트를 패키지 PURL로 대조하며, 다른 스캔과 마찬가지로 스캔할 때 데이터베이스를 내려받습니다. 패키지 PURL이 없는 컴포넌트(PURL이 없거나 `pkg:generic`, `pkg:opkg`, 또는 `pkg:github`처럼 소스 저장소를 가리키는 경우)는 CPE를 이미지에 들어 있는 NVD CPE 인덱스(`cpe_match.sqlite`)와 대조하고, 찾은 CVE를 같은 보안 보고서에 합칩니다. 이 대조는 펌웨어, 루트 파일시스템, 바이너리 스캔에서 `--security`를 켰을 때 CPE를 붙이는 단계가 모두 끝난 뒤 한 번 실행됩니다. 그래서 시그니처 검사기가 CPE를 붙인 컴포넌트뿐 아니라, BomLens가 관리하는 이름별 CPE 목록(`cpe-name-map.json`)으로 이름과 버전에서 CPE를 얻은 컴포넌트(예: OpenSSH, BusyBox)도 대조합니다. 결과 매니페스트에는 이 단계가 `match-cpe`로 남고 `offered`, `components`, `cves` 개수가 함께 기록됩니다.
 
-정적 바이너리의 CVE 매칭은 cve-bin-tool과 그 전용 취약점 데이터베이스로 이뤄집니다. 펌웨어 이미지는 하이브리드 방식이라, 같은 이미지로 에어갭 환경과 온라인 환경에서 모두 동작합니다.
+인덱스는 이미지를 빌드할 때 NVD 데이터에서 추려 만들므로, 대조에는 네트워크도 NVD API 키도 필요 없고 데이터는 이미지를 빌드한 시점 기준입니다. 최신 데이터가 필요하면 새 이미지를 받습니다. cve-bin-tool은 바이너리 식별에만 쓰며, 취약점 데이터베이스를 내려받거나 읽지 않습니다. `CVE_BIN_TOOL_MODE=components-only`로 두면 식별은 그대로 하고 CPE 대조만 끕니다. `--build-arg SBOM_CPE_INDEX=false`로 빌드한 이미지에는 인덱스가 없으며, 이때 이 단계는 `skipped`(`not_installed`)로 기록됩니다.
 
-- 이미지를 빌드할 때 데이터베이스를 번들하면, 펌웨어 스캔이 스캔 시점에 오프라인으로 CVE를 매칭합니다. 빠르고 에어갭에 적합한 경로입니다.
-- 번들 데이터베이스가 없지만 네트워크에 닿을 수 있으면, cve-bin-tool이 실행 중에 NVD에서 데이터베이스를 받습니다. 첫 실행은 느리며, 받는 동안 웹 UI에 다운로드 진행률 바가 표시됩니다.
-- 번들 데이터베이스도 네트워크도 없으면, CVE 단계를 조용히 빼는 대신 사유를 로그로 남기고 구성요소 식별만 하는(CVE 없음) 동작으로 낮춥니다.
+버전이 없거나, 패키지 PURL이 없고 인덱스에 대조한 CPE도 없는 컴포넌트는 보안 보고서의 "Components that could not be checked" 목록(`_security.json`의 `UncheckedComponents`)에 나옵니다. 따라서 취약점 표에 항목이 적어도, 그 결과는 대조할 수 있었던 컴포넌트에 대한 것입니다.
 
-`CVE_BIN_TOOL_MODE`로 동작을 고릅니다. `auto`(기본값으로, 번들 데이터베이스를 우선하고 없으면 온라인일 때 내려받음), `offline`, `online`, `components-only`입니다.
-
-데이터베이스는 NVD뿐 아니라 여러 출처(NVD, PURL2CPE 등)를 합친 집계 데이터입니다. cve-bin-tool은 "This product uses the NVD API but is not endorsed or certified by the NVD." 고지를 출력합니다.
-
-OSV(Open Source Vulnerabilities) 권고는 재배포 이미지에 share-alike 데이터를 포함하지 않으려고 번들하지 않습니다. 대신 웹 UI에 "Include OSV advisories" opt-in 토글이 있어, 켜면 그 스캔에 한해 osv.dev에서 OSV를 받아옵니다. 데이터가 이미지에 동봉되는 게 아니라 사용자 머신에서 직접 내려받는 방식입니다.
+스캔은 "This product uses NVD data but is not endorsed or certified by the NVD." 고지를 출력하고, 데이터 출처 고지는 이미지의 `/opt/cve-bin-tool-home/CVE-DATA-NOTICE.txt`에 들어 있습니다. OSV(Open Source Vulnerabilities) 권고는 재배포 이미지에 share-alike 데이터를 넣지 않으려고 번들하지 않습니다.
 
 ## 라이선스 주의
 
