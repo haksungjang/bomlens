@@ -2229,13 +2229,45 @@ if [ "$MODE" = "SOURCE" ]; then
         echo "        Use the image of the same BomLens version as this CLI (docker pull $PP_IMAGE, or set SBOM_SCANNER_IMAGE to it). Full cdxgen log: $STAGE1_LOG"
         exit 1
     fi
+    # What stage 1 ran with, for the input fingerprint stage 2 records in the
+    # result manifest (docker/lib/input-fingerprint.sh): the digest the stage 1
+    # image was pulled at (its RepoDigest under the name it ran by; none for a
+    # locally built image), the sha256 of the two files this CLI mounted into
+    # it and of this script, which sets stage 1's arguments, and the settings
+    # build-prep.sh read, the build-prep options by name as for stage 1.
+    _fp_sha256() {
+        if command -v sha256sum >/dev/null 2>&1; then sha256sum < "$1" | cut -d' ' -f1
+        else shasum -a 256 < "$1" | cut -d' ' -f1; fi
+    }
+    STAGE1_DIGEST=""
+    while IFS= read -r _rd; do
+        case "$_rd" in "${CDX_IMG%:*}@sha256:"*) STAGE1_DIGEST="${_rd#*@}" ;; esac
+    done <<EOF
+$("${DOCKER_ENV[@]}" docker image inspect -f '{{range .RepoDigests}}{{println .}}{{end}}' "$CDX_IMG" 2>/dev/null)
+EOF
+    case "$STAGE1_DIGEST" in sha256:*[!0-9a-f]*|sha256:) STAGE1_DIGEST="" ;; esac
+    STAGE1_FINGERPRINT_ENV=" -e BOMLENS_STAGE1_DIGEST=$STAGE1_DIGEST -e BOMLENS_STAGE1_PREP_SHA256=$(_fp_sha256 "$BUILD_PREP" 2>/dev/null)"
+    STAGE1_FINGERPRINT_ENV="$STAGE1_FINGERPRINT_ENV -e BOMLENS_STAGE1_CONDA_SHA256=$(_fp_sha256 "$IDENTIFY_CONDA" 2>/dev/null) -e BOMLENS_STAGE1_CLI_SHA256=$(_fp_sha256 "${BASH_SOURCE[0]}" 2>/dev/null)"
+    STAGE1_FINGERPRINT_ENV="$STAGE1_FINGERPRINT_ENV -e BOMLENS_STAGE1_SPEC_VERSION=$CDX_SPEC_VERSION -e FETCH_LICENSE=\"$FETCH_LICENSE\" -e HOST_GOTOOLCHAIN=\"$HOST_GOTOOLCHAIN\""
+    for _n in $BUILD_PREP_ENV_NAMES; do
+        [ "$_n" = BOMLENS_INCLUDE_NON_SHIPPED ] || STAGE1_FINGERPRINT_ENV="$STAGE1_FINGERPRINT_ENV -e $_n"
+    done
+    # This run's output folder, when it is inside the scanned tree (the
+    # default), is left out of the tree the fingerprint hashes: it holds this
+    # run's own results. Stage 1 ran with an earlier run's files there, so
+    # the value is then not reusable. A flat output (SBOM_OUTPUT_FLAT=1) into
+    # the scanned folder itself is passed as ".".
+    case "$OUTPUT_HOST_DIR" in
+        "$SCAN_INPUT_DIR") STAGE1_FINGERPRINT_ENV="$STAGE1_FINGERPRINT_ENV -e BOMLENS_FINGERPRINT_EXCLUDE=." ;;
+        "$SCAN_INPUT_DIR"/*) STAGE1_FINGERPRINT_ENV="$STAGE1_FINGERPRINT_ENV -e BOMLENS_FINGERPRINT_EXCLUDE=\"${OUTPUT_HOST_DIR#"$SCAN_INPUT_DIR"/}\"" ;;
+    esac
     export_scan_secrets
     # shellcheck disable=SC2046
     eval "$DOCKER_MSYS"docker run --rm \
         -v "\"$(hostpath "$SCAN_INPUT_DIR")\"":/src -v "\"$(hostpath "$OUTPUT_HOST_DIR")\"":/host-output \
         -w /host-output \
         --add-host=host.docker.internal:host-gateway \
-        -e MODE=POSTPROCESS -e BOMLENS_RUN_INPUT="$OUTPUT_FILE" -e NESTED_ROOTFS_HINT="\"$NESTED_ROOTFS_HINT\"" -e BOMLENS_DEEP_LICENSE_FALLBACK="\"${DEEP_LICENSE_FALLBACK_FROM:-}\"" -e BOMLENS_INCLUDE_NON_SHIPPED${STAGE1_FALLBACK_ENV} $(pp_env)$(cosign_run)$(vex_run)$(declare_run)$(gate_run) \
+        -e MODE=POSTPROCESS -e BOMLENS_RUN_INPUT="$OUTPUT_FILE" -e NESTED_ROOTFS_HINT="\"$NESTED_ROOTFS_HINT\"" -e BOMLENS_DEEP_LICENSE_FALLBACK="\"${DEEP_LICENSE_FALLBACK_FROM:-}\"" -e BOMLENS_INCLUDE_NON_SHIPPED${STAGE1_FALLBACK_ENV}${STAGE1_FINGERPRINT_ENV} $(pp_env)$(cosign_run)$(vex_run)$(declare_run)$(gate_run) \
         "\"$PP_IMAGE\"" || {
         _pp_rc=$?
         if [ -n "$STAGE1_FAILED" ] && [ ! -s "$OUTPUT_HOST_DIR/$OUTPUT_FILE" ]; then

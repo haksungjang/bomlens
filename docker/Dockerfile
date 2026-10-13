@@ -34,7 +34,7 @@ LABEL org.opencontainers.image.licenses="Apache-2.0"
 # The engine contract this image follows (docs/reference/engine-contract.md),
 # the same value as ENGINE_CONTRACT_VERSION in docker/lib/engine-result.sh.
 # The CLI reads it to tell an image too old for the stage 1 hand-off.
-LABEL com.sktelecom.sbom.engine-contract="1.2.0"
+LABEL com.sktelecom.sbom.engine-contract="1.3.0"
 
 ENV DEBIAN_FRONTEND=noninteractive
 

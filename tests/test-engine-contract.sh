@@ -797,7 +797,10 @@ cat > "$CMP/bin/docker" <<'STUB'
 case "$1" in
     info|rm|pull|stop|kill) exit 0 ;;
     image)
-        case "$*" in *engine-contract*) [ -n "${STUB_OLD_IMAGE:-}" ] || echo 1.0.0 ;; esac
+        case "$*" in
+            *engine-contract*) [ -n "${STUB_OLD_IMAGE:-}" ] || echo 1.0.0 ;;
+            *RepoDigests*) [ -n "${STUB_REPO_DIGEST:-}" ] && echo "$STUB_REPO_DIGEST" ;;
+        esac
         exit 0 ;;
     inspect) echo false; exit 0 ;;
     wait) echo 0; exit 0 ;;
@@ -813,7 +816,9 @@ STUB
 chmod +x "$CMP/bin/docker"
 CLI_SRC="$WORK/plan-src-node"
 mkdir -p "$CMP/tmp"
+NODE_DIGEST="$(jq -r '.digests["ghcr.io/cdxgen/cdxgen-alpine-node24"]' "$ROOT_DIR/docker/lib/cdxgen-images.json")"
 ( cd "$CMP" && env PATH="$CMP/bin:$PATH" CLI_ARGV_LOG="$CMP/argv" HOME="$CMP/home" TMPDIR="$CMP/tmp" \
+    STUB_REPO_DIGEST="ghcr.io/cdxgen/cdxgen-alpine-node24@$NODE_DIGEST" \
     bash "$ROOT_DIR/scripts/scan-sbom.sh" --project demo --version 1.0 --target "$CLI_SRC" \
     --generate-only --output-dir "$CMP/out" ) > "$CMP/log" 2>&1
 P="$(plan_run cli-compare "$CLI_SRC")"
@@ -870,6 +875,36 @@ esac
 [ -n "$s2" ] && case "$s2" in *"-e BOMLENS_INCLUDE_NON_SHIPPED "*) true ;; *) false ;; esac \
     && pass "a stage 1 with no SBOM hands stage 2 its exit code, the reason and BOMLENS_INCLUDE_NON_SHIPPED" \
     || fail "stage 2 hand-off" "$(tr '\n' ' ' < "$CMP/argv.stage2" 2>&1)"
+# What stage 1 ran, for the input fingerprint: the image's RepoDigest and the
+# sha256 of the files the CLI mounted and of scan-sbom.sh itself.
+want_s2=""
+for kv in "BOMLENS_STAGE1_DIGEST=$NODE_DIGEST" \
+          "BOMLENS_STAGE1_PREP_SHA256=$(shasum -a 256 < "$ROOT_DIR/docker/lib/build-prep.sh" | cut -d' ' -f1)" \
+          "BOMLENS_STAGE1_CONDA_SHA256=$(shasum -a 256 < "$ROOT_DIR/docker/lib/identify-conda.py" | cut -d' ' -f1)" \
+          "BOMLENS_STAGE1_CLI_SHA256=$(shasum -a 256 < "$ROOT_DIR/scripts/scan-sbom.sh" | cut -d' ' -f1)" \
+          "BOMLENS_STAGE1_SPEC_VERSION=1.6"; do
+    grep -qxF -- "$kv" "$CMP/argv.stage2" 2>/dev/null || want_s2="$want_s2 $kv"
+done
+[ -z "$want_s2" ] && pass "the CLI hands stage 2 the stage 1 image digest and the sha256 of the files it ran" \
+    || fail "stage 2 is missing:$want_s2" "$(grep BOMLENS_STAGE1 "$CMP/argv.stage2" 2>&1)"
+grep -q '^BOMLENS_FINGERPRINT_EXCLUDE=' "$CMP/argv.stage2" 2>/dev/null \
+    && fail "an output folder outside the source is passed as BOMLENS_FINGERPRINT_EXCLUDE" || pass "an output folder outside the source is not excluded"
+CLI_IN="$WORK/cli-in-src"; mkdir -p "$CLI_IN"; cp "$CLI_SRC/package.json" "$CLI_IN/"; rm -f "$CMP/argv.stage2"
+( cd "$CMP" && env PATH="$CMP/bin:$PATH" CLI_ARGV_LOG="$CMP/argv" HOME="$CMP/home" TMPDIR="$CMP/tmp" \
+    STUB_REPO_DIGEST="ghcr.io/cdxgen/cdxgen-alpine-node24@$NODE_DIGEST" \
+    bash "$ROOT_DIR/scripts/scan-sbom.sh" --project demo --version 1.0 --target "$CLI_IN" \
+    --generate-only --output-dir "$CLI_IN/out" ) > "$CMP/log-in" 2>&1
+grep -qxF 'BOMLENS_FINGERPRINT_EXCLUDE=out/demo_1.0' "$CMP/argv.stage2" 2>/dev/null \
+    && pass "an output folder inside the source is passed to stage 2 as BOMLENS_FINGERPRINT_EXCLUDE" \
+    || fail "output inside the source: $(grep FINGERPRINT "$CMP/argv.stage2" 2>&1)" "$(tail -3 "$CMP/log-in")"
+rm -f "$CMP/argv.stage2"
+( cd "$CMP" && env PATH="$CMP/bin:$PATH" CLI_ARGV_LOG="$CMP/argv" HOME="$CMP/home" TMPDIR="$CMP/tmp" SBOM_OUTPUT_FLAT=1 \
+    STUB_REPO_DIGEST="ghcr.io/cdxgen/cdxgen-alpine-node24@$NODE_DIGEST" \
+    bash "$ROOT_DIR/scripts/scan-sbom.sh" --project demo --version 1.0 --target "$CLI_IN" \
+    --generate-only --output-dir "$CLI_IN" ) > "$CMP/log-flat" 2>&1
+grep -qxF 'BOMLENS_FINGERPRINT_EXCLUDE=.' "$CMP/argv.stage2" 2>/dev/null \
+    && pass "a flat output into the source itself is passed to stage 2 as BOMLENS_FINGERPRINT_EXCLUDE=." \
+    || fail "flat output: $(grep FINGERPRINT "$CMP/argv.stage2" 2>&1)" "$(tail -3 "$CMP/log-flat")"
 # The same failure with a post-processing image older than the contract
 # label: a clear error instead of stage 2 stopping on a missing SBOM.
 rm -f "$CMP/argv.stage2"
@@ -1126,6 +1161,467 @@ rc=$?
     && [ "$(jq -r .run.status "$D/bomlens-result.json")" = succeeded ] \
     && pass "a project named app runs through: stamp-metadata ok with the warning in its detail" \
     || fail "name app: rc $rc, $(jq -c '[.steps[] | select(.id=="stamp-metadata")], .run.status' "$D/bomlens-result.json" 2>&1)" "$(grep -i 'stamp' "$D.log")"
+
+echo "== the input fingerprint of stage 1 =="
+# plan_fp <plan dir> [field]: the generate stage's input_fingerprint (or the
+# top-level one when there are no stages), or one field of it.
+plan_fp() {
+    jq -r --arg f "${2:-}" '(([.stages[]? | select(.id == "generate") | .input_fingerprint] | first) // .input_fingerprint)
+        | if $f == "" then tojson else (.[$f] | if type == "string" then . else tojson end) end' "$1/bomlens-plan.json" 2>/dev/null
+}
+# fp_tree <dir> [reverse]: a Node.js workspace with a lock file, a resolver
+# setting file and members; "reverse" writes the files in the other order.
+fp_tree() {
+    local d="$1" f
+    mkdir -p "$d/packages/a" "$d/node_modules/x" "$d/test"
+    local -a order=(package.json package-lock.json .npmrc packages/a/package.json node_modules/x/package.json test/package.json)
+    [ "${2:-}" = reverse ] && order=(test/package.json node_modules/x/package.json packages/a/package.json .npmrc package-lock.json package.json)
+    for f in "${order[@]}"; do
+        case "$f" in
+            package.json) echo '{"name":"x","workspaces":["packages/*","test"],"dependencies":{"lodash":"^4"}}' > "$d/$f" ;;
+            package-lock.json) echo '{"lockfileVersion":3,"packages":{"":{"dependencies":{"lodash":"^4"}},"packages/a":{"dependencies":{"left-pad":"1.3.0"}},"test":{"dependencies":{"left-pad":"1.3.0"}},"node_modules/lodash":{"version":"4.17.21"}}}' > "$d/$f" ;;
+            .npmrc) echo 'save-exact=true' > "$d/$f" ;;
+            *) echo '{"dependencies":{"left-pad":"1.3.0"}}' > "$d/$f" ;;
+        esac
+        sleep 0.01
+    done
+}
+FPA="$WORK/fp-a/src"; FPB="$WORK/fp-elsewhere/deeper/src"; FPC="$WORK/fp-c"
+fp_tree "$FPA"; mkdir -p "$(dirname "$FPB")"; cp -R "$FPA" "$FPB"; fp_tree "$FPC" reverse
+PA="$(plan_run fp-a "$FPA")"; PB="$(plan_run fp-b "$FPB")"; PC="$(plan_run fp-c "$FPC")"
+sa="$(plan_fp "$PA" sha256)"
+err="$(plan_schema_errors "$PA/bomlens-plan.json")"
+[ -z "$err" ] && pass "a plan with an input fingerprint validates against schemas/engine-plan-1.json" || fail "plan schema errors" "$err"
+[ "$(plan_fp "$PA" | jq -r '"\(.algorithm) \(.reusable) \(.reasons | length) \(.sha256 | test("^[0-9a-f]{64}$"))"')" = "bomlens-input-1 true 0 true" ] \
+    && pass "a Node.js tree with a lock file has a reusable fingerprint" || fail "fingerprint: $(plan_fp "$PA")"
+[ "$(plan_fp "$PA")" = "$(jq -c .input_fingerprint "$PA/bomlens-plan.json")" ] \
+    && pass "the plan's top-level input_fingerprint is the generate stage's" || fail "top-level: $(jq -c .input_fingerprint "$PA/bomlens-plan.json")"
+[ -n "$sa" ] && [ "$sa" = "$(plan_fp "$PB" sha256)" ] \
+    && pass "the same tree at another absolute path has the same fingerprint" || fail "paths: $sa vs $(plan_fp "$PB" sha256)"
+[ -n "$sa" ] && [ "$sa" = "$(plan_fp "$PC" sha256)" ] \
+    && pass "the order the files were written in does not change it" || fail "order: $sa vs $(plan_fp "$PC" sha256)"
+# tree_sha <plan dir>: the whole-tree component's sha256 (and count).
+tree_sha() { plan_fp "$1" | jq -r '.components[] | select(.kind == "file" and .name == ".") | "\(.sha256) \(.count)"'; }
+[ "$(plan_fp "$PA" | jq -c '[.components[] | select(.kind == "file") | {name, count}]')" = '[{"name":".","count":6}]' ] \
+    && pass "the whole tree, node_modules and the non-shipped test folder included, is one file component of 6 files" \
+    || fail "file components: $(plan_fp "$PA" | jq -c '[.components[] | select(.kind == "file")]')"
+grep -qF "$FPA" "$PA/bomlens-plan.json" && fail "the plan holds the source's absolute path" || pass "no absolute path in the plan"
+PI="$(plan_run fp-a-ns "$FPA" BOMLENS_INCLUDE_NON_SHIPPED=1)"
+[ "$(plan_fp "$PI" sha256)" != "$sa" ] && [ "$(tree_sha "$PI")" = "$(tree_sha "$PA")" ] \
+    && pass "BOMLENS_INCLUDE_NON_SHIPPED=1 changes the value through its setting; the tree is the same" \
+    || fail "include non-shipped: $(plan_fp "$PI" sha256), tree $(tree_sha "$PI") vs $(tree_sha "$PA")"
+PX="$(plan_run fp-a-proxy "$FPA" HTTPS_PROXY=http://user:secret@proxy:3128 http_proxy=http://user:secret@proxy:3128 \
+    GOPROXY=https://goproxy.example GOSUMDB=off TRIVY_DB_REPOSITORY=mirror.example/trivy-db CDXGEN_IMAGE_PREFIX=registry.example/mirror/cdxgen/ HOST_UID=501 HOST_GID=20)"
+! grep -qE 'secret|user:|proxy:3128|goproxy\.example|mirror\.example/trivy' "$PX/bomlens-plan.json" \
+    && pass "a proxy value with credentials appears nowhere in bomlens-plan.json" || fail "the plan holds a proxy value" "$(grep -oE '.{30}(secret|proxy:3128).{10}' "$PX/bomlens-plan.json" | head -3)"
+[ "$(plan_fp "$PX" sha256)" = "$sa" ] \
+    && pass "proxies, GOPROXY, GOSUMDB, TRIVY_*, CDXGEN_IMAGE_PREFIX and HOST_UID/GID do not change it" || fail "excluded settings changed it: $(plan_fp "$PX" sha256) vs $sa"
+PS="$(plan_run fp-a-setting "$FPA" BOMLENS_NODE_FULL_GRAPH=1)"
+[ "$(plan_fp "$PS" sha256)" != "$sa" ] && [ "$(plan_fp "$PS" reusable)" = true ] \
+    && pass "a build-prep option changes it" || fail "BOMLENS_NODE_FULL_GRAPH: $(plan_fp "$PS" sha256)"
+# The files stage 1 runs from this image count, also with no image digest.
+FPLIB="$WORK/fp-lib"; cp -R "$ROOT_DIR/docker/lib" "$FPLIB"; echo '# changed' >> "$FPLIB/build-prep.sh"
+PE="$(plan_run fp-a-engine "$FPA" BOMLENS_LIBDIR="$FPLIB")"
+ediff="$(jq -n -c --argjson a "$(plan_fp "$PA")" --argjson b "$(plan_fp "$PE")" \
+    '[range($a.components | length) | select($a.components[.] != $b.components[.]) | $a.components[.] | "\(.kind):\(.name)"]' 2>&1)"
+[ "$(plan_fp "$PE" sha256)" != "$sa" ] && [ "$(plan_fp "$PE" reusable)" = true ] && [ "$ediff" = '["engine:build-prep.sh"]' ] \
+    && pass "a changed build-prep.sh changes it, and only its engine component differs" \
+    || fail "build-prep.sh change: sha $(plan_fp "$PE" sha256), differing components $ediff"
+plan_fp "$PA" | jq -e --arg h "$(shasum -a 256 < "$PA/bomlens-plan/identify-conda.py" | cut -d' ' -f1)" \
+    'any(.components[]; .kind == "engine" and .name == "identify-conda.py" and .sha256 == $h)' >/dev/null \
+    && pass "the engine components hash the files copied into bomlens-plan/" \
+    || fail "engine components: $(plan_fp "$PA" | jq -c '[.components[] | select(.kind == "engine")]')"
+jq '.packages["node_modules/lodash"].version = "4.17.20"' "$FPA/package-lock.json" > "$FPB/package-lock.json"
+PB2="$(plan_run fp-b2 "$FPB")"
+[ "$(plan_fp "$PB2" sha256)" != "$sa" ] && [ "$(plan_fp "$PB2" reusable)" = true ] \
+    && pass "a changed lock file changes the fingerprint" || fail "changed lock: $(plan_fp "$PB2" sha256)"
+rm -f "$FPB/package-lock.json"
+PN="$(plan_run fp-nolock "$FPB")"
+[ "$(plan_fp "$PN" | jq -c '[.sha256, .reusable, .reasons]')" = '[null,false,["no-lockfile"]]' ] \
+    && pass "no lock file: sha256 null, not reusable, no-lockfile" || fail "no lock: $(plan_fp "$PN")"
+MV="$WORK/fp-maven"; mkdir -p "$MV"
+maven_pom() {  # maven_pom <dependency version>
+    cat > "$MV/pom.xml" <<POM
+<project><modelVersion>4.0.0</modelVersion><groupId>x</groupId><artifactId>y</artifactId><version>1.0</version>
+<properties><guava.version>$1</guava.version></properties>
+<dependencies><dependency><groupId>com.google.guava</groupId><artifactId>guava</artifactId><version>\${guava.version}</version></dependency></dependencies></project>
+POM
+}
+for v in '[30.0,33.0)' '33.0-SNAPSHOT' 'LATEST' '33.3.1-jre'; do
+    maven_pom "$v"
+    P="$(plan_run "fp-maven-${v//[^A-Za-z0-9.-]/_}" "$MV")"
+    got="$(plan_fp "$P" | jq -c '[.reusable, .reasons]')"
+    case "$v:$got" in
+        '33.3.1-jre:[false,["registry-resolution"]]') pass "a Maven tree with fixed versions is still registry-resolution (no lock covers the transitive graph)" ;;
+        *'-jre:'*) fail "fixed Maven versions: $got" ;;
+        *':[false,["registry-resolution","unpinned-versions"]]') pass "a Maven dependency version $v is unpinned-versions" ;;
+        *) fail "Maven $v: $got" ;;
+    esac
+done
+UK="$WORK/fp-unknown"; mkdir -p "$UK"; echo 'project(x)' > "$UK/CMakeLists.txt"
+P="$(plan_run fp-unknown "$UK")"
+[ "$(plan_fp "$P" | jq -c '[.sha256, .reasons]')" = '[null,["unsupported-ecosystem"]]' ] \
+    && pass "an unrecognised tree is unsupported-ecosystem" || fail "unknown: $(plan_fp "$P")"
+MX="$WORK/fp-mixed"; fp_tree "$MX"; echo 'requests==2.31.0' > "$MX/requirements.txt"
+P="$(plan_run fp-mixed "$MX")"
+[ "$(plan_fp "$P" | jq -c '[.reusable, .reasons]')" = '[false,["no-lockfile"]]' ] \
+    && pass "a mixed tree needs every language locked (Python without a lock file)" || fail "mixed: $(plan_fp "$P")"
+# fp_case <case> <dir> [VAR=value ...]: [reusable, reasons] of the plan.
+fp_case() { local c="$1" d="$2"; shift 2; plan_fp "$(plan_run "fpc-$c" "$d" "$@")" | jq -c '[.reusable, .reasons]'; }
+expect_fp() {  # expect_fp <want> <got> <what>
+    [ "$2" = "$1" ] && pass "$3" || fail "$3: got $2"
+}
+NL='{"lockfileVersion":3,"packages":{"":{"dependencies":{"a":"1"}}}}'
+FX="$WORK/fpx"
+# Requirements files: stage 1 runs pip against the registry.
+mkdir -p "$FX/req-inc"; printf -- '-r base.txt\n' > "$FX/req-inc/requirements.txt"; echo 'requests==2.31.0' > "$FX/req-inc/base.txt"
+P="$(plan_run fpc-req-inc "$FX/req-inc")"
+expect_fp '[false,["no-lockfile"]]' "$(plan_fp "$P" | jq -c '[.reusable, .reasons]')" "a requirements file that only includes another is no-lockfile"
+t1="$(tree_sha "$P")"; echo 'requests==2.32.0' > "$FX/req-inc/base.txt"
+[ "$(tree_sha "$(plan_run fpc-req-inc2 "$FX/req-inc")")" != "$t1" ] \
+    && pass "the included requirements file is part of the tree value" || fail "include: tree unchanged ($t1)"
+mkdir -p "$FX/req-var"; printf 'requests==${REQ_VERSION} --hash=sha256:%064d\n' 0 > "$FX/req-var/requirements.txt"
+expect_fp '[false,["no-lockfile"]]' "$(fp_case req-var "$FX/req-var")" "a requirements file using an environment variable is no-lockfile"
+mkdir -p "$FX/req-out"; printf -- '--requirement=../../outside.txt\n' > "$FX/req-out/requirements.txt"
+expect_fp '[false,["no-lockfile","unhashable-input"]]' "$(fp_case req-out "$FX/req-out")" "an include outside the source is unhashable-input"
+mkdir -p "$FX/req-pin"; echo 'requests==2.31.0' > "$FX/req-pin/requirements.txt"; : > "$FX/req-pin/poetry.lock"
+expect_fp '[false,["no-lockfile"]]' "$(fp_case req-pin "$FX/req-pin")" "exact pins without --hash are no-lockfile, and poetry.lock does not cover requirements.txt"
+mkdir -p "$FX/req-url"; printf 'pkg @ https://example.invalid/pkg.whl --hash=sha256:%064d\n' 0 > "$FX/req-url/requirements.txt"
+expect_fp '[false,["no-lockfile"]]' "$(fp_case req-url "$FX/req-url")" "a URL requirement is no-lockfile"
+mkdir -p "$FX/req-hash"; printf 'requests==2.31.0 \\\n    --hash=sha256:%064d\n' 0 > "$FX/req-hash/requirements.txt"
+expect_fp '[true,[]]' "$(fp_case req-hash "$FX/req-hash")" "a requirements file in hash-checking mode is reusable"
+# A lock above a manifest covers it only as a declared workspace member.
+mkdir -p "$FX/ws-no/sub"; echo '{"dependencies":{"a":"1"}}' > "$FX/ws-no/package.json"; echo "$NL" > "$FX/ws-no/package-lock.json"
+echo '{"dependencies":{"b":"1"}}' > "$FX/ws-no/sub/package.json"
+expect_fp '[false,["no-lockfile"]]' "$(fp_case ws-no "$FX/ws-no")" "a lock in a parent folder does not cover a package that is not a workspace member"
+mkdir -p "$FX/ws-cargo/crates/a" "$FX/ws-cargo/other"
+printf '[workspace]\nmembers = ["crates/*"]\n[dependencies]\nserde = "1"\n' > "$FX/ws-cargo/Cargo.toml"; echo x > "$FX/ws-cargo/Cargo.lock"
+printf '[package]\nname="a"\n[dependencies]\nlog = "0.4"\n' > "$FX/ws-cargo/crates/a/Cargo.toml"
+expect_fp '[true,[]]' "$(fp_case ws-cargo "$FX/ws-cargo")" "a Cargo workspace member is covered by the root Cargo.lock"
+printf '[package]\nname="o"\n[dependencies]\nlog = "0.4"\n' > "$FX/ws-cargo/other/Cargo.toml"
+expect_fp '[false,["no-lockfile"]]' "$(fp_case ws-cargo-out "$FX/ws-cargo")" "a crate outside the workspace members is not"
+mkdir -p "$FX/gradle/app"; echo "dependencies { implementation 'a:b:1' }" > "$FX/gradle/app/build.gradle"
+echo "dependencies { implementation 'a:b:1' }" > "$FX/gradle/build.gradle"; : > "$FX/gradle/gradle.lockfile"
+expect_fp '[false,["no-lockfile"]]' "$(fp_case gradle "$FX/gradle")" "gradle.lockfile is per project: the root's does not cover app/"
+# Every manifest in the tree is judged, not only the root language.
+mkdir -p "$FX/nested/tools/gen"; echo '{"dependencies":{"a":"1"}}' > "$FX/nested/package.json"; echo "$NL" > "$FX/nested/package-lock.json"
+printf 'module x\nrequire golang.org/x/text v0.3.0\n' > "$FX/nested/tools/gen/go.mod"
+expect_fp '[false,["no-lockfile"]]' "$(fp_case nested "$FX/nested")" "a nested go.mod without go.sum in a Node.js tree is no-lockfile"
+# Maven: versions from a parent pom in the tree, nested dependencies, unknown properties.
+mkdir -p "$FX/mvn-parent/child"
+cat > "$FX/mvn-parent/pom.xml" <<'POM'
+<project><groupId>g</groupId><artifactId>root</artifactId><version>1</version><properties><x.version>[1.0,2.0)</x.version></properties></project>
+POM
+cat > "$FX/mvn-parent/child/pom.xml" <<'POM'
+<project><parent><groupId>g</groupId><artifactId>root</artifactId><version>1</version></parent><artifactId>c</artifactId>
+<dependencies><dependency><groupId>x</groupId><artifactId>y</artifactId><version>${x.version}</version></dependency></dependencies></project>
+POM
+expect_fp '[false,["registry-resolution","unpinned-versions"]]' "$(fp_case mvn-parent "$FX/mvn-parent")" "a range in a parent pom's property, used in a child, is unpinned-versions"
+mkdir -p "$FX/mvn-plugin"
+cat > "$FX/mvn-plugin/pom.xml" <<'POM'
+<project><groupId>g</groupId><artifactId>a</artifactId><version>1</version><build><plugins><plugin><artifactId>p</artifactId><version>1.0</version>
+<dependencies><dependency><groupId>x</groupId><artifactId>y</artifactId><version>2.0-SNAPSHOT</version></dependency></dependencies></plugin></plugins></build></project>
+POM
+expect_fp '[false,["registry-resolution","unpinned-versions"]]' "$(fp_case mvn-plugin "$FX/mvn-plugin")" "a SNAPSHOT dependency inside a plugin is unpinned-versions"
+mkdir -p "$FX/mvn-bom"
+cat > "$FX/mvn-bom/pom.xml" <<'POM'
+<project><groupId>g</groupId><artifactId>a</artifactId><version>1</version><dependencyManagement><dependencies>
+<dependency><groupId>x</groupId><artifactId>bom</artifactId><version>${bom.version}</version><type>pom</type><scope>import</scope></dependency>
+</dependencies></dependencyManagement></project>
+POM
+expect_fp '[false,["registry-resolution"]]' "$(fp_case mvn-bom "$FX/mvn-bom")" "an imported BOM at a property defined nowhere is registry-resolution, as every Maven tree"
+mvn_one() {  # mvn_one <dir> <extra project xml> <dependency version>
+    mkdir -p "$1"
+    printf '<project><groupId>g</groupId><artifactId>a</artifactId><version>1</version>%s<dependencies><dependency><groupId>x</groupId><artifactId>y</artifactId><version>%s</version></dependency></dependencies></project>\n' "$2" "$3" > "$1/pom.xml"
+}
+mvn_one "$FX/mvn-profile" '<properties><y.v>1.0</y.v></properties><profiles><profile><id>p</id><properties><y.v>1.1-SNAPSHOT</y.v></properties></profile></profiles>' '${y.v}'
+expect_fp '[false,["registry-resolution","unpinned-versions"]]' "$(fp_case mvn-profile "$FX/mvn-profile")" "a SNAPSHOT a profile gives a property is unpinned-versions"
+mvn_one "$FX/mvn-config" '' '${revision}'; mkdir -p "$FX/mvn-config/.mvn"; echo '-Drevision=2.0-SNAPSHOT' > "$FX/mvn-config/.mvn/maven.config"
+expect_fp '[false,["registry-resolution"]]' "$(fp_case mvn-config "$FX/mvn-config")" "a SNAPSHOT from .mvn/maven.config -D is registry-resolution, as every Maven tree"
+echo '-Drevision=2.0' > "$FX/mvn-config/.mvn/maven.config"
+expect_fp '[false,["registry-resolution"]]' "$(fp_case mvn-config-fixed "$FX/mvn-config")" "a fixed version from .mvn/maven.config -D is registry-resolution, as every Maven tree"
+mvn_one "$FX/mvn-cdata" '' '<![CDATA[[1.0,2.0)]]>'
+expect_fp '[false,["registry-resolution"]]' "$(fp_case mvn-cdata "$FX/mvn-cdata")" "a range written as CDATA is registry-resolution, as every Maven tree"
+mvn_one "$FX/mvn-remote" '<parent><groupId>org.example</groupId><artifactId>parent</artifactId><version>3.0.0</version></parent>' '1.0'
+expect_fp '[false,["registry-resolution"]]' "$(fp_case mvn-remote "$FX/mvn-remote")" "a parent pom from the registry (not in the tree) is registry-resolution, as every Maven tree"
+mkdir -p "$FX/mvn-child/sub"
+printf '<project><groupId>g</groupId><artifactId>root</artifactId><version>1</version><properties><y.v>1.0</y.v></properties></project>\n' > "$FX/mvn-child/pom.xml"
+printf '<project><parent><groupId>g</groupId><artifactId>root</artifactId><version>1</version></parent><artifactId>c</artifactId><properties><y.v>[1,2)</y.v></properties><dependencies><dependency><groupId>x</groupId><artifactId>y</artifactId><version>${y.v}</version></dependency></dependencies></project>\n' > "$FX/mvn-child/sub/pom.xml"
+expect_fp '[false,["registry-resolution","unpinned-versions"]]' "$(fp_case mvn-child "$FX/mvn-child")" "a child pom overriding a parent property with a range is unpinned-versions"
+# Links: followed to a file inside the source only.
+mkdir -p "$FX/link-out" "$FX/link-in"; echo '{"dependencies":{"a":"1"}}' | tee "$FX/link-out/package.json" > "$FX/link-in/package.json"
+echo "$NL" > "$WORK/fpx-outside-lock.json"; ln -s "$WORK/fpx-outside-lock.json" "$FX/link-out/package-lock.json"
+echo "$NL" > "$FX/link-in/real-lock.json"; ln -s real-lock.json "$FX/link-in/package-lock.json"
+fp_case link-out "$FX/link-out" | jq -e 'first == false and (last | index("unhashable-input"))' >/dev/null \
+    && pass "a lock file linked to outside the source is unhashable-input" || fail "link out: $(fp_case link-out2 "$FX/link-out")"
+expect_fp '[true,[]]' "$(fp_case link-in "$FX/link-in")" "a lock file linked inside the source is hashed through the link"
+mkdir -p "$FX/link-dir/real"; cp "$FX/link-in/package.json" "$FX/link-in/real-lock.json" "$FX/link-dir/"; mv "$FX/link-dir/real-lock.json" "$FX/link-dir/package-lock.json"
+ln -s real "$FX/link-dir/linked"
+expect_fp '[false,["unhashable-input"]]' "$(fp_case link-dir "$FX/link-dir")" "a folder link in the tree is unhashable-input"
+# Go: go mod tidy reads the imports, so the code counts.
+mkdir -p "$FX/go/pkg"; printf 'module x\nrequire golang.org/x/text v0.3.0\n' > "$FX/go/go.mod"; echo h > "$FX/go/go.sum"
+echo 'package main' > "$FX/go/main.go"; echo 'package pkg' > "$FX/go/pkg/a_test.go"
+P="$(plan_run fpc-go "$FX/go")"; g1="$(plan_fp "$P" sha256)"
+[ "$(plan_fp "$P" reusable)" = true ] \
+    && { echo 'package pkg // changed' > "$FX/go/pkg/a_test.go"; [ "$(plan_fp "$(plan_run fpc-go2 "$FX/go")" sha256)" != "$g1" ]; } \
+    && pass "a Go module with go.sum and only covered imports is reusable, and a change in a .go file changes the value" \
+    || fail "go: $(plan_fp "$P" | jq -c '[.reusable, .reasons]')"
+mkdir -p "$FX/go-noreq"; printf 'module x\n' > "$FX/go-noreq/go.mod"
+printf 'package main\nimport (\n  "fmt"\n  "github.com/example/lib"\n)\n' > "$FX/go-noreq/main.go"
+expect_fp '[false,["registry-resolution"]]' "$(fp_case go-noreq "$FX/go-noreq")" "a Go import go.mod does not require is registry-resolution"
+mkdir -p "$FX/go-v2"; printf 'module x\nrequire github.com/example/lib v1.0.0\n' > "$FX/go-v2/go.mod"; echo h > "$FX/go-v2/go.sum"
+printf 'package main\nimport "github.com/example/lib/v2/sub"\n' > "$FX/go-v2/main.go"
+expect_fp '[false,["registry-resolution"]]' "$(fp_case go-v2 "$FX/go-v2")" "a /v2 import with only v1 required is registry-resolution"
+printf 'package main\nimport "github.com/example/lib/sub"\n' > "$FX/go-v2/main.go"
+expect_fp '[true,[]]' "$(fp_case go-v1 "$FX/go-v2")" "an import the require list covers is reusable"
+# Go: back-quoted import paths count like double-quoted ones.
+mkdir -p "$FX/go-raw"; printf 'module x\nrequire golang.org/x/text v0.3.0\n' > "$FX/go-raw/go.mod"; echo h > "$FX/go-raw/go.sum"
+printf 'package main\nimport `evil.example/newpkg`\n' > "$FX/go-raw/main.go"
+expect_fp '[false,["registry-resolution"]]' "$(fp_case go-raw "$FX/go-raw")" "a back-quoted Go import go.mod does not cover is registry-resolution"
+printf 'package main\nimport (\n\t"golang.org/x/text"\n\tx `evil.example/newpkg`\n)\n' > "$FX/go-raw/main.go"
+expect_fp '[false,["registry-resolution"]]' "$(fp_case go-raw-block "$FX/go-raw")" "a back-quoted Go import in an import block is registry-resolution"
+# Inputs that made the checks slow are read in time linear in their size.
+mkdir -p "$FX/slow-go" "$FX/slow-pom" "$FX/slow-gradle" "$FX/mvn-chain"
+printf 'module x\n' > "$FX/slow-go/go.mod"
+python3 -c "import sys; open(sys.argv[1], 'w').write(' \n' * 60000 + 'import (\n' * 2000)" "$FX/slow-go/a.go"
+python3 -c "import sys; open(sys.argv[1], 'w').write('<project>' + '<!--' * 100000 + '</project>')" "$FX/slow-pom/pom.xml"
+printf "dependencies { implementation 'a:b:1' }\n" > "$FX/slow-gradle/build.gradle"
+python3 -c "import sys; open(sys.argv[1], 'w').write('/*' * 200000)" "$FX/slow-gradle/x.gradle"
+python3 - "$FX/mvn-chain/pom.xml" <<'PY'
+import sys
+props = "".join(f"<p{i}>${{p{i + 1}}}</p{i}>" for i in range(20))
+prof = "".join(f"<profile><properties>{props}</properties></profile>" for _ in range(4))
+open(sys.argv[1], "w").write("<project><groupId>g</groupId><artifactId>a</artifactId><version>1</version>"
+    f"<properties>{props}</properties><profiles>{prof}</profiles><dependencies><dependency><groupId>x</groupId>"
+    "<artifactId>y</artifactId><version>${p0}</version></dependency></dependencies></project>")
+PY
+for c in slow-go:'[true,[]]' slow-pom:'[false,["registry-resolution"]]' slow-gradle:'[false,["no-lockfile"]]' mvn-chain:'[false,["registry-resolution"]]'; do
+    t0=$SECONDS; got="$(fp_case "${c%%:*}" "$FX/${c%%:*}")"; t=$((SECONDS - t0))
+    [ "$got" = "${c#*:}" ] && [ "$t" -lt 30 ] && pass "${c%%:*}: checked in ${t}s, $got" || fail "${c%%:*}: $got in ${t}s"
+done
+# A manifest or Go source over 4 MiB cannot be judged: unhashable-input.
+mkdir -p "$FX/big-go"; printf 'module x\n' > "$FX/big-go/go.mod"
+python3 -c "import sys; open(sys.argv[1], 'w').write('package a\n' + '// x\n' * 1200000)" "$FX/big-go/a.go"
+expect_fp '[false,["unhashable-input"]]' "$(fp_case big-go "$FX/big-go")" "a Go source over 4 MiB is unhashable-input"
+# Folders count toward BOMLENS_FINGERPRINT_MAX_FILES, so empty ones stop the walk too.
+mkdir -p "$FX/folders"; for i in $(seq 1 300); do mkdir -p "$FX/folders/d$i"; done
+P="$(plan_run fpc-folders "$FX/folders" BOMLENS_FINGERPRINT_MAX_FILES=100)"
+[ "$(plan_fp "$P" | jq -c '[(.reasons | index("unhashable-input") != null), (.components[] | select(.name == ".") | .truncated)]')" = '[true,true]' ] \
+    && pass "300 empty folders over a limit of 100 stop the walk (truncated)" || fail "folders: $(plan_fp "$P" | jq -c '[.reasons, (.components[] | select(.name == "."))]')"
+# Every file counts, a cdxgen config or a README as much as a lock file; .git does not.
+mkdir -p "$FX/whole/.git" "$FX/whole/src"; cp "$FX/link-in/package.json" "$FX/whole/"; echo "$NL" > "$FX/whole/package-lock.json"
+echo '// app' > "$FX/whole/src/app.js"; echo readme > "$FX/whole/README.md"; echo ref > "$FX/whole/.git/HEAD"
+w0="$(plan_fp "$(plan_run fpc-whole0 "$FX/whole")" sha256)"
+echo ref2 > "$FX/whole/.git/HEAD"; echo 'x' > "$FX/whole/.git/new-object"
+[ "$(plan_fp "$(plan_run fpc-whole1 "$FX/whole")" sha256)" = "$w0" ] && [ "$w0" != null ] \
+    && pass "a change under .git/ does not change the value" || fail ".git change: $w0"
+for f in src/app.js README.md .cdxgenrc; do
+    echo "changed $f" >> "$FX/whole/$f"
+    w1="$(plan_fp "$(plan_run "fpc-whole-${f//[^a-z]/}" "$FX/whole")" sha256)"
+    [ "$w1" != "$w0" ] && [ "$w1" != null ] && pass "a change to $f changes the value" || fail "$f change: $w1 vs $w0"
+    w0="$w1"
+done
+# Node: without package-lock.json the production filter asks npm to resolve again.
+mkdir -p "$FX/yarn"; cp "$FX/link-in/package.json" "$FX/yarn/"; echo '# yarn lockfile v1' > "$FX/yarn/yarn.lock"
+expect_fp '[false,["registry-resolution"]]' "$(fp_case yarn "$FX/yarn")" "a yarn project with no package-lock.json is registry-resolution (npm re-resolves for the production set)"
+expect_fp '[true,[]]' "$(fp_case yarn-full "$FX/yarn" BOMLENS_NODE_FULL_GRAPH=1)" "with BOMLENS_NODE_FULL_GRAPH=1 the yarn project is reusable"
+# Gradle: a lock file counts only when locking is on.
+mkdir -p "$FX/gl/app"; printf "include 'app'\n" > "$FX/gl/settings.gradle"
+printf "dependencies { implementation 'a:b:1.+' }\ndependencyLocking { lockAllConfigurations() }\n" | tee "$FX/gl/build.gradle" > "$FX/gl/app/build.gradle"
+echo 'a:b:1.0=compileClasspath,runtimeClasspath' | tee "$FX/gl/gradle.lockfile" > "$FX/gl/app/gradle.lockfile"
+expect_fp '[true,[]]' "$(fp_case gl-on "$FX/gl")" "Gradle projects with locking on and a gradle.lockfile each are reusable"
+printf "dependencies { implementation 'a:b:1.+' }\n" > "$FX/gl/app/build.gradle"
+expect_fp '[false,["no-lockfile"]]' "$(fp_case gl-off "$FX/gl")" "locking at the top of the root build file does not lock a subproject"
+printf "dependencies { implementation 'a:b:1.+' }\ndependencyLocking { lockAllConfigurations() }\nsubprojects { dependencyLocking { lockAllConfigurations() } }\n" > "$FX/gl/build.gradle"
+expect_fp '[true,[]]' "$(fp_case gl-sub "$FX/gl")" "locking in the root's subprojects {} block locks a subproject"
+echo 'empty=annotationProcessor' > "$FX/gl/app/gradle.lockfile"
+expect_fp '[false,["no-lockfile"]]' "$(fp_case gl-empty "$FX/gl")" "a gradle.lockfile with no group:artifact:version entry is no-lockfile"
+mkdir -p "$FX/gs/lib"; printf "include 'lib'\n" > "$FX/gs/settings.gradle"
+printf "subprojects { dependencies { implementation 'a:b:1' } }\ndependencyLocking { lockAllConfigurations() }\n" > "$FX/gs/build.gradle"
+: > "$FX/gs/gradle.lockfile"; echo src > "$FX/gs/lib/Lib.java"
+expect_fp '[false,["no-lockfile"]]' "$(fp_case gs "$FX/gs")" "a subproject with no build file of its own still needs a gradle.lockfile"
+# .NET: floating versions, and a restore with no lock.
+mkdir -p "$FX/net"; echo '<Project><ItemGroup><PackageReference Include="A" Version="1.0.0" /></ItemGroup></Project>' > "$FX/net/App.csproj"
+expect_fp '[false,["no-lockfile"]]' "$(fp_case net-nolock "$FX/net")" "a .NET project with no packages.lock.json is no-lockfile"
+echo '{}' > "$FX/net/packages.lock.json"
+expect_fp '[true,[]]' "$(fp_case net-lock "$FX/net")" "a .NET project with packages.lock.json and fixed versions is reusable"
+echo '<Project><ItemGroup><PackageVersion Include="A" Version="1.*" /></ItemGroup></Project>' > "$FX/net/Directory.Packages.props"
+expect_fp '[false,["unpinned-versions"]]' "$(fp_case net-float "$FX/net")" "a floating version in Directory.Packages.props is unpinned-versions"
+# SRC_TREE_EXCLUDE is not something stage 1 sees.
+P="$(plan_run fpc-ste "$FPA" SRC_TREE_EXCLUDE=packages)"
+[ "$(plan_fp "$P" sha256)" = "$sa" ] && plan_fp "$P" | jq -e '[.components[].name] | index("SRC_TREE_EXCLUDE") | not' >/dev/null \
+    && pass "SRC_TREE_EXCLUDE neither prunes the tree nor changes the value" || fail "SRC_TREE_EXCLUDE: $(plan_fp "$P" sha256) vs $sa"
+# A file that cannot be read leaves the value blind to it.
+if [ "$(id -u)" != 0 ]; then
+    mkdir -p "$FX/unread"; cp "$FX/link-in/package.json" "$FX/unread/"; echo "$NL" > "$FX/unread/package-lock.json"; chmod 000 "$FX/unread/package-lock.json"
+    fp_case unread "$FX/unread" | jq -e 'first == false and (last | index("unhashable-input"))' >/dev/null \
+        && pass "an unreadable lock file is unhashable-input" || fail "unreadable lock: $(fp_case unread2 "$FX/unread")"
+    chmod 644 "$FX/unread/package-lock.json"
+fi
+# A folder that cannot be read leaves the value blind to it.
+if [ "$(id -u)" != 0 ]; then
+    mkdir -p "$FX/unread-dir/secret"; cp "$FX/link-in/package.json" "$FX/unread-dir/"; echo "$NL" > "$FX/unread-dir/package-lock.json"
+    echo x > "$FX/unread-dir/secret/a"; chmod 000 "$FX/unread-dir/secret"
+    expect_fp '[false,["unhashable-input"]]' "$(fp_case unread-dir "$FX/unread-dir")" "an unreadable folder is unhashable-input"
+    chmod 755 "$FX/unread-dir/secret"
+fi
+# 5,000 small files hash in well under a minute (about a second on an idle
+# machine; a file scanner on a desktop adds a lot to every open).
+mkdir -p "$FX/files"; cp "$FX/link-in/package.json" "$FX/files/"; echo "$NL" > "$FX/files/package-lock.json"
+for i in $(seq 1 50); do mkdir -p "$FX/files/node_modules/m$i"; for j in $(seq 1 100); do echo "$i $j" > "$FX/files/node_modules/m$i/f$j.js"; done; done
+t0=$SECONDS; got="$(plan_fp "$(plan_run fpc-files "$FX/files")" | jq -c '[.reusable, (.components[] | select(.name == ".") | .count)]')"; t=$((SECONDS - t0))
+[ "$got" = '[true,5002]' ] && [ "$t" -lt 60 ] && pass "a tree of 5,002 files takes ${t}s (under 60)" || fail "5,000 files: $got in ${t}s"
+# A FIFO, socket or device is never opened: a FIFO would block the walk.
+mkdir -p "$FX/fifo"; cp "$FX/link-in/package.json" "$FX/fifo/"; echo "$NL" > "$FX/fifo/package-lock.json"; mkfifo "$FX/fifo/pipe"
+if command -v timeout >/dev/null 2>&1; then
+got="$(timeout 60 bash -c "$(declare -f plan_run plan_fp); WORK='$WORK' ROOT_DIR='$ROOT_DIR' ENTRY='$ENTRY'; plan_fp \"\$(plan_run fpc-fifo '$FX/fifo')\" | jq -c '[.reusable, .reasons]'" 2>&1)"
+expect_fp '[false,["unhashable-input"]]' "$got" "a FIFO in the tree is unhashable-input and does not block"
+else
+    echo "  SKIP: timeout is not installed, so the FIFO case is not run"
+fi
+# The execute bit and links are part of the value; a .git file is not.
+mkdir -p "$FX/mode"; cp "$FX/link-in/package.json" "$FX/mode/"; echo "$NL" > "$FX/mode/package-lock.json"; echo x > "$FX/mode/gradlew"
+m0="$(plan_fp "$(plan_run fpc-mode0 "$FX/mode")" sha256)"; chmod +x "$FX/mode/gradlew"
+m1="$(plan_fp "$(plan_run fpc-mode1 "$FX/mode")" sha256)"
+[ "$m0" != null ] && [ "$m1" != null ] && [ "$m0" != "$m1" ] && pass "the execute bit changes the value" || fail "execute bit: $m0 $m1"
+cp "$FX/mode/gradlew" "$FX/mode/copy"; c0="$(plan_fp "$(plan_run fpc-copy "$FX/mode")" sha256)"
+rm "$FX/mode/copy"; ln -s gradlew "$FX/mode/copy"; c1="$(plan_fp "$(plan_run fpc-link "$FX/mode")" sha256)"
+[ "$c0" != null ] && [ "$c0" != "$c1" ] && pass "a link and a copy of the same file give different values" || fail "link vs copy: $c0 $c1"
+echo 'gitdir: /somewhere/worktrees/a' > "$FX/mode/.git"; g0="$(plan_fp "$(plan_run fpc-gitfile0 "$FX/mode")" sha256)"
+echo 'gitdir: /elsewhere/worktrees/b' > "$FX/mode/.git"; g1="$(plan_fp "$(plan_run fpc-gitfile1 "$FX/mode")" sha256)"
+[ "$g0" = "$c1" ] && [ "$g1" = "$c1" ] && pass "a .git file (a worktree's gitlink) is not part of the value" || fail ".git file: $g0 $g1 vs $c1"
+# Go, Maven and Gradle resolve the non-shipped folders from the root too.
+mkdir -p "$FX/go-ex/examples/demo" "$FX/go-ex/testdata/x"; printf 'module x\nrequire golang.org/x/text v0.3.0\n' > "$FX/go-ex/go.mod"; echo h > "$FX/go-ex/go.sum"
+printf 'package x\nimport "golang.org/x/text/language"\n' > "$FX/go-ex/x.go"
+printf 'package x\nimport "github.com/other/thing"\n' > "$FX/go-ex/testdata/x/t.go"
+expect_fp '[true,[]]' "$(fp_case go-ex-ok "$FX/go-ex")" "Go code under testdata is left out, as go leaves it out"
+printf 'package demo\nimport "github.com/other/thing"\n' > "$FX/go-ex/examples/demo/d.go"
+expect_fp '[false,["registry-resolution"]]' "$(fp_case go-ex "$FX/go-ex")" "an uncovered Go import under examples/ is registry-resolution (go mod tidy sees it)"
+mkdir -p "$FX/gr-ex/examples/demo"; printf "include 'examples:demo'\n" > "$FX/gr-ex/settings.gradle"
+printf "dependencyLocking { lockAllConfigurations() }\ndependencies { implementation 'a:b:1' }\n" > "$FX/gr-ex/build.gradle"; : > "$FX/gr-ex/gradle.lockfile"
+printf "dependencies { implementation 'a:b:1.+' }\n" > "$FX/gr-ex/examples/demo/build.gradle"
+expect_fp '[false,["no-lockfile"]]' "$(fp_case gr-ex "$FX/gr-ex")" "a Gradle project under examples/ is judged"
+# Gradle: a commented-out locking line does not turn locking on.
+printf "dependencies { implementation 'a:b:1.+' }\n// dependencyLocking { lockAllConfigurations() }\n/* resolutionStrategy.activateDependencyLocking() */\n" > "$FX/gr-ex/build.gradle"
+rm -rf "$FX/gr-ex/examples" "$FX/gr-ex/settings.gradle"
+expect_fp '[false,["no-lockfile"]]' "$(fp_case gr-comment "$FX/gr-ex")" "Gradle locking only in a comment does not count"
+# An npm lock that does not match package.json is resolved again.
+mkdir -p "$FX/npm-sync"; echo '{"dependencies":{"a":"1","b":"2"}}' > "$FX/npm-sync/package.json"; echo "$NL" > "$FX/npm-sync/package-lock.json"
+expect_fp '[false,["registry-resolution"]]' "$(fp_case npm-sync "$FX/npm-sync")" "a package-lock.json that does not list every dependency of package.json is registry-resolution"
+mkdir -p "$FX/npm-ws/packages/a"; echo '{"workspaces":["packages/*"],"dependencies":{"a":"1"}}' > "$FX/npm-ws/package.json"; echo "$NL" > "$FX/npm-ws/package-lock.json"
+echo '{"dependencies":{"b":"1"}}' > "$FX/npm-ws/packages/a/package.json"
+expect_fp '[false,["registry-resolution"]]' "$(fp_case npm-ws "$FX/npm-ws")" "a workspace member the root lock does not record is registry-resolution"
+mkdir -p "$FX/gem"; printf "source 'https://rubygems.org'\ngem 'rack'\ngem 'puma'\n" > "$FX/gem/Gemfile"
+printf 'GEM\n  specs:\n    rack (3.0.0)\n\nDEPENDENCIES\n  rack\n\nBUNDLED WITH\n   2.5.0\n' > "$FX/gem/Gemfile.lock"
+expect_fp '[false,["registry-resolution"]]' "$(fp_case gem "$FX/gem")" "a Gemfile.lock missing a gem the Gemfile names is registry-resolution"
+mkdir -p "$FX/spm"; printf 'let package = Package(name: "x", dependencies: [.package(url: "https://github.com/a/b.git", from: "1.0.0"), .package(url: "https://github.com/c/d", from: "2.0.0")])\n' > "$FX/spm/Package.swift"
+echo '{"pins":[{"identity":"b","location":"https://github.com/a/b","state":{"version":"1.0.0"}}],"version":2}' > "$FX/spm/Package.resolved"
+expect_fp '[false,["registry-resolution"]]' "$(fp_case spm "$FX/spm")" "a Package.resolved missing a package Package.swift names is registry-resolution"
+# The file count and time limits stop the walk.
+P="$(plan_run fpc-cap "$FPA" BOMLENS_FINGERPRINT_MAX_FILES=3)"
+[ "$(plan_fp "$P" | jq -c '[.reusable, .reasons, (.components[] | select(.name == ".") | [.sha256, .truncated])]')" = '[false,["unhashable-input"],[null,true]]' ] \
+    && pass "over BOMLENS_FINGERPRINT_MAX_FILES the walk stops: truncated, unhashable-input" || fail "cap: $(plan_fp "$P" | jq -c '[.reasons, (.components[] | select(.name == "."))]')"
+# 500 workspace members in well under 30 seconds.
+mkdir -p "$FX/many"; echo '{"workspaces":["packages/*"],"dependencies":{"a":"1"}}' > "$FX/many/package.json"
+jq -n '{lockfileVersion: 3, packages: ({"": {dependencies: {a: "1"}}} + ([range(1; 501)] | map({key: "packages/p\(.)", value: {dependencies: {b: "1"}}}) | from_entries))}' > "$FX/many/package-lock.json"
+for i in $(seq 1 500); do mkdir -p "$FX/many/packages/p$i"; echo '{"dependencies":{"b":"1"}}' > "$FX/many/packages/p$i/package.json"; done
+t0=$SECONDS; got="$(fp_case many "$FX/many")"; t=$((SECONDS - t0))
+[ "$got" = '[true,[]]' ] && [ "$t" -lt 30 ] && pass "500 workspace members take ${t}s (under 30)" || fail "500 members: $got in ${t}s"
+P="$(plan_run fp-android "$PSRC2")"
+[ "$(jq -c '[(.stages | length), .input_fingerprint.reusable, .input_fingerprint.sha256, (.input_fingerprint.reasons | index("plan-unsupported") != null)]' "$P/bomlens-plan.json")" = '[0,false,null,true]' ] \
+    && pass "an unsupported plan has the fingerprint at the top level, with plan-unsupported" \
+    || fail "unsupported plan: $(jq -c '{stages: (.stages | length), input_fingerprint}' "$P/bomlens-plan.json")"
+err="$(plan_schema_errors "$P/bomlens-plan.json")"
+[ -z "$err" ] && pass "the unsupported plan validates" || fail "plan schema errors" "$err"
+# Stage 2 after the plan computes the value again from the source, with the
+# plan's stage 1 image, settings and bomlens-plan/ copies, and finds the plan's
+# own. BOMLENS_IMAGE_DIGEST is not given to stage 2 here: it comes from the plan.
+P="$(plan_run fp-pp "$FPA")"
+cp "$FIX/good-cyclonedx.json" "$P/demo_1.0_bom.json"
+run_engine "$P" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$FPA" BOMLENS_STAGE1_EXIT=0 BOMLENS_STAGE1_REUSED=1
+g="$(jq -c '[.steps[] | select(.id == "generate")][0]' "$P/bomlens-result.json" 2>/dev/null)"
+[ -n "$g" ] && [ "$(jq -c .input_fingerprint <<<"$g")" = "$(plan_fp "$P")" ] \
+    && [ "$(jq -c '[.reused, .reuse_unsafe, .plan_mismatch]' <<<"$g")" = '[true,false,false]' ] \
+    && pass "after a plan, the manifest's value is the plan's, computed again: reused, not unsafe, no mismatch" \
+    || fail "manifest generate: $g" "$(tail -5 "$P.log")"
+err="$(schema_errors "$P/bomlens-result.json")"
+[ -z "$err" ] && pass "a manifest with an input fingerprint validates against schemas/engine-result-1.json" || fail "schema errors" "$err"
+# A plan whose value does not fit this source (a leftover from another tree,
+# or edited) is not trusted: the manifest has the computed value, plan_mismatch,
+# and the reuse the caller made on it is unsafe.
+P="$(plan_run fp-pp-stale "$FPA")"
+jq '.stages[0].input_fingerprint.sha256 = ("f" * 64) | .input_fingerprint = .stages[0].input_fingerprint' "$P/bomlens-plan.json" > "$P/x" && mv "$P/x" "$P/bomlens-plan.json"
+cp "$FIX/good-cyclonedx.json" "$P/demo_1.0_bom.json"
+run_engine "$P" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$FPA" BOMLENS_STAGE1_EXIT=0 BOMLENS_STAGE1_REUSED=1
+g="$(jq -c '[.steps[] | select(.id == "generate")][0]' "$P/bomlens-result.json" 2>/dev/null)"
+[ "$(jq -c '[.input_fingerprint.sha256, .plan_mismatch, .reuse_unsafe]' <<<"$g")" = "[\"$sa\",true,true]" ] \
+    && pass "a plan value that does not fit the source is not adopted: computed value, plan_mismatch, reuse_unsafe" \
+    || fail "stale plan: $(jq -c '[.input_fingerprint.sha256, .plan_mismatch, .reuse_unsafe]' <<<"$g")"
+# Reuse of a stage 1 whose input is not reproducible is recorded as unsafe.
+P="$(plan_run fp-pp-nolock "$FPB")"
+cp "$FIX/good-cyclonedx.json" "$P/demo_1.0_bom.json"
+run_engine "$P" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$FPB" BOMLENS_STAGE1_EXIT=0 BOMLENS_STAGE1_REUSED=1
+[ "$(jq -c '[.steps[] | select(.id == "generate")][0] | [.reused, .reuse_unsafe, .input_fingerprint.reusable]' "$P/bomlens-result.json")" = '[true,true,false]' ] \
+    && pass "reuse with a fingerprint that is not reusable is reuse_unsafe" \
+    || fail "unsafe reuse: $(jq -c '[.steps[] | select(.id == "generate")][0]' "$P/bomlens-result.json")"
+# The CLI's stage 2 (no plan in the folder): what the CLI says stage 1 ran.
+cli_env=(BOMLENS_STAGE1_DIGEST="$(jq -r '.stages[0].image_digest' "$PA/bomlens-plan.json")"
+    BOMLENS_STAGE1_PREP_SHA256="$(shasum -a 256 < "$ROOT_DIR/docker/lib/build-prep.sh" | cut -d' ' -f1)"
+    BOMLENS_STAGE1_CONDA_SHA256="$(shasum -a 256 < "$ROOT_DIR/docker/lib/identify-conda.py" | cut -d' ' -f1)"
+    BOMLENS_STAGE1_CLI_SHA256="$(shasum -a 256 < "$ROOT_DIR/scripts/scan-sbom.sh" | cut -d' ' -f1)"
+    BOMLENS_STAGE1_SPEC_VERSION=1.6 FETCH_LICENSE=true)
+D="$(new_run fp-cli)"
+run_engine "$D" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$FPA" BOMLENS_STAGE1_EXIT=0 "${cli_env[@]}"
+g="$(jq -c '[.steps[] | select(.id == "generate")][0]' "$D/bomlens-result.json" 2>/dev/null)"
+[ "$(jq -c '[.input_fingerprint.reusable, .reused, ([.input_fingerprint.components[] | select(.kind == "engine") | .name] | sort)]' <<<"$g")" = '[true,false,["build-prep.sh","identify-conda.py","scan-sbom.sh"]]' ] \
+    && [ "$(jq -r '.input_fingerprint.components[] | select(.kind == "engine" and .name == "build-prep.sh") | .sha256' <<<"$g")" = "${cli_env[1]#*=}" ] \
+    && pass "the CLI path records the files and image the CLI says stage 1 ran, and reused is false" \
+    || fail "CLI path: $(jq -c '.input_fingerprint | [.reusable, .reasons, [.components[] | select(.kind != "file")]]' <<<"$g")" "$(tail -5 "$D.log")"
+# A stage 1 that exited 0 but recorded a failed step is not one to keep.
+P="$(plan_run fp-pp-deg "$FPA")"
+jq '.metadata.properties = ((.metadata.properties // []) + [{"name": "bomlens:pipeline-step-failed", "value": "npm-production-set"}])' \
+    "$FIX/good-cyclonedx.json" > "$P/demo_1.0_bom.json"
+run_engine "$P" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$FPA" BOMLENS_STAGE1_EXIT=0 BOMLENS_STAGE1_REUSED=1
+[ "$(jq -c '[.steps[] | select(.id == "generate")][0] | [.input_fingerprint.reusable, .input_fingerprint.sha256, .input_fingerprint.reasons, .reuse_unsafe]' "$P/bomlens-result.json")" = '[false,null,["stage1-degraded"],true]' ] \
+    && pass "a stage 1 SBOM with a failed step makes the recorded value stage1-degraded, and its reuse unsafe" \
+    || fail "stage1-degraded: $(jq -c '[.steps[] | select(.id == "generate")][0] | [.input_fingerprint.reasons, .reuse_unsafe, .plan_mismatch]' "$P/bomlens-result.json")"
+err="$(schema_errors "$P/bomlens-result.json")"
+[ -z "$err" ] && pass "a stage1-degraded manifest validates" || fail "schema errors" "$err"
+# The CLI's default output folder sits inside the source: it is left out.
+CS="$WORK/fp-cli-src"; fp_tree "$CS"
+t_before="$(tree_sha "$(plan_run fp-cli-src "$CS")")"
+CO="$CS/demo_1.0"; mkdir -p "$CO"; cp "$FIX/good-cyclonedx.json" "$CO/demo_1.0_bom.json"
+( cd "$CO" && env PATH="$WORK/bin:$PATH" MODE=POSTPROCESS PROJECT_NAME=demo PROJECT_VERSION=1.0 HOST_OUTPUT_DIR="$CO" \
+    BOMLENS_LIBDIR="$ROOT_DIR/docker/lib" BOMLENS_RUN_INPUT=demo_1.0_bom.json UPLOAD_ENABLED=false GENERATE_SECURITY=false \
+    SECURITY_ENRICH=false ENRICH_EOL=false ENRICH_MALICIOUS=false SOURCE_ROOT="$CS" BOMLENS_STAGE1_EXIT=0 \
+    BOMLENS_FINGERPRINT_EXCLUDE=demo_1.0 "${cli_env[@]}" bash "$ENTRY" ) > "$WORK/fp-cli-src-run.log" 2>&1
+[ "$(jq -c '[.steps[] | select(.id == "generate")][0].input_fingerprint | [.reusable, .reasons, (.components[] | select(.name == ".") | .count), [.components[] | select(.kind == "file" and .sha256 == null and .name != ".") | .name]]' "$CO/bomlens-result.json" 2>/dev/null)" = "[false,[\"unhashable-input\"],${t_before##* },[\"demo_1.0\"]]" ] \
+    && pass "on the CLI path an output folder inside the source is left out of the walk and makes the value unhashable-input" \
+    || fail "CLI exclude: $(jq -c '[.steps[] | select(.id == "generate")][0].input_fingerprint.components[] | select(.name == ".")' "$CO/bomlens-result.json" 2>&1) vs $t_before" "$(tail -3 "$WORK/fp-cli-src-run.log")"
+D="$(new_run fp-cli-flat)"
+run_engine "$D" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$FPA" BOMLENS_STAGE1_EXIT=0 BOMLENS_FINGERPRINT_EXCLUDE=. "${cli_env[@]}"
+[ "$(jq -c '[.steps[] | select(.id == "generate")][0].input_fingerprint | [.reusable, .reasons]' "$D/bomlens-result.json" 2>/dev/null)" = '[false,["unhashable-input"]]' ] \
+    && pass "a CLI output written into the source root itself makes the value unhashable-input" \
+    || fail "flat CLI output: $(jq -c '[.steps[] | select(.id == "generate")][0].input_fingerprint | [.reusable, .reasons]' "$D/bomlens-result.json" 2>&1)"
+D="$(new_run fp-cli-bare)"
+run_engine "$D" "$ROOT_DIR/docker/lib" SOURCE_ROOT="$FPA" BOMLENS_STAGE1_EXIT=0
+[ "$(jq -c '[.steps[] | select(.id == "generate")][0].input_fingerprint | [.reusable, .reasons]' "$D/bomlens-result.json" 2>/dev/null)" = '[false,["unhashable-input","unknown-stage1-image"]]' ] \
+    && pass "a CLI path that does not say what stage 1 ran is not reusable (unknown-stage1-image, unhashable-input)" \
+    || fail "CLI path without the stage 1 record: $(jq -c '[.steps[] | select(.id == "generate")][0].input_fingerprint | [.reusable, .reasons]' "$D/bomlens-result.json" 2>&1)"
+D="$(new_run fp-image)"
+( cd "$D" && env PATH="$WORK/bin:$PATH" MODE=ANALYZE ANALYZE_SBOM="$D/demo_1.0_bom.json" PROJECT_NAME=demo PROJECT_VERSION=1.0 \
+    HOST_OUTPUT_DIR="$D" BOMLENS_LIBDIR="$ROOT_DIR/docker/lib" UPLOAD_ENABLED=false GENERATE_SECURITY=false \
+    SECURITY_ENRICH=false ENRICH_EOL=false ENRICH_MALICIOUS=false bash "$ENTRY" ) > "$D.log" 2>&1
+jq -e '[.steps[] | select(.id == "generate")][0] | has("input_fingerprint") or has("reused") | not' "$D/bomlens-result.json" >/dev/null 2>&1 \
+    && pass "a run that is not stage 2 of a source scan has no fingerprint" \
+    || fail "ANALYZE generate: $(jq -c '[.steps[] | select(.id == "generate")]' "$D/bomlens-result.json" 2>&1)"
+# The reasons the contract page lists are the schema's.
+doc_fp_reasons="$(sed -n '/^<!-- fingerprint-reasons:begin -->/,/^<!-- fingerprint-reasons:end -->/p' "$DOC" | grep -v '^| `reasons`' | grep -oE '^\| `[a-z0-9-]+`' | tr -d '|` ' | sort | tr '\n' ' ')"
+schema_fp_reasons="$(jq -r '."$defs".input_fingerprint.properties.reasons.items.enum[]' "$PLAN_SCHEMA" | sort | tr '\n' ' ')"
+[ -n "$doc_fp_reasons" ] && [ "$doc_fp_reasons" = "$schema_fp_reasons" ] \
+    && [ "$schema_fp_reasons" = "$(jq -r '."$defs".input_fingerprint.properties.reasons.items.enum[]' "$SCHEMA" | sort | tr '\n' ' ')" ] \
+    && pass "the fingerprint reasons in the contract page and both schemas agree ($doc_fp_reasons)" \
+    || fail "fingerprint reasons: docs '$doc_fp_reasons', schema '$schema_fp_reasons'"
 
 echo "== every step label in entrypoint.sh is documented =="
 missing=""
