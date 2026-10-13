@@ -674,7 +674,7 @@ in_out "Mode: ANALYZE" && pass "--analyze <sbom> → ANALYZE mode" || { fail "--
 # plain source scan; a source project holding a rootfs-shaped fixture stays source.
 mk_rootfs() { mkdir -p "$1/etc" "$1/bin" "$1/usr/bin" "$1/lib"; printf 'x' > "$1/usr/bin/f"; }
 d="$(new_proj relfs)"; mk_rootfs "$d/images/rootfs"; mkdir -p "$d/images/install" "$d/images/kernel"
-printf 'x' > "$d/images/install/app"; printf 'opaque\n' > "$d/images/dev-2.60.pak"
+printf 'x' > "$d/images/install/app"; printf 'opaque\n' > "$d/images/dev-1.0.pak"
 scan_in "$d" --project Rel --version 1 --target images --generate-only
 { in_out "Mode: ROOTFS" && in_out "images/rootfs" && in_out "add --as-source" \
   && in_log "images/rootfs:/target"; } \
@@ -707,15 +707,15 @@ scan_in "$d" --project Rel --version 1 --target images --generate-only
 
 # A .bix image is recognized, so a folder holding it next to a rootfs, an
 # install tree and a kernel has two candidates (the kernel is not one).
-d="$(new_proj relbix)"; mk_rootfs "$d/images/rootfs"; printf 'opaque\n' > "$d/images/dev-2.60.bix"
+d="$(new_proj relbix)"; mk_rootfs "$d/images/rootfs"; printf 'opaque\n' > "$d/images/dev-1.0.bix"
 mkdir -p "$d/images/install"; printf 'kernel\n' > "$d/images/vmlinuz"
 scan_in "$d" --project Rel --version 1 --target images --generate-only
-{ [ "$RC" -ne 0 ] && in_out '--target "images/rootfs"' && in_out '--target "images/dev-2.60.bix" --firmware' \
+{ [ "$RC" -ne 0 ] && in_out '--target "images/rootfs"' && in_out '--target "images/dev-1.0.bix" --firmware' \
   && ! in_out 'vmlinuz'; } \
   && pass "rootfs/, install/, a kernel and a .bix stop with the two candidates listed" \
   || { fail "a .bix image next to a rootfs was not listed" "rc=$RC"; show; }
-d="$(new_proj bix)"; printf 'opaque\n' > "$d/dev-2.60.bix"
-scan_in "$d" --project Bix --version 1 --target dev-2.60.bix --generate-only
+d="$(new_proj bix)"; printf 'opaque\n' > "$d/dev-1.0.bix"
+scan_in "$d" --project Bix --version 1 --target dev-1.0.bix --generate-only
 in_out "Mode: FIRMWARE" && pass "--target *.bix → FIRMWARE mode (extension)" || { fail "--target .bix → FIRMWARE" "rc=$RC"; show; }
 
 # Folders that hold a .bin but are an application, a model or a build output
