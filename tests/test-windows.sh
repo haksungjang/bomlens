@@ -669,7 +669,7 @@ in_out "Mode: ANALYZE" && pass "--analyze <sbom> → ANALYZE mode" || { fail "--
 # plain source scan; a source project holding a rootfs-shaped fixture stays source.
 mk_rootfs() { mkdir -p "$1/etc" "$1/bin" "$1/usr/bin" "$1/lib"; printf 'x' > "$1/usr/bin/f"; }
 d="$(new_proj relfs)"; mk_rootfs "$d/images/rootfs"; mkdir -p "$d/images/install" "$d/images/kernel"
-printf 'x' > "$d/images/install/app"; printf 'opaque\n' > "$d/images/dev-2.60.bix"
+printf 'x' > "$d/images/install/app"; printf 'opaque\n' > "$d/images/dev-2.60.pak"
 scan_in "$d" --project Rel --version 1 --target images --generate-only
 { in_out "Mode: ROOTFS" && in_out "images/rootfs" && in_out "add --as-source" \
   && in_log "images/rootfs:/target"; } \
@@ -689,6 +689,26 @@ scan_in "$d" --project Rel --version 1 --target images --generate-only
   && ! in_out "Mode:" && ! grep -q '^docker run' "$LOG"; } \
   && pass "release folder with two candidates stops before scanning and lists both" \
   || { fail "two candidates were not refused with a list" "rc=$RC"; show; }
+
+# The rootfs it switched to has no package database, so the large file beside
+# it (not a recognized firmware type) is offered as a --firmware command.
+d="$(new_proj relbig)"; mk_rootfs "$d/images/rootfs"; mkdir -p "$d/images/install"
+head -c 2097152 /dev/zero > "$d/images/vendor-image.pak"; printf 'notes\n' > "$d/images/notes.txt"
+scan_in "$d" --project Rel --version 1 --target images --generate-only
+{ in_out "Mode: ROOTFS" && in_out "no package database" \
+  && in_out '--target "images/vendor-image.pak" --firmware' && ! in_out 'notes.txt'; } \
+  && pass "a rootfs with no package database names the large file beside it as a --firmware command" \
+  || { fail "the large file beside a package-less rootfs was not offered" "rc=$RC"; show; }
+
+# A .bix image is recognized, so a folder holding it next to a rootfs has two candidates.
+d="$(new_proj relbix)"; mk_rootfs "$d/images/rootfs"; printf 'opaque\n' > "$d/images/dev-2.60.bix"
+scan_in "$d" --project Rel --version 1 --target images --generate-only
+{ [ "$RC" -ne 0 ] && in_out '--target "images/rootfs"' && in_out '--target "images/dev-2.60.bix" --firmware'; } \
+  && pass "a .bix image next to a rootfs makes two candidates, both listed" \
+  || { fail "a .bix image next to a rootfs was not listed" "rc=$RC"; show; }
+d="$(new_proj bix)"; printf 'opaque\n' > "$d/dev-2.60.bix"
+scan_in "$d" --project Bix --version 1 --target dev-2.60.bix --generate-only
+in_out "Mode: FIRMWARE" && pass "--target *.bix → FIRMWARE mode (extension)" || { fail "--target .bix → FIRMWARE" "rc=$RC"; show; }
 
 d="$(new_proj relsrc)"; printf '{"name":"app","version":"1.0.0"}\n' > "$d/package.json"
 mk_rootfs "$d/rootfs"; printf 'blob\n' > "$d/sample.bin"
