@@ -13,6 +13,10 @@
 #   - the local web UI (React SPA, built in stage 1; served by Python stdlib)
 # ========================================================
 
+# Selects the CPE index stage below (true builds it, false leaves it out). Global
+# because a FROM line reads it; the runtime stage declares it again for its label.
+ARG SBOM_CPE_INDEX=true
+
 # ---- Stage 1: build the React SPA (Vite). node lives ONLY in this stage; the
 #      runtime image copies just the static dist/, so it stays lightweight. ----
 FROM node:26-alpine@sha256:3ad34ca6292aec4a91d8ddeb9229e29d9c2f689efd0dd242860889ac71842eba AS web
@@ -21,6 +25,83 @@ COPY web/frontend/package.json web/frontend/package-lock.json* ./
 RUN npm ci || npm install
 COPY web/frontend/ ./
 RUN npm run build
+
+# ---- CPE index stages: the NVD CPE -> CVE applicability index ----
+# lib/match-cpe-index.sh (through lib/firmware-cpe-match.py) matches the CPEs of
+# components with no package purl against this index, for firmware, rootfs and
+# binary scans. cpe_match.sqlite (~146 MB) is the application-part CPE->CVE
+# index, distilled by build-cpe-index.py from the fkie-cad NVD 2.0 JSON feeds,
+# fetched with a plain git clone (no api2 rate limit, no key).
+#
+# The data does not depend on the target architecture or on the image flavor, so
+# it is built in its own stage on the BUILD platform and copied into the runtime
+# stage. One build serves amd64 and arm64 (arm64 is not emulated for it), and its
+# layer cache is shared by every image built from this Dockerfile: the stage reads
+# no per-release ARG (BOMLENS_VERSION, the SBOM_* flavor flags). NVD_FEED_REF pins
+# the feed commit. The publish workflow resolves it once per run, so all images
+# of a release carry the same index and a new feed commit rebuilds it; left empty,
+# the build clones the feed's current HEAD.
+#
+# SBOM_CPE_INDEX (declared at the top of the file) selects the stage: false picks
+# the empty one, so the clone never runs (for a local build with no network
+# access to GitHub). A firmware build refuses false.
+
+FROM --platform=$BUILDPLATFORM python:3.12-slim@sha256:23b5dc88c7dd47fec3f960b51dc30d19df9875cfbfc60f3b62d3e5b88cbccf62 AS cpe-index-true
+# renovate: datasource=git-refs depName=fkie-cad/nvd-json-data-feeds
+ARG NVD_FEED_REPO="https://github.com/fkie-cad/nvd-json-data-feeds"
+ARG NVD_FEED_REF=
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY build-cpe-index.py check-version-string-map.py /build/
+COPY lib/firmware-cpe-match.py lib/version-string-map.json /build/
+# RELEASE GATE: the build FAILS unless the index has a substantial row count AND a
+# BusyBox 1.30.1 and a Linux kernel 4.4.153 smoke match each yield >=1 CVE. The
+# smoke tests run the real matcher, so a broken distill or an empty feed cannot
+# ship a silent 0-CVE image.
+RUN set -e; \
+    fetch_hint="[build] For a local build without access to $NVD_FEED_REPO, pass --build-arg SBOM_CPE_INDEX=false: the image then has no CPE index, and firmware, rootfs and binary scans report no CVEs for components that have no package purl."; \
+    echo "[build] fetching NVD data feeds (shallow${NVD_FEED_REF:+, commit $NVD_FEED_REF}) ..."; \
+    if [ -n "$NVD_FEED_REF" ]; then \
+      if ! { git init --quiet /tmp/nvd-feeds \
+             && git -C /tmp/nvd-feeds fetch --quiet --depth 1 "$NVD_FEED_REPO" "$NVD_FEED_REF" \
+             && git -C /tmp/nvd-feeds checkout --quiet FETCH_HEAD; }; then \
+        echo "[build] ERROR: could not fetch commit $NVD_FEED_REF of the NVD data feeds from $NVD_FEED_REPO."; \
+        echo "$fetch_hint"; exit 1; \
+      fi; \
+    elif ! git clone --quiet --depth 1 "$NVD_FEED_REPO" /tmp/nvd-feeds; then \
+      echo "[build] ERROR: could not clone the NVD data feeds from $NVD_FEED_REPO."; \
+      echo "$fetch_hint"; exit 1; \
+    fi; \
+    echo "[build] distilling CPE index ..."; \
+    mkdir -p /out; \
+    idx=/out/cpe_match.sqlite; \
+    python3 /build/build-cpe-index.py /tmp/nvd-feeds "$idx"; \
+    rm -rf /tmp/nvd-feeds; \
+    rows="$(python3 -c 'import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute("select count(*) from cpe_match").fetchone()[0])' "$idx" 2>/dev/null || echo 0)"; \
+    printf '%s' '{"components":[{"type":"application","name":"busybox","version":"1.30.1","cpe":"cpe:/a:busybox:busybox:1.30.1"}]}' > /tmp/smoke.json; \
+    nsmoke="$(python3 /build/firmware-cpe-match.py /tmp/smoke.json "$idx" 2>/dev/null | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null || echo 0)"; \
+    # The kernel is filed by NVD under CPE part `o`, and the index keeps only \
+    # part `a` plus a closed list of `o` pairs. It is the one component every \
+    # rootfs carries, so a build that dropped it would return nothing for all \
+    # of them. Check it here rather than finding out on a scan. \
+    printf '%s' '{"components":[{"type":"application","name":"linux_kernel","version":"4.4.153","cpe":"cpe:/a:linux:linux_kernel:4.4.153"}]}' > /tmp/smoke-kernel.json; \
+    nkernel="$(python3 /build/firmware-cpe-match.py /tmp/smoke-kernel.json "$idx" 2>/dev/null | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null || echo 0)"; \
+    echo "[build] CPE index: rows=${rows:-0}, busybox-1.30.1 smoke CVEs=${nsmoke:-0}, linux_kernel-4.4.153 smoke CVEs=${nkernel:-0} ($(du -h "$idx" | cut -f1))"; \
+    if [ "${rows:-0}" -lt 500000 ] || [ "${nsmoke:-0}" -lt 1 ] || [ "${nkernel:-0}" -lt 1 ]; then \
+      echo "[build] ERROR: CPE index looks broken (rows=${rows:-0}, busybox smoke=${nsmoke:-0}, kernel smoke=${nkernel:-0}). Build aborted."; \
+      exit 1; \
+    fi; \
+    echo "[build] checking version-string-map CPEs against the index ..."; \
+    python3 /build/check-version-string-map.py /build/version-string-map.json "$idx"; \
+    rm -f /tmp/smoke.json /tmp/smoke-kernel.json
+
+# SBOM_CPE_INDEX=false: an empty /out, so the runtime stage's COPY still works.
+FROM --platform=$BUILDPLATFORM python:3.12-slim@sha256:23b5dc88c7dd47fec3f960b51dc30d19df9875cfbfc60f3b62d3e5b88cbccf62 AS cpe-index-false
+RUN mkdir -p /out
+
+# hadolint ignore=DL3006
+FROM cpe-index-${SBOM_CPE_INDEX} AS cpe-index
 
 # ---- Stage 2: post-process runtime ----
 # python 3.12: the base only needs stdlib (web server.py), but the opt-in scancode/
@@ -87,11 +168,11 @@ ARG DOCKER_CLI_VERSION=29.9.0
 # tools of our own choosing — its Debian base contributes GPL system packages
 # either way, as every Linux image does; see THIRD_PARTY_LICENSES.md.
 ARG SBOM_FIRMWARE=false
-# The NVD CPE index (cpe_match.sqlite, below) is built into every image, so a
-# rootfs or binary scan matches the CPEs of components that carry no package
-# purl offline. Pure Python and public-domain NVD data, no GPL tool. A firmware
-# build always includes it; SBOM_CPE_INDEX=false leaves it out of the others.
-ARG SBOM_CPE_INDEX=true
+# The NVD CPE index (cpe_match.sqlite, built in the cpe-index stage above) is in
+# every image, so a rootfs or binary scan matches the CPEs of components that
+# carry no package purl offline. Pure Python and public-domain NVD data, no GPL
+# tool. SBOM_CPE_INDEX=false leaves it out; a firmware build requires it.
+ARG SBOM_CPE_INDEX
 # renovate: datasource=pypi depName=unblob
 ARG UNBLOB_VERSION=26.3.30
 # renovate: datasource=pypi depName=cve-bin-tool
@@ -368,64 +449,32 @@ RUN if [ "$SBOM_DEEP_CVE" = "true" ]; then \
       echo "[build] deep-cve tools skipped (SBOM_DEEP_CVE=false)"; \
     fi
 
-# CPE -> CVE matching data. lib/match-cpe-index.sh (through lib/firmware-cpe-match.py)
-# matches the CPEs of components with no package purl against a distilled NVD
-# index, for firmware, rootfs and binary scans. Two artifacts:
+# CPE -> CVE matching data, for firmware, rootfs and binary scans. Two artifacts:
 #   (1) a tiny STUB cve.db, firmware image only: cve-bin-tool refuses to run on
 #       an empty cache (EmptyCache in cvedb.check_cve_entries), so we seed its
 #       schema with one sentinel row. Identification never reads CVE data from it. (~57 KB)
-#   (2) cpe_match.sqlite, every image unless SBOM_CPE_INDEX=false: the
-#       application-part CPE->CVE applicability index, distilled by
-#       build-cpe-index.py from the fkie-cad NVD 2.0 JSON feeds. (~146 MB)
-# The NVD data comes from a plain git clone (no api2 rate limit, no key, builds on
-# GitHub cloud runners), replacing the old ~1.5 GB api2-fetched cve.db that NVD
-# throttled into multi-hour stalls.
-# RELEASE GATE: the build FAILS unless the index has a substantial row count AND a
-# BusyBox 1.30.1 smoke match yields >=1 CVE. The smoke test runs the real matcher,
-# so a broken distill or an empty feed cannot ship a silent 0-CVE image.
+#   (2) cpe_match.sqlite, every image unless SBOM_CPE_INDEX=false, built and
+#       checked by the release gate in the cpe-index stage at the top of this
+#       file. A firmware build without it is refused: firmware scans depend on it.
 ENV CVE_BIN_TOOL_HOME=/opt/cve-bin-tool-home
 # Attribution + required notices for the bundled NVD-derived data. Shipped with it.
 COPY CVE-DATA-NOTICE.txt /opt/cve-bin-tool-home/CVE-DATA-NOTICE.txt
-# renovate: datasource=git-refs depName=fkie-cad/nvd-json-data-feeds
-ARG NVD_FEED_REPO="https://github.com/fkie-cad/nvd-json-data-feeds"
-COPY build-cpe-index.py /tmp/build-cpe-index.py
-COPY lib/firmware-cpe-match.py /tmp/firmware-cpe-match.py
-COPY lib/version-string-map.json /tmp/version-string-map.json
-COPY check-version-string-map.py /tmp/check-version-string-map.py
+COPY --from=cpe-index /out/ /opt/cve-bin-tool-home/
 RUN set -e; \
     if [ "$SBOM_FIRMWARE" = "true" ]; then \
+      if [ ! -s "$CVE_BIN_TOOL_HOME/cpe_match.sqlite" ]; then \
+        echo "[build] ERROR: the firmware image needs the CPE index; drop --build-arg SBOM_CPE_INDEX=false for SBOM_FIRMWARE=true."; \
+        exit 1; \
+      fi; \
       echo "[build] seeding stub cve.db (cve-bin-tool EmptyCache guard) ..."; \
       mkdir -p "$CVE_BIN_TOOL_HOME/.cache/cve-bin-tool"; \
       HOME="$CVE_BIN_TOOL_HOME" python3 -c "import sqlite3, os; from cve_bin_tool.cvedb import CVEDB; CVEDB().init_database(); p=os.path.expanduser('~/.cache/cve-bin-tool/cve.db'); c=sqlite3.connect(p); c.execute(\"INSERT OR IGNORE INTO cve_severity VALUES (?,?,?,?,?,?,?,datetime('now'))\", ('CVE-0000-00000','UNKNOWN','stub row for cve-bin-tool EmptyCache check; not used for matching',0,3,'','STUB')); c.commit(); c.close()"; \
     fi; \
-    if [ "$SBOM_FIRMWARE" = "true" ] || [ "$SBOM_CPE_INDEX" != "false" ]; then \
-      echo "[build] cloning NVD data feeds (shallow) ..."; \
-      git clone --quiet --depth 1 "$NVD_FEED_REPO" /tmp/nvd-feeds; \
-      echo "[build] distilling CPE index ..."; \
-      python3 /tmp/build-cpe-index.py /tmp/nvd-feeds "$CVE_BIN_TOOL_HOME/cpe_match.sqlite"; \
-      rm -rf /tmp/nvd-feeds; \
-      idx="$CVE_BIN_TOOL_HOME/cpe_match.sqlite"; \
-      rows="$(python3 -c 'import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute("select count(*) from cpe_match").fetchone()[0])' "$idx" 2>/dev/null || echo 0)"; \
-      printf '%s' '{"components":[{"type":"application","name":"busybox","version":"1.30.1","cpe":"cpe:/a:busybox:busybox:1.30.1"}]}' > /tmp/smoke.json; \
-      nsmoke="$(python3 /tmp/firmware-cpe-match.py /tmp/smoke.json "$idx" 2>/dev/null | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null || echo 0)"; \
-      # The kernel is filed by NVD under CPE part `o`, and the index keeps only \
-      # part `a` plus a closed list of `o` pairs. It is the one component every \
-      # rootfs carries, so a build that dropped it would return nothing for all \
-      # of them — check it here rather than finding out on a scan. \
-      printf '%s' '{"components":[{"type":"application","name":"linux_kernel","version":"4.4.153","cpe":"cpe:/a:linux:linux_kernel:4.4.153"}]}' > /tmp/smoke-kernel.json; \
-      nkernel="$(python3 /tmp/firmware-cpe-match.py /tmp/smoke-kernel.json "$idx" 2>/dev/null | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null || echo 0)"; \
-      echo "[build] CPE index: rows=${rows:-0}, busybox-1.30.1 smoke CVEs=${nsmoke:-0}, linux_kernel-4.4.153 smoke CVEs=${nkernel:-0} ($(du -h "$idx" | cut -f1))"; \
-      if [ "${rows:-0}" -lt 500000 ] || [ "${nsmoke:-0}" -lt 1 ] || [ "${nkernel:-0}" -lt 1 ]; then \
-        echo "[build] ERROR: CPE index looks broken (rows=${rows:-0}, busybox smoke=${nsmoke:-0}, kernel smoke=${nkernel:-0}). Build aborted."; \
-        exit 1; \
-      fi; \
-      echo "[build] checking version-string-map CPEs against the index ..."; \
-      python3 /tmp/check-version-string-map.py /tmp/version-string-map.json "$idx"; \
+    if [ -s "$CVE_BIN_TOOL_HOME/cpe_match.sqlite" ]; then \
+      echo "[build] CPE index included ($(du -h "$CVE_BIN_TOOL_HOME/cpe_match.sqlite" | cut -f1))"; \
     else \
       echo "[build] CPE index skipped (SBOM_CPE_INDEX=false)"; \
-    fi; \
-    rm -f /tmp/build-cpe-index.py /tmp/firmware-cpe-match.py /tmp/smoke.json /tmp/smoke-kernel.json \
-          /tmp/version-string-map.json /tmp/check-version-string-map.py
+    fi
 
 # OWASP AIBOM Generator (opt-in: --build-arg SBOM_AIBOM=true). Generates an AI
 # SBOM (CycloneDX 1.7) for a HuggingFace model id; see scan-aibom.sh.

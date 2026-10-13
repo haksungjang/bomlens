@@ -39,7 +39,7 @@ docker pull ghcr.io/sktelecom/bomlens:latest
 
 도구 버전은 `docker/Dockerfile`의 `ARG`로 고정됩니다.
 
-모든 이미지에는 NVD CPE 인덱스(`cpe_match.sqlite`, 약 146 MB)도 들어 있으며, 이미지를 빌드할 때 NVD 데이터로 만듭니다. 펌웨어, 루트 파일시스템, 바이너리 스캔에서 `--security`를 켜면 패키지 PURL이 없는 컴포넌트의 CPE를 네트워크 없이 이 인덱스와 대조합니다([CVE 대조 방식](../guides/firmware.ko.md#cve-대조-방식) 참고). 이미지를 직접 빌드할 때 `--build-arg SBOM_CPE_INDEX=false`로 빼 둘 수 있으며, 펌웨어 이미지에는 항상 들어갑니다.
+모든 이미지에는 NVD CPE 인덱스(`cpe_match.sqlite`, 약 146 MB)도 들어 있으며, 이미지를 빌드할 때 NVD 데이터로 만듭니다. 펌웨어, 루트 파일시스템, 바이너리 스캔에서 `--security`를 켜면 패키지 PURL이 없는 컴포넌트의 CPE를 네트워크 없이 이 인덱스와 대조합니다([CVE 대조 방식](../guides/firmware.ko.md#cve-대조-방식) 참고). 인덱스를 만들 때 GitHub에서 NVD 데이터 피드를 복제합니다. GitHub에 접속할 수 없는 환경에서 이미지를 직접 빌드하면 빌드가 이 단계에서 멈추고 `--build-arg SBOM_CPE_INDEX=false`를 안내하며, 이 옵션으로 인덱스를 뺄 수 있습니다. 펌웨어 빌드는 이 옵션을 받지 않으므로 펌웨어 이미지에는 항상 인덱스가 들어갑니다.
 
 ## 직접 실행
 
