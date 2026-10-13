@@ -32,9 +32,29 @@ def vc_cpe_index_candidate:
 # firmware-cpe-match.py parses.
 def vc_app_cpe: (.cpe // "") | test("^cpe:(2\\.3:|/)a:");
 
+# The version field of an application CPE, "" for any other CPE or none.
+def vc_cpe_version:
+  (.cpe // "") as $c
+  | if ($c | startswith("cpe:2.3:a:")) then ($c | split(":")[5] // "")
+    elif ($c | startswith("cpe:/a:")) then ($c | split(":")[4] // "")
+    else "" end;
+
+# The version a check compares: the component's own, or, when it has none, its
+# CPE's version field, as firmware-cpe-match.py reads it ("*" and "-" are not
+# versions).
+def vc_version:
+  ((.version // "") | tostring) as $v
+  | if $v != "" then $v
+    else (vc_cpe_version | if IN("*", "-") then "" else . end) end;
+
 # A version can be compared only if it holds a digit; placeholders such as
 # UNKNOWN, "-" or "" cannot.
-def vc_usable_version: (.version // "") | tostring | test("[0-9]");
+def vc_usable_version: vc_version | test("[0-9]");
+
+# A component a Yocto build's cve-check (or its SPDX VEX) judged: every recipe
+# the build read. parse-yocto-spdx.py and parse-yocto-manifests.py mark them.
+def vc_yocto_component:
+  any(.properties[]?; .name == "bomlens:identifiedBy" and (.value | IN("yocto-spdx", "yocto-manifest")));
 
 # Distribution names Trivy reads an operating-system component as. Such a
 # component tells Trivy which advisories to use for the packages; it is not
@@ -56,7 +76,11 @@ def vc_in_scope:
 # Why no check could reach a component, or empty when one could.
 #   no-version     there is no version to compare against an advisory
 #   no-identifier  no ecosystem purl, and no CPE the index was asked about
-def vc_unchecked_reason($cpe_matched):
-  if (vc_usable_version | not) then "no-version"
+# $yocto_checked: the Yocto build's own CVE check ran (a _yocto_vex.json with
+# judgements), so the recipes it read were checked there.
+def vc_unchecked_reason($cpe_matched; $yocto_checked):
+  if ($yocto_checked and vc_yocto_component) then empty
+  elif (vc_usable_version | not) then "no-version"
   elif vc_no_ecosystem_purl and (($cpe_matched and vc_app_cpe) | not) then "no-identifier"
   else empty end;
+def vc_unchecked_reason($cpe_matched): vc_unchecked_reason($cpe_matched; false);

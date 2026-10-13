@@ -26,6 +26,22 @@
 # `cve-bin-tool` engine's result.
 set -e
 
+# Exit 3 means only "no index in this image" (the pipeline records it as
+# skipped). Any other way out with 3, such as a jq compile error under set -e,
+# is reported as a failure.
+NO_INDEX=false
+WORK=""
+on_exit() {
+    _rc=$?
+    if [ -n "$WORK" ]; then rm -rf "$WORK"; fi
+    if [ "$_rc" = 3 ] && [ "$NO_INDEX" != true ]; then
+        echo "[cpe-index] the CPE match failed (exit 3 from a command, not a missing index)." >&2
+        exit 1
+    fi
+    exit "$_rc"
+}
+trap on_exit EXIT
+
 SBOM="$1"
 OUT_PREFIX="$2"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -48,24 +64,31 @@ CPE_INDEX="${FW_CPE_INDEX:-${CVE_BIN_TOOL_HOME:-/opt/cve-bin-tool-home}/cpe_matc
 if [ ! -f "$CPE_INDEX" ]; then
     echo "[cpe-index] no CPE index at $CPE_INDEX; components with no package purl are not matched." >&2
     echo "[cpe-index] Use an image built with the index (the default build; --build-arg SBOM_CPE_INDEX=true)." >&2
+    NO_INDEX=true
     exit 3
 fi
 if ! command -v python3 >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
     echo "[cpe-index] python3 and jq are required to match the CPE index." >&2
     exit 1
 fi
+if [ ! -f "$SCRIPT_DIR/vuln-coverage.jq" ] || [ ! -f "$SCRIPT_DIR/firmware-cpe-match.py" ]; then
+    echo "[cpe-index] vuln-coverage.jq or firmware-cpe-match.py is missing beside $0; the image is incomplete." >&2
+    exit 1
+fi
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
 
 # A purl synthesized from a container layer's os-release stays offered here
 # (vc_cpe_index_candidate). It was written to reach the distribution advisories,
 # which is a different question from what this index answers, and the two
 # disagree: measured on one switch OS, giving `snmp` and `pkgconf` a purl and
 # taking them out of this pass cost four CVEs that nothing else reported.
-jq "$(cat "$SCRIPT_DIR/vuln-coverage.jq")"'
+if ! jq "$(cat "$SCRIPT_DIR/vuln-coverage.jq")"'
     {components: [ (.components // [])[] | recurse(.components[]?)
-                   | select(vc_cpe_index_candidate) ]}' "$SBOM" > "$WORK/cpe-in.json"
+                   | select(vc_cpe_index_candidate) ]}' "$SBOM" > "$WORK/cpe-in.json" 2>"$WORK/err"; then
+    echo "[cpe-index] could not read the components to match: $(head -c 300 "$WORK/err")" >&2
+    exit 1
+fi
 OFFERED="$(jq '.components | length' "$WORK/cpe-in.json")"
 
 if ! python3 "$SCRIPT_DIR/firmware-cpe-match.py" "$WORK/cpe-in.json" "$CPE_INDEX" \
@@ -80,7 +103,7 @@ fi
 # InstalledVersion, Severity, CVSS, PrimaryURL } ] } ] }. NVD severity is upper
 # case already; a score becomes CVSS V<n>Score. Identical (CVE, package,
 # version) rows are kept once.
-jq '
+if ! jq '
   [ .[]? | select((.cve_number // "") | test("^CVE-")) | {
       VulnerabilityID: .cve_number,
       PkgName: (.product // ""),
@@ -94,7 +117,10 @@ jq '
       source: "cve-bin-tool"
     } ]
   | unique_by([.VulnerabilityID, .PkgName, .InstalledVersion])
-' "$WORK/rows.json" > "$WORK/vulns.json"
+' "$WORK/rows.json" > "$WORK/vulns.json" 2>"$WORK/err"; then
+    echo "[cpe-index] could not shape the matched CVEs: $(head -c 300 "$WORK/err")" >&2
+    exit 1
+fi
 
 NCVE="$(jq 'length' "$WORK/vulns.json")"
 NCOMP="$(jq '[.[] | [.PkgName, .InstalledVersion]] | unique | length' "$WORK/vulns.json")"

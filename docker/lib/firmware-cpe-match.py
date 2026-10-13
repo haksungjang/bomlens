@@ -71,7 +71,8 @@ def _fallback_cmp(a, b):
     records: a letter after the last number is a later release (OpenSSL's
     1.0.2 < 1.0.2h < 1.0.2i, OpenSSH's 6.2 < 6.2p2), and a pre-release word
     is an earlier one (2.0.0rc1 < 2.0.0). At one position a number is later
-    than a letter, so 1.0.2h < 1.0.3.
+    than a letter, so 1.0.2h < 1.0.3. Trailing zero components do not count,
+    so 1.0 == 1.0.0 and 5.4.0 == 5.4, while 5.4.0rc1 < 5.4 < 5.4.0.1.
     """
     ta, tb = _tokens(a), _tokens(b)
     for x, y in zip(ta, tb):
@@ -86,10 +87,14 @@ def _fallback_cmp(a, b):
         if xp != yp:
             return -1 if xp else 1
         return (x > y) - (x < y)
-    if len(ta) == len(tb):
-        return 0
     longer, sign = (ta, 1) if len(ta) > len(tb) else (tb, -1)
-    nxt = longer[min(len(ta), len(tb))]
+    rest = longer[min(len(ta), len(tb)):]
+    # Zero components the shorter version leaves out are equal to it.
+    while rest and rest[0] == 0 and isinstance(rest[0], int):
+        rest = rest[1:]
+    if not rest:
+        return 0
+    nxt = rest[0]
     if isinstance(nxt, str) and nxt in _PRE_RELEASE:
         return -sign
     return sign

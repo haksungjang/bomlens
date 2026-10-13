@@ -2175,6 +2175,16 @@ assert f("1.0.2a", "1.0.2") > 0
 assert f("6.2p2", "6.2") > 0 and f("6.2p2", "7.0") < 0
 assert f("2.0.0rc1", "2.0.0") < 0 and f("2.0.0beta2", "2.0.0beta10") < 0
 assert f("1.00", "1.0") == 0 and f("1.10", "1.9") > 0 and f("2.6.19", "2.6.19.1") < 0
+# Trailing zero components are equal to their absence, in either order, while
+# a pre-release or a further non-zero component after them still orders.
+assert f("1.0", "1.0.0") == 0 and f("1.0.0", "1.0") == 0
+assert f("5.4.0", "5.4") == 0 and f("5.4", "5.4.0.0") == 0
+assert f("5.4.0rc1", "5.4") < 0 and f("5.4", "5.4.0rc1") > 0
+assert f("5.4.0.1", "5.4") > 0 and f("1.0.0a", "1.0") > 0
+assert f("1.0.2", "1.0.2.0h") < 0
+assert m.in_range("1.0", "1.0.0", None, None, None, None) is True
+assert m.in_range("5.4", None, "5.4.0", 1, "5.5", 0) is True
+assert m.in_range("5.4.0", None, None, None, "5.4", 0) is False
 CPEPY
     then
         pass "a prefixed version compares as its number, and a bounded range still bounds"

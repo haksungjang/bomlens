@@ -305,26 +305,37 @@ SCAN_ERR=$(jq -r '.ScanError.Message // empty' "$JSON" 2>/dev/null)
 # was never asked about, so an empty table says nothing about it. They are
 # named in the report and kept in _security.json as UncheckedComponents for the
 # web layer and the risk report. A component that has a finding was checked by
-# definition (a grype CPE match, for one), matched on purl or on name and version. The classifier is vuln-coverage.jq,
+# definition (a grype CPE match, for one), matched on purl or on name and
+# version. A Yocto build's recipes were checked by the build's own cve-check
+# when _yocto_vex.json holds its judgements (an --analyze of a Yocto SBOM or
+# build directory), so they are not listed. The classifier is vuln-coverage.jq,
 # shared with match-cpe-index.sh. Not computed when the scan itself failed: the
 # failure note already says nothing was checked.
 UNCHECKED='[]'
 if [ -z "$SCAN_ERR" ] && [ -f "$SCRIPT_DIR/vuln-coverage.jq" ]; then
     _cpe_matched=false
-    [ "${BOMLENS_CPE_INDEX_MATCHED:-false}" = "true" ] && _cpe_matched=true
+    if [ "${BOMLENS_CPE_INDEX_MATCHED:-false}" = "true" ]; then
+        _cpe_matched=true
+    fi
+    _yocto_checked=false
+    if [ -f "${OUT_PREFIX}_yocto_vex.json" ] \
+       && jq -e '([(.judgements // {})[]? | numbers] | add // 0) + (.unresolved // 0) > 0' \
+            "${OUT_PREFIX}_yocto_vex.json" >/dev/null 2>&1; then
+        _yocto_checked=true
+    fi
     # Through a file: an old kernel's advisories make this list larger than one
     # command-line argument may be.
     _found="$(mktemp)"
     { echo "$FINDINGS"; echo "$KERNEL_FINDINGS"; } | jq -cs \
         '[add[] | (.purl // ""), (((.pkg // "") + "|" + (.version // "")) | ascii_downcase)]
          | map(select(. != "" and . != "|")) | unique' > "$_found" 2>/dev/null || echo '[]' > "$_found"
-    UNCHECKED=$(jq -c --argjson cm "$_cpe_matched" --slurpfile foundf "$_found" \
+    UNCHECKED=$(jq -c --argjson cm "$_cpe_matched" --argjson yc "$_yocto_checked" --slurpfile foundf "$_found" \
         "$(cat "$SCRIPT_DIR/vuln-coverage.jq")"' ($foundf[0] // []) as $found
         | [ (.components // [])[] | recurse(.components[]?)
           | select(vc_in_scope)
-          | (.purl // "") as $p | (((.name // "") + "|" + (.version // "")) | ascii_downcase) as $n
+          | (.purl // "") as $p | (((.name // "") + "|" + vc_version) | ascii_downcase) as $n
           | select((($p != "" and ($p | IN($found[]))) or ($n | IN($found[]))) | not)
-          | . as $c | (vc_unchecked_reason($cm)) as $r
+          | . as $c | (vc_unchecked_reason($cm; $yc)) as $r
           | {Name: $c.name, Version: ($c.version // ""), PURL: ($c.purl // ""), Reason: $r} ]
         | unique_by([.Name, .Version, .Reason])' "$SBOM" 2>/dev/null || echo '[]')
     rm -f "$_found"

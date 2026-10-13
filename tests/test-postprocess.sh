@@ -4257,6 +4257,18 @@ JSON
     _rc=0; CVE_BIN_TOOL_MODE=components-only FW_CPE_INDEX="$CPEIDX" bash "$LIB/match-cpe-index.sh" "$WORK/rfs.json" "$WORK/rfs-off" >/dev/null 2>&1 || _rc=$?
     [ "$_rc" = 4 ] && pass "CVE_BIN_TOOL_MODE=components-only exits 4 (recorded as disabled)" \
         || fail "components-only: exit $_rc"
+    # jq exits 3 on a compile error; only a missing index may exit 3, so a
+    # broken filter is a failure the pipeline reports, not a skipped step.
+    mkdir -p "$CPEDIR/brokenlib"
+    cp "$LIB/match-cpe-index.sh" "$LIB/firmware-cpe-match.py" "$CPEDIR/brokenlib/"
+    printf 'def vc_cpe_index_candidate: (;\n' > "$CPEDIR/brokenlib/vuln-coverage.jq"
+    _rc=0; FW_CPE_INDEX="$CPEIDX" bash "$CPEDIR/brokenlib/match-cpe-index.sh" "$WORK/rfs.json" "$WORK/rfs-broken" >/dev/null 2>&1 || _rc=$?
+    [ "$_rc" = 1 ] && pass "a filter that does not compile exits 1 (recorded as failed), not 3" \
+        || fail "broken vuln-coverage.jq: exit $_rc, expected 1"
+    rm -f "$CPEDIR/brokenlib/vuln-coverage.jq"
+    _rc=0; FW_CPE_INDEX="$CPEIDX" bash "$CPEDIR/brokenlib/match-cpe-index.sh" "$WORK/rfs.json" "$WORK/rfs-broken" >/dev/null 2>&1 || _rc=$?
+    [ "$_rc" = 1 ] && pass "a missing vuln-coverage.jq exits 1, not 3" \
+        || fail "missing vuln-coverage.jq: exit $_rc, expected 1"
 
     echo "== cpe-index: the merged report counts a CVE once and names what was not checked =="
     cat > "$FAKEBIN/trivy" <<'SH'
@@ -4316,6 +4328,42 @@ SH
     [ "$mat_list" = "libmystery" ] \
         && pass "after the index match only the component with no version is unchecked" \
         || fail "UncheckedComponents after the match: '$mat_list'"
+
+    # A component with no version field but a version in its CPE is matched
+    # with the CPE's version, so it is not listed as having no version.
+    cat > "$FAKEBIN/trivy" <<'SH'
+#!/bin/sh
+out=""
+while [ $# -gt 0 ]; do
+    [ "$1" = "--output" ] && { out="$2"; shift; }
+    shift
+done
+echo '{"SchemaVersion":2,"Results":[]}' > "$out"
+exit 0
+SH
+    cat > "$WORK/cpev.json" <<'JSON'
+{"bomFormat":"CycloneDX","specVersion":"1.6","components":[
+  {"type":"application","name":"busybox","purl":"pkg:generic/busybox","cpe":"cpe:2.3:a:busybox:busybox:1.00:*:*:*:*:*:*:*"},
+  {"type":"application","name":"dropbear","purl":"pkg:generic/dropbear","cpe":"cpe:/a:dropbear_ssh_project:dropbear_ssh:2019.78"},
+  {"type":"application","name":"thing","purl":"pkg:generic/thing","cpe":"cpe:2.3:a:thing:thing:*:*:*:*:*:*:*:*"}]}
+JSON
+    FW_CPE_INDEX="$CPEIDX" bash "$LIB/match-cpe-index.sh" "$WORK/cpev.json" "$WORK/cpev" >/dev/null 2>&1
+    [ "$(jq -r '[.Results[].Vulnerabilities[] | "\(.PkgName)@\(.InstalledVersion)"] | join(" ")' "$WORK/cpev_security_cvebintool.json" 2>/dev/null)" = "busybox@1.00" ] \
+        && pass "the matcher compares a CPE's version when the component has none" \
+        || fail "CPE-version match found: $(jq -c '.' "$WORK/cpev_security_cvebintool.json" 2>/dev/null)"
+    BOMLENS_CPE_INDEX_MATCHED=true PATH="$FAKEBIN:$PATH" SECURITY_ENRICH=false DEEP_CVE=false \
+        bash "$LIB/scan-security.sh" "$WORK/cpev.json" "$WORK/cpev" proj >/dev/null 2>&1
+    cpev_list="$(jq -r '[.UncheckedComponents.Components[] | "\(.Name):\(.Reason)"] | join(" ")' "$WORK/cpev_security.json" 2>/dev/null)"
+    [ "$cpev_list" = "thing:no-version" ] \
+        && pass "a CPE's version counts as the version; only the one with none ('*') is unchecked" \
+        || fail "UncheckedComponents with CPE versions: '${cpev_list:-absent}'"
+    rm -f "$WORK/cpev_security_cvebintool.json"
+    PATH="$FAKEBIN:$PATH" SECURITY_ENRICH=false DEEP_CVE=false \
+        bash "$LIB/scan-security.sh" "$WORK/cpev.json" "$WORK/cpev-nomatch" proj >/dev/null 2>&1
+    cpev_list="$(jq -r '[.UncheckedComponents.Components[] | "\(.Name):\(.Reason)"] | join(" ")' "$WORK/cpev-nomatch_security.json" 2>/dev/null)"
+    [ "$cpev_list" = "busybox:no-identifier dropbear:no-identifier thing:no-version" ] \
+        && pass "without the index match the same components are unchecked for want of an identifier" \
+        || fail "UncheckedComponents with no match: '${cpev_list:-absent}'"
 
     # A clean scan of fully identified components keeps the plain wording.
     cat > "$WORK/clean.json" <<'JSON'
@@ -5413,6 +5461,33 @@ ynames=$(jq -r '[.components[].name] | sort | join(",")' "$WORK/yocto.cdx.json" 
 [ "$(jq -r '.metadata.timestamp' "$WORK/yocto.cdx.json")" = "2026-01-01T00:00:00Z" ] \
     && pass "document creation time is carried into metadata.timestamp" \
     || fail "timestamp='$(jq -r '.metadata.timestamp' "$WORK/yocto.cdx.json")'"
+
+# An --analyze of a Yocto SBOM runs no CPE index match, but the build's own
+# cve-check judged every recipe, so none is listed as unchecked. The same SBOM
+# without the build's judgements lists the recipe that has no CVE (libz1).
+cat > "$FAKEBIN/trivy" <<'SH'
+#!/bin/sh
+out=""
+while [ $# -gt 0 ]; do
+    [ "$1" = "--output" ] && { out="$2"; shift; }
+    shift
+done
+echo '{"SchemaVersion":2,"Results":[]}' > "$out"
+exit 0
+SH
+chmod +x "$FAKEBIN/trivy"
+BOMLENS_CPE_INDEX_MATCHED=false PATH="$FAKEBIN:$PATH" SECURITY_ENRICH=false DEEP_CVE=false \
+    bash "$LIB/scan-security.sh" "$WORK/yocto.cdx.json" "$WORK/yocto" proj >/dev/null 2>&1
+[ "$(jq '.UncheckedComponents.Count' "$WORK/yocto_security.json" 2>/dev/null)" = 0 ] \
+    && grep -q "CVE-2022-28391" "$WORK/yocto_security.md" \
+    && pass "a Yocto build's recipes are not listed as unchecked: its cve-check judged them" \
+    || fail "Yocto UncheckedComponents: $(jq -c '.UncheckedComponents' "$WORK/yocto_security.json" 2>/dev/null)"
+cp "$WORK/yocto.cdx.json" "$WORK/yocto-novex.cdx.json"
+BOMLENS_CPE_INDEX_MATCHED=false PATH="$FAKEBIN:$PATH" SECURITY_ENRICH=false DEEP_CVE=false \
+    bash "$LIB/scan-security.sh" "$WORK/yocto-novex.cdx.json" "$WORK/yocto-novex" proj >/dev/null 2>&1
+[ "$(jq -r '[.UncheckedComponents.Components[] | "\(.Name):\(.Reason)"] | join(" ")' "$WORK/yocto-novex_security.json" 2>/dev/null)" = "busybox:no-identifier libz1:no-identifier" ] \
+    && pass "with no cve-check judgements the same recipes are listed" \
+    || fail "Yocto with no judgements: $(jq -c '.UncheckedComponents' "$WORK/yocto-novex_security.json" 2>/dev/null)"
 
 # rc=3 means "not mine" and must stay non-fatal: the generic converter handles
 # every other supplier SBOM.
