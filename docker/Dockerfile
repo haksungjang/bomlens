@@ -87,6 +87,11 @@ ARG DOCKER_CLI_VERSION=29.9.0
 # tools of our own choosing — its Debian base contributes GPL system packages
 # either way, as every Linux image does; see THIRD_PARTY_LICENSES.md.
 ARG SBOM_FIRMWARE=false
+# The NVD CPE index (cpe_match.sqlite, below) is built into every image, so a
+# rootfs or binary scan matches the CPEs of components that carry no package
+# purl offline. Pure Python and public-domain NVD data, no GPL tool. A firmware
+# build always includes it; SBOM_CPE_INDEX=false leaves it out of the others.
+ARG SBOM_CPE_INDEX=true
 # renovate: datasource=pypi depName=unblob
 ARG UNBLOB_VERSION=26.3.30
 # renovate: datasource=pypi depName=cve-bin-tool
@@ -363,20 +368,21 @@ RUN if [ "$SBOM_DEEP_CVE" = "true" ]; then \
       echo "[build] deep-cve tools skipped (SBOM_DEEP_CVE=false)"; \
     fi
 
-# Firmware CVE matching data (Plan 2, rebuilt). cve-bin-tool identifies binaries
-# (its signature checkers) and lib/firmware-cpe-match.py matches their CPEs against
-# a distilled NVD index. Two artifacts are baked into the firmware image:
-#   (1) a tiny STUB cve.db — cve-bin-tool refuses to run on an empty cache
-#       (EmptyCache in cvedb.check_cve_entries), so we seed its schema with one
-#       sentinel row. Identification never reads CVE data from it. (~57 KB)
-#   (2) cpe_match.sqlite — the application-part CPE->CVE applicability index,
-#       distilled by build-cpe-index.py from the fkie-cad NVD 2.0 JSON feeds. (~130 MB)
+# CPE -> CVE matching data. lib/match-cpe-index.sh (through lib/firmware-cpe-match.py)
+# matches the CPEs of components with no package purl against a distilled NVD
+# index, for firmware, rootfs and binary scans. Two artifacts:
+#   (1) a tiny STUB cve.db, firmware image only: cve-bin-tool refuses to run on
+#       an empty cache (EmptyCache in cvedb.check_cve_entries), so we seed its
+#       schema with one sentinel row. Identification never reads CVE data from it. (~57 KB)
+#   (2) cpe_match.sqlite, every image unless SBOM_CPE_INDEX=false: the
+#       application-part CPE->CVE applicability index, distilled by
+#       build-cpe-index.py from the fkie-cad NVD 2.0 JSON feeds. (~146 MB)
 # The NVD data comes from a plain git clone (no api2 rate limit, no key, builds on
 # GitHub cloud runners), replacing the old ~1.5 GB api2-fetched cve.db that NVD
 # throttled into multi-hour stalls.
 # RELEASE GATE: the build FAILS unless the index has a substantial row count AND a
 # BusyBox 1.30.1 smoke match yields >=1 CVE. The smoke test runs the real matcher,
-# so a broken distill or an empty feed cannot ship a silent 0-CVE firmware image.
+# so a broken distill or an empty feed cannot ship a silent 0-CVE image.
 ENV CVE_BIN_TOOL_HOME=/opt/cve-bin-tool-home
 # Attribution + required notices for the bundled NVD-derived data. Shipped with it.
 COPY CVE-DATA-NOTICE.txt /opt/cve-bin-tool-home/CVE-DATA-NOTICE.txt
@@ -386,11 +392,13 @@ COPY build-cpe-index.py /tmp/build-cpe-index.py
 COPY lib/firmware-cpe-match.py /tmp/firmware-cpe-match.py
 COPY lib/version-string-map.json /tmp/version-string-map.json
 COPY check-version-string-map.py /tmp/check-version-string-map.py
-RUN if [ "$SBOM_FIRMWARE" = "true" ]; then \
-      set -e; \
+RUN set -e; \
+    if [ "$SBOM_FIRMWARE" = "true" ]; then \
       echo "[build] seeding stub cve.db (cve-bin-tool EmptyCache guard) ..."; \
       mkdir -p "$CVE_BIN_TOOL_HOME/.cache/cve-bin-tool"; \
       HOME="$CVE_BIN_TOOL_HOME" python3 -c "import sqlite3, os; from cve_bin_tool.cvedb import CVEDB; CVEDB().init_database(); p=os.path.expanduser('~/.cache/cve-bin-tool/cve.db'); c=sqlite3.connect(p); c.execute(\"INSERT OR IGNORE INTO cve_severity VALUES (?,?,?,?,?,?,?,datetime('now'))\", ('CVE-0000-00000','UNKNOWN','stub row for cve-bin-tool EmptyCache check; not used for matching',0,3,'','STUB')); c.commit(); c.close()"; \
+    fi; \
+    if [ "$SBOM_FIRMWARE" = "true" ] || [ "$SBOM_CPE_INDEX" != "false" ]; then \
       echo "[build] cloning NVD data feeds (shallow) ..."; \
       git clone --quiet --depth 1 "$NVD_FEED_REPO" /tmp/nvd-feeds; \
       echo "[build] distilling CPE index ..."; \
@@ -413,9 +421,11 @@ RUN if [ "$SBOM_FIRMWARE" = "true" ]; then \
       fi; \
       echo "[build] checking version-string-map CPEs against the index ..."; \
       python3 /tmp/check-version-string-map.py /tmp/version-string-map.json "$idx"; \
-      rm -f /tmp/build-cpe-index.py /tmp/firmware-cpe-match.py /tmp/smoke.json /tmp/smoke-kernel.json \
-            /tmp/version-string-map.json /tmp/check-version-string-map.py; \
-    fi
+    else \
+      echo "[build] CPE index skipped (SBOM_CPE_INDEX=false)"; \
+    fi; \
+    rm -f /tmp/build-cpe-index.py /tmp/firmware-cpe-match.py /tmp/smoke.json /tmp/smoke-kernel.json \
+          /tmp/version-string-map.json /tmp/check-version-string-map.py
 
 # OWASP AIBOM Generator (opt-in: --build-arg SBOM_AIBOM=true). Generates an AI
 # SBOM (CycloneDX 1.7) for a HuggingFace model id; see scan-aibom.sh.
@@ -473,6 +483,7 @@ RUN if [ "$SBOM_PDF" = "true" ]; then \
 # Reflects the firmware build flavor. When SBOM_FIRMWARE=true the image bundles GPL
 # tools (cve-bin-tool, ubi_reader); the source-offer label points to the inventory.
 LABEL com.sktelecom.sbom.firmware-tools="${SBOM_FIRMWARE}" \
+      com.sktelecom.sbom.cpe-index="${SBOM_CPE_INDEX}" \
       com.sktelecom.sbom.scanoss-tools="${SBOM_SCANOSS}" \
       com.sktelecom.sbom.aibom-tools="${SBOM_AIBOM}" \
       com.sktelecom.sbom.pdf-tools="${SBOM_PDF}" \
