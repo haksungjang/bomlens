@@ -104,6 +104,8 @@ The file is CSV with two columns, `name,version`; lines starting with `#` and ro
 
 ## CVE matching, online and offline
 
+A component with no package PURL is matched by its CPE against an NVD CPE index bundled in the image. The match runs after BomLens adds CPEs from its curated name list (`cpe-name-map.json`), so a component identified by name and version (OpenSSH or BusyBox, for example) is matched as well as one a signature checker gave a CPE. A component that has no version, or no CPE, is listed in the security report as one that could not be checked.
+
 CVE matching for static binaries uses cve-bin-tool with its own vulnerability database. The firmware image ships in a hybrid arrangement, so the same image works both air-gapped and online.
 
 - When the image is built with the database bundled, firmware scans match CVEs offline at scan time. This is the fast, air-gap-friendly path.

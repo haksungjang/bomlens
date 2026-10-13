@@ -101,6 +101,7 @@ BomLens 이미지를 스캔 엔진으로 쓰는 프로그램은 모든 스캔이
 | `source-file-tree` | 스캔한 트리의 파일 목록 기록 |
 | `source-snapshot` | 파일 보기 화면용으로 스캔한 파일 내용 보관 |
 | `generate-notice` | 오픈소스 고지문 작성 |
+| `match-cpe` | `--security`를 켠 펌웨어, 루트 파일 시스템, 바이너리 스캔에서 패키지 PURL이 없는 컴포넌트의 CPE를 이미지에 들어 있는 NVD CPE 인덱스와 대조. `counts`에 `offered`, `components`, `cves`를 담고, 인덱스가 없는 이미지에서는 `skipped`(`not_installed`), `--security`가 꺼져 있거나 `CVE_BIN_TOOL_MODE=components-only`이면 `disabled` |
 | `scan-security` | Trivy로 취약점 매칭 |
 | `generate-risk-report` | 위험 보고서 작성 |
 | `model-security` | AI 모델 파일의 위험한 내용 검사 |
