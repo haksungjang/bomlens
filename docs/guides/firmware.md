@@ -26,8 +26,8 @@ Firmware is a single file that packs and seals an operating system and dozens of
    `bomlens:purlSource`. An SPDX export keeps this: the images and the
    distribution are packages there, and the membership is a `CONTAINS`
    relationship.
-3. Use `cve-bin-tool` to find the versions and vulnerabilities of stripped static binaries (busybox, openssl, dropbear, and so on).
-4. Merge the two results into one SBOM, then run the same post-processing as a normal scan (licenses, CVEs, signing).
+3. Use the signature checkers of `cve-bin-tool` to identify stripped static binaries (busybox, openssl, dropbear, and so on) and give them a CPE.
+4. Merge the two results into one SBOM, then run the same post-processing as a normal scan (licenses, CVEs, signing). CVEs of components with no package PURL come from the NVD CPE index in the image (see [How CVEs are matched](#how-cves-are-matched)).
 
 ## Preparing the firmware image
 
@@ -60,7 +60,7 @@ Set `SBOM_FIRMWARE_IMAGE` only if you want a different tag or an internal mirror
 SBOM_FIRMWARE_IMAGE=<your-mirror>:<tag> ./scripts/scan-sbom.sh --ui
 ```
 
-Enter a project name and version, choose the firmware upload tile, upload the file, and run. While the CVE database downloads on a first online run, the UI shows a download progress bar.
+Enter a project name and version, choose the firmware upload tile, upload the file, and run.
 
 ### From the CLI
 
@@ -102,21 +102,15 @@ A component tagged `presence-only` has no version, so neither a CVE lookup nor a
 
 The file is CSV with two columns, `name,version`; lines starting with `#` and rows left empty are skipped. The template can be filled in where it is: when the file passed is that template, the scan leaves it as you wrote it and only lists what is still missing. A filled version is marked `bomlens:versionSource = supplier-declared` and gets the upstream purl above. When the scan read a version from the delivered files, that version is kept and a warning shows both, because a source tree can hold several releases of one project and the binary shows which one shipped. A name the scan did not find is added as a component marked `bomlens:identifiedBy = supplier-declared`. A file over 256 KiB, a row that is not two fields, a name or version with characters outside letters, digits and `. _ + ~ -`, or one name given two versions is refused with the line number, and the SBOM is left unchanged.
 
-## CVE matching, online and offline
+## How CVEs are matched
 
-A component with no package PURL is matched by its CPE against an NVD CPE index bundled in the image. The match runs after BomLens adds CPEs from its curated name list (`cpe-name-map.json`), so a component identified by name and version (OpenSSH or BusyBox, for example) is matched as well as one a signature checker gave a CPE. A component that has no version, or no CPE, is listed in the security report as one that could not be checked.
+Trivy matches components by their package PURL, with a database it downloads at scan time as in any other scan. A component with no package PURL (none, `pkg:generic`, `pkg:opkg`, or a source repository PURL such as `pkg:github`) is matched by its CPE against the NVD CPE index built into the image (`cpe_match.sqlite`), and its CVEs go into the same security report. This match runs with `--security` in firmware, root filesystem and binary scans, once, after every step that adds CPEs. A component identified by name and version through BomLens's name list (`cpe-name-map.json`), OpenSSH or BusyBox for example, is matched as well as one the signature checkers gave a CPE. The result manifest records the step as `match-cpe` with `offered`, `components` and `cves` counts.
 
-CVE matching for static binaries uses cve-bin-tool with its own vulnerability database. The firmware image ships in a hybrid arrangement, so the same image works both air-gapped and online.
+The index is distilled from the NVD data when the image is built, so the match needs no network and no NVD API key, and its data is as recent as the image. Pull a newer image to update it. cve-bin-tool only identifies binaries; it does not download or read a vulnerability database. `CVE_BIN_TOOL_MODE=components-only` turns the CPE match off while identification still runs. An image built with `--build-arg SBOM_CPE_INDEX=false` has no index, and the step is recorded as `skipped` (`not_installed`).
 
-- When the image is built with the database bundled, firmware scans match CVEs offline at scan time. This is the fast, air-gap-friendly path.
-- When the bundled database is absent but the network is reachable, cve-bin-tool downloads the database from NVD at runtime. The first run is slow; the web UI shows a download progress bar while it runs.
-- When neither a bundled database nor a network is available, the scan degrades to component-only identification (no CVEs) and logs the reason rather than silently dropping the CVE stage.
+A component with no version, or with no package PURL and no CPE the index was asked about, is listed in the security report under "Components that could not be checked" (`UncheckedComponents` in `_security.json`). A short vulnerability table therefore covers only the components that were checked.
 
-`CVE_BIN_TOOL_MODE` selects the behavior: `auto` (default; bundled database first, otherwise download if online), `offline`, `online`, or `components-only`.
-
-The database is aggregated from several sources (NVD, PURL2CPE, and others), not from NVD alone. cve-bin-tool prints the notice "This product uses the NVD API but is not endorsed or certified by the NVD."
-
-OSV (Open Source Vulnerabilities) advisories are not bundled, to keep the redistributed image free of share-alike data. The web UI offers an opt-in toggle, "Include OSV advisories," that fetches OSV from osv.dev for that single scan, so the data is downloaded directly on your machine rather than shipped in the image.
+The scan prints "This product uses NVD data but is not endorsed or certified by the NVD.", and the image carries the data attribution in `/opt/cve-bin-tool-home/CVE-DATA-NOTICE.txt`. OSV (Open Source Vulnerabilities) advisories are not bundled, to keep share-alike data out of the redistributed image.
 
 ## License note
 
