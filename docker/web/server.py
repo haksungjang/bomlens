@@ -141,7 +141,7 @@ UPLOAD_EXTS = {
               ".onnx", ".npz", ".npy"),
     "declaration": (".json",),
     "firmware": (".bin", ".img", ".squashfs", ".sqsh", ".ubi", ".ubifs",
-                 ".trx", ".chk", ".fw", ".rom", ".dlf",
+                 ".trx", ".chk", ".fw", ".rom", ".dlf", ".bix",
                  # Compressed firmware images (unblob unpacks these), e.g. the
                  # OpenWRT *.img.gz releases. .zip belongs here because that is
                  # how most vendors ship a firmware download — D-Link, NETGEAR,
