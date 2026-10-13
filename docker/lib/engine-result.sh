@@ -263,6 +263,23 @@ er_finish() {
     case "${BOMLENS_STAGE1_REUSED:-}" in 1|true) reused=true ;; esac
     local s1deg=false
     [ "${ER_STAGE1_DEGRADED:-}" = "true" ] && s1deg=true
+    # The image an IMAGE run read (image-digest.sh, set by entrypoint.sh once
+    # syft has read it): the reference, the digest the later reads were pinned
+    # to (null when it could not be resolved, or for an archive), the platform.
+    # A run that stopped before syft read the image has the reference only.
+    local image="null"
+    if [ "${SCAN_MODE:-}" = "IMAGE" ]; then
+        image="$(jq -c --arg ref "${TARGET_IMAGE:-}" '
+            def dig: if type == "string" and test("^sha256:[0-9a-f]{64}$") then . else null end;
+            (if type == "object" then . else {} end) as $i
+            | {reference: (if $ref == "" then null else $ref end),
+               source: ($i.source // null),
+               digest: ($i.digest | dig),
+               platform: (if ($i.platform | type) == "string" then $i.platform else null end)}
+              + (if ($i.index_digest | dig) != null then {index_digest: ($i.index_digest | dig)} else {} end)' \
+            <<<"${ER_INPUT_IMAGE:-"{}"}" 2>/dev/null)" || image=""
+        [ -n "$image" ] || image="$(jq -nc --arg ref "${TARGET_IMAGE:-}" '{reference: (if $ref == "" then null else $ref end), source: null, digest: null, platform: null}')"
+    fi
     local tmp="$outdir/.${ENGINE_RESULT_NAME}.tmp.$$"
     jq -s \
         --arg cv "$ENGINE_CONTRACT_VERSION" --arg ev "${BOMLENS_VERSION:-}" \
@@ -272,7 +289,8 @@ er_finish() {
         --argjson rc "$rc" --argjson props "$props" --arg scanerr "$scan_error" \
         --argjson secpresent "$sec_present" --argjson outputs "$outputs" \
         --argjson engines "$engines" --argjson tools "$tools" --argjson tdb "$trivy_db" \
-        --argjson fp "$fp" --argjson mismatch "$mismatch" --argjson reused "$reused" --argjson s1deg "$s1deg" '
+        --argjson fp "$fp" --argjson mismatch "$mismatch" --argjson reused "$reused" --argjson s1deg "$s1deg" \
+        --argjson image "$image" '
         def rank: {"failed":4, "degraded":3, "skipped":2, "disabled":1, "ok":0}[.] // 0;
         # One entry per step id, in first-seen order: the worst status wins, the
         # time span covers every call (conformance can run twice in one scan).
@@ -330,10 +348,10 @@ er_finish() {
               image: (if $img == "" then null else $img end),
               image_digest: (if $dig == "" then null else $dig end)
             },
-            input: {
+            input: ({
               kind: $kind, mode: $mode,
               target: (if $target == "" then null else $target end)
-            },
+            } + (if $image != null then {image: $image} else {} end)),
             run: {
               status: $status,
               reason: (if $status == "cancelled" then "cancelled"
