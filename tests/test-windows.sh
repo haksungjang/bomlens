@@ -159,6 +159,11 @@ case "${1:-}" in
       if [ -n "${DOCKER_STUB_SUMMARY_RESULT:-}" ]; then
         printf '%b' "$DOCKER_STUB_SUMMARY_RESULT" > "$dest/${spn}_${spv}_summary.result"
       fi
+      # DOCKER_STUB_VERSIONS_TEMPLATE models the component-versions template a
+      # firmware, root filesystem or binary scan writes, verbatim. Unset means none.
+      if [ -n "${DOCKER_STUB_VERSIONS_TEMPLATE:-}" ]; then
+        printf '%b' "$DOCKER_STUB_VERSIONS_TEMPLATE" > "$dest/${spn}_${spv}_component-versions.template.csv"
+      fi
     fi
     # MODE=DIFF carries no PROJECT_NAME/VERSION at all — it names its own
     # output file (DIFF_OUT_NAME) instead, so it needs its own stub write.
@@ -1141,6 +1146,19 @@ in_log "<COMPONENT_VERSIONS_FILE=/component-versions-in/versions.csv>" \
   && in_log "/dir with space/versions list.csv:/component-versions-in/versions.csv:ro>" \
   && pass "--component-versions mounts the file alone, read-only, and names its container path" \
   || { fail "--component-versions was not mounted as a single read-only file"; show; cat "$LOG"; }
+# The closing count is the template rows still without a version: the
+# template can be the filled-in file this run read, left as the supplier wrote it.
+d="$(new_proj cv-count)"; printf 'ELFish\n' > "$d/app.out"
+DOCKER_STUB_VERSIONS_TEMPLATE='# note\nname,version\nncurses,5.7\nnet-snmp,\nzlib,1.2.3\r\nbusybox,\r\n' \
+  scan_in "$d" --project CV3 --version 1 --target app.out --generate-only
+[ "$RC" -eq 0 ] && in_out "[WARN] 2 component(s) have no version" \
+  && pass "the closing count takes only the template rows with an empty version" \
+  || { fail "versionless count: rc=$RC"; show; }
+DOCKER_STUB_VERSIONS_TEMPLATE='name,version\nncurses,5.7\nnet-snmp,5.7.1\n' \
+  scan_in "$d" --project CV3 --version 1 --target app.out --generate-only
+[ "$RC" -eq 0 ] && ! in_out "have no version" \
+  && pass "a template with every row filled prints no versionless count" \
+  || { fail "a filled template still printed a count: rc=$RC"; show; }
 # A source scan has nothing for it to fill, and is refused before any container runs.
 d="$(new_proj cv-source)"; printf '{"name":"x","version":"1.0.0"}\n' > "$d/package.json"
 printf 'name,version\nx,1\n' > "$d/v.csv"

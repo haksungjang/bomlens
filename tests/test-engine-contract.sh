@@ -1847,16 +1847,16 @@ printf 'name,version\nncurses,5.7\n' > "$WORK/upstream-versions.csv"
 [ "$(jq -r '.components[] | select(.name == "ncurses") | "\(.version) \(.purl)"' "$UB/demo_1.0_bom.json" 2>/dev/null)" = "5.7 pkg:github/mirror/ncurses@v5.7" ] \
     && pass "a version from the file reaches the SBOM with its upstream purl" \
     || fail "ncurses: $(jq -c '.components[] | select(.name == "ncurses")' "$UB/demo_1.0_bom.json" 2>&1)"
-[ "$(grep -v '^#' "$UB/demo_1.0_component-versions.template.csv" 2>/dev/null | tr '\n' ' ')" = "name,version net-snmp, " ] \
+[ "$(grep -v '^#' "$UB/demo_1.0_component-versions.template.csv" 2>/dev/null | tr '\n' ' ')" = "name,version 3c59x, libxml2, " ] \
     && jq -e 'any(.outputs[]; .path == "demo_1.0_component-versions.template.csv")' "$UB/bomlens-result.json" >/dev/null \
     && pass "the template of what is still missing is written and listed in the outputs" \
     || fail "template: $(cat "$UB/demo_1.0_component-versions.template.csv" 2>&1)"
-[ "$(jq -c '[.checks[] | select(.id == "versions-needed" or .id == "upstream-purl") | .missing] + [.submitFile]' "$UB/demo_1.0_conformance.json" 2>/dev/null)" = '[["net-snmp"],["gcc@3.4.4","openssl@3.0.13"],"demo_1.0_bom.json"]' ] \
+[ "$(jq -c '[.checks[] | select(.id == "versions-needed" or .id == "upstream-purl") | .missing] + [.submitFile]' "$UB/demo_1.0_conformance.json" 2>/dev/null)" = '[["Vendor Utility","libxml2","3c59x"],["gcc@9.3.0","openssl@3.0.13"],"demo_1.0_bom.json"]' ] \
     && pass "the submission profile names what is missing and the file to submit" \
     || fail "conformance: $(jq -c '[.checks[] | select(.id == "versions-needed" or .id == "upstream-purl")] + [.submitFile]' "$UB/demo_1.0_conformance.json" 2>&1)"
 # The template filled in place and passed back is the supplier's record: the
 # run reads it, and neither sweeps nor rewrites it.
-printf '# filled\nname,version\nnet-snmp,5.7.1\n' > "$UB/demo_1.0_component-versions.template.csv"
+printf '# filled\nname,version\n3c59x,\nlibxml2,2.9.14\n' > "$UB/demo_1.0_component-versions.template.csv"
 cp "$UB/demo_1.0_component-versions.template.csv" "$WORK/upstream-filled.csv"
 ( cd "$UB" && env PATH="$WORK/bin-syft:$WORK/bin:$PATH" MODE=BINARY TARGET_FILE="$WORK/upstream-fw.bin" \
     PROJECT_NAME=demo PROJECT_VERSION=1.0 HOST_OUTPUT_DIR="$UB" BOMLENS_LIBDIR="$ROOT_DIR/docker/lib" \
@@ -1864,10 +1864,26 @@ cp "$UB/demo_1.0_component-versions.template.csv" "$WORK/upstream-filled.csv"
     ENRICH_EOL=false ENRICH_MALICIOUS=false \
     COMPONENT_VERSIONS_FILE="$UB/demo_1.0_component-versions.template.csv" bash "$ENTRY" ) > "$UB.2.log" 2>&1
 cmp -s "$WORK/upstream-filled.csv" "$UB/demo_1.0_component-versions.template.csv" \
-    && [ "$(jq -r '.components[] | select(.name == "net-snmp") | .purl' "$UB/demo_1.0_bom.json" 2>/dev/null)" = "pkg:github/net-snmp/net-snmp@v5.7.1" ] \
+    && [ "$(jq -r '.components[] | select(.name == "libxml2") | .purl' "$UB/demo_1.0_bom.json" 2>/dev/null)" = "pkg:github/gnome/libxml2@v2.9.14" ] \
     && grep -q "Add them to the file passed with --component-versions" "$UB.2.log" \
     && pass "a filled-in template passed back is applied and left as the supplier wrote it" \
     || fail "template passed back: $(cat "$UB/demo_1.0_component-versions.template.csv" 2>&1)" "$(grep component-versions "$UB.2.log")"
+# A refused file: the step fails, every file is still written, and the run
+# ends with the reason and exit 1, since the versions asked for were not applied.
+UB3="$(new_run upstream-binary-refused empty)"
+printf 'name,version\nncurses,$(id)\n' > "$WORK/upstream-bad.csv"
+( cd "$UB3" && env PATH="$WORK/bin-syft:$WORK/bin:$PATH" MODE=BINARY TARGET_FILE="$WORK/upstream-fw.bin" \
+    PROJECT_NAME=demo PROJECT_VERSION=1.0 HOST_OUTPUT_DIR="$UB3" BOMLENS_LIBDIR="$ROOT_DIR/docker/lib" \
+    BOMLENS_ARTIFACT_CLEANUP=1 UPLOAD_ENABLED=false GENERATE_SECURITY=false SECURITY_ENRICH=false \
+    ENRICH_EOL=false ENRICH_MALICIOUS=false \
+    COMPONENT_VERSIONS_FILE="$WORK/upstream-bad.csv" bash "$ENTRY" ) > "$UB3.log" 2>&1; ub3_rc=$?
+[ "$ub3_rc" = 1 ] && [ -s "$UB3/demo_1.0_bom.json" ] \
+    && [ "$(jq -c '[.steps[] | select(.id == "component-versions") | [.status, .reason]][0]' "$UB3/bomlens-result.json" 2>/dev/null)" = '["failed","failed"]' ] \
+    && jq -e '.steps[] | select(.id == "component-versions") | .detail | contains("is not a version")' "$UB3/bomlens-result.json" >/dev/null 2>&1 \
+    && [ "$(jq -r '.run.status' "$UB3/bomlens-result.json" 2>/dev/null)" = failed ] \
+    && tail -n 2 "$UB3.log" | head -n 1 | grep -q '^\[ERROR\] --component-versions: the file was refused, so none of its versions were applied: line 2' \
+    && pass "a refused file fails the step, keeps the outputs, and ends the run with the reason and exit 1" \
+    || fail "refused file: rc=$ub3_rc $(jq -c '[.run.status] + [.steps[] | select(.id == "component-versions")]' "$UB3/bomlens-result.json" 2>&1)" "$(tail -4 "$UB3.log")"
 UB2="$(new_run upstream-binary-off empty)"
 ( cd "$UB2" && env PATH="$WORK/bin-syft:$WORK/bin:$PATH" MODE=BINARY TARGET_FILE="$WORK/upstream-fw.bin" \
     PROJECT_NAME=demo PROJECT_VERSION=1.0 HOST_OUTPUT_DIR="$UB2" BOMLENS_LIBDIR="$ROOT_DIR/docker/lib" \
