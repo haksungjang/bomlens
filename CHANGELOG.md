@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v1.13.3] - 2026-10-13
+
 ### Upgrade note
 
 - Firmware, root filesystem and binary scans now give a component identified with no package PURL (none, `pkg:generic` or `pkg:opkg`) the upstream source repository PURL when it is in `docker/lib/upstream-purl-map.json`, for example `pkg:generic/openssl@1.0.2h` becomes `pkg:github/openssl/openssl@OpenSSL_1_0_2h`; the replaced one is kept in `bomlens:originalPurl`. A tool that joins these scans with an earlier BomLens SBOM by PURL sees these components as new once. Set `ENRICH_UPSTREAM_PURL=false` to keep the earlier PURLs. The engine contract counts this as a minor change: the version rules now name package PURLs.
